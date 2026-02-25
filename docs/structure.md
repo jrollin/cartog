@@ -21,15 +21,16 @@ cartog/
 │   │   ├── rust_lang.rs     # Rust extractor
 │   │   └── go.rs            # Go extractor
 │   └── types.rs             # Symbol, Edge, FileInfo structs
-├── skill/
-│   ├── SKILL.md             # Claude behavioral instructions
-│   ├── scripts/
-│   │   ├── install.sh
-│   │   ├── ensure_indexed.sh
-│   │   └── query.sh
-│   └── references/
-│       ├── query_cookbook.md
-│       └── supported_languages.md
+├── skills/
+│   └── cartog/              # Agent Skill (agentskills.io)
+│       ├── SKILL.md         # Behavioral instructions for AI agents
+│       ├── scripts/
+│       │   ├── install.sh
+│       │   ├── ensure_indexed.sh
+│       │   └── query.sh
+│       └── references/
+│           ├── query_cookbook.md
+│           └── supported_languages.md
 └── docs/
     ├── product.md           # Product overview
     ├── tech.md              # Technology decisions

@@ -101,6 +101,22 @@ Re-indexing is incremental: only files with changed content hashes are re-parsed
 - **Zero dependencies** — single 3.5MB binary + SQLite file. No language server, no embedding model, no graph DB.
 - **Incremental** — SHA256 hash per file, only re-indexes what changed.
 
+## Agent Skill
+
+Install cartog as an [Agent Skill](https://agentskills.io) for Claude Code, Cursor, Copilot, and other compatible agents:
+
+```bash
+npx skills add jrollin/cartog
+```
+
+Or install manually:
+
+```bash
+cp -r skills/cartog ~/.claude/skills/
+```
+
+The skill teaches your AI agent to use cartog for code navigation instead of grep/cat. See [Claude Code Integration](docs/claude-code.md) for details.
+
 ## Documentation
 
 - [Usage](docs/usage.md)

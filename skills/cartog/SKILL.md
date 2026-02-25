@@ -1,3 +1,11 @@
+---
+name: cartog
+description: >-
+  Code graph navigation skill. Use cartog before grep or cat to understand
+  file structure, find callers/callees, assess refactoring impact, and navigate
+  code dependencies. Supports Python, TypeScript/JavaScript, Rust, Go.
+---
+
 # cartog — Code Graph Navigation Skill
 
 ## When to Use
@@ -24,7 +32,7 @@ Use cartog **before** reaching for grep, cat, or file reads when you need to:
 Ensure cartog is indexed before first use:
 
 ```bash
-bash skill/scripts/ensure_indexed.sh
+bash scripts/ensure_indexed.sh
 ```
 
 ## Commands Reference

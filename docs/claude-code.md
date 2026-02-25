@@ -11,16 +11,26 @@ cargo install --path .
 cargo install cartog
 ```
 
-## Setup as a Claude Code Skill
+## Setup as an Agent Skill
 
-The `skill/` directory contains a ready-made Claude Code skill. Register it by adding the skill path to your Claude Code configuration pointing to `skill/SKILL.md`.
+Install the cartog skill for Claude Code, Cursor, Copilot, and other [Agent Skills](https://agentskills.io)-compatible agents:
 
-This teaches Claude Code to automatically use cartog for code navigation instead of grep/cat.
+```bash
+npx skills add jrollin/cartog
+```
+
+Or install manually:
+
+```bash
+cp -r skills/cartog ~/.claude/skills/
+```
+
+This teaches your AI agent to automatically use cartog for code navigation instead of grep/cat.
 
 At session start, ensure the index exists:
 
 ```bash
-bash skill/scripts/ensure_indexed.sh
+bash skills/cartog/scripts/ensure_indexed.sh
 ```
 
 ## Workflow
@@ -54,7 +64,7 @@ cartog --json callers validate_token
 
 ## What the Skill Teaches Claude Code
 
-The skill (`skill/SKILL.md`) instructs Claude Code to:
+The skill (`skills/cartog/SKILL.md`) instructs your AI agent to:
 
 - Use `cartog outline` **before** reading a file when structure is needed, not content
 - Run `cartog callers/impact` **before** grepping for references
@@ -65,12 +75,12 @@ The skill (`skill/SKILL.md`) instructs Claude Code to:
 
 | File | Purpose |
 |------|---------|
-| `skill/SKILL.md` | Behavioral instructions for Claude Code |
-| `skill/scripts/install.sh` | Automated installation via `cargo install` |
-| `skill/scripts/ensure_indexed.sh` | Ensures `.cartog.db` exists and is up to date |
-| `skill/scripts/query.sh` | Thin wrapper running `cartog --json "$@"` |
-| `skill/references/query_cookbook.md` | Recipes for common navigation patterns |
-| `skill/references/supported_languages.md` | Language support matrix |
+| `skills/cartog/SKILL.md` | Behavioral instructions for AI agents |
+| `skills/cartog/scripts/install.sh` | Automated installation via `cargo install` |
+| `skills/cartog/scripts/ensure_indexed.sh` | Ensures `.cartog.db` exists and is up to date |
+| `skills/cartog/scripts/query.sh` | Thin wrapper running `cartog --json "$@"` |
+| `skills/cartog/references/query_cookbook.md` | Recipes for common navigation patterns |
+| `skills/cartog/references/supported_languages.md` | Language support matrix |
 
 ## Why It Helps
 
