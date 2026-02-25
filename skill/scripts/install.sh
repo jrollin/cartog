@@ -5,7 +5,7 @@ set -euo pipefail
 # 1. Try downloading pre-built binary from GitHub Releases
 # 2. Fallback to cargo install
 
-REPO="julienrollin/cartog"
+REPO="jrollin/cartog"
 
 if command -v cartog &>/dev/null; then
     echo "cartog is already installed: $(cartog --version)"

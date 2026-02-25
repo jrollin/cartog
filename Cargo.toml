@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.70"
 description = "Code graph indexer for LLM coding agents. Map your codebase, navigate by graph."
 license = "MIT"
-repository = "https://github.com/julienrollin/cartog"
+repository = "https://github.com/jrollin/cartog"
 keywords = ["code-analysis", "tree-sitter", "graph", "llm", "code-intelligence"]
 categories = ["development-tools", "command-line-utilities"]
 
