@@ -37,7 +37,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          sed "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
           echo "Building version ${VERSION}"
 
       - uses: dtolnay/rust-toolchain@stable
@@ -110,7 +110,7 @@ jobs:
       - name: Sync Cargo.toml version with tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          sed "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo publish
         env:
