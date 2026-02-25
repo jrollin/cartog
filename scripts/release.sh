@@ -70,7 +70,7 @@ fi
 info "bumping $CURRENT → $NEW"
 
 # update Cargo.toml
-sed -i "s/^version = \".*\"/version = \"${NEW}\"/" "$CARGO_TOML"
+sed "s/^version = \".*\"/version = \"${NEW}\"/" "$CARGO_TOML" > "$CARGO_TOML.tmp" && mv "$CARGO_TOML.tmp" "$CARGO_TOML"
 
 # update Cargo.lock
 cargo generate-lockfile --quiet 2>/dev/null || true
