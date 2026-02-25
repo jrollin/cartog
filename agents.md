@@ -56,9 +56,13 @@ Returns `Vec<Symbol>` + `Vec<Edge>`. After all files are extracted, `db.resolve_
 ### Release Process
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+./scripts/release.sh patch   # 0.1.0 → 0.1.1
+./scripts/release.sh minor   # 0.1.0 → 0.2.0
+./scripts/release.sh major   # 0.1.0 → 1.0.0
+./scripts/release.sh 2.3.4   # set exact version
 ```
+
+The script bumps `Cargo.toml`, commits, tags `vX.Y.Z`, and pushes. The release workflow then builds binaries and publishes to crates.io.
 
 ## Current State
 
