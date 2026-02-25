@@ -1,0 +1,25 @@
+[package]
+name = "cartog"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Code graph indexer for LLM coding agents. Map your codebase, navigate by graph."
+license = "MIT"
+repository = "https://github.com/julienrollin/cartog"
+keywords = ["code-analysis", "tree-sitter", "graph", "llm", "code-intelligence"]
+categories = ["development-tools", "command-line-utilities"]
+
+[dependencies]
+tree-sitter = "0.24"
+tree-sitter-python = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-rust = "0.23"
+tree-sitter-go = "0.23"
+rusqlite = { version = "0.31", features = ["bundled"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+sha2 = "0.10"
+anyhow = "1"
