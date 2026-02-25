@@ -1,7 +1,7 @@
 # cartog
 
-[![CI](https://github.com/julienrollin/cartog/actions/workflows/ci.yml/badge.svg)](https://github.com/julienrollin/cartog/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/julienrollin/cartog/branch/main/graph/badge.svg)](https://codecov.io/gh/julienrollin/cartog)
+[![CI](https://github.com/jrollin/cartog/actions/workflows/ci.yml/badge.svg)](https://github.com/jrollin/cartog/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/jrollin/cartog/branch/main/graph/badge.svg)](https://codecov.io/gh/jrollin/cartog)
 [![Crates.io](https://img.shields.io/crates/v/cartog.svg)](https://crates.io/crates/cartog)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
