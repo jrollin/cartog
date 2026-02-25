@@ -33,6 +33,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Bump Cargo.toml version to match tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          rm -f Cargo.toml.bak
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -100,6 +107,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Bump Cargo.toml version to match tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo publish
         env:
