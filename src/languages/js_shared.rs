@@ -133,6 +133,9 @@ fn extract_function(
         .with_docstring(docstring),
     );
 
+    // Extract type annotation references from parameters and return type
+    extract_fn_type_refs(node, source, file_path, &sym_id, edges);
+
     // Walk body for calls/throws
     if let Some(body) = node.child_by_field_name("body") {
         walk_for_calls_and_throws(body, source, file_path, Some(&sym_id), edges);
@@ -191,6 +194,8 @@ fn extract_variable_declaration(
                 .with_async(is_async)
                 .with_docstring(docstring),
             );
+
+            extract_fn_type_refs(val, source, file_path, &sym_id, edges);
 
             if let Some(body) = val.child_by_field_name("body") {
                 walk_for_calls_and_throws(body, source, file_path, Some(&sym_id), edges);
@@ -360,6 +365,8 @@ fn extract_method(
         .with_async(is_async)
         .with_docstring(docstring),
     );
+
+    extract_fn_type_refs(node, source, file_path, &sym_id, edges);
 
     if let Some(body) = node.child_by_field_name("body") {
         walk_for_calls_and_throws(body, source, file_path, Some(&sym_id), edges);
@@ -638,6 +645,22 @@ fn walk_for_calls_and_throws(
                         }
                     }
                 }
+                "new_expression" => {
+                    if let Some(ctx) = context_id {
+                        if let Some(ctor) = current.child_by_field_name("constructor") {
+                            let ctor_name = node_text(ctor, source).to_string();
+                            if !ctor_name.is_empty() {
+                                edges.push(Edge::new(
+                                    ctx.to_string(),
+                                    ctor_name,
+                                    EdgeKind::Calls,
+                                    file_path,
+                                    current.start_position().row as u32 + 1,
+                                ));
+                            }
+                        }
+                    }
+                }
                 "throw_statement" => {
                     if let Some(ctx) = context_id {
                         if let Some(exc) = current.named_child(0) {
@@ -712,6 +735,53 @@ fn walk_body_for_nested(
                 extract_node(child, source, file_path, Some(parent_id), symbols, edges);
             }
             _ => {}
+        }
+    }
+}
+
+// ── Type reference extraction ──
+
+/// Extract type annotation references from function parameters and return type.
+fn extract_fn_type_refs(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    sym_id: &str,
+    edges: &mut Vec<Edge>,
+) {
+    // Walk parameters looking for type_annotation nodes
+    if let Some(params) = node.child_by_field_name("parameters") {
+        collect_type_refs_recursive(params, source, file_path, sym_id, edges);
+    }
+    // Return type annotation
+    if let Some(ret) = node.child_by_field_name("return_type") {
+        collect_type_refs_recursive(ret, source, file_path, sym_id, edges);
+    }
+}
+
+/// Recursively walk a subtree collecting type_identifier references.
+fn collect_type_refs_recursive(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    sym_id: &str,
+    edges: &mut Vec<Edge>,
+) {
+    if node.kind() == "type_identifier" {
+        let name = node_text(node, source);
+        // Skip built-in types (lowercase: string, number, boolean, void, etc.)
+        if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_uppercase()) {
+            edges.push(Edge::new(
+                sym_id,
+                name,
+                EdgeKind::References,
+                file_path,
+                node.start_position().row as u32 + 1,
+            ));
+        }
+    } else {
+        for child in node.named_children(&mut node.walk()) {
+            collect_type_refs_recursive(child, source, file_path, sym_id, edges);
         }
     }
 }

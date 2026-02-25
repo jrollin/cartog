@@ -324,19 +324,64 @@ impl Database {
         Ok(rows)
     }
 
-    /// Find callers of a symbol (edges where target matches the name).
-    pub fn callers(&self, name: &str) -> Result<Vec<(Edge, Option<Symbol>)>> {
+    /// Find what a symbol calls (edges originating from symbols matching the name).
+    pub fn callees(&self, name: &str) -> Result<Vec<Edge>> {
         let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
-                    s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
-                    s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                    s.is_async, s.docstring
+            "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line
              FROM edges e
-             LEFT JOIN symbols s ON e.source_id = s.id
-             WHERE e.target_name = ?1 OR e.target_id IN (SELECT id FROM symbols WHERE name = ?1)",
+             JOIN symbols s ON e.source_id = s.id
+             WHERE s.name = ?1 AND e.kind = 'calls'",
         )?;
         let rows = stmt
-            .query_map(params![name], |row| {
+            .query_map(params![name], row_to_edge)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// All references to a name, with the source symbol resolved.
+    /// Optionally filter by edge kind.
+    pub fn refs(
+        &self,
+        name: &str,
+        kind_filter: Option<EdgeKind>,
+    ) -> Result<Vec<(Edge, Option<Symbol>)>> {
+        let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(kind) =
+            kind_filter
+        {
+            (
+                    "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+                            s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
+                            s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
+                            s.is_async, s.docstring
+                     FROM edges e
+                     LEFT JOIN symbols s ON e.source_id = s.id
+                     WHERE (e.target_name = ?1 OR e.target_id IN (SELECT id FROM symbols WHERE name = ?1))
+                       AND e.kind = ?2"
+                        .to_string(),
+                    vec![
+                        Box::new(name.to_string()) as Box<dyn rusqlite::types::ToSql>,
+                        Box::new(kind.as_str().to_string()),
+                    ],
+                )
+        } else {
+            (
+                    "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+                            s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
+                            s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
+                            s.is_async, s.docstring
+                     FROM edges e
+                     LEFT JOIN symbols s ON e.source_id = s.id
+                     WHERE e.target_name = ?1 OR e.target_id IN (SELECT id FROM symbols WHERE name = ?1)"
+                        .to_string(),
+                    vec![Box::new(name.to_string()) as Box<dyn rusqlite::types::ToSql>],
+                )
+        };
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
                 let kind_str = row.get::<_, String>(4)?;
                 let kind = kind_str.parse().unwrap_or(EdgeKind::References);
                 let edge = Edge {
@@ -354,34 +399,6 @@ impl Database {
                 };
                 Ok((edge, sym))
             })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    /// Find what a symbol calls (edges originating from symbols matching the name).
-    pub fn callees(&self, name: &str) -> Result<Vec<Edge>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line
-             FROM edges e
-             JOIN symbols s ON e.source_id = s.id
-             WHERE s.name = ?1 AND e.kind = 'calls'",
-        )?;
-        let rows = stmt
-            .query_map(params![name], row_to_edge)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
-    /// All references to a name (calls, imports, inherits, etc.).
-    pub fn refs(&self, name: &str) -> Result<Vec<Edge>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line
-             FROM edges e
-             WHERE e.target_name = ?1
-                OR e.target_id IN (SELECT id FROM symbols WHERE name = ?1)",
-        )?;
-        let rows = stmt
-            .query_map(params![name], row_to_edge)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -427,7 +444,7 @@ impl Database {
             }
             visited.insert(current.clone());
 
-            let refs = self.callers(&current)?;
+            let refs = self.refs(&current, None)?;
             for (edge, sym) in refs {
                 results.push((edge, depth + 1));
                 if let Some(s) = sym {
@@ -482,7 +499,6 @@ impl Database {
         })
     }
 
-    /// Get all indexed file paths.
     /// Get all indexed file paths, sorted alphabetically.
     pub fn all_files(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare("SELECT path FROM files ORDER BY path")?;
@@ -589,9 +605,9 @@ mod tests {
         };
         db.insert_edge(&edge).unwrap();
 
-        let callers = db.callers("callee_fn").unwrap();
-        assert_eq!(callers.len(), 1);
-        assert_eq!(callers[0].0.source_id, caller.id);
+        let refs = db.refs("callee_fn", None).unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].0.source_id, caller.id);
     }
 
     #[test]
@@ -659,9 +675,12 @@ mod tests {
         assert_eq!(resolved, 1);
 
         // Verify it resolved to the same-directory symbol
-        let refs = db.refs("helper").unwrap();
-        let call_edge = refs.iter().find(|e| e.kind == EdgeKind::Calls).unwrap();
-        assert_eq!(call_edge.target_id.as_ref().unwrap(), &same_dir.id);
+        let refs = db.refs("helper", None).unwrap();
+        let call_edge = refs
+            .iter()
+            .find(|(e, _)| e.kind == EdgeKind::Calls)
+            .unwrap();
+        assert_eq!(call_edge.0.target_id.as_ref().unwrap(), &same_dir.id);
     }
 
     #[test]
@@ -714,9 +733,12 @@ mod tests {
         assert_eq!(resolved, 1);
 
         // Verify same-file symbol was chosen
-        let refs = db.refs("helper").unwrap();
-        let call_edge = refs.iter().find(|e| e.kind == EdgeKind::Calls).unwrap();
-        assert_eq!(call_edge.target_id.as_ref().unwrap(), &same_file.id);
+        let refs = db.refs("helper", None).unwrap();
+        let call_edge = refs
+            .iter()
+            .find(|(e, _)| e.kind == EdgeKind::Calls)
+            .unwrap();
+        assert_eq!(call_edge.0.target_id.as_ref().unwrap(), &same_file.id);
     }
 
     #[test]

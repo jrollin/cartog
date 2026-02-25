@@ -37,20 +37,6 @@ class Database  L62-500
   ...
 ```
 
-### `cartog callers <name>`
-
-Find everything that calls or references a symbol — answers "who uses this?".
-
-```bash
-cartog callers validate_token
-```
-
-```
-imports  .tokens  auth/service.py:5
-calls    get_current_user  auth/service.py:40
-calls    refresh_token  auth/tokens.py:54
-```
-
 ### `cartog callees <name>`
 
 Find what a function calls — answers "what does this depend on?".
@@ -81,19 +67,23 @@ cartog impact validate_token --depth 3
 
 Indentation shows depth.
 
-### `cartog refs <name>`
+### `cartog refs <name> [--kind <kind>]`
 
-All references to a symbol across all edge types (calls, imports, inherits). Broader than `callers` — includes import statements and inheritance.
+All references to a symbol (calls, imports, inherits, type references, raises). Optionally filter by edge kind.
 
 ```bash
-cartog refs UserService
+cartog refs UserService                  # all reference types
+cartog refs validate_token --kind calls  # only call sites
 ```
 
 ```
 imports  ./service  routes/auth.py:3
 calls    login  routes/auth.py:15
 inherits AdminService  auth/service.py:47
+references  process  routes/auth.py:22
 ```
+
+Available `--kind` values: `calls`, `imports`, `inherits`, `references`, `raises`.
 
 ### `cartog hierarchy <class>`
 
@@ -150,7 +140,7 @@ Symbols by kind:
 All commands accept `--json` for structured output:
 
 ```bash
-cartog --json callers validate_token
+cartog --json refs validate_token
 cartog --json outline src/auth/tokens.py
 cartog --json stats
 ```

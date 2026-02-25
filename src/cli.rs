@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(name = "cartog")]
@@ -11,6 +11,16 @@ pub struct Cli {
     /// Output as JSON
     #[arg(long, global = true)]
     pub json: bool,
+}
+
+/// Filter for edge kinds in the refs command.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum EdgeKindFilter {
+    Calls,
+    Imports,
+    Inherits,
+    References,
+    Raises,
 }
 
 #[derive(Debug, Subcommand)]
@@ -32,12 +42,6 @@ pub enum Command {
         file: String,
     },
 
-    /// Find all callers of a symbol
-    Callers {
-        /// Symbol name to search for
-        name: String,
-    },
-
     /// Find what a symbol calls
     Callees {
         /// Symbol name to search for
@@ -54,10 +58,14 @@ pub enum Command {
         depth: u32,
     },
 
-    /// All references to a symbol (calls, imports, inherits)
+    /// All references to a symbol (calls, imports, inherits, references, raises)
     Refs {
         /// Symbol name to search for
         name: String,
+
+        /// Filter by edge kind
+        #[arg(long)]
+        kind: Option<EdgeKindFilter>,
     },
 
     /// Show inheritance hierarchy for a class

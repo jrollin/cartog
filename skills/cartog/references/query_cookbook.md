@@ -9,7 +9,7 @@ cartog outline src/auth/tokens.py
 
 ### "Who calls this function?"
 ```bash
-cartog callers validate_token
+cartog refs validate_token --kind calls
 ```
 
 ### "What does this function depend on?"
@@ -65,5 +65,5 @@ cartog impact OldClassName --depth 5   # Full blast radius
 - Use `--json` when you need to parse output programmatically
 - After making changes, run `cartog index .` to update (uses git to detect changes)
 - Use `cartog index . --force` to rebuild the entire index from scratch
-- Symbol names are matched exactly — use the simple name (e.g., `validate_token`, not `auth.tokens.validate_token`)
-- For method queries, use just the method name (e.g., `authenticate`, not `UserService.authenticate`)
+- Symbol names are matched by simple name — use `validate_token`, not `auth.tokens.validate_token`
+- For method queries, use the method name (e.g., `authenticate`). Dotted names like `UserService.authenticate` are accepted but resolved to the simple part

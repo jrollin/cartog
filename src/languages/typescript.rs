@@ -281,4 +281,71 @@ type UserId = string;
         assert!(t.is_some());
         assert_eq!(t.unwrap().kind, SymbolKind::Variable);
     }
+
+    #[test]
+    fn test_type_annotation_refs() {
+        let result = extract_ts(
+            r#"
+function process(user: User, count: number): Response {
+    return new Response();
+}
+"#,
+        );
+
+        let refs: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References)
+            .collect();
+
+        let targets: Vec<&str> = refs.iter().map(|e| e.target_name.as_str()).collect();
+        // User and Response are uppercase → captured as references
+        assert!(targets.contains(&"User"));
+        assert!(targets.contains(&"Response"));
+        // number is lowercase → not captured
+        assert!(!targets.contains(&"number"));
+    }
+
+    #[test]
+    fn test_new_expression_as_call() {
+        let result = extract_ts(
+            r#"
+function create() {
+    const user = new UserService();
+    const map = new Map();
+}
+"#,
+        );
+
+        let calls: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Calls)
+            .collect();
+
+        let targets: Vec<&str> = calls.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(targets.contains(&"UserService"));
+        assert!(targets.contains(&"Map"));
+    }
+
+    #[test]
+    fn test_generic_type_annotation_refs() {
+        let result = extract_ts(
+            r#"
+async function getUser(id: number): Promise<User> {
+    return {} as User;
+}
+"#,
+        );
+
+        let refs: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References)
+            .collect();
+
+        let targets: Vec<&str> = refs.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(targets.contains(&"Promise"));
+        assert!(targets.contains(&"User"));
+    }
 }

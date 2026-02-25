@@ -11,7 +11,7 @@ cartog is a code graph indexer that gives LLM coding agents (Claude Code, Cursor
 
 ## Why
 
-Code is a graph of relationships (calls, imports, inherits). cartog pre-computes this graph with tree-sitter, stores it in SQLite, and lets you query it instead of re-discovering structure from scratch every time.
+Code is a graph of relationships (calls, imports, inherits, type references). cartog pre-computes this graph with tree-sitter, stores it in SQLite, and lets you query it instead of re-discovering structure from scratch every time.
 
 **Before** (6+ tool calls, ~2000 tokens, might still miss references):
 ```
@@ -39,10 +39,10 @@ cargo install cartog
 ```bash
 cartog index .                              # Build the graph
 cartog outline src/auth/tokens.py           # File structure without reading it
-cartog callers validate_token               # Who calls this?
+cartog refs validate_token                  # Who references this? (calls, imports, inherits, types)
+cartog refs validate_token --kind calls     # Filter: only call sites
 cartog callees authenticate                 # What does this call?
 cartog impact SessionManager --depth 3      # What breaks if I change this?
-cartog refs parse_config                    # All references (calls, imports, inherits)
 cartog hierarchy BaseService                # Inheritance tree
 cartog deps src/routes/auth.py              # File-level imports
 cartog stats                                # Index summary
@@ -77,7 +77,7 @@ $ cartog impact validate_token --depth 3
 
 ## How It Works
 
-1. **Index** — walks your project, parses each file with tree-sitter, extracts symbols (functions, classes, methods, imports, variables) and edges (calls, imports, inherits, raises)
+1. **Index** — walks your project, parses each file with tree-sitter, extracts symbols (functions, classes, methods, imports, variables) and edges (calls, imports, inherits, raises, type references)
 2. **Store** — writes everything to a local `.cartog.db` SQLite file
 3. **Resolve** — links edges by name with scope-aware heuristic matching (same file > same directory > unique project match)
 4. **Query** — instant lookups against the pre-computed graph

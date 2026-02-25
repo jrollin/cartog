@@ -2,7 +2,7 @@
 name: cartog
 description: >-
   Code graph navigation skill. Use cartog before grep or cat to understand
-  file structure, find callers/callees, assess refactoring impact, and navigate
+  file structure, find references/callees, assess refactoring impact, and navigate
   code dependencies. Supports Python, TypeScript/JavaScript, Rust, Go.
 ---
 
@@ -12,10 +12,9 @@ description: >-
 
 Use cartog **before** reaching for grep, cat, or file reads when you need to:
 - Understand the structure of a file → `cartog outline <file>`
-- Find who calls a function → `cartog callers <name>`
+- Find who references a symbol → `cartog refs <name>` (or `--kind calls` for just callers)
 - See what a function calls → `cartog callees <name>`
 - Assess refactoring impact → `cartog impact <name> --depth 3`
-- Find all references → `cartog refs <name>`
 - Understand class hierarchies → `cartog hierarchy <class>`
 - See file dependencies → `cartog deps <file>`
 
@@ -49,14 +48,15 @@ cartog outline src/auth/tokens.py
 ```
 Output shows symbols with types, signatures, and line ranges — no need to read the file.
 
-### Callers (who calls this?)
+### Refs (who references this?)
 ```bash
-cartog callers validate_token
+cartog refs validate_token               # all reference types
+cartog refs validate_token --kind calls  # only call sites
 ```
 
 ### Callees (what does this call?)
 ```bash
-cartog callees UserService.authenticate
+cartog callees authenticate
 ```
 
 ### Impact (transitive blast radius)
@@ -65,11 +65,11 @@ cartog impact SessionManager --depth 3
 ```
 Shows everything that transitively depends on a symbol up to N hops.
 
-### Refs (all references)
+### Refs with kind filter
 ```bash
-cartog refs parse_config
+cartog refs parse_config --kind imports  # only import edges
 ```
-Returns calls, imports, inherits — every edge pointing to this name.
+Available kinds: `calls`, `imports`, `inherits`, `references`, `raises`.
 
 ### Hierarchy (inheritance tree)
 ```bash
@@ -90,7 +90,7 @@ cartog stats
 
 All commands support `--json` for structured output:
 ```bash
-cartog --json callers validate_token
+cartog --json refs validate_token
 cartog --json outline src/auth/tokens.py
 ```
 
@@ -99,10 +99,9 @@ cartog --json outline src/auth/tokens.py
 | I need to... | Use |
 |-------------|-----|
 | Know what's in a file | `cartog outline <file>` |
-| Find usages of a function | `cartog callers <name>` |
+| Find usages of a function | `cartog refs <name>` (use `--kind calls` for just callers) |
 | Understand what a function does at a high level | `cartog callees <name>` |
 | Check if a change is safe | `cartog impact <name>` |
-| Find all references (imports, calls, inherits) | `cartog refs <name>` |
 | Understand class hierarchy | `cartog hierarchy <class>` |
 | See file dependencies | `cartog deps <file>` |
 | Read actual implementation logic | `cat <file>` (cartog can't help here) |

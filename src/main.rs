@@ -16,10 +16,9 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Index { path, force } => commands::cmd_index(&path, force, cli.json),
         Command::Outline { file } => commands::cmd_outline(&file, cli.json),
-        Command::Callers { name } => commands::cmd_callers(&name, cli.json),
         Command::Callees { name } => commands::cmd_callees(&name, cli.json),
         Command::Impact { name, depth } => commands::cmd_impact(&name, depth, cli.json),
-        Command::Refs { name } => commands::cmd_refs(&name, cli.json),
+        Command::Refs { name, kind } => commands::cmd_refs(&name, kind, cli.json),
         Command::Hierarchy { name } => commands::cmd_hierarchy(&name, cli.json),
         Command::Deps { file } => commands::cmd_deps(&file, cli.json),
         Command::Stats => commands::cmd_stats(cli.json),

@@ -48,10 +48,10 @@ Creates a `.cartog.db` SQLite file with the code graph. Incremental -- re-runnin
 | Task | Command |
 |------|---------|
 | File structure (replaces `cat`) | `cartog outline src/main.rs` |
-| Who calls a function? | `cartog callers validate_token` |
+| Who references a symbol? | `cartog refs validate_token` |
+| Only call sites? | `cartog refs validate_token --kind calls` |
 | What does a function call? | `cartog callees authenticate` |
 | Refactoring blast radius | `cartog impact SessionManager --depth 3` |
-| All references | `cartog refs parse_config` |
 | Class hierarchy | `cartog hierarchy BaseService` |
 | File imports | `cartog deps src/routes/auth.py` |
 | Index summary | `cartog stats` |
@@ -59,7 +59,7 @@ Creates a `.cartog.db` SQLite file with the code graph. Incremental -- re-runnin
 ### 3. Use `--json` for structured output
 
 ```bash
-cartog --json callers validate_token
+cartog --json refs validate_token
 ```
 
 ## What the Skill Teaches Claude Code
@@ -67,7 +67,7 @@ cartog --json callers validate_token
 The skill (`skills/cartog/SKILL.md`) instructs your AI agent to:
 
 - Use `cartog outline` **before** reading a file when structure is needed, not content
-- Run `cartog callers/impact` **before** grepping for references
+- Run `cartog refs/impact` **before** grepping for references
 - Run `cartog index .` after making code changes to keep the graph fresh
 - Only fall back to `cat`/`grep` for actual implementation details, string literals, or config values
 

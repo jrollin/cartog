@@ -122,6 +122,9 @@ fn extract_function(
     }
     symbols.push(sym);
 
+    // Extract type references from parameter and return types
+    extract_fn_type_refs(node, source, file_path, &sym_id, edges);
+
     if let Some(body) = node.child_by_field_name("body") {
         walk_for_calls(body, source, file_path, &sym_id, edges);
     }
@@ -172,6 +175,9 @@ fn extract_method(
         sym = sym.with_visibility(visibility);
     }
     symbols.push(sym);
+
+    // Extract type references from parameter and return types
+    extract_fn_type_refs(node, source, file_path, &sym_id, edges);
 
     if let Some(body) = node.child_by_field_name("body") {
         walk_for_calls(body, source, file_path, &sym_id, edges);
@@ -547,6 +553,23 @@ fn walk_for_calls(
                         }
                     }
                 }
+                "composite_literal" => {
+                    // MyStruct{field: val} — the type is a reference
+                    if let Some(type_node) = current.child_by_field_name("type") {
+                        let type_name = extract_type_name(type_node, source);
+                        if !type_name.is_empty()
+                            && type_name.chars().next().is_some_and(|c| c.is_uppercase())
+                        {
+                            edges.push(Edge::new(
+                                context_id,
+                                type_name,
+                                EdgeKind::References,
+                                file_path,
+                                current.start_position().row as u32 + 1,
+                            ));
+                        }
+                    }
+                }
                 // Don't descend into nested function literals
                 "func_literal" => {
                     did_visit_children = true;
@@ -570,6 +593,69 @@ fn walk_for_calls(
             }
             if cursor.goto_next_sibling() {
                 break;
+            }
+        }
+    }
+}
+
+// ── Type reference extraction ──
+
+/// Extract type references from function parameter types and return type.
+fn extract_fn_type_refs(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    sym_id: &str,
+    edges: &mut Vec<Edge>,
+) {
+    // Parameter types
+    if let Some(params) = node.child_by_field_name("parameters") {
+        collect_type_refs_recursive(params, source, file_path, sym_id, edges);
+    }
+    // Return type (Go calls this "result")
+    if let Some(ret) = node.child_by_field_name("result") {
+        collect_type_refs_recursive(ret, source, file_path, sym_id, edges);
+    }
+}
+
+/// Recursively walk a subtree collecting type_identifier references.
+fn collect_type_refs_recursive(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    sym_id: &str,
+    edges: &mut Vec<Edge>,
+) {
+    match node.kind() {
+        "type_identifier" => {
+            let name = node_text(node, source);
+            // Go: exported types start with uppercase, skip builtins (int, string, bool, error, etc.)
+            if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                edges.push(Edge::new(
+                    sym_id,
+                    name,
+                    EdgeKind::References,
+                    file_path,
+                    node.start_position().row as u32 + 1,
+                ));
+            }
+        }
+        "qualified_type" => {
+            // pkg.Type — extract the type part
+            let name = extract_type_name(node, source);
+            if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                edges.push(Edge::new(
+                    sym_id,
+                    name,
+                    EdgeKind::References,
+                    file_path,
+                    node.start_position().row as u32 + 1,
+                ));
+            }
+        }
+        _ => {
+            for child in node.named_children(&mut node.walk()) {
+                collect_type_refs_recursive(child, source, file_path, sym_id, edges);
             }
         }
     }
@@ -996,6 +1082,53 @@ type unexportedType struct {}
 
         let unexported = result.symbols.iter().find(|s| s.name == "unexportedType");
         assert_eq!(unexported.unwrap().visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn test_type_annotation_refs() {
+        let result = extract(
+            r#"package main
+
+func Process(user User, count int) Response {
+    return Response{}
+}
+"#,
+        );
+
+        let refs: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References)
+            .collect();
+
+        let targets: Vec<&str> = refs.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(targets.contains(&"User"));
+        assert!(targets.contains(&"Response"));
+        // int is lowercase → not captured
+        assert!(!targets.contains(&"int"));
+    }
+
+    #[test]
+    fn test_composite_literal_refs() {
+        let result = extract(
+            r#"package main
+
+func create() {
+    user := User{Name: "Alice"}
+    cfg := Config{Debug: true}
+}
+"#,
+        );
+
+        let refs: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References)
+            .collect();
+
+        let targets: Vec<&str> = refs.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(targets.contains(&"User"));
+        assert!(targets.contains(&"Config"));
     }
 
     #[test]

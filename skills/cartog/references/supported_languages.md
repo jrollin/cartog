@@ -8,6 +8,9 @@
 - Function calls
 - Inheritance (base classes)
 - Raise statements
+- Type annotation references (parameter types, return types)
+- Decorator references (`@decorator`)
+- Exception handler type references (`except ValueError:`)
 - Async functions
 - Docstrings
 - Variable assignments (module-level and class-level)
@@ -16,8 +19,9 @@
 ### TypeScript (.ts, .tsx)
 - Functions (declaration and arrow), classes, methods, interfaces, enums, type aliases
 - Imports (ES modules)
-- Function calls, throw statements
+- Function calls, `new` expressions, throw statements
 - Inheritance (extends), interface extends, implements
+- Type annotation references (parameter types, return types, generic types)
 - Async functions
 - JSDoc comments
 - Class fields with visibility (public/private/protected TS modifiers, #private, _convention)
@@ -25,7 +29,7 @@
 ### JavaScript (.js, .jsx, .mjs, .cjs)
 - Functions (declaration and arrow), classes, methods
 - Imports (ES modules)
-- Function calls, throw statements
+- Function calls, `new` expressions, throw statements
 - Inheritance (extends)
 - Async functions
 - JSDoc comments
@@ -36,6 +40,7 @@
 - Use declarations (use statements)
 - Function calls, macro invocations (tracked as `name!`)
 - Trait implementations (impl Trait for Type -> inherits edge)
+- Type references in function signatures (parameter types, return types, generic types)
 - Async functions
 - Doc comments (///)
 - Methods within impl blocks (linked to parent type)
@@ -47,6 +52,8 @@
 - Imports (single and grouped)
 - Function and method calls (including selector expressions like `fmt.Println`)
 - Interface embedding (inherits edges)
+- Composite literal type references (`MyStruct{...}`)
+- Type references in function signatures (parameter types, return types)
 - Constants and variables (single and grouped)
 - Doc comments (`//` preceding declarations)
 - Visibility: Exported (uppercase) = public, unexported (lowercase) = private

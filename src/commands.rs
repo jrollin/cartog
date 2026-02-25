@@ -3,9 +3,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+use crate::cli::EdgeKindFilter;
 use crate::db::Database;
 use crate::indexer;
-use crate::types::SymbolKind;
+use crate::types::{EdgeKind, SymbolKind};
 
 const DB_FILE: &str = ".cartog.db";
 
@@ -75,45 +76,6 @@ pub fn cmd_outline(file: &str, json: bool) -> Result<()> {
     })
 }
 
-/// Find all callers of a symbol.
-pub fn cmd_callers(name: &str, json: bool) -> Result<()> {
-    let db = open_db()?;
-    let results = db.callers(name)?;
-
-    if json {
-        let items: Vec<_> = results
-            .iter()
-            .map(|(edge, sym)| {
-                serde_json::json!({
-                    "edge": edge,
-                    "caller": sym,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&items)?);
-    } else {
-        if results.is_empty() {
-            println!("No callers found for '{name}'");
-            return Ok(());
-        }
-        for (edge, sym) in &results {
-            let caller_name = sym
-                .as_ref()
-                .map(|s| s.name.as_str())
-                .unwrap_or(&edge.source_id);
-            println!(
-                "{kind}  {caller}  {file}:{line}",
-                kind = edge.kind,
-                caller = caller_name,
-                file = edge.file_path,
-                line = edge.line,
-            );
-        }
-    }
-
-    Ok(())
-}
-
 /// Find what a symbol calls.
 pub fn cmd_callees(name: &str, json: bool) -> Result<()> {
     let db = open_db()?;
@@ -171,26 +133,50 @@ pub fn cmd_impact(name: &str, depth: u32, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// All references to a symbol (calls, imports, inherits).
-pub fn cmd_refs(name: &str, json: bool) -> Result<()> {
+/// All references to a symbol (calls, imports, inherits, references, raises).
+pub fn cmd_refs(name: &str, kind: Option<EdgeKindFilter>, json: bool) -> Result<()> {
     let db = open_db()?;
-    let edges = db.refs(name)?;
+    let kind_filter = kind.map(|k| match k {
+        EdgeKindFilter::Calls => EdgeKind::Calls,
+        EdgeKindFilter::Imports => EdgeKind::Imports,
+        EdgeKindFilter::Inherits => EdgeKind::Inherits,
+        EdgeKindFilter::References => EdgeKind::References,
+        EdgeKindFilter::Raises => EdgeKind::Raises,
+    });
+    let results = db.refs(name, kind_filter)?;
 
-    output(&edges, json, |edges| {
-        if edges.is_empty() {
+    if json {
+        let items: Vec<_> = results
+            .iter()
+            .map(|(edge, sym)| {
+                serde_json::json!({
+                    "edge": edge,
+                    "source": sym,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&items)?);
+    } else {
+        if results.is_empty() {
             println!("No references found for '{name}'");
-            return;
+            return Ok(());
         }
-        for edge in edges {
+        for (edge, sym) in &results {
+            let source_name = sym
+                .as_ref()
+                .map(|s| s.name.as_str())
+                .unwrap_or(&edge.source_id);
             println!(
                 "{kind}  {source}  {file}:{line}",
                 kind = edge.kind,
-                source = edge.source_id,
+                source = source_name,
                 file = edge.file_path,
                 line = edge.line,
             );
         }
-    })
+    }
+
+    Ok(())
 }
 
 /// Show inheritance hierarchy for a class.

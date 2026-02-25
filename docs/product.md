@@ -8,7 +8,7 @@ cartog is a code graph indexer that gives LLM coding agents instant structural u
 
 ## Core Insight
 
-Code is a graph of relationships (calls, imports, inherits). Pre-compute this graph with tree-sitter, store it in SQLite, and let the agent query it instead of re-discovering structure from scratch every time.
+Code is a graph of relationships (calls, imports, inherits, type references). Pre-compute this graph with tree-sitter, store it in SQLite, and let the agent query it instead of re-discovering structure from scratch every time.
 
 ## Target Users
 

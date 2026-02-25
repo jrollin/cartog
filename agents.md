@@ -11,7 +11,7 @@ See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/
 ```bash
 cargo build              # debug build
 cargo build --release    # release build (3.5MB binary)
-cargo test               # run all tests (56 unit tests)
+cargo test               # run all tests (84 unit tests)
 ```
 
 ## Code Conventions
@@ -66,5 +66,5 @@ The script bumps `Cargo.toml`, commits, tags `vX.Y.Z`, and pushes. The release w
 
 ## Current State
 
-- **Working**: Python, TypeScript/JavaScript, Rust, Go extractors, SQLite storage, all 9 CLI commands, incremental indexing (git-based + SHA-256 fallback), `--force` re-index flag, CI/CD pipelines
-- **Pending**: Java extractor, crates.io publish
+- **Working**: Python, TypeScript/JavaScript, Rust, Go extractors, SQLite storage, all 8 CLI commands, incremental indexing (git-based + SHA-256 fallback), `--force` re-index flag, CI/CD pipelines, `EdgeKind::References` extraction (type annotations, decorators, exception types, composite literals, `new` expressions)
+- **Pending**: Java extractor

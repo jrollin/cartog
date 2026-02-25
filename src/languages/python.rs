@@ -65,9 +65,24 @@ fn extract_node(
             extract_class(node, source, file_path, parent_id, symbols, edges);
         }
         "decorated_definition" => {
-            // The actual definition is a child; decorators are siblings
+            // Find the actual definition first to compute its symbol ID for decorator edges
+            let mut def_sym_id = None;
             for child in node.named_children(&mut node.walk()) {
                 if child.kind() == "function_definition" || child.kind() == "class_definition" {
+                    if let Some(name_node) = child.child_by_field_name("name") {
+                        let name = node_text(name_node, source);
+                        let line = child.start_position().row as u32 + 1;
+                        def_sym_id = Some(symbol_id(file_path, name, line));
+                    }
+                }
+            }
+            // Extract decorator references using the decorated symbol as source
+            for child in node.named_children(&mut node.walk()) {
+                if child.kind() == "decorator" {
+                    extract_decorator_ref(child, source, file_path, def_sym_id.as_deref(), edges);
+                } else if child.kind() == "function_definition"
+                    || child.kind() == "class_definition"
+                {
                     extract_node(child, source, file_path, parent_id, symbols, edges);
                 }
             }
@@ -161,6 +176,9 @@ fn extract_function(
     }
     sym = sym.with_docstring(docstring);
     symbols.push(sym);
+
+    // Extract type annotation references from parameters and return type
+    extract_fn_type_refs(node, source, file_path, &sym_id, edges);
 
     // Walk the function body for calls, raises, etc.
     if let Some(body) = node.child_by_field_name("body") {
@@ -368,6 +386,44 @@ fn walk_for_calls_and_raises(
                         }
                     }
                 }
+                "except_clause" => {
+                    // except ValueError as e: — extract exception type reference
+                    if let Some(ctx) = context_id {
+                        for child in current.named_children(&mut current.walk()) {
+                            if child.kind() == "identifier" || child.kind() == "attribute" {
+                                let type_name = node_text(child, source);
+                                if !type_name.is_empty()
+                                    && type_name.chars().next().is_some_and(|c| c.is_uppercase())
+                                {
+                                    edges.push(Edge::new(
+                                        ctx,
+                                        type_name,
+                                        EdgeKind::References,
+                                        file_path,
+                                        child.start_position().row as u32 + 1,
+                                    ));
+                                }
+                                break; // only the first identifier/attribute is the exception type
+                            }
+                            // except (TypeError, ValueError):
+                            if child.kind() == "tuple" {
+                                for tc in child.named_children(&mut child.walk()) {
+                                    let type_name = node_text(tc, source);
+                                    if !type_name.is_empty() {
+                                        edges.push(Edge::new(
+                                            ctx,
+                                            type_name,
+                                            EdgeKind::References,
+                                            file_path,
+                                            tc.start_position().row as u32 + 1,
+                                        ));
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
                 // Don't descend into nested function/class definitions
                 "function_definition" | "class_definition" => {
                     did_visit_children = true;
@@ -393,6 +449,108 @@ fn walk_for_calls_and_raises(
             if cursor.goto_next_sibling() {
                 break;
             }
+        }
+    }
+}
+
+// ── Reference helpers ──
+
+/// Extract type annotation references from function parameters and return type.
+fn extract_fn_type_refs(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    sym_id: &str,
+    edges: &mut Vec<Edge>,
+) {
+    // Parameter type annotations
+    if let Some(params) = node.child_by_field_name("parameters") {
+        for param in params.named_children(&mut params.walk()) {
+            // typed_parameter, typed_default_parameter
+            if let Some(type_node) = param.child_by_field_name("type") {
+                collect_type_refs(type_node, source, file_path, sym_id, edges);
+            }
+        }
+    }
+    // Return type annotation
+    if let Some(ret) = node.child_by_field_name("return_type") {
+        collect_type_refs(ret, source, file_path, sym_id, edges);
+    }
+}
+
+/// Recursively collect type name references from a type annotation node.
+fn collect_type_refs(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    sym_id: &str,
+    edges: &mut Vec<Edge>,
+) {
+    match node.kind() {
+        "identifier" => {
+            let name = node_text(node, source);
+            // Skip builtins and lowercase names (int, str, bool, etc.)
+            if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                edges.push(Edge::new(
+                    sym_id,
+                    name,
+                    EdgeKind::References,
+                    file_path,
+                    node.start_position().row as u32 + 1,
+                ));
+            }
+        }
+        "attribute" => {
+            // e.g. typing.Optional — emit the full dotted name
+            let name = node_text(node, source);
+            if !name.is_empty() {
+                edges.push(Edge::new(
+                    sym_id,
+                    name,
+                    EdgeKind::References,
+                    file_path,
+                    node.start_position().row as u32 + 1,
+                ));
+            }
+        }
+        // For subscript types like Optional[str], List[int], Dict[str, int]
+        // recurse into children to capture the outer type and inner types
+        _ => {
+            for child in node.named_children(&mut node.walk()) {
+                collect_type_refs(child, source, file_path, sym_id, edges);
+            }
+        }
+    }
+}
+
+/// Extract a decorator as a reference edge.
+fn extract_decorator_ref(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    context_id: Option<&str>,
+    edges: &mut Vec<Edge>,
+) {
+    let Some(ctx) = context_id else { return };
+    // Decorator node children: "@" + expression
+    // The expression can be identifier, attribute, or call
+    for child in node.named_children(&mut node.walk()) {
+        let name = match child.kind() {
+            "identifier" | "attribute" => node_text(child, source).to_string(),
+            "call" => child
+                .child_by_field_name("function")
+                .map(|f| node_text(f, source).to_string())
+                .unwrap_or_default(),
+            _ => continue,
+        };
+        if !name.is_empty() {
+            edges.push(Edge::new(
+                ctx,
+                name,
+                EdgeKind::References,
+                file_path,
+                node.start_position().row as u32 + 1,
+            ));
         }
     }
 }
@@ -732,6 +890,80 @@ class Foo:
         let result = extract("def broken(:\n    pass");
         // Should extract something or nothing, but not crash
         let _ = result.symbols.len();
+    }
+
+    #[test]
+    fn test_type_annotation_refs() {
+        let result = extract(
+            r#"
+def process(user: User, count: int) -> Response:
+    pass
+"#,
+        );
+
+        let refs: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References)
+            .collect();
+
+        let targets: Vec<&str> = refs.iter().map(|e| e.target_name.as_str()).collect();
+        // User and Response are uppercase → captured as references
+        assert!(targets.contains(&"User"));
+        assert!(targets.contains(&"Response"));
+        // int is lowercase → not captured
+        assert!(!targets.contains(&"int"));
+    }
+
+    #[test]
+    fn test_decorator_refs() {
+        let result = extract(
+            r#"
+@login_required
+def protected():
+    pass
+
+@app.route("/api")
+def endpoint():
+    pass
+"#,
+        );
+
+        let refs: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References)
+            .collect();
+
+        let targets: Vec<&str> = refs.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(targets.contains(&"login_required"));
+        assert!(targets.contains(&"app.route"));
+    }
+
+    #[test]
+    fn test_except_clause_refs() {
+        let result = extract(
+            r#"
+def risky():
+    try:
+        pass
+    except ValueError:
+        pass
+    except (TypeError, KeyError):
+        pass
+"#,
+        );
+
+        let refs: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References)
+            .collect();
+
+        let targets: Vec<&str> = refs.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(targets.contains(&"ValueError"));
+        assert!(targets.contains(&"TypeError"));
+        assert!(targets.contains(&"KeyError"));
     }
 
     #[test]

@@ -9,7 +9,7 @@
 | Crate | Purpose |
 |-------|---------|
 | `tree-sitter` | Incremental parsing, CST traversal |
-| `tree-sitter-{lang}` | Per-language grammars (Python, TS/JS, Rust, Go, Java) |
+| `tree-sitter-{lang}` | Per-language grammars (Python, TS/JS, Rust, Go) |
 | `rusqlite` (bundled) | SQLite storage, zero external deps |
 | `clap` (derive) | CLI argument parsing |
 | `serde` + `serde_json` | JSON serialization for `--json` output |
@@ -32,8 +32,8 @@
 | Monorepo | Deferred | Index from CWD, user can cd into subproject |
 | Output format | Human default + `--json` flag | Readable for humans, parseable for scripts |
 | Edge resolution | Exact name, scope-aware | Same file > same dir > same project priority |
-| Distribution | `cargo install` first, binaries later | Ship fast, optimize distribution after |
+| Distribution | `cargo install` + pre-built binaries | GitHub Releases for 5 targets, crates.io publish |
 
 ## Minimum Supported Rust Version
 
-1.75+ (edition 2021)
+1.70+ (edition 2021)

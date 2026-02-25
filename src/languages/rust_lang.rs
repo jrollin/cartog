@@ -142,6 +142,9 @@ fn extract_function(
         .with_docstring(docstring),
     );
 
+    // Extract type references from parameter and return types
+    extract_fn_type_refs(node, source, file_path, &sym_id, edges);
+
     // Walk body for calls
     if let Some(body) = node.child_by_field_name("body") {
         walk_for_calls(body, source, file_path, &sym_id, edges);
@@ -639,6 +642,71 @@ fn walk_for_calls(
     }
 }
 
+// ── Type reference extraction ──
+
+/// Extract type references from function parameter types and return type.
+fn extract_fn_type_refs(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    sym_id: &str,
+    edges: &mut Vec<Edge>,
+) {
+    // Parameter types
+    if let Some(params) = node.child_by_field_name("parameters") {
+        collect_type_refs_recursive(params, source, file_path, sym_id, edges);
+    }
+    // Return type
+    if let Some(ret) = node.child_by_field_name("return_type") {
+        collect_type_refs_recursive(ret, source, file_path, sym_id, edges);
+    }
+}
+
+/// Recursively walk a subtree collecting type_identifier and scoped_type_identifier references.
+fn collect_type_refs_recursive(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    sym_id: &str,
+    edges: &mut Vec<Edge>,
+) {
+    match node.kind() {
+        "type_identifier" => {
+            let name = node_text(node, source);
+            // Skip primitive types (lowercase: i32, u64, bool, str, etc.)
+            // and common generic wrappers that are always in scope
+            if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                edges.push(Edge::new(
+                    sym_id,
+                    name,
+                    EdgeKind::References,
+                    file_path,
+                    node.start_position().row as u32 + 1,
+                ));
+            }
+        }
+        "scoped_type_identifier" => {
+            // e.g. std::io::Error — extract the full path as a reference
+            let name = extract_type_name(node, source);
+            if !name.is_empty() {
+                edges.push(Edge::new(
+                    sym_id,
+                    name,
+                    EdgeKind::References,
+                    file_path,
+                    node.start_position().row as u32 + 1,
+                ));
+            }
+        }
+        // Don't recurse into scoped_type_identifier children (already handled above)
+        _ => {
+            for child in node.named_children(&mut node.walk()) {
+                collect_type_refs_recursive(child, source, file_path, sym_id, edges);
+            }
+        }
+    }
+}
+
 // ── Helpers ──
 
 fn has_child_kind(node: Node, kind: &str) -> bool {
@@ -960,6 +1028,71 @@ pub(crate) fn crate_fn() {}
 
         let crate_fn = result.symbols.iter().find(|s| s.name == "crate_fn");
         assert_eq!(crate_fn.unwrap().visibility, Visibility::Public);
+    }
+
+    #[test]
+    fn test_type_annotation_refs() {
+        let result = extract(
+            r#"
+fn process(user: User, count: u32) -> Response {
+    todo!()
+}
+"#,
+        );
+
+        let refs: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References)
+            .collect();
+
+        let targets: Vec<&str> = refs.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(targets.contains(&"User"));
+        assert!(targets.contains(&"Response"));
+        // u32 is lowercase → not captured
+        assert!(!targets.contains(&"u32"));
+    }
+
+    #[test]
+    fn test_generic_type_refs() {
+        let result = extract(
+            r#"
+fn find(id: u64) -> Option<User> {
+    todo!()
+}
+"#,
+        );
+
+        let refs: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References)
+            .collect();
+
+        let targets: Vec<&str> = refs.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(targets.contains(&"Option"));
+        assert!(targets.contains(&"User"));
+    }
+
+    #[test]
+    fn test_result_type_refs() {
+        let result = extract(
+            r#"
+fn connect(addr: &str) -> Result<Connection> {
+    todo!()
+}
+"#,
+        );
+
+        let refs: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References)
+            .collect();
+
+        let targets: Vec<&str> = refs.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(targets.contains(&"Result"));
+        assert!(targets.contains(&"Connection"));
     }
 
     #[test]
