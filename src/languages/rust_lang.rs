@@ -270,9 +270,20 @@ fn extract_impl(
         return;
     }
 
-    // Build a synthetic parent ID for methods: file:TypeName:line
     let start_line = node.start_position().row as u32 + 1;
+    let end_line = node.end_position().row as u32 + 1;
     let impl_parent_id = symbol_id(file_path, &impl_type, start_line);
+
+    // Emit a Class symbol for the impl block so edges have a valid source_id
+    symbols.push(Symbol::new(
+        impl_type.clone(),
+        SymbolKind::Class,
+        file_path,
+        start_line,
+        end_line,
+        node.start_byte() as u32,
+        node.end_byte() as u32,
+    ));
 
     // Check if this is a trait impl: impl Trait for Type
     let trait_name = node
