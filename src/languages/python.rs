@@ -878,6 +878,76 @@ class Foo:
     }
 
     #[test]
+    fn test_async_function() {
+        let result = extract(
+            r#"
+async def fetch(url: str) -> Response:
+    return await http.get(url)
+
+class Service:
+    async def process(self, data):
+        pass
+"#,
+        );
+
+        let fetch = result.symbols.iter().find(|s| s.name == "fetch").unwrap();
+        assert_eq!(fetch.kind, SymbolKind::Function);
+        assert!(fetch.is_async);
+
+        let process = result.symbols.iter().find(|s| s.name == "process").unwrap();
+        assert_eq!(process.kind, SymbolKind::Method);
+        assert!(process.is_async);
+    }
+
+    #[test]
+    fn test_module_level_assignment() {
+        let result = extract(
+            r#"
+MAX_RETRIES = 3
+_internal_cache = {}
+__private_lock = None
+"#,
+        );
+
+        let vars: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Variable)
+            .collect();
+        assert_eq!(vars.len(), 3);
+
+        let max = vars.iter().find(|s| s.name == "MAX_RETRIES").unwrap();
+        assert_eq!(max.visibility, Visibility::Public);
+
+        let internal = vars.iter().find(|s| s.name == "_internal_cache").unwrap();
+        assert_eq!(internal.visibility, Visibility::Protected);
+
+        let private = vars.iter().find(|s| s.name == "__private_lock").unwrap();
+        assert_eq!(private.visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn test_aliased_import() {
+        let result = extract(
+            r#"
+import numpy as np
+from collections import OrderedDict as ODict
+"#,
+        );
+
+        let imports: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Import)
+            .collect();
+        assert_eq!(imports.len(), 2);
+
+        let names: Vec<&str> = imports.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"numpy"));
+        assert!(names.contains(&"collections"));
+    }
+
+    #[test]
     fn test_empty_file() {
         let result = extract("");
         assert!(result.symbols.is_empty());
@@ -886,9 +956,7 @@ class Foo:
 
     #[test]
     fn test_syntax_error_partial_parse() {
-        // Tree-sitter is error-tolerant — should not panic, may return partial results
         let result = extract("def broken(:\n    pass");
-        // Should extract something or nothing, but not crash
         let _ = result.symbols.len();
     }
 

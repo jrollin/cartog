@@ -1132,8 +1132,69 @@ func create() {
     }
 
     #[test]
+    fn test_grouped_const() {
+        let result = extract(
+            r#"package main
+
+const (
+    StatusOK    = 200
+    statusError = 500
+    maxRetries  = 3
+)
+"#,
+        );
+
+        let vars: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Variable)
+            .collect();
+        assert_eq!(vars.len(), 3);
+
+        let ok = vars.iter().find(|s| s.name == "StatusOK").unwrap();
+        assert_eq!(ok.visibility, Visibility::Public);
+
+        let err = vars.iter().find(|s| s.name == "statusError").unwrap();
+        assert_eq!(err.visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn test_type_alias() {
+        let result = extract(
+            r#"package main
+
+type Handler func(w Writer, r *Request)
+type UserID int64
+"#,
+        );
+
+        // Non-struct/interface types are Variable (type alias)
+        let handler = result.symbols.iter().find(|s| s.name == "Handler").unwrap();
+        assert_eq!(handler.kind, SymbolKind::Variable);
+        assert_eq!(handler.visibility, Visibility::Public);
+
+        let uid = result.symbols.iter().find(|s| s.name == "UserID").unwrap();
+        assert_eq!(uid.kind, SymbolKind::Variable);
+    }
+
+    #[test]
+    fn test_private_method() {
+        let result = extract(
+            r#"package main
+
+type cache struct{}
+
+func (c *cache) get(key string) string { return "" }
+"#,
+        );
+
+        let method = result.symbols.iter().find(|s| s.name == "get").unwrap();
+        assert_eq!(method.kind, SymbolKind::Method);
+        assert_eq!(method.visibility, Visibility::Private);
+    }
+
+    #[test]
     fn test_empty_file() {
-        // Go requires package declaration, but empty string should not panic
         let result = extract("");
         assert!(result.symbols.is_empty());
     }

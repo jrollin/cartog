@@ -1096,6 +1096,140 @@ fn connect(addr: &str) -> Result<Connection> {
     }
 
     #[test]
+    fn test_const_and_static() {
+        let result = extract(
+            r#"
+/// Maximum retries.
+pub const MAX_RETRIES: u32 = 3;
+static DB_POOL: Pool = Pool::new();
+"#,
+        );
+
+        let max = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "MAX_RETRIES")
+            .unwrap();
+        assert_eq!(max.kind, SymbolKind::Variable);
+        assert_eq!(max.visibility, Visibility::Public);
+        assert_eq!(max.docstring.as_deref(), Some("Maximum retries."));
+
+        let pool = result.symbols.iter().find(|s| s.name == "DB_POOL").unwrap();
+        assert_eq!(pool.kind, SymbolKind::Variable);
+        assert_eq!(pool.visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn test_type_alias() {
+        let result = extract(
+            r#"
+pub type Result<T> = std::result::Result<T, Error>;
+type Handler = Box<dyn Fn()>;
+"#,
+        );
+
+        let alias = result.symbols.iter().find(|s| s.name == "Result").unwrap();
+        assert_eq!(alias.kind, SymbolKind::Variable);
+        assert_eq!(alias.visibility, Visibility::Public);
+
+        let handler = result.symbols.iter().find(|s| s.name == "Handler").unwrap();
+        assert_eq!(handler.visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn test_inline_mod() {
+        let result = extract(
+            r#"
+pub mod auth {
+    pub fn login() {}
+    fn verify() {}
+}
+"#,
+        );
+
+        let module = result.symbols.iter().find(|s| s.name == "auth").unwrap();
+        assert_eq!(module.kind, SymbolKind::Class);
+        assert_eq!(module.visibility, Visibility::Public);
+
+        let login = result.symbols.iter().find(|s| s.name == "login").unwrap();
+        assert!(login.parent_id.is_some());
+        assert_eq!(login.visibility, Visibility::Public);
+
+        let verify = result.symbols.iter().find(|s| s.name == "verify").unwrap();
+        assert!(verify.parent_id.is_some());
+        assert_eq!(verify.visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn test_extern_mod_ignored() {
+        // `mod foo;` (no body) should not emit a symbol
+        let result = extract("mod foo;");
+        assert!(result.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_use_wildcard() {
+        let result = extract("use std::io::*;");
+
+        let imports: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Import)
+            .collect();
+        assert_eq!(imports.len(), 1);
+
+        // Wildcard imports don't produce specific import edges
+        let edges: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Imports)
+            .collect();
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn test_use_as_clause() {
+        let result = extract("use std::collections::HashMap as Map;");
+
+        let imports: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Import)
+            .collect();
+        assert_eq!(imports.len(), 1);
+
+        let edges: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Imports)
+            .collect();
+        // `use_as_clause` collects the original name from the path
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].target_name, "HashMap");
+    }
+
+    #[test]
+    fn test_scoped_type_refs() {
+        let result = extract(
+            r#"
+fn connect(cfg: &crate::Config) -> io::Result<Connection> {
+    todo!()
+}
+"#,
+        );
+
+        let refs: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References)
+            .map(|e| e.target_name.as_str())
+            .collect();
+        assert!(refs.contains(&"Config"));
+        assert!(refs.contains(&"Result"));
+        assert!(refs.contains(&"Connection"));
+    }
+
+    #[test]
     fn test_empty_file() {
         let result = extract("");
         assert!(result.symbols.is_empty());

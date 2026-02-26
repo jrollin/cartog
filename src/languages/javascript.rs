@@ -138,6 +138,106 @@ function process() {
     }
 
     #[test]
+    fn test_exported_class() {
+        let result = extract_js(
+            r#"
+export class Router {
+    constructor(routes) {
+        this.routes = routes;
+    }
+
+    match(path) {
+        return this.routes[path];
+    }
+}
+
+export function createRouter() {
+    return new Router({});
+}
+"#,
+        );
+
+        let router = result.symbols.iter().find(|s| s.name == "Router").unwrap();
+        assert_eq!(router.kind, SymbolKind::Class);
+
+        let create = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "createRouter")
+            .unwrap();
+        assert_eq!(create.kind, SymbolKind::Function);
+
+        let method_names: Vec<&str> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Method)
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(method_names.contains(&"constructor"));
+        assert!(method_names.contains(&"match"));
+    }
+
+    #[test]
+    fn test_top_level_expression_no_crash() {
+        // Top-level calls have no parent context — should not crash or produce
+        // spurious edges (calls require a source symbol)
+        let result = extract_js(
+            r#"
+console.log("booting");
+setupDatabase();
+
+function setupDatabase() {}
+"#,
+        );
+
+        let func = result.symbols.iter().find(|s| s.name == "setupDatabase");
+        assert!(func.is_some());
+        // No calls edges from top-level (no context symbol to attach to)
+        let orphan_calls: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Calls && e.source_id.is_empty())
+            .collect();
+        assert!(orphan_calls.is_empty());
+    }
+
+    #[test]
+    fn test_jsdoc_comment() {
+        let result = extract_js(
+            r#"
+/** Adds two numbers. */
+function add(a, b) {
+    return a + b;
+}
+"#,
+        );
+
+        let add = result.symbols.iter().find(|s| s.name == "add").unwrap();
+        assert_eq!(add.docstring.as_deref(), Some("Adds two numbers."));
+    }
+
+    #[test]
+    fn test_throw_expressions() {
+        let result = extract_js(
+            r#"
+function validate(x) {
+    if (!x) throw new TypeError("missing");
+    if (x < 0) throw new RangeError("negative");
+}
+"#,
+        );
+
+        let raises: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Raises)
+            .map(|e| e.target_name.as_str())
+            .collect();
+        assert!(raises.contains(&"TypeError"));
+        assert!(raises.contains(&"RangeError"));
+    }
+
+    #[test]
     fn test_private_field_convention() {
         let result = extract_js(
             r#"

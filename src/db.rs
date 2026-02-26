@@ -891,4 +891,52 @@ mod tests {
         assert!(db.outline("test.py").unwrap().is_empty());
         assert!(db.get_file("test.py").unwrap().is_none());
     }
+
+    #[test]
+    fn test_refs_with_kind_filter() {
+        let db = Database::open_memory().unwrap();
+        let parent = test_symbol("AuthService", SymbolKind::Class, "a.py", 1);
+        let child = test_symbol("AdminService", SymbolKind::Class, "a.py", 20);
+        let caller = test_symbol("login", SymbolKind::Function, "b.py", 1);
+        db.insert_symbols(&[parent.clone(), child.clone(), caller.clone()])
+            .unwrap();
+
+        db.insert_edges(&[
+            Edge {
+                source_id: child.id.clone(),
+                target_name: "AuthService".to_string(),
+                target_id: None,
+                kind: EdgeKind::Inherits,
+                file_path: "a.py".to_string(),
+                line: 20,
+            },
+            Edge {
+                source_id: caller.id.clone(),
+                target_name: "AuthService".to_string(),
+                target_id: None,
+                kind: EdgeKind::Calls,
+                file_path: "b.py".to_string(),
+                line: 5,
+            },
+        ])
+        .unwrap();
+
+        // No filter → both edges
+        let all = db.refs("AuthService", None).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Filter inherits only
+        let inherits = db.refs("AuthService", Some(EdgeKind::Inherits)).unwrap();
+        assert_eq!(inherits.len(), 1);
+        assert_eq!(inherits[0].0.kind, EdgeKind::Inherits);
+
+        // Filter calls only
+        let calls = db.refs("AuthService", Some(EdgeKind::Calls)).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0.kind, EdgeKind::Calls);
+
+        // Filter with no matches
+        let raises = db.refs("AuthService", Some(EdgeKind::Raises)).unwrap();
+        assert!(raises.is_empty());
+    }
 }
