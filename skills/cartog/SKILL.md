@@ -1,9 +1,13 @@
 ---
 name: cartog
 description: >-
-  Code graph navigation skill. Use cartog before grep or cat to understand
-  file structure, find references/callees, assess refactoring impact, and navigate
-  code dependencies. Supports Python, TypeScript/JavaScript, Rust, Go.
+  Code graph navigation and impact analysis. Use when the user asks
+  "where is X defined?", "what calls X?", "who imports X?", "what depends on X?",
+  "what breaks if I change X?", "help me refactor X", "show me the call graph",
+  "find all usages of X", "show file structure", or needs to navigate code,
+  locate definitions, trace dependencies, assess blast radius of changes,
+  support refactoring (rename, extract, move), or explore an unfamiliar codebase.
+  Supports Python, TypeScript/JavaScript, Rust, Go.
 ---
 
 # cartog — Code Graph Navigation Skill
@@ -18,6 +22,13 @@ Use cartog **before** reaching for grep, cat, or file reads when you need to:
 - Understand class hierarchies → `cartog hierarchy <class>`
 - See file dependencies → `cartog deps <file>`
 
+## Why cartog Over grep/glob
+
+cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores it in SQLite. Compared to grep/glob:
+- **Fewer tool calls**: 1 command vs 3-6 grep/read cycles
+- **Transitive analysis**: `impact --depth 3` traces callers-of-callers — grep can't do this
+- **Structured results**: symbols with types, signatures, and line ranges — not raw text matches
+
 ## Workflow Rules
 
 1. **Before you grep or read a file to understand structure**, query cartog first.
@@ -28,10 +39,14 @@ Use cartog **before** reaching for grep, cat, or file reads when you need to:
 
 ## Setup
 
-Ensure cartog is indexed before first use:
+Before first use, ensure cartog is installed and indexed:
 
 ```bash
-bash scripts/ensure_indexed.sh
+# Install if missing
+command -v cartog || bash scripts/install.sh
+
+# Index (incremental — safe to re-run)
+cartog index .
 ```
 
 ## Commands Reference
@@ -93,6 +108,19 @@ All commands support `--json` for structured output:
 cartog --json refs validate_token
 cartog --json outline src/auth/tokens.py
 ```
+
+## Refactoring Workflow
+
+Before changing any symbol (rename, extract, move, delete):
+
+1. **Identify** — what symbol is being changed?
+2. **Map references** — `cartog refs <name>` to find every usage
+3. **Assess blast radius** — `cartog impact <name> --depth 3` for transitive dependents
+4. **Check hierarchy** — `cartog hierarchy <name>` if it's a class (subclasses need updating too)
+5. **Plan change order** — update leaf dependents first, work inward toward the source
+6. **Apply changes** — modify files
+7. **Re-index** — `cartog index .` to update the graph
+8. **Verify** — re-run `cartog refs <name>` to confirm no stale references remain
 
 ## Decision Heuristics
 
