@@ -19,7 +19,8 @@ cartog/
 │   │   ├── javascript.rs    # JavaScript extractor
 │   │   ├── js_shared.rs     # Shared JS/TS extraction logic
 │   │   ├── rust_lang.rs     # Rust extractor
-│   │   └── go.rs            # Go extractor
+│   │   ├── go.rs            # Go extractor
+│   │   └── ruby.rs          # Ruby extractor
 │   └── types.rs             # Symbol, Edge, FileInfo structs
 ├── skills/
 │   └── cartog/              # Agent Skill (agentskills.io)
@@ -36,7 +37,8 @@ cartog/
 │   ├── lib/                 # Shared measurement & comparison helpers
 │   ├── fixtures/
 │   │   ├── webapp_py/       # Python fixture (15 files: auth, models, routes, utils)
-│   │   └── webapp_rs/       # Rust fixture (12 files: auth, models, routes)
+│   │   ├── webapp_rs/       # Rust fixture (12 files: auth, models, routes)
+│   │   └── webapp_rb/       # Ruby fixture (10 files: auth, models, routes, utils)
 │   ├── ground_truth/        # Expected relationships per fixture (JSON)
 │   ├── scenarios/           # 7 scenario scripts (01-07)
 │   └── results/             # Benchmark output (gitignored)

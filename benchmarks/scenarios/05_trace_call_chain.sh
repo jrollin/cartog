@@ -71,3 +71,4 @@ run_scenario() {
 
 run_scenario "webapp_py" "login_route" "login" "generate_token"
 run_scenario "webapp_rs" "login_handler" "login" "generate_token"
+run_scenario "webapp_rb" "login_route" "login" "generate_token"

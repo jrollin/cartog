@@ -55,3 +55,4 @@ run_scenario() {
 
 run_scenario "webapp_py" "auth/service.py"
 run_scenario "webapp_rs" "auth/service.rs"
+run_scenario "webapp_rb" "auth/service.rb"

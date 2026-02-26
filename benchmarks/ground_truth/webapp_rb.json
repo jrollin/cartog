@@ -1,0 +1,83 @@
+{
+  "01_find_callers": {
+    "description": "Who calls validate_token?",
+    "query": "refs validate_token --kind calls",
+    "expected": [
+      {"source": "get_current_user", "file": "auth/service.rb"},
+      {"source": "change_password", "file": "auth/service.rb"},
+      {"source": "refresh_token", "file": "auth/tokens.rb"},
+      {"source": "auth_required", "file": "auth/middleware.rb"},
+      {"source": "get_current_user", "file": "auth/middleware.rb"}
+    ]
+  },
+  "02_file_structure": {
+    "description": "What's in auth/service.rb?",
+    "query": "outline auth/service.rb",
+    "expected": [
+      {"name": "BaseService", "kind": "class"},
+      {"name": "initialize", "kind": "method"},
+      {"name": "_log", "kind": "method"},
+      {"name": "AuthService", "kind": "class"},
+      {"name": "initialize", "kind": "method"},
+      {"name": "login", "kind": "method"},
+      {"name": "logout", "kind": "method"},
+      {"name": "get_current_user", "kind": "method"},
+      {"name": "_find_user", "kind": "method"},
+      {"name": "change_password", "kind": "method"},
+      {"name": "AdminService", "kind": "class"},
+      {"name": "impersonate", "kind": "method"},
+      {"name": "list_all_users", "kind": "method"}
+    ]
+  },
+  "03_refactor_impact": {
+    "description": "Impact of changing AuthService",
+    "query": "impact AuthService --depth 3",
+    "expected_refs": [
+      "AdminService",
+      "routes/auth.rb",
+      "routes/admin.rb"
+    ]
+  },
+  "04_class_hierarchy": {
+    "description": "Hierarchy of BaseService",
+    "query": "hierarchy BaseService",
+    "expected": [
+      {"child": "AuthService", "parent": "BaseService"}
+    ]
+  },
+  "05_trace_call_chain": {
+    "description": "Trace login_route call chain",
+    "query_sequence": [
+      "callees login_route",
+      "callees login",
+      "callees generate_token"
+    ],
+    "expected_chain": [
+      {"caller": "login_route", "callee": "login"},
+      {"caller": "login", "callee": "generate_token"},
+      {"caller": "login", "callee": "_find_user"},
+      {"caller": "generate_token", "callee": "Session.create"}
+    ]
+  },
+  "06_file_deps": {
+    "description": "What does routes/auth.rb require?",
+    "query": "deps routes/auth.rb",
+    "expected": [
+      "AuthService",
+      "auth_required",
+      "extract_token",
+      "get_logger"
+    ]
+  },
+  "07_type_references": {
+    "description": "Type references to TokenError (inherits, raises, rescue)",
+    "query": "refs TokenError",
+    "expected": [
+      {"source": "ExpiredTokenError", "file": "auth/tokens.rb", "kind": "inherits"},
+      {"source": "InvalidScopeError", "file": "auth/tokens.rb", "kind": "inherits"},
+      {"source": "validate_token", "file": "auth/tokens.rb", "kind": "raises"},
+      {"source": "auth/tokens", "file": "auth/middleware.rb", "kind": "imports"},
+      {"source": "auth_required", "file": "auth/middleware.rb", "kind": "references"}
+    ]
+  }
+}

@@ -55,3 +55,4 @@ run_scenario() {
 
 run_scenario "webapp_py" "py"
 run_scenario "webapp_rs" "rs"
+run_scenario "webapp_rb" "rb"

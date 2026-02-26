@@ -9,6 +9,7 @@
 #   ./benchmarks/run.sh --scenario 01    # Run single scenario
 #   ./benchmarks/run.sh --fixture py     # Run only Python fixtures
 #   ./benchmarks/run.sh --fixture rs     # Run only Rust fixtures
+#   ./benchmarks/run.sh --fixture rb     # Run only Ruby fixtures
 
 set -euo pipefail
 
@@ -35,7 +36,7 @@ while [[ $# -gt 0 ]]; do
         --scenario) SCENARIO_FILTER="$2"; shift 2 ;;
         --fixture)  FIXTURE_FILTER="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--scenario NN] [--fixture py|rs]"
+            echo "Usage: $0 [--scenario NN] [--fixture py|rs|rb]"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -77,6 +78,7 @@ for fixture_dir in "$BENCH_DIR"/fixtures/*/; do
         case "$FIXTURE_FILTER" in
             py) [[ "$fixture_name" != *"_py"* ]] && continue ;;
             rs) [[ "$fixture_name" != *"_rs"* ]] && continue ;;
+            rb) [[ "$fixture_name" != *"_rb"* ]] && continue ;;
         esac
     fi
 

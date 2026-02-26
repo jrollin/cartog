@@ -56,3 +56,4 @@ run_scenario() {
 
 run_scenario "webapp_py" "routes/auth.py" "^from \|^import "
 run_scenario "webapp_rs" "routes/auth.rs" "^use "
+run_scenario "webapp_rb" "routes/auth.rb" "^require "

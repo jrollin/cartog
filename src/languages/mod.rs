@@ -2,6 +2,7 @@ pub mod go;
 pub mod javascript;
 mod js_shared;
 pub mod python;
+pub mod ruby;
 pub mod rust_lang;
 pub mod typescript;
 
@@ -37,6 +38,7 @@ pub fn detect_language(path: &std::path::Path) -> Option<&'static str> {
         "js" | "jsx" | "mjs" | "cjs" => Some("javascript"),
         "rs" => Some("rust"),
         "go" => Some("go"),
+        "rb" => Some("ruby"),
         _ => None,
     }
 }
@@ -50,6 +52,7 @@ pub fn get_extractor(language: &str) -> Option<Box<dyn Extractor>> {
         "javascript" => Some(Box::new(javascript::JavaScriptExtractor::new())),
         "rust" => Some(Box::new(rust_lang::RustExtractor::new())),
         "go" => Some(Box::new(go::GoExtractor::new())),
+        "ruby" => Some(Box::new(ruby::RubyExtractor::new())),
         _ => None,
     }
 }
@@ -69,6 +72,7 @@ mod tests {
         assert_eq!(detect_language(Path::new("util.mjs")), Some("javascript"));
         assert_eq!(detect_language(Path::new("main.rs")), Some("rust"));
         assert_eq!(detect_language(Path::new("server.go")), Some("go"));
+        assert_eq!(detect_language(Path::new("app.rb")), Some("ruby"));
         assert_eq!(detect_language(Path::new("README.md")), None);
         assert_eq!(detect_language(Path::new("Makefile")), None);
         assert_eq!(detect_language(Path::new("Main.java")), None); // java not supported yet
@@ -82,6 +86,7 @@ mod tests {
         assert!(get_extractor("javascript").is_some());
         assert!(get_extractor("rust").is_some());
         assert!(get_extractor("go").is_some());
+        assert!(get_extractor("ruby").is_some());
         assert!(get_extractor("java").is_none());
         assert!(get_extractor("unknown").is_none());
     }

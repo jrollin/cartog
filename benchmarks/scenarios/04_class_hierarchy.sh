@@ -57,3 +57,4 @@ run_scenario() {
 
 run_scenario "webapp_py" "BaseService" "class.*BaseService\|class.*(BaseService)\|class.*(AuthService)"
 run_scenario "webapp_rs" "AuthProvider" "impl.*AuthProvider\|trait AuthProvider"
+run_scenario "webapp_rb" "BaseService" "class.*BaseService\|class.*<.*BaseService\|class.*<.*AuthService"

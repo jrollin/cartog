@@ -58,6 +58,21 @@
 - Doc comments (`//` preceding declarations)
 - Visibility: Exported (uppercase) = public, unexported (lowercase) = private
 
+### Ruby (.rb)
+- Classes, modules (both as class symbols)
+- Methods (instance and singleton `def self.method`)
+- Functions (top-level `def`)
+- Imports (`require`, `require_relative`)
+- Function/method calls (including receiver: `obj.method`)
+- Inheritance (`class Child < Parent`)
+- Mixins (`include`, `extend`, `prepend` → inherits edges)
+- Raise statements (`raise ExceptionClass`)
+- Rescue clause type references (`rescue TypeError, KeyError`)
+- Namespaced classes (`Foo::Bar`)
+- Doc comments (`#` preceding declarations)
+- Variable assignments (module-level and class-level)
+- Visibility: public (default), `_prefixed` (private convention)
+
 ## Planned
 
 ### Java (.java)
