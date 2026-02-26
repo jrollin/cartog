@@ -31,6 +31,15 @@ cartog/
 │       └── references/
 │           ├── query_cookbook.md
 │           └── supported_languages.md
+├── benchmarks/
+│   ├── run.sh               # Benchmark runner (token efficiency, recall, command count)
+│   ├── lib/                 # Shared measurement & comparison helpers
+│   ├── fixtures/
+│   │   ├── webapp_py/       # Python fixture (15 files: auth, models, routes, utils)
+│   │   └── webapp_rs/       # Rust fixture (12 files: auth, models, routes)
+│   ├── ground_truth/        # Expected relationships per fixture (JSON)
+│   ├── scenarios/           # 7 scenario scripts (01-07)
+│   └── results/             # Benchmark output (gitignored)
 ├── tests/
 │   └── fixtures/
 │       └── auth/            # Python fixtures for indexer tests
