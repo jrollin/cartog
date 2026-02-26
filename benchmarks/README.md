@@ -28,6 +28,7 @@ Both fixtures have controlled, known relationships defined in `ground_truth/`.
 | 05 | "Trace login → DB call chain" | Sequential `callees` vs multiple grep rounds |
 | 06 | "File dependencies?" | `deps` (resolved targets) vs grep for import keywords |
 | 07 | "Type references to X?" | `refs --kind references` vs context-unaware grep |
+| 08 | "Find all token-related symbols" | `search token` (ranked, deduplicated) vs grep (raw lines with noise) |
 
 ## Usage
 

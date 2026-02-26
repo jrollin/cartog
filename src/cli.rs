@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::types::EdgeKind;
+use crate::types::{EdgeKind, SymbolKind};
 
 #[derive(Debug, Parser)]
 #[command(name = "cartog")]
@@ -13,6 +13,28 @@ pub struct Cli {
     /// Output as JSON
     #[arg(long, global = true)]
     pub json: bool,
+}
+
+/// Filter for symbol kinds in the search command.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum SymbolKindFilter {
+    Function,
+    Class,
+    Method,
+    Variable,
+    Import,
+}
+
+impl From<SymbolKindFilter> for SymbolKind {
+    fn from(f: SymbolKindFilter) -> Self {
+        match f {
+            SymbolKindFilter::Function => SymbolKind::Function,
+            SymbolKindFilter::Class => SymbolKind::Class,
+            SymbolKindFilter::Method => SymbolKind::Method,
+            SymbolKindFilter::Variable => SymbolKind::Variable,
+            SymbolKindFilter::Import => SymbolKind::Import,
+        }
+    }
 }
 
 /// Filter for edge kinds in the refs command.
@@ -96,6 +118,24 @@ pub enum Command {
 
     /// Index statistics summary
     Stats,
+
+    /// Search symbols by name (case-insensitive prefix + substring match)
+    Search {
+        /// Query string to match against symbol names
+        query: String,
+
+        /// Filter by symbol kind
+        #[arg(long)]
+        kind: Option<SymbolKindFilter>,
+
+        /// Filter to a specific file path
+        #[arg(long)]
+        file: Option<String>,
+
+        /// Maximum results to return (default: 20, max: 100)
+        #[arg(long, default_value = "20")]
+        limit: u32,
+    },
 
     /// Start MCP server over stdio (for Claude Code, Cursor, and other MCP clients)
     Serve,

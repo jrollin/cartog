@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::cli::EdgeKindFilter;
-use crate::db::{Database, DB_FILE};
+use crate::cli::{EdgeKindFilter, SymbolKindFilter};
+use crate::db::{Database, DB_FILE, MAX_SEARCH_LIMIT};
 use crate::indexer;
 use crate::types::{EdgeKind, SymbolKind};
 
@@ -215,6 +215,36 @@ pub fn cmd_deps(file: &str, json: bool) -> Result<()> {
                 "{target}  L{line}",
                 target = edge.target_name,
                 line = edge.line
+            );
+        }
+    })
+}
+
+/// Search for symbols by name (case-insensitive prefix + substring match).
+pub fn cmd_search(
+    query: &str,
+    kind: Option<SymbolKindFilter>,
+    file: Option<&str>,
+    limit: u32,
+    json: bool,
+) -> Result<()> {
+    let db = open_db()?;
+    let kind_filter = kind.map(crate::types::SymbolKind::from);
+    let limit = limit.min(MAX_SEARCH_LIMIT);
+    let symbols = db.search(query, kind_filter, file, limit)?;
+
+    output(&symbols, json, |syms| {
+        if syms.is_empty() {
+            println!("No symbols found matching '{query}'");
+            return;
+        }
+        for sym in syms {
+            println!(
+                "{kind}  {name}  {file}:{line}",
+                kind = sym.kind,
+                name = sym.name,
+                file = sym.file_path,
+                line = sym.start_line,
             );
         }
     })

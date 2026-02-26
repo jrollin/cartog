@@ -69,6 +69,23 @@
       "Response"
     ]
   },
+  "08_symbol_search": {
+    "description": "Find all token-related symbols",
+    "query": "search token",
+    "expected": [
+      {"name": "Token"},
+      {"name": "TokenError"},
+      {"name": "ExpiredTokenError"},
+      {"name": "TOKEN_EXPIRY_SECS"},
+      {"name": "validate_token"},
+      {"name": "generate_token"},
+      {"name": "refresh_token"},
+      {"name": "revoke_token"},
+      {"name": "revoke_all_tokens"},
+      {"name": "extract_token"},
+      {"name": "find_by_token"}
+    ]
+  },
   "07_type_references": {
     "description": "Type references to User in Rust (function signatures)",
     "query": "refs User --kind references",

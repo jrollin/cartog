@@ -13,7 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::db::{Database, DB_FILE};
+use crate::db::{Database, DB_FILE, MAX_SEARCH_LIMIT};
 use crate::indexer;
 use crate::types::EdgeKind;
 
@@ -73,6 +73,18 @@ pub struct HierarchyParams {
 pub struct DepsParams {
     /// File path to show import dependencies for
     pub file: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchParams {
+    /// Case-insensitive query string (prefix + substring match against symbol names)
+    pub query: String,
+    /// Filter by symbol kind: function, class, method, variable, import
+    pub kind: Option<String>,
+    /// Filter to a specific file path relative to project root
+    pub file: Option<String>,
+    /// Maximum results to return (default 20, max 100)
+    pub limit: Option<u32>,
 }
 
 // ── Response wrappers for JSON serialization ──
@@ -390,6 +402,59 @@ impl CartogServer {
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
     }
 
+    /// Search for symbols by name — use this to discover exact names before calling refs/callees/impact.
+    #[tool(
+        description = "Search symbols by name (case-insensitive prefix + substring match). \
+                       Use to discover symbol names before calling refs/callees/impact. \
+                       Optionally filter by kind (function|class|method|variable|import) or file path. \
+                       Returns up to 100 results ranked: exact match → prefix → substring."
+    )]
+    async fn cartog_search(
+        &self,
+        Parameters(params): Parameters<SearchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let query = params.query;
+        let kind_str = params.kind;
+        let file = params.file;
+        let limit = params.limit.unwrap_or(20).min(MAX_SEARCH_LIMIT);
+
+        tokio::task::spawn_blocking(move || {
+            if query.is_empty() {
+                return Err(mcp_err("query cannot be empty"));
+            }
+
+            let kind_filter = kind_str
+                .as_deref()
+                .map(|s| {
+                    s.parse::<crate::types::SymbolKind>().map_err(|_| {
+                        mcp_err("invalid symbol kind. Valid: function, class, method, variable, import")
+                    })
+                })
+                .transpose()?;
+
+            // Validate file path is within CWD — consistent with cartog_outline / cartog_deps.
+            let validated_file: Option<String> = file
+                .map(|f| {
+                    validate_path_within_cwd(&f)
+                        .map_err(mcp_err)
+                        .map(|p| p.to_string_lossy().into_owned())
+                })
+                .transpose()?;
+            let file_filter = validated_file.as_deref();
+            debug!(query = %query, kind = ?kind_filter, limit, "search");
+            let db = open_db()?;
+            let symbols = db
+                .search(&query, kind_filter, file_filter, limit)
+                .map_err(|e| mcp_err(format!("search failed: {e}")))?;
+
+            let json = serde_json::to_string_pretty(&symbols)
+                .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            json_response(&db, json)
+        })
+        .await
+        .map_err(|e| mcp_err(format!("task join failed: {e}")))?
+    }
+
     /// Index statistics summary.
     #[tool(
         description = "Show index statistics: file count, symbol count, edge count, resolution rate, breakdown by language and symbol kind."
@@ -425,13 +490,14 @@ impl ServerHandler for CartogServer {
                 "cartog is a code graph indexer. It pre-computes a graph of symbols \
                  (functions, classes, methods, imports) and edges (calls, imports, inherits, \
                  type references, raises) using tree-sitter, stored in SQLite.\n\n\
-                 Workflow:\n\
-                 1. Run cartog_index first to build/update the graph (use force=true if results seem stale).\n\
-                 2. Use cartog_outline instead of reading a file when you need structure, not content.\n\
-                 3. Use cartog_refs to find all usages of a symbol (filter with kind param).\n\
-                 4. Use cartog_impact before refactoring to assess blast radius.\n\
-                 5. Re-run cartog_index after making code changes to keep the graph current.\n\
-                 6. Only fall back to reading files when you need actual implementation logic.\n\n\
+                  Workflow:\n\
+                  1. Run cartog_index first to build/update the graph (use force=true if results seem stale).\n\
+                  2. Use cartog_search to discover symbol names by partial match before calling refs/callees/impact.\n\
+                  3. Use cartog_outline instead of reading a file when you need structure, not content.\n\
+                  4. Use cartog_refs to find all usages of a symbol (filter with kind param).\n\
+                  5. Use cartog_impact before refactoring to assess blast radius.\n\
+                  6. Re-run cartog_index after making code changes to keep the graph current.\n\
+                  7. Only fall back to reading files when you need actual implementation logic.\n\n\
                  Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby."
                     .into(),
             ),
@@ -612,6 +678,20 @@ mod tests {
         let db = Database::open_memory().expect("in-memory DB");
         let result = db.file_deps("nonexistent.py").expect("query");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn empty_db_search_returns_empty() {
+        let db = Database::open_memory().expect("in-memory DB");
+        let result = db.search("foo", None, None, 20).expect("query");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn search_limit_is_capped() {
+        assert_eq!(999u32.min(MAX_SEARCH_LIMIT), MAX_SEARCH_LIMIT);
+        assert_eq!(20u32.min(MAX_SEARCH_LIMIT), 20);
+        assert_eq!(None::<u32>.unwrap_or(20).min(MAX_SEARCH_LIMIT), 20);
     }
 
     #[test]

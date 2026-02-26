@@ -71,6 +71,22 @@
       "get_logger"
     ]
   },
+  "08_symbol_search": {
+    "description": "Find all token-related symbols",
+    "query": "search token",
+    "expected": [
+      {"name": "TokenError"},
+      {"name": "ExpiredTokenError"},
+      {"name": "TOKEN_EXPIRY"},
+      {"name": "validate_token"},
+      {"name": "generate_token"},
+      {"name": "refresh_token"},
+      {"name": "revoke_token"},
+      {"name": "revoke_all_tokens"},
+      {"name": "extract_token"},
+      {"name": "find_by_token"}
+    ]
+  },
   "07_type_references": {
     "description": "Type references in Python (decorators, exception types)",
     "query": "refs TokenError",

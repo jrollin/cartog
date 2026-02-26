@@ -59,6 +59,10 @@ CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
 /// Default database filename, stored in the project root.
 pub const DB_FILE: &str = ".cartog.db";
 
+/// Maximum number of results returned by [`Database::search`].
+/// Enforced here and referenced by CLI and MCP layers.
+pub const MAX_SEARCH_LIMIT: u32 = 100;
+
 pub struct Database {
     conn: Connection,
 }
@@ -313,6 +317,61 @@ impl Database {
     }
 
     // ── Queries ──
+
+    /// Search for symbols by name — case-insensitive, prefix match ranks before substring.
+    ///
+    /// `%` and `_` in `query` are treated as literals, not LIKE wildcards.
+    /// Note: `LOWER()` in SQLite is ASCII-only, which is acceptable for code identifiers.
+    /// Returns an error if `query` is empty or `limit` is zero.
+    pub fn search(
+        &self,
+        query: &str,
+        kind_filter: Option<SymbolKind>,
+        file_filter: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<Symbol>> {
+        anyhow::ensure!(!query.is_empty(), "search query cannot be empty");
+        anyhow::ensure!(limit > 0, "search limit must be at least 1");
+
+        // Escape LIKE special characters so query is matched literally.
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let kind_str = kind_filter.map(|k| k.as_str());
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, kind, file_path, start_line, end_line,
+                    start_byte, end_byte, parent_id, signature, visibility,
+                    is_async, docstring,
+                    CASE
+                      WHEN LOWER(name) = LOWER(?1)                    THEN 0
+                      WHEN LOWER(name) LIKE LOWER(?2) || '%' ESCAPE '\\' THEN 1
+                      ELSE                                                  2
+                    END AS rank
+             FROM symbols
+             WHERE LOWER(name) LIKE '%' || LOWER(?2) || '%' ESCAPE '\\'
+               AND (?3 IS NULL OR kind = ?3)
+               AND (?4 IS NULL OR file_path = ?4)
+             ORDER BY rank,
+                      CASE kind
+                        WHEN 'function' THEN 0
+                        WHEN 'method'   THEN 1
+                        WHEN 'class'    THEN 2
+                        ELSE                 3
+                      END,
+                      file_path, start_line
+             LIMIT ?5",
+        )?;
+        // rank is column 13 — row_to_symbol reads columns 0–12 and ignores it
+        // ?1 = raw query (exact equality), ?2 = escaped query (LIKE patterns), ?3 = kind, ?4 = file, ?5 = limit
+        let rows = stmt
+            .query_map(
+                params![query, escaped, kind_str, file_filter, limit],
+                row_to_symbol,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
 
     /// Outline: all symbols in a file, ordered by line.
     pub fn outline(&self, file_path: &str) -> Result<Vec<Symbol>> {
@@ -942,5 +1001,147 @@ mod tests {
         // Filter with no matches
         let raises = db.refs("AuthService", Some(EdgeKind::Raises)).unwrap();
         assert!(raises.is_empty());
+    }
+
+    #[test]
+    fn test_search_exact_match_ranks_first() {
+        let db = Database::open_memory().unwrap();
+        let exact = test_symbol("parse_config", SymbolKind::Function, "a.py", 1);
+        let prefix = test_symbol("parse_config_file", SymbolKind::Function, "a.py", 10);
+        let substr = test_symbol("get_parse_config", SymbolKind::Function, "a.py", 20);
+        db.insert_symbols(&[exact.clone(), prefix, substr]).unwrap();
+
+        let results = db.search("parse_config", None, None, 20).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].name, "parse_config");
+    }
+
+    #[test]
+    fn test_search_prefix_match() {
+        let db = Database::open_memory().unwrap();
+        let a = test_symbol("parse_config", SymbolKind::Function, "a.py", 1);
+        let b = test_symbol("parse_args", SymbolKind::Function, "a.py", 10);
+        let c = test_symbol("unrelated", SymbolKind::Function, "a.py", 20);
+        db.insert_symbols(&[a, b, c]).unwrap();
+
+        let results = db.search("parse", None, None, 20).unwrap();
+        assert_eq!(results.len(), 2);
+        let names: Vec<&str> = results.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"parse_config"));
+        assert!(names.contains(&"parse_args"));
+    }
+
+    #[test]
+    fn test_search_substring_match() {
+        let db = Database::open_memory().unwrap();
+        let a = test_symbol("parse_config", SymbolKind::Function, "a.py", 1);
+        let b = test_symbol("get_config", SymbolKind::Function, "a.py", 10);
+        let c = test_symbol("unrelated", SymbolKind::Function, "a.py", 20);
+        db.insert_symbols(&[a, b, c]).unwrap();
+
+        let results = db.search("config", None, None, 20).unwrap();
+        assert_eq!(results.len(), 2);
+        let names: Vec<&str> = results.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"parse_config"));
+        assert!(names.contains(&"get_config"));
+    }
+
+    #[test]
+    fn test_search_case_insensitive() {
+        let db = Database::open_memory().unwrap();
+        let sym = test_symbol("parse_config", SymbolKind::Function, "a.py", 1);
+        db.insert_symbol(&sym).unwrap();
+
+        let results = db.search("Parse", None, None, 20).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "parse_config");
+    }
+
+    #[test]
+    fn test_search_kind_filter() {
+        let db = Database::open_memory().unwrap();
+        let func = test_symbol("parse_config", SymbolKind::Function, "a.py", 1);
+        let class = test_symbol("parse_result", SymbolKind::Class, "a.py", 10);
+        db.insert_symbols(&[func, class]).unwrap();
+
+        let results = db
+            .search("parse", Some(SymbolKind::Function), None, 20)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].kind, SymbolKind::Function);
+    }
+
+    #[test]
+    fn test_search_file_filter() {
+        let db = Database::open_memory().unwrap();
+        let a = test_symbol("parse_config", SymbolKind::Function, "src/a.rs", 1);
+        let b = test_symbol("parse_config", SymbolKind::Function, "src/b.rs", 1);
+        db.insert_symbols(&[a, b]).unwrap();
+
+        let results = db.search("parse", None, Some("src/a.rs"), 20).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].file_path, "src/a.rs");
+    }
+
+    #[test]
+    fn test_search_empty_query_returns_error() {
+        let db = Database::open_memory().unwrap();
+        let err = db.search("", None, None, 20).unwrap_err();
+        assert!(err.to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_search_zero_limit_returns_error() {
+        let db = Database::open_memory().unwrap();
+        let err = db.search("parse", None, None, 0).unwrap_err();
+        assert!(err.to_string().contains("at least 1"));
+    }
+
+    #[test]
+    fn test_search_limit_caps_results() {
+        let db = Database::open_memory().unwrap();
+        // Insert 5 symbols all matching "fn"
+        for i in 0..5u32 {
+            let sym = test_symbol(&format!("fn_{i}"), SymbolKind::Function, "a.py", i * 10 + 1);
+            db.insert_symbol(&sym).unwrap();
+        }
+        let results = db.search("fn", None, None, 3).unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_search_limit_one_returns_top_ranked() {
+        let db = Database::open_memory().unwrap();
+        let exact = test_symbol("resolve", SymbolKind::Function, "a.py", 1);
+        let prefix = test_symbol("resolve_edges", SymbolKind::Function, "a.py", 10);
+        db.insert_symbols(&[exact, prefix]).unwrap();
+
+        let results = db.search("resolve", None, None, 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "resolve");
+    }
+
+    #[test]
+    fn test_search_wildcard_chars_treated_as_literals() {
+        let db = Database::open_memory().unwrap();
+        let sym = test_symbol("get_foo", SymbolKind::Function, "a.py", 1);
+        let unrelated = test_symbol("getXfoo", SymbolKind::Function, "a.py", 10);
+        db.insert_symbols(&[sym, unrelated]).unwrap();
+
+        // "get_foo" with literal underscore should NOT match "getXfoo"
+        let results = db.search("get_foo", None, None, 20).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "get_foo");
+    }
+
+    #[test]
+    fn test_search_percent_treated_as_literal() {
+        let db = Database::open_memory().unwrap();
+        // No symbol contains a literal %, so searching for "%" should return empty
+        let sym = test_symbol("get_config", SymbolKind::Function, "a.py", 1);
+        db.insert_symbol(&sym).unwrap();
+
+        let results = db.search("%", None, None, 20).unwrap();
+        assert!(results.is_empty(), "% should not act as a wildcard");
     }
 }

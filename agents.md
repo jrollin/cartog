@@ -11,7 +11,7 @@ See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/
 ```bash
 cargo build              # debug build
 cargo build --release    # release build
-cargo test               # run all tests (142 unit tests)
+cargo test               # run all tests (156 unit tests)
 ```
 
 ## Code Conventions
@@ -32,7 +32,7 @@ main.rs → cli.rs (clap) → command handlers (sync)
               └── types.rs (shared structs)
 
          → Serve → mcp.rs (MCP server over stdio, async via tokio)
-              ├── CartogServer (8 tool handlers)
+              ├── CartogServer (9 tool handlers)
               ├── Path validation (CWD subtree restriction)
               └── spawn_blocking → db.rs / indexer.rs (sync)
 ```
@@ -71,5 +71,5 @@ The script bumps `Cargo.toml`, commits, tags `vX.Y.Z`, and pushes. The release w
 
 ## Current State
 
-- **Working**: Python, TypeScript/JavaScript, Rust, Go, Ruby extractors, SQLite storage, all 8 CLI commands + MCP server (`cartog serve`), incremental indexing (git-based + SHA-256 fallback), `--force` re-index flag, CI/CD pipelines, `EdgeKind::References` extraction (type annotations, decorators, exception types, composite literals, `new` expressions, rescue clause types)
+- **Working**: Python, TypeScript/JavaScript, Rust, Go, Ruby extractors, SQLite storage, all 9 CLI commands + MCP server (`cartog serve`), incremental indexing (git-based + SHA-256 fallback), `--force` re-index flag, CI/CD pipelines, `EdgeKind::References` extraction (type annotations, decorators, exception types, composite literals, `new` expressions, rescue clause types), symbol search (`cartog search`)
 - **Pending**: Java extractor

@@ -38,6 +38,12 @@ fn main() -> Result<()> {
         Command::Hierarchy { name } => commands::cmd_hierarchy(&name, cli.json),
         Command::Deps { file } => commands::cmd_deps(&file, cli.json),
         Command::Stats => commands::cmd_stats(cli.json),
+        Command::Search {
+            query,
+            kind,
+            file,
+            limit,
+        } => commands::cmd_search(&query, kind, file.as_deref(), limit, cli.json),
         Command::Serve => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(mcp::run_server())

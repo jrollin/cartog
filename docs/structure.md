@@ -61,8 +61,8 @@ cartog/
 - **cli.rs**: Defines all subcommands via clap derive. No business logic.
 - **db.rs**: Owns the SQLite connection. Schema creation, inserts, and all query methods. Returns domain types.
 - **indexer.rs**: Walks the file tree, delegates to language extractors, writes to db, runs edge resolution.
-- **commands.rs**: All 8 command handlers. Formats output (human-readable or `--json`).
-- **mcp.rs**: MCP server over stdio. `CartogServer` struct with 8 `#[tool]` handlers wrapping the same DB methods as `commands.rs`. Path validation restricts `index` to CWD subtree. Uses `spawn_blocking` for sync DB/indexer calls.
+- **commands.rs**: All 9 command handlers. Formats output (human-readable or `--json`).
+- **mcp.rs**: MCP server over stdio. `CartogServer` struct with 9 `#[tool]` handlers wrapping the same DB methods as `commands.rs`. Path validation restricts `index` to CWD subtree. Uses `spawn_blocking` for sync DB/indexer calls.
 - **languages/mod.rs**: Maps file extensions to extractors, defines the `Extractor` trait and shared `node_text` helper. Each extractor implements `fn extract(&self, source: &str, file_path: &str) -> Result<ExtractionResult>`.
 - **types.rs**: Shared data structures. No logic beyond Display/serialization.
 

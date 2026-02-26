@@ -5,8 +5,8 @@
 # measuring token efficiency, command count, and recall against ground truth.
 #
 # Usage:
-#   ./benchmarks/run.sh                  # Run all scenarios
-#   ./benchmarks/run.sh --scenario 01    # Run single scenario
+#   ./benchmarks/run.sh                  # Run all scenarios (01–08)
+#   ./benchmarks/run.sh --scenario 08    # Run single scenario
 #   ./benchmarks/run.sh --fixture py     # Run only Python fixtures
 #   ./benchmarks/run.sh --fixture rs     # Run only Rust fixtures
 #   ./benchmarks/run.sh --fixture rb     # Run only Ruby fixtures
@@ -55,8 +55,10 @@ if ! command -v jq &>/dev/null; then
     echo ""
 fi
 
-# Check for cartog binary
-if ! command -v cartog &>/dev/null; then
+# Check for cartog binary — honor CARTOG env if already set
+if [ -n "${CARTOG:-}" ]; then
+    echo -e "Using: $CARTOG (from env)"
+elif ! command -v cartog &>/dev/null; then
     echo -e "${YELLOW}cartog not in PATH, building from source...${NC}"
     (cd "$PROJECT_ROOT" && cargo build --release 2>&1 | tail -1)
     export CARTOG="$PROJECT_ROOT/target/release/cartog"

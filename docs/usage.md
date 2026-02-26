@@ -23,6 +23,27 @@ cartog index src/           # index a subdirectory only
 
 Incremental — skips files whose content hash hasn't changed.
 
+### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N]`
+
+Find symbols by partial name — use this when you know roughly what you're looking for but need the exact name before calling `refs`, `callees`, or `impact`.
+
+```bash
+cartog search validate                       # prefix + substring match
+cartog search validate --kind function       # functions only
+cartog search config --file src/db.rs        # scoped to one file
+cartog search parse --limit 5               # cap results
+```
+
+```
+function  validate_token    auth/tokens.py:30
+function  validate_session  auth/tokens.py:68
+function  validate_user     services/user.py:12
+```
+
+Results ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
+
+Available `--kind` values: `function`, `class`, `method`, `variable`, `import`.
+
 ### `cartog outline <file>`
 
 Show all symbols in a file with their types, signatures, and line ranges. Use this instead of reading a file when you need structure.
@@ -158,7 +179,7 @@ cartog --json stats
 
 ## MCP Server
 
-`cartog serve` runs cartog as an MCP server over stdio, exposing the same 8 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
+`cartog serve` runs cartog as an MCP server over stdio, exposing the same 9 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
 
 ```bash
 cartog serve
@@ -292,6 +313,7 @@ The config pattern is always the same — point the client at `cartog serve` ove
 | Tool | Parameters | Description |
 |------|-----------|-------------|
 | `cartog_index` | `path?`, `force?` | Build/update the code graph |
+| `cartog_search` | `query`, `kind?`, `file?`, `limit?` | Find symbols by partial name |
 | `cartog_outline` | `file` | File structure (symbols, line ranges) |
 | `cartog_refs` | `name`, `kind?` | All references to a symbol |
 | `cartog_callees` | `name` | What a symbol calls |

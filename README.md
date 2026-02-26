@@ -15,7 +15,7 @@ Code is a graph of relationships (calls, imports, inherits, type references). ca
 
 **Before** (6+ tool calls, ~2000 tokens, might still miss references):
 ```
-grep -r 'validate_token' .
+grep -r 'validate' .
 cat src/auth/tokens.py
 cat src/services/user.py
 cat src/middleware/auth.py
@@ -23,9 +23,9 @@ cat src/middleware/auth.py
 
 **After** (2-3 calls, ~200 tokens, complete picture):
 ```
-cartog refs validate_token
-cartog outline src/auth/tokens.py
-cartog impact validate_token
+cartog search validate          # discover exact name
+cartog refs validate_token      # all usages
+cartog impact validate_token    # blast radius
 ```
 
 ## Install
@@ -38,6 +38,8 @@ cargo install cartog
 
 ```bash
 cartog index .                              # Build the graph
+cartog search validate                      # Find symbols by partial name
+cartog search validate --kind function      # Filter by kind
 cartog outline src/auth/tokens.py           # File structure without reading it
 cartog refs validate_token                  # Who references this? (calls, imports, inherits, types)
 cartog refs validate_token --kind calls     # Filter: only call sites
@@ -65,6 +67,17 @@ function lookup_session(token: str) -> Optional[Session]  L47-49
 function refresh_token(old_token: str) -> str  L52-56
 function revoke_token(token: str) -> bool  L59-65
 ```
+
+### Example: search
+
+```
+$ cartog search validate
+function  validate_token    auth/tokens.py:30
+function  validate_session  auth/tokens.py:68
+function  validate_user     services/user.py:12
+```
+
+Results ranked: exact match → prefix → substring. Case-insensitive.
 
 ### Example: impact analysis
 
@@ -104,7 +117,7 @@ Re-indexing is incremental: only files with changed content hashes are re-parsed
 
 ## MCP Server
 
-cartog can run as an [MCP](https://modelcontextprotocol.io/) server, exposing all 8 tools over stdio with zero context cost.
+cartog can run as an [MCP](https://modelcontextprotocol.io/) server, exposing all 9 tools over stdio with zero context cost.
 
 ```bash
 # Claude Code
