@@ -1,6 +1,6 @@
 [package]
 name = "cartog"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 rust-version = "1.70"
 description = "Code graph indexer for LLM coding agents. Map your codebase, navigate by graph."
