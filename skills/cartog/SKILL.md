@@ -15,6 +15,7 @@ description: >-
 ## When to Use
 
 Use cartog **before** reaching for grep, cat, or file reads when you need to:
+- Discover symbols by partial name → `cartog search <query>`
 - Understand the structure of a file → `cartog outline <file>`
 - Find who references a symbol → `cartog refs <name>` (or `--kind calls` for just callers)
 - See what a function calls → `cartog callees <name>`
@@ -32,10 +33,15 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 ## Workflow Rules
 
 1. **Before you grep or read a file to understand structure**, query cartog first.
-2. **Use `cartog outline <file>`** instead of `cat <file>` when you need structure, not content.
-3. **Before refactoring**, run `cartog impact <symbol>` to see the blast radius.
-4. **Only fall back to grep/read** when cartog doesn't have what you need (e.g., reading actual implementation logic, string literals, config values).
-5. **After making code changes**, run `cartog index .` to update the graph.
+2. **Start with `cartog search <query>`** to locate any symbol before calling `refs`, `callees`, or `impact`:
+   - If the output contains **exactly one result**, use that symbol name and file — proceed.
+   - If multiple results share the same name but different files, add `--file <path>` to pick the right one — proceed.
+   - If multiple results have different names, add `--kind <kind>` to filter, then re-evaluate.
+   - Never pass an ambiguous name to `refs`/`callees`/`impact` — the result will be wrong.
+3. **Use `cartog outline <file>`** instead of `cat <file>` when you need structure, not content.
+4. **Before refactoring**, run `cartog impact <symbol>` to see the blast radius.
+5. **Only fall back to grep/read** when cartog doesn't have what you need (e.g., reading actual implementation logic, string literals, config values).
+6. **After making code changes**, run `cartog index .` to update the graph.
 
 ## Setup
 
@@ -57,6 +63,17 @@ cartog index .                    # Index current directory
 cartog index src/                 # Index specific directory
 ```
 
+### Search (find symbols by partial name)
+```bash
+cartog search parse                          # prefix + substring match
+cartog search parse --kind function          # filter by symbol kind
+cartog search config --file src/db.rs        # filter to one file
+cartog search parse --limit 10              # cap results
+```
+Returns symbols ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
+
+Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`.
+
 ### Outline (file structure)
 ```bash
 cartog outline src/auth/tokens.py
@@ -68,6 +85,7 @@ Output shows symbols with types, signatures, and line ranges — no need to read
 cartog refs validate_token               # all reference types
 cartog refs validate_token --kind calls  # only call sites
 ```
+Available `--kind` values: `calls`, `imports`, `inherits`, `references`, `raises`.
 
 ### Callees (what does this call?)
 ```bash
@@ -79,12 +97,6 @@ cartog callees authenticate
 cartog impact SessionManager --depth 3
 ```
 Shows everything that transitively depends on a symbol up to N hops.
-
-### Refs with kind filter
-```bash
-cartog refs parse_config --kind imports  # only import edges
-```
-Available kinds: `calls`, `imports`, `inherits`, `references`, `raises`.
 
 ### Hierarchy (inheritance tree)
 ```bash
@@ -113,7 +125,7 @@ cartog --json outline src/auth/tokens.py
 
 Before changing any symbol (rename, extract, move, delete):
 
-1. **Identify** — what symbol is being changed?
+1. **Identify** — `cartog search <name>` to confirm the exact symbol name and file
 2. **Map references** — `cartog refs <name>` to find every usage
 3. **Assess blast radius** — `cartog impact <name> --depth 3` for transitive dependents
 4. **Check hierarchy** — `cartog hierarchy <name>` if it's a class (subclasses need updating too)
@@ -126,6 +138,8 @@ Before changing any symbol (rename, extract, move, delete):
 
 | I need to... | Use |
 |-------------|-----|
+| Discover symbols matching a partial name | `cartog search <query>` |
+| Find where a symbol is defined | `cartog search <query>` then `cartog outline <file>` |
 | Know what's in a file | `cartog outline <file>` |
 | Find usages of a function | `cartog refs <name>` (use `--kind calls` for just callers) |
 | Understand what a function does at a high level | `cartog callees <name>` |

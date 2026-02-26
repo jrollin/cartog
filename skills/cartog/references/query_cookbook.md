@@ -2,6 +2,19 @@
 
 ## Common Patterns
 
+### "Where is this symbol defined?"
+
+Start broad, then narrow only if needed:
+```bash
+cartog search extract
+# → 1 result? Use it. Done.
+# → many results with different names? Add --kind:
+cartog search extract --kind method
+# → still multiple files? Add --file:
+cartog search extract --kind method --file src/languages/python.rs
+# → now unique: proceed with outline/refs/callees
+```
+
 ### "What does this file contain?"
 ```bash
 cartog outline src/auth/tokens.py
@@ -41,7 +54,8 @@ cartog refs SessionManager
 
 ### Understand a function before modifying it
 ```bash
-cartog outline src/auth/tokens.py     # See structure
+cartog search validate_token           # Locate the symbol — note the file path returned
+cartog outline <file-from-search>      # See structure of that file
 cartog callees validate_token          # What it depends on
 cartog impact validate_token           # Who depends on it
 ```
@@ -55,6 +69,7 @@ cartog callees validate_token          # Keep going deeper
 
 ### Assess refactoring scope
 ```bash
+cartog search OldClassName             # Confirm exact name and file first
 cartog refs OldClassName               # All references
 cartog hierarchy OldClassName          # Subclasses to update
 cartog impact OldClassName --depth 5   # Full blast radius
