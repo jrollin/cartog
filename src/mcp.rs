@@ -693,7 +693,6 @@ mod tests {
     fn search_limit_is_capped() {
         assert_eq!(999u32.min(MAX_SEARCH_LIMIT), MAX_SEARCH_LIMIT);
         assert_eq!(20u32.min(MAX_SEARCH_LIMIT), 20);
-        assert_eq!(None::<u32>.unwrap_or(20).min(MAX_SEARCH_LIMIT), 20);
     }
 
     #[test]

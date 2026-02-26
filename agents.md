@@ -12,7 +12,11 @@ See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/
 cargo build              # debug build
 cargo build --release    # release build
 cargo test               # run all tests (156 unit tests)
+cargo fmt --check        # check formatting
+cargo clippy --all-targets -- -D warnings  # lint
 ```
+
+Always run `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` before committing.
 
 ## Code Conventions
 
