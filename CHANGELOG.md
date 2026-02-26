@@ -1,10 +1,14 @@
 # Changelog
 
-## [0.3.2] - 2026-02-26
+## [0.3.3] - 2026-02-26
 
 ### Bug Fixes
 
 - Remove redundant clippy-flagged test assertion and enforce fmt/clippy in AGENTS.md ([`203825b`](https://github.com/jrollin/cartog/commit/203825bd6e1fe4ec3816231d92477c3eab56e5d9))
+
+### Documentation
+
+- **skill**: Document cartog search command and progressive narrowing workflow ([`693f47e`](https://github.com/jrollin/cartog/commit/693f47ed25fdabdf5c3f024e3ff7659d29136020))
 
 ### Miscellaneous
 
