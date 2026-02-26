@@ -5,17 +5,14 @@
 //! kinds for functions, classes, imports, and calls are identical.
 
 use anyhow::Result;
-use tree_sitter::{Language, Node, Parser};
+use tree_sitter::{Node, Parser};
 
 use crate::types::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
 use super::{node_text, ExtractionResult};
 
 /// Parse source and extract symbols + edges. Works for JS, TS, and TSX.
-pub fn extract(language: &Language, source: &str, file_path: &str) -> Result<ExtractionResult> {
-    let mut parser = Parser::new();
-    parser.set_language(language)?;
-
+pub fn extract(parser: &mut Parser, source: &str, file_path: &str) -> Result<ExtractionResult> {
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;

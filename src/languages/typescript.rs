@@ -1,17 +1,19 @@
 use anyhow::Result;
-use tree_sitter::Language;
+use tree_sitter::{Language, Parser};
 
 use super::{js_shared, ExtractionResult, Extractor};
 
 pub struct TypeScriptExtractor {
-    language: Language,
+    parser: Parser,
 }
 
 impl TypeScriptExtractor {
     pub fn new() -> Self {
-        Self {
-            language: Language::new(tree_sitter_typescript::LANGUAGE_TYPESCRIPT),
-        }
+        let mut parser = Parser::new();
+        parser
+            .set_language(&Language::new(tree_sitter_typescript::LANGUAGE_TYPESCRIPT))
+            .expect("TypeScript grammar should always load");
+        Self { parser }
     }
 }
 
@@ -22,20 +24,22 @@ impl Default for TypeScriptExtractor {
 }
 
 impl Extractor for TypeScriptExtractor {
-    fn extract(&self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        js_shared::extract(&self.language, source, file_path)
+    fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
+        js_shared::extract(&mut self.parser, source, file_path)
     }
 }
 
 pub struct TsxExtractor {
-    language: Language,
+    parser: Parser,
 }
 
 impl TsxExtractor {
     pub fn new() -> Self {
-        Self {
-            language: Language::new(tree_sitter_typescript::LANGUAGE_TSX),
-        }
+        let mut parser = Parser::new();
+        parser
+            .set_language(&Language::new(tree_sitter_typescript::LANGUAGE_TSX))
+            .expect("TSX grammar should always load");
+        Self { parser }
     }
 }
 
@@ -46,8 +50,8 @@ impl Default for TsxExtractor {
 }
 
 impl Extractor for TsxExtractor {
-    fn extract(&self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        js_shared::extract(&self.language, source, file_path)
+    fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
+        js_shared::extract(&mut self.parser, source, file_path)
     }
 }
 
@@ -57,7 +61,7 @@ mod tests {
     use crate::types::{EdgeKind, SymbolKind, Visibility};
 
     fn extract_ts(source: &str) -> ExtractionResult {
-        let ext = TypeScriptExtractor::new();
+        let mut ext = TypeScriptExtractor::new();
         ext.extract(source, "test.ts").unwrap()
     }
 

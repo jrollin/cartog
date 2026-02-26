@@ -7,14 +7,16 @@ use super::{node_text, ExtractionResult, Extractor};
 
 /// Extracts symbols and edges from Ruby source files.
 pub struct RubyExtractor {
-    language: Language,
+    parser: Parser,
 }
 
 impl RubyExtractor {
     pub fn new() -> Self {
-        Self {
-            language: Language::new(tree_sitter_ruby::LANGUAGE),
-        }
+        let mut parser = Parser::new();
+        parser
+            .set_language(&Language::new(tree_sitter_ruby::LANGUAGE))
+            .expect("Ruby grammar should always load");
+        Self { parser }
     }
 }
 
@@ -25,11 +27,9 @@ impl Default for RubyExtractor {
 }
 
 impl Extractor for RubyExtractor {
-    fn extract(&self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        let mut parser = Parser::new();
-        parser.set_language(&self.language)?;
-
-        let tree = parser
+    fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
+        let tree = self
+            .parser
             .parse(source, None)
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;
 
@@ -666,7 +666,7 @@ mod tests {
     use super::*;
 
     fn extract(source: &str) -> ExtractionResult {
-        let ext = RubyExtractor::new();
+        let mut ext = RubyExtractor::new();
         ext.extract(source, "test.rb").unwrap()
     }
 

@@ -7,7 +7,7 @@ use tracing::warn;
 use walkdir::WalkDir;
 
 use crate::db::Database;
-use crate::languages::{detect_language, get_extractor};
+use crate::languages::{detect_language, get_extractor, Extractor};
 use crate::types::FileInfo;
 
 /// Summary of an indexing operation.
@@ -31,6 +31,10 @@ pub fn index_directory(db: &Database, root: &Path, force: bool) -> Result<IndexR
     let mut result = IndexResult::default();
 
     let root = root.canonicalize().context("Failed to resolve root path")?;
+
+    // Cache one extractor (with its Parser) per language to avoid recreating parsers per file.
+    let mut extractors: std::collections::HashMap<&'static str, Box<dyn Extractor>> =
+        std::collections::HashMap::new();
 
     // Collect files that should be indexed
     let mut current_files = std::collections::HashSet::new();
@@ -112,14 +116,12 @@ pub fn index_directory(db: &Database, root: &Path, force: bool) -> Result<IndexR
 
         let modified = file_modified(path);
 
-        // Extract symbols and edges
-        let extractor = match get_extractor(lang) {
-            Some(e) => e,
-            None => {
-                result.files_skipped += 1;
-                continue;
-            }
-        };
+        // Extract symbols and edges — reuse the cached extractor for this language
+        // so the tree-sitter Parser inside is allocated only once per language.
+        let extractor = extractors
+            .entry(lang)
+            .or_insert_with(|| get_extractor(lang).expect("lang was validated by detect_language"))
+            .as_mut();
 
         let extraction = match extractor.extract(&source, &rel_path) {
             Ok(e) => e,

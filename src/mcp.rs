@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use rmcp::schemars;
 use rmcp::{
@@ -109,16 +110,14 @@ struct HierarchyEntry {
 
 // ── Path validation ──
 
-/// Validate that a path is within the current working directory subtree.
-/// Returns the canonicalized path on success, or an error if the path escapes CWD.
-fn validate_path_within_cwd(input: &str) -> Result<PathBuf, String> {
-    let cwd = std::env::current_dir().map_err(|e| format!("cannot determine CWD: {e}"))?;
-
+/// Validate that a path is within the given canonical CWD subtree.
+/// Returns the resolved path on success, or an error string if the path escapes CWD.
+fn validate_path_within_cwd_canonical(input: &str, cwd_canonical: &Path) -> Result<PathBuf, String> {
     // Resolve the input path relative to CWD
     let candidate = if Path::new(input).is_absolute() {
         PathBuf::from(input)
     } else {
-        cwd.join(input)
+        cwd_canonical.join(input)
     };
 
     // Canonicalize if the path exists, otherwise normalize manually
@@ -132,15 +131,22 @@ fn validate_path_within_cwd(input: &str) -> Result<PathBuf, String> {
         normalize_path(&candidate)
     };
 
-    let cwd_canonical = cwd
-        .canonicalize()
-        .map_err(|e| format!("cannot canonicalize CWD: {e}"))?;
-
-    if !resolved.starts_with(&cwd_canonical) {
+    if !resolved.starts_with(cwd_canonical) {
         return Err(format!("path '{input}' is outside the project directory"));
     }
 
     Ok(resolved)
+}
+
+/// Validate that a path is within the current working directory subtree.
+/// Returns the canonicalized path on success, or an error if the path escapes CWD.
+#[cfg(test)]
+fn validate_path_within_cwd(input: &str) -> Result<PathBuf, String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("cannot determine CWD: {e}"))?;
+    let cwd_canonical = cwd
+        .canonicalize()
+        .map_err(|e| format!("cannot canonicalize CWD: {e}"))?;
+    validate_path_within_cwd_canonical(input, &cwd_canonical)
 }
 
 /// Normalize a path by resolving `.` and `..` components without requiring the path to exist.
@@ -162,16 +168,13 @@ fn mcp_err(msg: impl std::fmt::Display) -> McpError {
     McpError::internal_error(msg.to_string(), None)
 }
 
-fn open_db() -> Result<Database, McpError> {
-    Database::open(DB_FILE).map_err(|e| mcp_err(format!("failed to open database: {e}")))
-}
-
 /// Build a JSON text response, appending a hint if the DB has no indexed files.
 fn json_response(db: &Database, json: String) -> Result<CallToolResult, McpError> {
-    let stats = db
-        .stats()
+    // Single lightweight check instead of full stats() (which runs 4 COUNT queries).
+    let is_empty = !db
+        .has_indexed_files()
         .map_err(|e| mcp_err(format!("stats check failed: {e}")))?;
-    if stats.num_files == 0 {
+    if is_empty {
         let hint = "\n\n(Index is empty. Run cartog_index first to build the code graph.)";
         Ok(CallToolResult::success(vec![Content::text(format!(
             "{json}{hint}"
@@ -186,14 +189,26 @@ fn json_response(db: &Database, json: String) -> Result<CallToolResult, McpError
 #[derive(Clone)]
 pub struct CartogServer {
     tool_router: ToolRouter<Self>,
+    /// Shared database connection, opened once at server start.
+    db: Arc<Mutex<Database>>,
+    /// Canonicalized CWD captured at server start to avoid repeated syscalls.
+    /// Wrapped in `Arc` so clones (required by `#[derive(Clone)]`) are cheap.
+    cwd: Arc<Path>,
 }
 
 #[tool_router]
 impl CartogServer {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> anyhow::Result<Self> {
+        let db = Database::open(DB_FILE)
+            .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
+        let cwd = std::env::current_dir()
+            .and_then(|p| p.canonicalize())
+            .map_err(|e| anyhow::anyhow!("cannot determine CWD: {e}"))?;
+        Ok(Self {
             tool_router: Self::tool_router(),
-        }
+            db: Arc::new(Mutex::new(db)),
+            cwd: Arc::from(cwd),
+        })
     }
 
     /// Build or rebuild the code graph index for a directory.
@@ -206,12 +221,14 @@ impl CartogServer {
     ) -> Result<CallToolResult, McpError> {
         let path = params.path;
         let force = params.force;
+        let db = Arc::clone(&self.db);
+        let cwd = Arc::clone(&self.cwd);
 
         tokio::task::spawn_blocking(move || {
-            let validated = validate_path_within_cwd(&path).map_err(mcp_err)?;
+            let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
             debug!(path = %validated.display(), force, "indexing directory");
 
-            let db = open_db()?;
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
             let result = indexer::index_directory(&db, &validated, force)
                 .map_err(|e| mcp_err(format!("indexing failed: {e}")))?;
 
@@ -232,10 +249,11 @@ impl CartogServer {
         Parameters(params): Parameters<OutlineParams>,
     ) -> Result<CallToolResult, McpError> {
         let file = params.file;
+        let db = Arc::clone(&self.db);
 
         tokio::task::spawn_blocking(move || {
             debug!(file = %file, "outline");
-            let db = open_db()?;
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
             let symbols = db
                 .outline(&file)
                 .map_err(|e| mcp_err(format!("outline query failed: {e}")))?;
@@ -258,6 +276,7 @@ impl CartogServer {
     ) -> Result<CallToolResult, McpError> {
         let name = params.name;
         let kind_str = params.kind;
+        let db = Arc::clone(&self.db);
 
         tokio::task::spawn_blocking(move || {
             let kind_filter = kind_str
@@ -273,7 +292,7 @@ impl CartogServer {
                 .transpose()?;
 
             debug!(name = %name, kind = ?kind_filter, "refs");
-            let db = open_db()?;
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
             let results = db
                 .refs(&name, kind_filter)
                 .map_err(|e| mcp_err(format!("refs query failed: {e}")))?;
@@ -300,10 +319,11 @@ impl CartogServer {
         Parameters(params): Parameters<CalleesParams>,
     ) -> Result<CallToolResult, McpError> {
         let name = params.name;
+        let db = Arc::clone(&self.db);
 
         tokio::task::spawn_blocking(move || {
             debug!(name = %name, "callees");
-            let db = open_db()?;
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
             let edges = db
                 .callees(&name)
                 .map_err(|e| mcp_err(format!("callees query failed: {e}")))?;
@@ -326,10 +346,11 @@ impl CartogServer {
     ) -> Result<CallToolResult, McpError> {
         let name = params.name;
         let depth = params.depth.unwrap_or(3).min(MAX_IMPACT_DEPTH);
+        let db = Arc::clone(&self.db);
 
         tokio::task::spawn_blocking(move || {
             debug!(name = %name, depth, "impact");
-            let db = open_db()?;
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
             let results = db
                 .impact(&name, depth)
                 .map_err(|e| mcp_err(format!("impact query failed: {e}")))?;
@@ -356,10 +377,11 @@ impl CartogServer {
         Parameters(params): Parameters<HierarchyParams>,
     ) -> Result<CallToolResult, McpError> {
         let name = params.name;
+        let db = Arc::clone(&self.db);
 
         tokio::task::spawn_blocking(move || {
             debug!(name = %name, "hierarchy");
-            let db = open_db()?;
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
             let pairs = db
                 .hierarchy(&name)
                 .map_err(|e| mcp_err(format!("hierarchy query failed: {e}")))?;
@@ -386,10 +408,11 @@ impl CartogServer {
         Parameters(params): Parameters<DepsParams>,
     ) -> Result<CallToolResult, McpError> {
         let file = params.file;
+        let db = Arc::clone(&self.db);
 
         tokio::task::spawn_blocking(move || {
             debug!(file = %file, "deps");
-            let db = open_db()?;
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
             let edges = db
                 .file_deps(&file)
                 .map_err(|e| mcp_err(format!("deps query failed: {e}")))?;
@@ -417,6 +440,8 @@ impl CartogServer {
         let kind_str = params.kind;
         let file = params.file;
         let limit = params.limit.unwrap_or(20).min(MAX_SEARCH_LIMIT);
+        let db = Arc::clone(&self.db);
+        let cwd = Arc::clone(&self.cwd);
 
         tokio::task::spawn_blocking(move || {
             if query.is_empty() {
@@ -437,14 +462,14 @@ impl CartogServer {
             // Validate file path is within CWD — consistent with cartog_outline / cartog_deps.
             let validated_file: Option<String> = file
                 .map(|f| {
-                    validate_path_within_cwd(&f)
+                    validate_path_within_cwd_canonical(&f, &cwd)
                         .map_err(mcp_err)
                         .map(|p| p.to_string_lossy().into_owned())
                 })
                 .transpose()?;
             let file_filter = validated_file.as_deref();
             debug!(query = %query, kind = ?kind_filter, limit, "search");
-            let db = open_db()?;
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
             let symbols = db
                 .search(&query, kind_filter, file_filter, limit)
                 .map_err(|e| mcp_err(format!("search failed: {e}")))?;
@@ -462,9 +487,11 @@ impl CartogServer {
         description = "Show index statistics: file count, symbol count, edge count, resolution rate, breakdown by language and symbol kind."
     )]
     async fn cartog_stats(&self) -> Result<CallToolResult, McpError> {
+        let db = Arc::clone(&self.db);
+
         tokio::task::spawn_blocking(move || {
             debug!("stats");
-            let db = open_db()?;
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
             let stats = db
                 .stats()
                 .map_err(|e| mcp_err(format!("stats query failed: {e}")))?;
@@ -511,7 +538,7 @@ impl ServerHandler for CartogServer {
 pub async fn run_server() -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
 
-    let server = CartogServer::new();
+    let server = CartogServer::new()?;
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
 

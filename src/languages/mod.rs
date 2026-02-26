@@ -18,8 +18,11 @@ pub struct ExtractionResult {
 }
 
 /// Trait implemented by each language extractor.
-pub trait Extractor: Send + Sync {
-    fn extract(&self, source: &str, file_path: &str) -> Result<ExtractionResult>;
+///
+/// `extract` takes `&mut self` so implementations can reuse an internal
+/// `tree_sitter::Parser` across calls instead of allocating a new one per file.
+pub trait Extractor: Send {
+    fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult>;
 }
 
 /// Extract the text of a tree-sitter node from the source.

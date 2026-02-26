@@ -1,17 +1,19 @@
 use anyhow::Result;
-use tree_sitter::Language;
+use tree_sitter::{Language, Parser};
 
 use super::{js_shared, ExtractionResult, Extractor};
 
 pub struct JavaScriptExtractor {
-    language: Language,
+    parser: Parser,
 }
 
 impl JavaScriptExtractor {
     pub fn new() -> Self {
-        Self {
-            language: Language::new(tree_sitter_javascript::LANGUAGE),
-        }
+        let mut parser = Parser::new();
+        parser
+            .set_language(&Language::new(tree_sitter_javascript::LANGUAGE))
+            .expect("JavaScript grammar should always load");
+        Self { parser }
     }
 }
 
@@ -22,8 +24,8 @@ impl Default for JavaScriptExtractor {
 }
 
 impl Extractor for JavaScriptExtractor {
-    fn extract(&self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        js_shared::extract(&self.language, source, file_path)
+    fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
+        js_shared::extract(&mut self.parser, source, file_path)
     }
 }
 
@@ -33,7 +35,7 @@ mod tests {
     use crate::types::{EdgeKind, SymbolKind, Visibility};
 
     fn extract_js(source: &str) -> ExtractionResult {
-        let ext = JavaScriptExtractor::new();
+        let mut ext = JavaScriptExtractor::new();
         ext.extract(source, "test.js").unwrap()
     }
 

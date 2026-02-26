@@ -5,6 +5,15 @@ use tracing::warn;
 
 use crate::types::{Edge, EdgeKind, FileInfo, Symbol, SymbolKind, Visibility};
 
+const SQL_INSERT_SYMBOL: &str = "INSERT OR REPLACE INTO symbols
+     (id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
+      parent_id, signature, visibility, is_async, docstring)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+
+const SQL_INSERT_EDGE: &str =
+    "INSERT INTO edges (source_id, target_name, target_id, kind, file_path, line)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS symbols (
     id TEXT PRIMARY KEY,
@@ -77,8 +86,15 @@ impl Database {
     /// Open or create the database at the given path.
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let conn = Connection::open(path.as_ref()).context("Failed to open database")?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .context("Failed to set pragmas")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA foreign_keys=ON;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA cache_size=-65536;
+             PRAGMA temp_store=MEMORY;
+             PRAGMA mmap_size=268435456;",
+        )
+        .context("Failed to set pragmas")?;
         conn.execute_batch(SCHEMA)
             .context("Failed to create schema")?;
         Ok(Self { conn })
@@ -174,13 +190,11 @@ impl Database {
     // ── Symbols ──
 
     /// Insert or replace a single symbol.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn insert_symbol(&self, sym: &Symbol) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO symbols
-             (id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-              parent_id, signature, visibility, is_async, docstring)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
+        self.conn
+            .prepare_cached(SQL_INSERT_SYMBOL)?
+            .execute(params![
                 sym.id,
                 sym.name,
                 sym.kind.as_str(),
@@ -194,16 +208,30 @@ impl Database {
                 sym.visibility.as_str(),
                 sym.is_async,
                 sym.docstring,
-            ],
-        )?;
+            ])?;
         Ok(())
     }
 
     /// Insert or replace multiple symbols in a single transaction.
     pub fn insert_symbols(&self, symbols: &[Symbol]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        let mut stmt = self.conn.prepare_cached(SQL_INSERT_SYMBOL)?;
         for sym in symbols {
-            self.insert_symbol(sym)?;
+            stmt.execute(params![
+                sym.id,
+                sym.name,
+                sym.kind.as_str(),
+                sym.file_path,
+                sym.start_line,
+                sym.end_line,
+                sym.start_byte,
+                sym.end_byte,
+                sym.parent_id,
+                sym.signature,
+                sym.visibility.as_str(),
+                sym.is_async,
+                sym.docstring,
+            ])?;
         }
         tx.commit()?;
         Ok(())
@@ -212,27 +240,32 @@ impl Database {
     // ── Edges ──
 
     /// Insert a single edge.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn insert_edge(&self, edge: &Edge) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO edges (source_id, target_name, target_id, kind, file_path, line)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                edge.source_id,
-                edge.target_name,
-                edge.target_id,
-                edge.kind.as_str(),
-                edge.file_path,
-                edge.line,
-            ],
-        )?;
+        self.conn.prepare_cached(SQL_INSERT_EDGE)?.execute(params![
+            edge.source_id,
+            edge.target_name,
+            edge.target_id,
+            edge.kind.as_str(),
+            edge.file_path,
+            edge.line,
+        ])?;
         Ok(())
     }
 
     /// Insert multiple edges in a single transaction.
     pub fn insert_edges(&self, edges: &[Edge]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        let mut stmt = self.conn.prepare_cached(SQL_INSERT_EDGE)?;
         for edge in edges {
-            self.insert_edge(edge)?;
+            stmt.execute(params![
+                edge.source_id,
+                edge.target_name,
+                edge.target_id,
+                edge.kind.as_str(),
+                edge.file_path,
+                edge.line,
+            ])?;
         }
         tx.commit()?;
         Ok(())
@@ -264,7 +297,7 @@ impl Database {
             .prepare("SELECT id FROM symbols WHERE name = ?1 AND file_path LIKE ?2 LIMIT 1")?;
         let mut anywhere_stmt = self
             .conn
-            .prepare("SELECT id FROM symbols WHERE name = ?1")?;
+            .prepare("SELECT id FROM symbols WHERE name = ?1 LIMIT 2")?;
         let mut update_stmt = self
             .conn
             .prepare("UPDATE edges SET target_id = ?1 WHERE id = ?2")?;
@@ -301,13 +334,12 @@ impl Database {
                 }
             }
 
-            // 3) Unique project-wide match
-            let matches: Vec<String> = anywhere_stmt
-                .query_map(params![simple_name], |row| row.get(0))?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-
-            if matches.len() == 1 {
-                update_stmt.execute(params![&matches[0], edge_id])?;
+            // 3) Unique project-wide match — fetch at most 2 rows; resolve only if exactly 1
+            let mut rows = anywhere_stmt.query(params![simple_name])?;
+            let first = rows.next()?.and_then(|r| r.get::<_, String>(0).ok());
+            let has_second = rows.next()?.is_some();
+            if let (Some(tid), false) = (first, has_second) {
+                update_stmt.execute(params![tid, edge_id])?;
                 resolved += 1;
             }
         }
@@ -408,61 +440,58 @@ impl Database {
         name: &str,
         kind_filter: Option<EdgeKind>,
     ) -> Result<Vec<(Edge, Option<Symbol>)>> {
-        let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(kind) =
-            kind_filter
-        {
-            (
-                    "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
-                            s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
-                            s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                            s.is_async, s.docstring
-                     FROM edges e
-                     LEFT JOIN symbols s ON e.source_id = s.id
-                     WHERE (e.target_name = ?1 OR e.target_id IN (SELECT id FROM symbols WHERE name = ?1))
-                       AND e.kind = ?2"
-                        .to_string(),
-                    vec![
-                        Box::new(name.to_string()) as Box<dyn rusqlite::types::ToSql>,
-                        Box::new(kind.as_str().to_string()),
-                    ],
-                )
-        } else {
-            (
-                    "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
-                            s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
-                            s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                            s.is_async, s.docstring
-                     FROM edges e
-                     LEFT JOIN symbols s ON e.source_id = s.id
-                     WHERE e.target_name = ?1 OR e.target_id IN (SELECT id FROM symbols WHERE name = ?1)"
-                        .to_string(),
-                    vec![Box::new(name.to_string()) as Box<dyn rusqlite::types::ToSql>],
-                )
+        // Use a LEFT JOIN to resolve target_id → symbol name instead of a correlated subquery.
+        let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(Edge, Option<Symbol>)> {
+            let kind_str = row.get::<_, String>(4)?;
+            let kind = kind_str.parse().unwrap_or(EdgeKind::References);
+            let edge = Edge {
+                source_id: row.get(1)?,
+                target_name: row.get(2)?,
+                target_id: row.get(3)?,
+                kind,
+                file_path: row.get(5)?,
+                line: row.get(6)?,
+            };
+            let sym: Option<Symbol> = if row.get::<_, Option<String>>(7)?.is_some() {
+                Some(row_to_symbol_offset(row, 7)?)
+            } else {
+                None
+            };
+            Ok((edge, sym))
         };
 
-        let mut stmt = self.conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt
-            .query_map(param_refs.as_slice(), |row| {
-                let kind_str = row.get::<_, String>(4)?;
-                let kind = kind_str.parse().unwrap_or(EdgeKind::References);
-                let edge = Edge {
-                    source_id: row.get(1)?,
-                    target_name: row.get(2)?,
-                    target_id: row.get(3)?,
-                    kind,
-                    file_path: row.get(5)?,
-                    line: row.get(6)?,
-                };
-                let sym: Option<Symbol> = if row.get::<_, Option<String>>(7)?.is_some() {
-                    Some(row_to_symbol_offset(row, 7)?)
-                } else {
-                    None
-                };
-                Ok((edge, sym))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let rows = if let Some(kind) = kind_filter {
+            let mut stmt = self.conn.prepare_cached(
+                "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+                        s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
+                        s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
+                        s.is_async, s.docstring
+                 FROM edges e
+                 LEFT JOIN symbols s ON e.source_id = s.id
+                 LEFT JOIN symbols sym2 ON e.target_id = sym2.id
+                 WHERE (e.target_name = ?1 OR sym2.name = ?1)
+                   AND e.kind = ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![name, kind.as_str()], map_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        } else {
+            let mut stmt = self.conn.prepare_cached(
+                "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+                        s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
+                        s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
+                        s.is_async, s.docstring
+                 FROM edges e
+                 LEFT JOIN symbols s ON e.source_id = s.id
+                 LEFT JOIN symbols sym2 ON e.target_id = sym2.id
+                 WHERE e.target_name = ?1 OR sym2.name = ?1",
+            )?;
+            let rows = stmt
+                .query_map(params![name], map_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
         Ok(rows)
     }
 
@@ -560,6 +589,18 @@ impl Database {
             languages,
             symbol_kinds,
         })
+    }
+
+    /// Returns `true` if at least one file has been indexed.
+    ///
+    /// Cheaper than [`stats`] for the common "is the index empty?" check —
+    /// SQLite can satisfy `LIMIT 1` with a single index seek rather than a full count.
+    pub fn has_indexed_files(&self) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row("SELECT 1 FROM files LIMIT 1", [], |_| Ok(()))
+            .optional()?
+            .is_some())
     }
 
     /// Get all indexed file paths, sorted alphabetically.

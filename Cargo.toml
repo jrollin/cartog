@@ -28,3 +28,11 @@ rmcp = { version = "0.5", features = ["server", "transport-io"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+[profile.release]
+lto = "thin"
+strip = "debuginfo"
+
+# opt-level=1 because tree-sitter C grammars compile very slowly at the default level=0
+[profile.dev]
+opt-level = 1

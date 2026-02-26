@@ -6,14 +6,16 @@ use crate::types::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 use super::{node_text, ExtractionResult, Extractor};
 
 pub struct PythonExtractor {
-    language: Language,
+    parser: Parser,
 }
 
 impl PythonExtractor {
     pub fn new() -> Self {
-        Self {
-            language: Language::new(tree_sitter_python::LANGUAGE),
-        }
+        let mut parser = Parser::new();
+        parser
+            .set_language(&Language::new(tree_sitter_python::LANGUAGE))
+            .expect("Python grammar should always load");
+        Self { parser }
     }
 }
 
@@ -24,11 +26,9 @@ impl Default for PythonExtractor {
 }
 
 impl Extractor for PythonExtractor {
-    fn extract(&self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        let mut parser = Parser::new();
-        parser.set_language(&self.language)?;
-
-        let tree = parser
+    fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
+        let tree = self
+            .parser
             .parse(source, None)
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;
 
@@ -701,7 +701,7 @@ mod tests {
     use super::*;
 
     fn extract(source: &str) -> ExtractionResult {
-        let ext = PythonExtractor::new();
+        let mut ext = PythonExtractor::new();
         ext.extract(source, "test.py").unwrap()
     }
 
