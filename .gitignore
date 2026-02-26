@@ -1,3 +1,4 @@
 /target
 .cartog.db
 .ruff_cache/
+benchmarks/results/*.jsonl
