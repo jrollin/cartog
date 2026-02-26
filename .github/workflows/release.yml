@@ -83,9 +83,28 @@ jobs:
           name: cartog-${{ matrix.target }}
           path: cartog-${{ matrix.target }}.*
 
+  changelog:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    outputs:
+      release_body: ${{ steps.cliff.outputs.content }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog with git-cliff
+        id: cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGELOG.md
+
   release:
     name: Create Release
-    needs: build
+    needs: [build, changelog]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -98,7 +117,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body: ${{ needs.changelog.outputs.release_body }}
           files: artifacts/*
 
   publish:

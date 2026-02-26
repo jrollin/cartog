@@ -82,6 +82,18 @@ git commit -m "chore: bump version to ${NEW}"
 info "tagging $TAG"
 git tag -a "$TAG" -m "Release ${TAG}"
 
+# generate / update CHANGELOG.md with git-cliff (tag must exist first)
+if command -v git-cliff &>/dev/null; then
+  info "generating CHANGELOG.md with git-cliff"
+  git-cliff --config cliff.toml -o CHANGELOG.md
+  if ! git diff --quiet CHANGELOG.md; then
+    git add CHANGELOG.md
+    git commit --amend --no-edit
+  fi
+else
+  info "git-cliff not found — skipping local CHANGELOG.md update (CI will still generate release notes)"
+fi
+
 info "pushing commit and tag"
 git push origin HEAD
 git push origin "$TAG"

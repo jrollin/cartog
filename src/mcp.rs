@@ -427,7 +427,9 @@ impl CartogServer {
                 .as_deref()
                 .map(|s| {
                     s.parse::<crate::types::SymbolKind>().map_err(|_| {
-                        mcp_err("invalid symbol kind. Valid: function, class, method, variable, import")
+                        mcp_err(
+                            "invalid symbol kind. Valid: function, class, method, variable, import",
+                        )
                     })
                 })
                 .transpose()?;
