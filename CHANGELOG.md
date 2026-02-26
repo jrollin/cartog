@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.4] - 2026-02-26
+## [0.3.5] - 2026-02-26
 
 ### Bug Fixes
 
@@ -9,6 +9,10 @@
 ### Documentation
 
 - **skill**: Document cartog search command and progressive narrowing workflow ([`693f47e`](https://github.com/jrollin/cartog/commit/693f47ed25fdabdf5c3f024e3ff7659d29136020))
+
+### Features
+
+- **perf**: Optimize treesitter parser and sql ([`4746d07`](https://github.com/jrollin/cartog/commit/4746d07e35be8a0e5c8dfbce25a4948c80348b9f))
 
 ### Miscellaneous
 
