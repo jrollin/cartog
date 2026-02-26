@@ -99,8 +99,37 @@ Re-indexing is incremental: only files with changed content hashes are re-parsed
 ## Design Trade-offs
 
 - **Structural, not semantic** — name-based resolution (~90% accuracy), not full type analysis. Good enough for navigation; LSP can be layered on later.
-- **Zero dependencies** — single 3.5MB binary + SQLite file. No language server, no embedding model, no graph DB.
+- **Zero dependencies** — single binary + SQLite file. No language server, no embedding model, no graph DB.
 - **Incremental** — SHA256 hash per file, only re-indexes what changed.
+
+## MCP Server
+
+cartog can run as an [MCP](https://modelcontextprotocol.io/) server, exposing all 8 tools over stdio with zero context cost.
+
+```bash
+# Claude Code
+claude mcp add cartog -- cartog serve
+
+# Cursor — add to .cursor/mcp.json
+# Windsurf — add to ~/.codeium/windsurf/mcp_config.json
+# OpenCode — add to .opencode.json
+# Zed — add to ~/.config/zed/settings.json
+```
+
+Common config (JSON):
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+See [Usage — MCP Server](docs/usage.md#mcp-server) for per-client installation details.
 
 ## Agent Skill
 

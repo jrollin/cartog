@@ -37,5 +37,5 @@ Structural/heuristic name resolution, not full semantic. 90% accuracy — enough
 ## Distribution
 
 - **Primary**: Claude Code skill (SKILL.md + bash scripts)
-- **Secondary**: `cargo install cartog` / pre-built binaries
-- **Future**: Optional MCP server mode (`cartog serve`)
+- **Secondary**: MCP server (`cartog serve` over stdio) for Claude Code, Cursor, and other MCP clients
+- **Tertiary**: `cargo install cartog` / pre-built binaries for direct CLI use

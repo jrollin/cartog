@@ -4,11 +4,9 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::cli::EdgeKindFilter;
-use crate::db::Database;
+use crate::db::{Database, DB_FILE};
 use crate::indexer;
 use crate::types::{EdgeKind, SymbolKind};
-
-const DB_FILE: &str = ".cartog.db";
 
 fn open_db() -> Result<Database> {
     Database::open(DB_FILE).context("Failed to open cartog database")
@@ -136,13 +134,7 @@ pub fn cmd_impact(name: &str, depth: u32, json: bool) -> Result<()> {
 /// All references to a symbol (calls, imports, inherits, references, raises).
 pub fn cmd_refs(name: &str, kind: Option<EdgeKindFilter>, json: bool) -> Result<()> {
     let db = open_db()?;
-    let kind_filter = kind.map(|k| match k {
-        EdgeKindFilter::Calls => EdgeKind::Calls,
-        EdgeKindFilter::Imports => EdgeKind::Imports,
-        EdgeKindFilter::Inherits => EdgeKind::Inherits,
-        EdgeKindFilter::References => EdgeKind::References,
-        EdgeKindFilter::Raises => EdgeKind::Raises,
-    });
+    let kind_filter = kind.map(EdgeKind::from);
     let results = db.refs(name, kind_filter)?;
 
     if json {

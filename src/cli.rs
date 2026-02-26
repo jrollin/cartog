@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::types::EdgeKind;
+
 #[derive(Debug, Parser)]
 #[command(name = "cartog")]
 #[command(about = "Map your codebase. Navigate by graph, not grep.")]
@@ -21,6 +23,18 @@ pub enum EdgeKindFilter {
     Inherits,
     References,
     Raises,
+}
+
+impl From<EdgeKindFilter> for EdgeKind {
+    fn from(f: EdgeKindFilter) -> Self {
+        match f {
+            EdgeKindFilter::Calls => EdgeKind::Calls,
+            EdgeKindFilter::Imports => EdgeKind::Imports,
+            EdgeKindFilter::Inherits => EdgeKind::Inherits,
+            EdgeKindFilter::References => EdgeKind::References,
+            EdgeKindFilter::Raises => EdgeKind::Raises,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -82,4 +96,7 @@ pub enum Command {
 
     /// Index statistics summary
     Stats,
+
+    /// Start MCP server over stdio (for Claude Code, Cursor, and other MCP clients)
+    Serve,
 }

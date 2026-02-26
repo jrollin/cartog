@@ -9,12 +9,15 @@
 | Crate | Purpose |
 |-------|---------|
 | `tree-sitter` | Incremental parsing, CST traversal |
-| `tree-sitter-{lang}` | Per-language grammars (Python, TS/JS, Rust, Go) |
+| `tree-sitter-{lang}` | Per-language grammars (Python, TS/JS, Rust, Go, Ruby) |
 | `rusqlite` (bundled) | SQLite storage, zero external deps |
 | `clap` (derive) | CLI argument parsing |
 | `serde` + `serde_json` | JSON serialization for `--json` output |
 | `walkdir` | Recursive directory traversal |
 | `sha2` | File content hashing for change detection |
+| `rmcp` | MCP server (JSON-RPC over stdio) |
+| `tokio` | Async runtime for MCP server |
+| `tracing` + `tracing-subscriber` | Structured logging (stderr) for MCP server |
 
 ## Architecture Decisions
 
@@ -26,7 +29,7 @@
 | Change detection | Git-based + SHA256 fallback + `--force` | Minimal re-indexing, deferred file reads |
 | Vector DB | No | 100MB+ model, non-deterministic, slow |
 | LSP | Deferred | Tree-sitter handles 90% of cases |
-| MCP server | Deferred | Skill-first approach, MCP when demanded |
+| MCP server | `cartog serve` (stdio) | Skill remains primary; MCP as secondary for zero-context-cost tool access |
 | Watch mode | No | On-demand re-index is sufficient for agent use |
 | Language detection | File extension | Simple, predictable, covers 99% |
 | Monorepo | Deferred | Index from CWD, user can cd into subproject |

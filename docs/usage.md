@@ -3,8 +3,11 @@
 ## Setup
 
 ```bash
+cargo install cartog           # from crates.io
+
+# Or build from source:
 cargo build --release
-cargo install --path .   # optional: puts cartog on your PATH
+cargo install --path .
 ```
 
 ## Commands
@@ -135,6 +138,14 @@ Symbols by kind:
   variable: 40
 ```
 
+### `cartog serve`
+
+Start cartog as an MCP server over stdio. See the [MCP Server](#mcp-server) section below for client configuration.
+
+```bash
+cartog serve
+```
+
 ## JSON Output
 
 All commands accept `--json` for structured output:
@@ -144,3 +155,168 @@ cartog --json refs validate_token
 cartog --json outline src/auth/tokens.py
 cartog --json stats
 ```
+
+## MCP Server
+
+`cartog serve` runs cartog as an MCP server over stdio, exposing the same 8 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
+
+```bash
+cartog serve
+```
+
+### Installation per Client
+
+All clients need `cartog` on your `PATH` first:
+
+```bash
+cargo install cartog
+```
+
+#### Claude Code
+
+```bash
+claude mcp add cartog -- cartog serve
+```
+
+Or manually edit `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+For project-scoped config, add to `.claude/settings.local.json` in your repo root.
+
+#### Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop after editing.
+
+#### Cursor
+
+Open Settings > MCP Servers > Add Server:
+
+- **Name**: `cartog`
+- **Type**: `command`
+- **Command**: `cartog serve`
+
+Or edit `.cursor/mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+#### Windsurf
+
+Edit `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+#### OpenCode
+
+Edit `~/.config/opencode/config.json` or your project `.opencode.json`:
+
+```json
+{
+  "mcp": {
+    "cartog": {
+      "type": "stdio",
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+#### Zed
+
+Edit `~/.config/zed/settings.json`:
+
+```json
+{
+  "context_servers": {
+    "cartog": {
+      "command": {
+        "path": "cartog",
+        "args": ["serve"]
+      }
+    }
+  }
+}
+```
+
+#### Any MCP-compatible client
+
+The config pattern is always the same — point the client at `cartog serve` over stdio:
+
+- **Command**: `cartog`
+- **Args**: `["serve"]`
+- **Transport**: stdio (default)
+
+### Available Tools
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `cartog_index` | `path?`, `force?` | Build/update the code graph |
+| `cartog_outline` | `file` | File structure (symbols, line ranges) |
+| `cartog_refs` | `name`, `kind?` | All references to a symbol |
+| `cartog_callees` | `name` | What a symbol calls |
+| `cartog_impact` | `name`, `depth?` | Transitive impact analysis |
+| `cartog_hierarchy` | `name` | Inheritance tree |
+| `cartog_deps` | `file` | File-level imports |
+| `cartog_stats` | — | Index summary |
+
+All tool responses are JSON. The `cartog_index` tool restricts indexing to the project directory (CWD subtree).
+
+### Logging
+
+Logs go to stderr. Default level is `info` (server start/stop only). Set `RUST_LOG` for more detail:
+
+```bash
+RUST_LOG=debug cartog serve   # per-request tool call logging
+```
+
+### MCP vs Skill
+
+| | MCP Server | Agent Skill |
+|-|-----------|-------------|
+| Context cost | Zero (tools are protocol-level) | ~150 lines of prompt |
+| Workflow guidance | Basic (via `instructions` field) | Full heuristics |
+| Compatibility | MCP clients only | Any LLM with bash |
+| Latency | Persistent process | Fork+exec per command |
+
+Use MCP when available for lower token cost. Use the skill for Claude.ai or non-MCP clients.

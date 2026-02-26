@@ -3,6 +3,7 @@ use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
+use tracing::warn;
 use walkdir::WalkDir;
 
 use crate::db::Database;
@@ -54,7 +55,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool) -> Result<IndexR
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("Warning: {e}");
+                warn!(error = %e, "directory walk error");
                 continue;
             }
         };
@@ -91,7 +92,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool) -> Result<IndexR
             Ok(s) => s,
             Err(e) if e.kind() == std::io::ErrorKind::InvalidData => continue, // binary file
             Err(e) => {
-                eprintln!("Warning: cannot read {rel_path}: {e}");
+                warn!(file = %rel_path, error = %e, "cannot read file");
                 continue;
             }
         };
@@ -123,7 +124,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool) -> Result<IndexR
         let extraction = match extractor.extract(&source, &rel_path) {
             Ok(e) => e,
             Err(err) => {
-                eprintln!("Warning: failed to extract {rel_path}: {err}");
+                warn!(file = %rel_path, error = %err, "extraction failed");
                 continue;
             }
         };

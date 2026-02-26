@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+use tracing::warn;
 
 use crate::types::{Edge, EdgeKind, FileInfo, Symbol, SymbolKind, Visibility};
 
@@ -54,6 +55,9 @@ CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_name);
 CREATE INDEX IF NOT EXISTS idx_edges_target_id ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
 "#;
+
+/// Default database filename, stored in the project root.
+pub const DB_FILE: &str = ".cartog.db";
 
 pub struct Database {
     conn: Connection,
@@ -528,7 +532,7 @@ fn row_to_symbol(row: &rusqlite::Row<'_>) -> rusqlite::Result<Symbol> {
 fn row_to_symbol_offset(row: &rusqlite::Row<'_>, off: usize) -> rusqlite::Result<Symbol> {
     let kind_str = row.get::<_, String>(off + 2)?;
     let kind = kind_str.parse().unwrap_or_else(|_| {
-        eprintln!("Warning: unknown symbol kind '{kind_str}', defaulting to variable");
+        warn!(kind = %kind_str, "unknown symbol kind, defaulting to variable");
         SymbolKind::Variable
     });
 
@@ -554,7 +558,7 @@ fn row_to_symbol_offset(row: &rusqlite::Row<'_>, off: usize) -> rusqlite::Result
 fn row_to_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<Edge> {
     let kind_str = row.get::<_, String>(4)?;
     let kind = kind_str.parse().unwrap_or_else(|_| {
-        eprintln!("Warning: unknown edge kind '{kind_str}', defaulting to references");
+        warn!(kind = %kind_str, "unknown edge kind, defaulting to references");
         EdgeKind::References
     });
 
