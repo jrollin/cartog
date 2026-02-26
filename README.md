@@ -93,6 +93,7 @@ Re-indexing is incremental: only files with changed content hashes are re-parsed
 | JavaScript (.js, .jsx, .mjs, .cjs) | Supported |
 | Rust | Supported |
 | Go | Supported |
+| Ruby | Supported |
 | Java | Planned |
 
 ## Design Trade-offs

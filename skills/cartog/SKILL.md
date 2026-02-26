@@ -7,7 +7,7 @@ description: >-
   "find all usages of X", "show file structure", or needs to navigate code,
   locate definitions, trace dependencies, assess blast radius of changes,
   support refactoring (rename, extract, move), or explore an unfamiliar codebase.
-  Supports Python, TypeScript/JavaScript, Rust, Go.
+  Supports Python, TypeScript/JavaScript, Rust, Go, Ruby.
 ---
 
 # cartog — Code Graph Navigation Skill
@@ -138,6 +138,6 @@ Before changing any symbol (rename, extract, move, delete):
 ## Limitations
 
 - Structural/heuristic resolution, not full semantic. ~90% accuracy for cross-file references.
-- Currently supports: Python, TypeScript/JavaScript, Rust, Go. Java planned.
+- Currently supports: Python, TypeScript/JavaScript, Rust, Go, Ruby. Java planned.
 - Does not index string literals, comments (except docstrings), or config values.
 - Method resolution is name-based — `foo.bar()` resolves `bar`, not `Foo.bar` specifically.
