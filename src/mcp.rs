@@ -112,7 +112,10 @@ struct HierarchyEntry {
 
 /// Validate that a path is within the given canonical CWD subtree.
 /// Returns the resolved path on success, or an error string if the path escapes CWD.
-fn validate_path_within_cwd_canonical(input: &str, cwd_canonical: &Path) -> Result<PathBuf, String> {
+fn validate_path_within_cwd_canonical(
+    input: &str,
+    cwd_canonical: &Path,
+) -> Result<PathBuf, String> {
     // Resolve the input path relative to CWD
     let candidate = if Path::new(input).is_absolute() {
         PathBuf::from(input)
@@ -199,8 +202,8 @@ pub struct CartogServer {
 #[tool_router]
 impl CartogServer {
     pub fn new() -> anyhow::Result<Self> {
-        let db = Database::open(DB_FILE)
-            .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
+        let db =
+            Database::open(DB_FILE).map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
         let cwd = std::env::current_dir()
             .and_then(|p| p.canonicalize())
             .map_err(|e| anyhow::anyhow!("cannot determine CWD: {e}"))?;
