@@ -1,12 +1,10 @@
 [advisories]
-# Warn on unmaintained crates, error on vulnerabilities.
-vulnerability = "deny"
-unmaintained = "warn"
+# Vulnerabilities always error (cargo-deny default). Report unmaintained and yanked crates.
+unmaintained = "workspace"
 yanked = "warn"
-notice = "warn"
 
 [licenses]
-# Permissive licenses only.
+# Permissive licenses only. Any license not listed here is denied.
 allow = [
   "MIT",
   "Apache-2.0",
@@ -15,26 +13,10 @@ allow = [
   "BSD-3-Clause",
   "ISC",
   "Unicode-DFS-2016",
+  "Unicode-3.0",
   "Zlib",
   "CC0-1.0",
 ]
-# Deny copyleft licenses that would affect distribution.
-deny = [
-  "GPL-2.0-only",
-  "GPL-2.0-or-later",
-  "GPL-3.0-only",
-  "GPL-3.0-or-later",
-  "AGPL-3.0-only",
-  "AGPL-3.0-or-later",
-  "LGPL-2.0-only",
-  "LGPL-2.1-only",
-  "LGPL-2.1-or-later",
-  "LGPL-3.0-only",
-  "LGPL-3.0-or-later",
-]
-copyleft = "deny"
-allow-osi-fsf-free = "neither"
-default = "warn"
 confidence-threshold = 0.8
 
 [bans]
