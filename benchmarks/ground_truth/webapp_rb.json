@@ -3,46 +3,129 @@
     "description": "Who calls validate_token?",
     "query": "refs validate_token --kind calls",
     "expected": [
-      {"source": "get_current_user", "file": "auth/service.rb"},
-      {"source": "change_password", "file": "auth/service.rb"},
-      {"source": "refresh_token", "file": "auth/tokens.rb"},
-      {"source": "auth_required", "file": "auth/middleware.rb"},
-      {"source": "get_current_user", "file": "auth/middleware.rb"}
+      {
+        "source": "call",
+        "file": "middleware/auth_middleware.rb"
+      },
+      {
+        "source": "auth_required",
+        "file": "auth/middleware.rb"
+      },
+      {
+        "source": "get_current_user",
+        "file": "auth/middleware.rb"
+      },
+      {
+        "source": "refresh_token",
+        "file": "auth/tokens.rb"
+      },
+      {
+        "source": "get_current_user",
+        "file": "auth/service.rb"
+      },
+      {
+        "source": "change_password",
+        "file": "auth/service.rb"
+      },
+      {
+        "source": "verify_token",
+        "file": "services/auth_service.rb"
+      }
     ]
   },
   "02_file_structure": {
     "description": "What's in auth/service.rb?",
     "query": "outline auth/service.rb",
     "expected": [
-      {"name": "BaseService", "kind": "class"},
-      {"name": "initialize", "kind": "method"},
-      {"name": "_log", "kind": "method"},
-      {"name": "AuthService", "kind": "class"},
-      {"name": "initialize", "kind": "method"},
-      {"name": "login", "kind": "method"},
-      {"name": "logout", "kind": "method"},
-      {"name": "get_current_user", "kind": "method"},
-      {"name": "_find_user", "kind": "method"},
-      {"name": "change_password", "kind": "method"},
-      {"name": "AdminService", "kind": "class"},
-      {"name": "impersonate", "kind": "method"},
-      {"name": "list_all_users", "kind": "method"}
+      {
+        "name": "BaseService",
+        "kind": "class"
+      },
+      {
+        "name": "initialize",
+        "kind": "method"
+      },
+      {
+        "name": "_log",
+        "kind": "method"
+      },
+      {
+        "name": "AuthService",
+        "kind": "class"
+      },
+      {
+        "name": "initialize",
+        "kind": "method"
+      },
+      {
+        "name": "login",
+        "kind": "method"
+      },
+      {
+        "name": "logout",
+        "kind": "method"
+      },
+      {
+        "name": "get_current_user",
+        "kind": "method"
+      },
+      {
+        "name": "_find_user",
+        "kind": "method"
+      },
+      {
+        "name": "change_password",
+        "kind": "method"
+      },
+      {
+        "name": "AdminService",
+        "kind": "class"
+      },
+      {
+        "name": "impersonate",
+        "kind": "method"
+      },
+      {
+        "name": "list_all_users",
+        "kind": "method"
+      }
     ]
   },
   "03_refactor_impact": {
     "description": "Impact of changing AuthService",
     "query": "impact AuthService --depth 3",
     "expected_refs": [
-      "AdminService",
-      "routes/auth.rb",
-      "routes/admin.rb"
+      "AdminService"
     ]
   },
   "04_class_hierarchy": {
     "description": "Hierarchy of BaseService",
     "query": "hierarchy BaseService",
     "expected": [
-      {"child": "AuthService", "parent": "BaseService"}
+      {
+        "child": "AuthService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "NotificationManager",
+        "parent": "BaseService"
+      },
+      {
+        "child": "PaymentProcessor",
+        "parent": "BaseService"
+      },
+      {
+        "child": "AuditableService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "EmailSender",
+        "parent": "BaseService"
+      },
+      {
+        "child": "AuthenticationService",
+        "parent": "BaseService"
+      }
     ]
   },
   "05_trace_call_chain": {
@@ -53,47 +136,481 @@
       "callees generate_token"
     ],
     "expected_chain": [
-      {"caller": "login_route", "callee": "login"},
-      {"caller": "login", "callee": "generate_token"},
-      {"caller": "login", "callee": "_find_user"},
-      {"caller": "generate_token", "callee": "Session.create"}
+      {
+        "caller": "login_route",
+        "callee": "Config.load"
+      },
+      {
+        "caller": "login_route",
+        "callee": "AuthService.new"
+      },
+      {
+        "caller": "login_route",
+        "callee": "service.login"
+      },
+      {
+        "caller": "login",
+        "callee": "_find_user"
+      },
+      {
+        "caller": "login",
+        "callee": "user.check_password"
+      },
+      {
+        "caller": "login",
+        "callee": "_log"
+      },
+      {
+        "caller": "login",
+        "callee": "generate_token"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "Session.create"
+      }
     ]
   },
   "06_file_deps": {
     "description": "What does routes/auth.rb require?",
     "query": "deps routes/auth.rb",
     "expected": [
-      "AuthService",
-      "auth_required",
-      "extract_token",
-      "get_logger"
-    ]
-  },
-  "08_symbol_search": {
-    "description": "Find all token-related symbols",
-    "query": "search token",
-    "expected": [
-      {"name": "TokenError"},
-      {"name": "ExpiredTokenError"},
-      {"name": "TOKEN_EXPIRY"},
-      {"name": "validate_token"},
-      {"name": "generate_token"},
-      {"name": "refresh_token"},
-      {"name": "revoke_token"},
-      {"name": "revoke_all_tokens"},
-      {"name": "extract_token"},
-      {"name": "find_by_token"}
+      "service",
+      "middleware",
+      "tokens",
+      "logging"
     ]
   },
   "07_type_references": {
     "description": "Type references to TokenError (inherits, raises, rescue)",
     "query": "refs TokenError",
     "expected": [
-      {"source": "ExpiredTokenError", "file": "auth/tokens.rb", "kind": "inherits"},
-      {"source": "InvalidScopeError", "file": "auth/tokens.rb", "kind": "inherits"},
-      {"source": "validate_token", "file": "auth/tokens.rb", "kind": "raises"},
-      {"source": "auth/tokens", "file": "auth/middleware.rb", "kind": "imports"},
-      {"source": "auth_required", "file": "auth/middleware.rb", "kind": "references"}
+      {
+        "source": "call",
+        "file": "middleware/auth_middleware.rb",
+        "kind": "references"
+      },
+      {
+        "source": "auth_required",
+        "file": "auth/middleware.rb",
+        "kind": "references"
+      },
+      {
+        "source": "get_current_user",
+        "file": "auth/middleware.rb",
+        "kind": "references"
+      },
+      {
+        "source": "ExpiredTokenError",
+        "file": "auth/tokens.rb",
+        "kind": "inherits"
+      },
+      {
+        "source": "InvalidScopeError",
+        "file": "auth/tokens.rb",
+        "kind": "inherits"
+      },
+      {
+        "source": "validate_token",
+        "file": "auth/tokens.rb",
+        "kind": "raises"
+      },
+      {
+        "source": "refresh_route",
+        "file": "routes/auth.rb",
+        "kind": "references"
+      },
+      {
+        "source": "verify_token",
+        "file": "services/auth_service.rb",
+        "kind": "references"
+      }
     ]
+  },
+  "08_symbol_search": {
+    "description": "Find all token-related symbols",
+    "query": "search token",
+    "expected": [
+      {
+        "name": "TokenError"
+      },
+      {
+        "name": "TOKEN_EXPIRY"
+      },
+      {
+        "name": "extract_token"
+      },
+      {
+        "name": "generate_token"
+      },
+      {
+        "name": "validate_token"
+      },
+      {
+        "name": "refresh_token"
+      },
+      {
+        "name": "revoke_token"
+      },
+      {
+        "name": "revoke_all_tokens"
+      },
+      {
+        "name": "handle_token_refresh"
+      },
+      {
+        "name": "find_by_token"
+      },
+      {
+        "name": "verify_token"
+      },
+      {
+        "name": "ExpiredTokenError"
+      }
+    ]
+  },
+  "09_ambiguous_symbol": {
+    "description": "Where is 'validate' defined?",
+    "query": "search validate",
+    "expected": [
+      {
+        "name": "validate",
+        "file": "api/v1/auth.rb"
+      },
+      {
+        "name": "validate",
+        "file": "api/v2/auth.rb"
+      },
+      {
+        "name": "validate",
+        "file": "validators/payment.rb"
+      },
+      {
+        "name": "validate",
+        "file": "validators/user.rb"
+      }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "Who references get_logger?",
+    "query": "refs get_logger",
+    "expected": [
+      {
+        "file": "api/v1/auth.rb"
+      },
+      {
+        "file": "api/v1/users.rb"
+      },
+      {
+        "file": "api/v2/auth.rb"
+      },
+      {
+        "file": "api/v2/payments.rb"
+      },
+      {
+        "file": "app_extended.rb"
+      },
+      {
+        "file": "cache/memory_cache.rb"
+      },
+      {
+        "file": "cache/redis_cache.rb"
+      },
+      {
+        "file": "config_extended.rb"
+      },
+      {
+        "file": "database/connection.rb"
+      },
+      {
+        "file": "database/migrations.rb"
+      },
+      {
+        "file": "database/pool.rb"
+      },
+      {
+        "file": "database/queries.rb"
+      },
+      {
+        "file": "events/dispatcher.rb"
+      },
+      {
+        "file": "events/handlers.rb"
+      },
+      {
+        "file": "middleware/auth_middleware.rb"
+      },
+      {
+        "file": "middleware/cors.rb"
+      },
+      {
+        "file": "middleware/logging_middleware.rb"
+      },
+      {
+        "file": "middleware/rate_limit.rb"
+      },
+      {
+        "file": "models/payment.rb"
+      },
+      {
+        "file": "services/base.rb"
+      },
+      {
+        "file": "services/cacheable.rb"
+      },
+      {
+        "file": "services/email/sender.rb"
+      },
+      {
+        "file": "services/payment/gateway.rb"
+      },
+      {
+        "file": "tasks/cleanup_task.rb"
+      },
+      {
+        "file": "tasks/email_task.rb"
+      },
+      {
+        "file": "tasks/payment_task.rb"
+      },
+      {
+        "file": "utils/helpers.rb"
+      },
+      {
+        "file": "validators/payment.rb"
+      },
+      {
+        "file": "validators/user.rb"
+      }
+    ]
+  },
+  "11_deep_call_chain": {
+    "description": "Deep call chain from handle_login (5+ hops)",
+    "query_sequence": [
+      "callees handle_login",
+      "callees authenticate",
+      "callees login",
+      "callees generate_token",
+      "callees execute_query",
+      "callees get_connection"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handle_login",
+        "callee": "get_logger('api.v1.auth').info"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "get_logger"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "validate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "UserValidator.validate_login"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "AuthenticationService.new"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "service.authenticate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "get_logger('api.v2.auth').info"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "get_logger"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "validate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "UserValidator.validate_login"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "AuthenticationService.new"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "service.authenticate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "result.merge"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "_log"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "sanitize_input"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "ValidationError.new"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "clean_email.empty?"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "@auth.login"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "@events.emit"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "AuthenticationError.new"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "@events.emit"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "@events.emit"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "AuthenticationError.new"
+      },
+      {
+        "caller": "login",
+        "callee": "_find_user"
+      },
+      {
+        "caller": "login",
+        "callee": "user.check_password"
+      },
+      {
+        "caller": "login",
+        "callee": "_log"
+      },
+      {
+        "caller": "login",
+        "callee": "generate_token"
+      },
+      {
+        "caller": "login",
+        "callee": "_log"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "user.id"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "Time.now.utc.iso8601"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "Time.now.utc"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "Time.now"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "Digest::SHA256.hexdigest"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "Session.create"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "Time.now"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "get_logger('database.connection').info"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "get_logger"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "((Time.now - start_time) * 1000).to_i"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "Time.now"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "rows.length"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "DatabaseError.new"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "e.to_s"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "release"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "@connections.each"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "conn.in_use"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "conn.in_use"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "conn.last_used"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "Time.now"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "conn.query_count"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "get_logger('database.pool').info"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "get_logger"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "conn.id"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "DatabaseError.new"
+      }
+    ]
+  },
+  "12_deep_impact": {
+    "description": "Deep impact of DatabaseConnection (depth 5)",
+    "query": "impact DatabaseConnection --depth 5",
+    "expected_refs": []
   }
 }

@@ -18,6 +18,8 @@ run_scenario() {
 
     local fixture_dir="$BENCH_DIR/fixtures/$fixture_name"
 
+    should_skip_fixture "$fixture_name" && return 0
+
     echo -e "  ${CYAN}[$fixture_name]${NC} Trace call chain from $entry_fn" >&2
 
     # ── Naive grep: search for each function name in sequence ──
@@ -70,5 +72,7 @@ run_scenario() {
 }
 
 run_scenario "webapp_py" "login_route" "login" "generate_token"
+run_scenario "webapp_ts" "loginRoute" "login" "generateToken"
+run_scenario "webapp_go" "LoginHandler" "Login" "GenerateToken"
 run_scenario "webapp_rs" "login_handler" "login" "generate_token"
 run_scenario "webapp_rb" "login_route" "login" "generate_token"

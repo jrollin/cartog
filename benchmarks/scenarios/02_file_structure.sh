@@ -16,6 +16,8 @@ run_scenario() {
 
     local fixture_dir="$BENCH_DIR/fixtures/$fixture_name"
 
+    should_skip_fixture "$fixture_name" && return 0
+
     echo -e "  ${CYAN}[$fixture_name]${NC} What's in $file?" >&2
 
     # ── Naive: cat the entire file ──
@@ -54,5 +56,7 @@ run_scenario() {
 }
 
 run_scenario "webapp_py" "auth/service.py"
+run_scenario "webapp_ts" "src/auth/service.ts"
+run_scenario "webapp_go" "internal/auth/service.go"
 run_scenario "webapp_rs" "auth/service.rs"
 run_scenario "webapp_rb" "auth/service.rb"

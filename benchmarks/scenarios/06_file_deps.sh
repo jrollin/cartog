@@ -17,6 +17,8 @@ run_scenario() {
 
     local fixture_dir="$BENCH_DIR/fixtures/$fixture_name"
 
+    should_skip_fixture "$fixture_name" && return 0
+
     echo -e "  ${CYAN}[$fixture_name]${NC} Dependencies of $file?" >&2
 
     # ── Naive grep: search for import keywords ──
@@ -55,5 +57,7 @@ run_scenario() {
 }
 
 run_scenario "webapp_py" "routes/auth.py" "^from \|^import "
+run_scenario "webapp_ts" "src/routes/auth.ts" "^import "
+run_scenario "webapp_go" "internal/routes/auth_routes.go" '"webapp_go/'
 run_scenario "webapp_rs" "routes/auth.rs" "^use "
-run_scenario "webapp_rb" "routes/auth.rb" "^require "
+run_scenario "webapp_rb" "routes/auth.rb" "^require"

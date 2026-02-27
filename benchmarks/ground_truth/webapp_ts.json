@@ -1,0 +1,695 @@
+{
+  "01_find_callers": {
+    "description": "Who calls validateToken?",
+    "query": "refs validateToken --kind calls",
+    "expected": [
+      {
+        "source": "authMiddleware",
+        "file": "src/middleware/auth.ts"
+      },
+      {
+        "source": "authRequired",
+        "file": "src/auth/middleware.ts"
+      },
+      {
+        "source": "refreshToken",
+        "file": "src/auth/tokens.ts"
+      },
+      {
+        "source": "revokeToken",
+        "file": "src/auth/tokens.ts"
+      },
+      {
+        "source": "findByToken",
+        "file": "src/auth/tokens.ts"
+      },
+      {
+        "source": "logout",
+        "file": "src/auth/service.ts"
+      },
+      {
+        "source": "getCurrentUser",
+        "file": "src/auth/service.ts"
+      },
+      {
+        "source": "verifyToken",
+        "file": "src/services/authService.ts"
+      }
+    ]
+  },
+  "02_file_structure": {
+    "description": "What's in src/auth/service.ts?",
+    "query": "outline src/auth/service.ts",
+    "expected": [
+      {
+        "name": "BaseService",
+        "kind": "class"
+      },
+      {
+        "name": "serviceName",
+        "kind": "variable"
+      },
+      {
+        "name": "initialized",
+        "kind": "variable"
+      },
+      {
+        "name": "constructor",
+        "kind": "method"
+      },
+      {
+        "name": "initialize",
+        "kind": "method"
+      },
+      {
+        "name": "shutdown",
+        "kind": "method"
+      },
+      {
+        "name": "healthCheck",
+        "kind": "method"
+      },
+      {
+        "name": "requireInitialized",
+        "kind": "method"
+      },
+      {
+        "name": "User",
+        "kind": "class"
+      },
+      {
+        "name": "AuthService",
+        "kind": "class"
+      },
+      {
+        "name": "users",
+        "kind": "variable"
+      },
+      {
+        "name": "constructor",
+        "kind": "method"
+      },
+      {
+        "name": "login",
+        "kind": "method"
+      },
+      {
+        "name": "logout",
+        "kind": "method"
+      },
+      {
+        "name": "getCurrentUser",
+        "kind": "method"
+      },
+      {
+        "name": "changePassword",
+        "kind": "method"
+      },
+      {
+        "name": "_findUser",
+        "kind": "method"
+      },
+      {
+        "name": "AdminService",
+        "kind": "class"
+      },
+      {
+        "name": "constructor",
+        "kind": "method"
+      },
+      {
+        "name": "impersonate",
+        "kind": "method"
+      },
+      {
+        "name": "listAllUsers",
+        "kind": "method"
+      }
+    ]
+  },
+  "03_refactor_impact": {
+    "description": "Impact of changing AuthService",
+    "query": "impact AuthService --depth 3",
+    "expected_refs": [
+      "AdminService",
+      "src/routes/auth.ts",
+      "src/services/authService.ts",
+      "src/routes/admin.ts",
+      "loginRoute",
+      "logoutRoute",
+      "constructor"
+    ]
+  },
+  "04_class_hierarchy": {
+    "description": "Hierarchy of BaseService",
+    "query": "hierarchy BaseService",
+    "expected": [
+      {
+        "child": "AuthService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "NotificationManager",
+        "parent": "BaseService"
+      },
+      {
+        "child": "AuthenticationService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "AuditableService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "CacheableService",
+        "parent": "BaseService"
+      }
+    ]
+  },
+  "05_trace_call_chain": {
+    "description": "Trace loginRoute call chain",
+    "query_sequence": [
+      "callees loginRoute",
+      "callees login",
+      "callees generateToken"
+    ],
+    "expected_chain": [
+      {
+        "caller": "loginRoute",
+        "callee": "validateRequest"
+      },
+      {
+        "caller": "loginRoute",
+        "callee": "sanitizeInput"
+      },
+      {
+        "caller": "loginRoute",
+        "callee": "AuthService"
+      },
+      {
+        "caller": "loginRoute",
+        "callee": "service.login"
+      },
+      {
+        "caller": "login",
+        "callee": "this.requireInitialized"
+      },
+      {
+        "caller": "login",
+        "callee": "this._findUser"
+      },
+      {
+        "caller": "login",
+        "callee": "generateToken"
+      }
+    ]
+  },
+  "06_file_deps": {
+    "description": "What does src/routes/auth.ts import?",
+    "query": "deps src/routes/auth.ts",
+    "expected": [
+      "getLogger",
+      "validateRequest",
+      "sanitizeInput",
+      "AuthService",
+      "validateToken",
+      "refreshToken",
+      "extractToken",
+      "TokenError",
+      "authRequired"
+    ]
+  },
+  "07_type_references": {
+    "description": "Type references to TokenError",
+    "query": "refs TokenError",
+    "expected": [
+      {
+        "source": "../auth/tokens",
+        "file": "src/middleware/auth.ts",
+        "kind": "imports"
+      },
+      {
+        "source": "./tokens",
+        "file": "src/auth/middleware.ts",
+        "kind": "imports"
+      },
+      {
+        "source": "ExpiredTokenError",
+        "file": "src/auth/tokens.ts",
+        "kind": "inherits"
+      },
+      {
+        "source": "InvalidScopeError",
+        "file": "src/auth/tokens.ts",
+        "kind": "inherits"
+      },
+      {
+        "source": "validateToken",
+        "file": "src/auth/tokens.ts",
+        "kind": "raises"
+      },
+      {
+        "source": "validateToken",
+        "file": "src/auth/tokens.ts",
+        "kind": "calls"
+      },
+      {
+        "source": "./tokens",
+        "file": "src/auth/service.ts",
+        "kind": "imports"
+      },
+      {
+        "source": "../auth/tokens",
+        "file": "src/routes/auth.ts",
+        "kind": "imports"
+      }
+    ]
+  },
+  "08_symbol_search": {
+    "description": "Find all token-related symbols",
+    "query": "search token",
+    "expected": [
+      {
+        "name": "TokenError"
+      },
+      {
+        "name": "TokenClaims"
+      },
+      {
+        "name": "TOKEN_EXPIRY"
+      },
+      {
+        "name": "tokenHash"
+      },
+      {
+        "name": "handleTokenRefresh"
+      },
+      {
+        "name": "generateToken"
+      },
+      {
+        "name": "validateToken"
+      },
+      {
+        "name": "refreshToken"
+      },
+      {
+        "name": "revokeToken"
+      },
+      {
+        "name": "revokeAllTokens"
+      },
+      {
+        "name": "extractToken"
+      },
+      {
+        "name": "findByToken"
+      },
+      {
+        "name": "verifyToken"
+      },
+      {
+        "name": "ExpiredTokenError"
+      }
+    ]
+  },
+  "09_ambiguous_symbol": {
+    "description": "Where is 'validate' defined?",
+    "query": "search validate",
+    "expected": [
+      {
+        "name": "validate",
+        "file": "src/api/v1/auth.ts"
+      },
+      {
+        "name": "validate",
+        "file": "src/api/v2/auth.ts"
+      },
+      {
+        "name": "validate",
+        "file": "src/validators/payment.ts"
+      },
+      {
+        "name": "validate",
+        "file": "src/validators/user.ts"
+      }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "Who references getLogger?",
+    "query": "refs getLogger",
+    "expected": [
+      {
+        "file": "src/api/v1/auth.ts"
+      },
+      {
+        "file": "src/api/v1/payments.ts"
+      },
+      {
+        "file": "src/api/v1/users.ts"
+      },
+      {
+        "file": "src/api/v2/auth.ts"
+      },
+      {
+        "file": "src/api/v2/payments.ts"
+      },
+      {
+        "file": "src/app.ts"
+      },
+      {
+        "file": "src/auth/middleware.ts"
+      },
+      {
+        "file": "src/auth/service.ts"
+      },
+      {
+        "file": "src/auth/tokens.ts"
+      },
+      {
+        "file": "src/cache/memoryCache.ts"
+      },
+      {
+        "file": "src/cache/redisCache.ts"
+      },
+      {
+        "file": "src/config.ts"
+      },
+      {
+        "file": "src/database/connection.ts"
+      },
+      {
+        "file": "src/database/migrations.ts"
+      },
+      {
+        "file": "src/database/pool.ts"
+      },
+      {
+        "file": "src/database/queries.ts"
+      },
+      {
+        "file": "src/events/dispatcher.ts"
+      },
+      {
+        "file": "src/events/handlers.ts"
+      },
+      {
+        "file": "src/middleware/auth.ts"
+      },
+      {
+        "file": "src/middleware/cors.ts"
+      },
+      {
+        "file": "src/middleware/logging.ts"
+      },
+      {
+        "file": "src/middleware/rateLimit.ts"
+      },
+      {
+        "file": "src/models/payment.ts"
+      },
+      {
+        "file": "src/models/session.ts"
+      },
+      {
+        "file": "src/models/user.ts"
+      },
+      {
+        "file": "src/routes/admin.ts"
+      },
+      {
+        "file": "src/routes/auth.ts"
+      },
+      {
+        "file": "src/routes/notifications.ts"
+      },
+      {
+        "file": "src/routes/payments.ts"
+      },
+      {
+        "file": "src/routes/users.ts"
+      },
+      {
+        "file": "src/services/auditable.ts"
+      },
+      {
+        "file": "src/services/authService.ts"
+      },
+      {
+        "file": "src/services/base.ts"
+      },
+      {
+        "file": "src/services/cacheable.ts"
+      },
+      {
+        "file": "src/services/email/sender.ts"
+      },
+      {
+        "file": "src/services/notification/manager.ts"
+      },
+      {
+        "file": "src/services/payment/gateway.ts"
+      },
+      {
+        "file": "src/services/payment/processor.ts"
+      },
+      {
+        "file": "src/tasks/cleanupTask.ts"
+      },
+      {
+        "file": "src/tasks/emailTask.ts"
+      },
+      {
+        "file": "src/tasks/paymentTask.ts"
+      },
+      {
+        "file": "src/validators/common.ts"
+      },
+      {
+        "file": "src/validators/payment.ts"
+      },
+      {
+        "file": "src/validators/user.ts"
+      }
+    ]
+  },
+  "11_deep_call_chain": {
+    "description": "Deep call chain from handleLogin (5+ hops)",
+    "query_sequence": [
+      "callees handleLogin",
+      "callees authenticate",
+      "callees login",
+      "callees generateToken",
+      "callees executeQuery",
+      "callees getConnection"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handleLogin",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "validate"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "validateLogin"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "AuthenticationService"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "service.initialize"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "service.authenticate"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "validate"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "validateLogin"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "AuthenticationService"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "service.initialize"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "service.authenticate"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "this.requireInitialized"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "sanitizeInput"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "ValidationError"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "this.auth.login"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "this.events.emit"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "AuthenticationError"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "this.events.emit"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "this.events.emit"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "AuthenticationError"
+      },
+      {
+        "caller": "login",
+        "callee": "this.requireInitialized"
+      },
+      {
+        "caller": "login",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "login",
+        "callee": "this._findUser"
+      },
+      {
+        "caller": "login",
+        "callee": "logger.warn"
+      },
+      {
+        "caller": "login",
+        "callee": "generateToken"
+      },
+      {
+        "caller": "login",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "Date.now"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "Buffer.from(JSON.stringify(payload)).toString"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "Buffer.from"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "JSON.stringify"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "this.acquire"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "Date.now"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "sql.substring"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "Date.now"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "DatabaseError"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "String"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "this.release"
+      },
+      {
+        "caller": "getConnection",
+        "callee": "this.initialize"
+      },
+      {
+        "caller": "getConnection",
+        "callee": "Date.now"
+      },
+      {
+        "caller": "getConnection",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "getConnection",
+        "callee": "DatabaseError"
+      }
+    ]
+  },
+  "12_deep_impact": {
+    "description": "Deep impact of DatabaseConnection (depth 5)",
+    "query": "impact DatabaseConnection --depth 5",
+    "expected_refs": [
+      "DatabaseConnection",
+      "src/database/queries.ts",
+      "src/database/migrations.ts",
+      "src/tasks/cleanupTask.ts",
+      "src/tasks/emailTask.ts",
+      "src/tasks/paymentTask.ts",
+      "src/app.ts",
+      "src/api/v1/users.ts",
+      "src/api/v1/payments.ts",
+      "src/api/v1/auth.ts",
+      "src/api/v2/payments.ts",
+      "src/api/v2/auth.ts",
+      "src/routes/notifications.ts",
+      "src/routes/users.ts",
+      "src/routes/payments.ts",
+      "src/services/base.ts",
+      "src/services/notification/manager.ts",
+      "src/services/payment/processor.ts",
+      "src/services/authService.ts",
+      "src/services/email/sender.ts"
+    ]
+  }
+}

@@ -1,8 +1,18 @@
+mod api;
+mod app_errors;
 mod auth;
+mod cache;
 mod config;
+mod database;
 mod error;
+mod events;
+mod middleware;
 mod models;
 mod routes;
+mod services;
+mod tasks;
+mod utils;
+mod validators;
 
 use config::Config;
 use routes::auth::{login_handler, logout_handler, refresh_handler};

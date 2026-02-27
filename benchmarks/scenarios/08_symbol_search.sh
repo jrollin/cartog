@@ -18,6 +18,8 @@ run_scenario() {
     local fixture_name="$1"
     local fixture_dir="$BENCH_DIR/fixtures/$fixture_name"
 
+    should_skip_fixture "$fixture_name" && return 0
+
     echo -e "  ${CYAN}[$fixture_name]${NC} Find symbols matching '$QUERY'" >&2
 
     # ── Naive grep: raw string search, returns every occurrence ──
@@ -56,5 +58,7 @@ run_scenario() {
 }
 
 run_scenario "webapp_py"
+run_scenario "webapp_ts"
+run_scenario "webapp_go"
 run_scenario "webapp_rs"
 run_scenario "webapp_rb"

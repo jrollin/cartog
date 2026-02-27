@@ -3,24 +3,80 @@
     "description": "Who calls validate_token?",
     "query": "refs validate_token --kind calls",
     "expected": [
-      {"source": "get_current_user", "file": "auth/service.rs"},
-      {"source": "refresh_token", "file": "auth/tokens.rs"},
-      {"source": "auth_middleware", "file": "auth/middleware.rs"}
+      {
+        "source": "refresh_token",
+        "file": "auth/tokens.rs"
+      },
+      {
+        "source": "get_current_user",
+        "file": "auth/service.rs"
+      },
+      {
+        "source": "auth_middleware",
+        "file": "auth/middleware.rs"
+      },
+      {
+        "source": "verify_token",
+        "file": "services/auth_service.rs"
+      }
     ]
   },
   "02_file_structure": {
     "description": "What's in auth/service.rs?",
     "query": "outline auth/service.rs",
     "expected": [
-      {"name": "AuthProvider", "kind": "class"},
-      {"name": "login", "kind": "method"},
-      {"name": "logout", "kind": "method"},
-      {"name": "get_current_user", "kind": "method"},
-      {"name": "DefaultAuth", "kind": "class"},
-      {"name": "new", "kind": "method"},
-      {"name": "AdminAuth", "kind": "class"},
-      {"name": "impersonate", "kind": "method"},
-      {"name": "list_all_users", "kind": "method"}
+      {
+        "name": "AuthProvider",
+        "kind": "class"
+      },
+      {
+        "name": "DefaultAuth",
+        "kind": "class"
+      },
+      {
+        "name": "DefaultAuth",
+        "kind": "class"
+      },
+      {
+        "name": "new",
+        "kind": "method"
+      },
+      {
+        "name": "DefaultAuth",
+        "kind": "class"
+      },
+      {
+        "name": "login",
+        "kind": "method"
+      },
+      {
+        "name": "logout",
+        "kind": "method"
+      },
+      {
+        "name": "get_current_user",
+        "kind": "method"
+      },
+      {
+        "name": "AdminAuth",
+        "kind": "class"
+      },
+      {
+        "name": "AdminAuth",
+        "kind": "class"
+      },
+      {
+        "name": "new",
+        "kind": "method"
+      },
+      {
+        "name": "impersonate",
+        "kind": "method"
+      },
+      {
+        "name": "list_all_users",
+        "kind": "method"
+      }
     ]
   },
   "03_refactor_impact": {
@@ -29,14 +85,20 @@
     "expected_refs": [
       "DefaultAuth",
       "auth/mod.rs",
-      "routes/auth.rs"
+      "api/v1/auth.rs",
+      "api/v2/auth.rs",
+      "routes/auth.rs",
+      "services/auth_service.rs"
     ]
   },
   "04_class_hierarchy": {
     "description": "Trait impls for AuthProvider",
     "query": "hierarchy AuthProvider",
     "expected": [
-      {"child": "DefaultAuth", "parent": "AuthProvider"}
+      {
+        "child": "DefaultAuth",
+        "parent": "AuthProvider"
+      }
     ]
   },
   "05_trace_call_chain": {
@@ -47,12 +109,34 @@
       "callees generate_token"
     ],
     "expected_chain": [
-      {"caller": "login_handler", "callee": "Config::load"},
-      {"caller": "login_handler", "callee": "DefaultAuth::new"},
-      {"caller": "login_handler", "callee": "auth.login"},
-      {"caller": "login", "callee": "generate_token"},
-      {"caller": "login", "callee": "User::find_by_email"},
-      {"caller": "generate_token", "callee": "Session::create"}
+      {
+        "caller": "login_handler",
+        "callee": "Config::load"
+      },
+      {
+        "caller": "login_handler",
+        "callee": "DefaultAuth::new"
+      },
+      {
+        "caller": "login_handler",
+        "callee": "auth.login"
+      },
+      {
+        "caller": "login",
+        "callee": "User::find_by_email"
+      },
+      {
+        "caller": "login",
+        "callee": "generate_token"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "simple_hash"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "Session::create"
+      }
     ]
   },
   "06_file_deps": {
@@ -66,39 +150,558 @@
       "refresh_token",
       "Config",
       "Request",
-      "Response"
+      "Response",
+      "service",
+      "middleware"
+    ]
+  },
+  "07_type_references": {
+    "description": "Type references to User in Rust (function signatures)",
+    "query": "refs User",
+    "expected": [
+      {
+        "source": "crate::models::user",
+        "file": "auth/tokens.rs",
+        "kind": "imports"
+      },
+      {
+        "source": "generate_token",
+        "file": "auth/tokens.rs",
+        "kind": "references"
+      },
+      {
+        "source": "validate_token",
+        "file": "auth/tokens.rs",
+        "kind": "references"
+      },
+      {
+        "source": "revoke_all_tokens",
+        "file": "auth/tokens.rs",
+        "kind": "references"
+      },
+      {
+        "source": "crate::models::user",
+        "file": "auth/service.rs",
+        "kind": "imports"
+      },
+      {
+        "source": "get_current_user",
+        "file": "auth/service.rs",
+        "kind": "references"
+      },
+      {
+        "source": "list_all_users",
+        "file": "auth/service.rs",
+        "kind": "references"
+      },
+      {
+        "source": "crate::models::user",
+        "file": "auth/middleware.rs",
+        "kind": "imports"
+      },
+      {
+        "source": "auth_middleware",
+        "file": "auth/middleware.rs",
+        "kind": "references"
+      },
+      {
+        "source": "admin_middleware",
+        "file": "auth/middleware.rs",
+        "kind": "references"
+      },
+      {
+        "source": "crate::models::user",
+        "file": "models/session.rs",
+        "kind": "imports"
+      },
+      {
+        "source": "create",
+        "file": "models/session.rs",
+        "kind": "references"
+      },
+      {
+        "source": "find_all_by_user",
+        "file": "models/session.rs",
+        "kind": "references"
+      },
+      {
+        "source": "find_by_email",
+        "file": "models/user.rs",
+        "kind": "references"
+      },
+      {
+        "source": "find_by_id",
+        "file": "models/user.rs",
+        "kind": "references"
+      },
+      {
+        "source": "find_all",
+        "file": "models/user.rs",
+        "kind": "references"
+      },
+      {
+        "source": "user",
+        "file": "models/mod.rs",
+        "kind": "imports"
+      },
+      {
+        "source": "crate::models::user",
+        "file": "routes/users.rs",
+        "kind": "imports"
+      }
     ]
   },
   "08_symbol_search": {
     "description": "Find all token-related symbols",
     "query": "search token",
     "expected": [
-      {"name": "Token"},
-      {"name": "TokenError"},
-      {"name": "ExpiredTokenError"},
-      {"name": "TOKEN_EXPIRY_SECS"},
-      {"name": "validate_token"},
-      {"name": "generate_token"},
-      {"name": "refresh_token"},
-      {"name": "revoke_token"},
-      {"name": "revoke_all_tokens"},
-      {"name": "extract_token"},
-      {"name": "find_by_token"}
+      {
+        "name": "Token"
+      },
+      {
+        "name": "TokenError"
+      },
+      {
+        "name": "TokenError"
+      },
+      {
+        "name": "TOKEN_EXPIRY_SECS"
+      },
+      {
+        "name": "extract_token"
+      },
+      {
+        "name": "generate_token"
+      },
+      {
+        "name": "validate_token"
+      },
+      {
+        "name": "refresh_token"
+      },
+      {
+        "name": "revoke_token"
+      },
+      {
+        "name": "revoke_all_tokens"
+      },
+      {
+        "name": "find_by_token"
+      },
+      {
+        "name": "verify_token"
+      },
+      {
+        "name": "ExpiredTokenError"
+      },
+      {
+        "name": "ExpiredTokenError"
+      }
     ]
   },
-  "07_type_references": {
-    "description": "Type references to User in Rust (function signatures)",
-    "query": "refs User --kind references",
+  "09_ambiguous_symbol": {
+    "description": "Where is 'validate' defined?",
+    "query": "search validate",
     "expected": [
-      {"source": "generate_token", "file": "auth/tokens.rs"},
-      {"source": "validate_token", "file": "auth/tokens.rs"},
-      {"source": "revoke_all_tokens", "file": "auth/tokens.rs"},
-      {"source": "get_current_user", "file": "auth/service.rs"},
-      {"source": "list_all_users", "file": "auth/service.rs"},
-      {"source": "auth_middleware", "file": "auth/middleware.rs"},
-      {"source": "admin_middleware", "file": "auth/middleware.rs"},
-      {"source": "create", "file": "models/session.rs"},
-      {"source": "find_all_by_user", "file": "models/session.rs"}
+      {
+        "name": "validate",
+        "file": "api/v1/auth.rs"
+      },
+      {
+        "name": "validate",
+        "file": "api/v2/auth.rs"
+      },
+      {
+        "name": "validate",
+        "file": "validators/payment.rs"
+      },
+      {
+        "name": "validate",
+        "file": "validators/user.rs"
+      }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "Who references get_logger?",
+    "query": "refs get_logger",
+    "expected": [
+      {
+        "file": "api/v1/auth.rs"
+      },
+      {
+        "file": "api/v1/payments.rs"
+      },
+      {
+        "file": "api/v2/auth.rs"
+      },
+      {
+        "file": "api/v2/payments.rs"
+      },
+      {
+        "file": "app_errors.rs"
+      },
+      {
+        "file": "cache/memory.rs"
+      },
+      {
+        "file": "cache/redis.rs"
+      },
+      {
+        "file": "database/connection.rs"
+      },
+      {
+        "file": "database/migrations.rs"
+      },
+      {
+        "file": "database/pool.rs"
+      },
+      {
+        "file": "database/queries.rs"
+      },
+      {
+        "file": "events/dispatcher.rs"
+      },
+      {
+        "file": "events/handlers.rs"
+      },
+      {
+        "file": "middleware/auth_mw.rs"
+      },
+      {
+        "file": "middleware/cors.rs"
+      },
+      {
+        "file": "middleware/logging_mw.rs"
+      },
+      {
+        "file": "middleware/rate_limit.rs"
+      },
+      {
+        "file": "models/event.rs"
+      },
+      {
+        "file": "models/notification.rs"
+      },
+      {
+        "file": "models/payment.rs"
+      },
+      {
+        "file": "routes/notifications.rs"
+      },
+      {
+        "file": "routes/payments.rs"
+      },
+      {
+        "file": "routes/users.rs"
+      },
+      {
+        "file": "services/auditable.rs"
+      },
+      {
+        "file": "services/auth_service.rs"
+      },
+      {
+        "file": "services/base.rs"
+      },
+      {
+        "file": "services/cacheable.rs"
+      },
+      {
+        "file": "services/email/sender.rs"
+      },
+      {
+        "file": "services/notification/manager.rs"
+      },
+      {
+        "file": "services/payment/gateway.rs"
+      },
+      {
+        "file": "services/payment/processor.rs"
+      },
+      {
+        "file": "tasks/cleanup_task.rs"
+      },
+      {
+        "file": "tasks/email_task.rs"
+      },
+      {
+        "file": "tasks/payment_task.rs"
+      },
+      {
+        "file": "validators/common.rs"
+      },
+      {
+        "file": "validators/payment.rs"
+      },
+      {
+        "file": "validators/user.rs"
+      }
+    ]
+  },
+  "11_deep_call_chain": {
+    "description": "Deep call chain from handle_login (5+ hops)",
+    "query_sequence": [
+      "callees handle_login",
+      "callees authenticate",
+      "callees login",
+      "callees generate_token",
+      "callees execute_query",
+      "callees get_connection"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handle_login",
+        "callee": "get_logger"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "validate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "Response::error"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "Config::load"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "DefaultAuth::new"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "sanitize_input"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "format!"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "auth.login"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "Response::ok"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "format!"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "Response::error"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "format!"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "get_logger"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "validate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "Response::error"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "Config::load"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "DefaultAuth::new"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "sanitize_input"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "format!"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "auth.login"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "Response::ok"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "format!"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "Response::error"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "format!"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "get_logger"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "self.inner.require_initialized()\n            .map_err"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "self.inner.require_initialized"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "sanitize_input"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "format!"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "self.auth.login"
+      },
+      {
+        "caller": "login",
+        "callee": "User::find_by_email(email)\n            .ok_or_else"
+      },
+      {
+        "caller": "login",
+        "callee": "User::find_by_email"
+      },
+      {
+        "caller": "login",
+        "callee": "user.verify_password"
+      },
+      {
+        "caller": "login",
+        "callee": "Err"
+      },
+      {
+        "caller": "login",
+        "callee": "AppError::Unauthorized"
+      },
+      {
+        "caller": "login",
+        "callee": "\"Invalid credentials\".to_string"
+      },
+      {
+        "caller": "login",
+        "callee": "generate_token(&user, &self.config).map_err"
+      },
+      {
+        "caller": "login",
+        "callee": "generate_token"
+      },
+      {
+        "caller": "login",
+        "callee": "println!"
+      },
+      {
+        "caller": "login",
+        "callee": "Ok"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "format!"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "simple_hash"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "Session::create"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "value.clone"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "Ok"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "get_logger"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "self.pool.get_connection"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "format!"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "Ok"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "Vec::new"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "get_logger"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "self.initialize"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "format!"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "Ok"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "Err"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "\"Connection pool exhausted\".to_string"
+      }
+    ]
+  },
+  "12_deep_impact": {
+    "description": "Deep impact of DatabaseConnection (depth 5)",
+    "query": "impact DatabaseConnection --depth 5",
+    "expected_refs": [
+      "DatabaseConnection",
+      "database/queries.rs",
+      "database/migrations.rs"
     ]
   }
 }

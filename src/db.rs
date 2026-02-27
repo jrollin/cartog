@@ -100,8 +100,8 @@ impl Database {
         Ok(Self { conn })
     }
 
-    /// Open an in-memory database (for tests).
-    #[cfg(test)]
+    /// Open an in-memory database (for tests and benchmarks).
+    #[doc(hidden)]
     pub fn open_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;

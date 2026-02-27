@@ -16,6 +16,8 @@ run_scenario() {
 
     local fixture_dir="$BENCH_DIR/fixtures/$fixture_name"
 
+    should_skip_fixture "$fixture_name" && return 0
+
     echo -e "  ${CYAN}[$fixture_name]${NC} Impact of changing $symbol?" >&2
 
     # ── Naive grep: just search for the name ──
@@ -54,5 +56,7 @@ run_scenario() {
 }
 
 run_scenario "webapp_py" "AuthService"
+run_scenario "webapp_ts" "AuthService"
+run_scenario "webapp_go" "AuthService"
 run_scenario "webapp_rs" "AuthProvider"
 run_scenario "webapp_rb" "AuthService"

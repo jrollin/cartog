@@ -13,25 +13,28 @@ SYMBOL="validate_token"
 
 run_scenario() {
     local fixture_name="$1"
-    local fixture_dir="$BENCH_DIR/fixtures/$fixture_name"
     local ext="$2"
+    local symbol="${3:-$SYMBOL}"
+    local fixture_dir="$BENCH_DIR/fixtures/$fixture_name"
 
-    echo -e "  ${CYAN}[$fixture_name]${NC} Who calls $SYMBOL?" >&2
+    should_skip_fixture "$fixture_name" && return 0
+
+    echo -e "  ${CYAN}[$fixture_name]${NC} Who calls $symbol?" >&2
 
     # ── Naive grep: simple string search with context ──
-    run_grep "naive" "$fixture_dir" "grep -rn -B3 '$SYMBOL' ."
+    run_grep "naive" "$fixture_dir" "grep -rn -B3 '$symbol' ."
     local naive_tok=$GREP_TOKENS
     local naive_out="$GREP_OUTPUT"
     local naive_cmds=1
 
     # ── Best-effort grep: filter to call sites with context ──
-    run_grep "best" "$fixture_dir" "grep -rn -B3 '${SYMBOL}(' . | grep -v 'def ${SYMBOL}\|fn ${SYMBOL}\|pub fn ${SYMBOL}'"
+    run_grep "best" "$fixture_dir" "grep -rn -B3 '${symbol}(' . | grep -v 'def ${symbol}\|fn ${symbol}\|pub fn ${symbol}\|func ${symbol}\|function ${symbol}'"
     local best_tok=$GREP_TOKENS
     local best_out="$GREP_OUTPUT"
     local best_cmds=1
 
     # ── Cartog ──
-    run_cartog_cmd "$fixture_dir" refs "$SYMBOL" --kind calls
+    run_cartog_cmd "$fixture_dir" refs "$symbol" --kind calls
     local cartog_tok=$CARTOG_TOKENS
     local cartog_out="$CARTOG_OUTPUT"
     local cartog_cmds=1
@@ -54,5 +57,7 @@ run_scenario() {
 }
 
 run_scenario "webapp_py" "py"
+run_scenario "webapp_ts" "ts" "validateToken"
+run_scenario "webapp_go" "go" "ValidateToken"
 run_scenario "webapp_rs" "rs"
 run_scenario "webapp_rb" "rb"

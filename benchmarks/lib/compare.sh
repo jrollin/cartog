@@ -64,7 +64,10 @@ check_recall() {
     while IFS= read -r item; do
         [ -z "$item" ] && continue
         total=$((total + 1))
-        if echo "$output" | grep -q "$item"; then
+        # Use grep -c instead of grep -q to avoid SIGPIPE with pipefail on large outputs.
+        # When grep -q finds a match and exits early, echo may still be writing,
+        # causing SIGPIPE (exit 141) which pipefail treats as failure.
+        if echo "$output" | grep -c "$item" >/dev/null 2>&1; then
             found=$((found + 1))
         fi
     done <<< "$items"

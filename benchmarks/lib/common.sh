@@ -18,6 +18,26 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# ── Fixture filter ──
+
+# Check if a fixture should be skipped based on FIXTURE_FILTER env var.
+# Usage: should_skip_fixture <fixture_name>
+# Returns 0 (true = skip) if fixture doesn't match filter, 1 (false = run) otherwise.
+should_skip_fixture() {
+    local fixture_name="$1"
+    if [ -z "${FIXTURE_FILTER:-}" ]; then
+        return 1
+    fi
+    case "$FIXTURE_FILTER" in
+        py) [[ "$fixture_name" != *"_py"* ]] && return 0 || return 1 ;;
+        ts) [[ "$fixture_name" != *"_ts"* ]] && return 0 || return 1 ;;
+        go) [[ "$fixture_name" != *"_go"* ]] && return 0 || return 1 ;;
+        rs) [[ "$fixture_name" != *"_rs"* ]] && return 0 || return 1 ;;
+        rb) [[ "$fixture_name" != *"_rb"* ]] && return 0 || return 1 ;;
+        *)  return 1 ;;
+    esac
+}
+
 # ── Measurement helpers ──
 
 count_bytes() {
@@ -93,7 +113,7 @@ count_matches() {
     shift
     local found=0
     for item in "$@"; do
-        if echo "$output" | grep -q "$item"; then
+        if echo "$output" | grep -c "$item" >/dev/null 2>&1; then
             found=$((found + 1))
         fi
     done

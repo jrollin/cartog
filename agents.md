@@ -18,6 +18,19 @@ cargo clippy --all-targets -- -D warnings  # lint
 
 Always run `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` before committing.
 
+### Integrity checks
+
+```bash
+make check            # all checks (Rust project + fixture codebases)
+make check-rust       # cargo fmt + clippy + test
+make check-fixtures   # validate all 5 fixture codebases (py, go, rs, rb)
+make check-ts         # TypeScript fixtures (requires npx/tsc)
+make bench            # shell benchmark suite (12 scenarios x 5 languages)
+make bench-criterion  # Rust criterion benchmarks (query latency)
+```
+
+Run `make check` before committing benchmark fixture changes.
+
 ## Code Conventions
 
 - **Error handling**: `anyhow::Result` everywhere, no `unwrap()` in library code.

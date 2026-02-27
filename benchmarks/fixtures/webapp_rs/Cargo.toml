@@ -1,0 +1,8 @@
+[package]
+name = "webapp_rs"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "webapp_rs"
+path = "main.rs"

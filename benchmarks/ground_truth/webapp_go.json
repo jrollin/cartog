@@ -1,0 +1,474 @@
+{
+  "01_find_callers": {
+    "description": "Who calls ValidateToken?",
+    "query": "refs ValidateToken --kind calls",
+    "expected": [
+      {
+        "source": "GetCurrentUser",
+        "file": "internal/auth/service.go"
+      },
+      {
+        "source": "RefreshToken",
+        "file": "internal/auth/tokens.go"
+      },
+      {
+        "source": "FindByToken",
+        "file": "internal/auth/tokens.go"
+      }
+    ]
+  },
+  "02_file_structure": {
+    "description": "What's in internal/auth/service.go?",
+    "query": "outline internal/auth/service.go",
+    "expected": [
+      {
+        "name": "serviceLog",
+        "kind": "variable"
+      },
+      {
+        "name": "User",
+        "kind": "class"
+      },
+      {
+        "name": "AuthProvider",
+        "kind": "class"
+      },
+      {
+        "name": "BaseService",
+        "kind": "class"
+      },
+      {
+        "name": "Initialize",
+        "kind": "method"
+      },
+      {
+        "name": "AuthService",
+        "kind": "class"
+      },
+      {
+        "name": "NewAuthService",
+        "kind": "function"
+      },
+      {
+        "name": "Login",
+        "kind": "method"
+      },
+      {
+        "name": "Logout",
+        "kind": "method"
+      },
+      {
+        "name": "GetCurrentUser",
+        "kind": "method"
+      },
+      {
+        "name": "AdminService",
+        "kind": "class"
+      },
+      {
+        "name": "NewAdminService",
+        "kind": "function"
+      },
+      {
+        "name": "IsAdmin",
+        "kind": "method"
+      },
+      {
+        "name": "PromoteToAdmin",
+        "kind": "method"
+      }
+    ]
+  },
+  "03_refactor_impact": {
+    "description": "Impact of changing AuthService",
+    "query": "impact AuthService --depth 3",
+    "expected_refs": [
+      "NewAuthService",
+      "cmd/server/main.go",
+      "NewAdminService",
+      "internal/services/authentication.go",
+      "internal/routes/auth_routes.go"
+    ]
+  },
+  "04_class_hierarchy": {
+    "description": "Hierarchy of BaseService",
+    "query": "hierarchy BaseService",
+    "expected": [],
+    "note": "Go does not use class inheritance; hierarchy returns empty for struct types"
+  },
+  "05_trace_call_chain": {
+    "description": "Trace LoginHandler call chain",
+    "query_sequence": [
+      "callees LoginHandler",
+      "callees Login",
+      "callees GenerateToken"
+    ],
+    "expected_chain": [
+      {
+        "caller": "LoginHandler",
+        "callee": "authRouteLog.Info"
+      },
+      {
+        "caller": "LoginHandler",
+        "callee": "database.NewDatabaseConnection"
+      },
+      {
+        "caller": "LoginHandler",
+        "callee": "services.NewAuthenticationService"
+      },
+      {
+        "caller": "LoginHandler",
+        "callee": "authSvc.Authenticate"
+      },
+      {
+        "caller": "Login",
+        "callee": "serviceLog.Info"
+      },
+      {
+        "caller": "Login",
+        "callee": "GenerateToken"
+      },
+      {
+        "caller": "GenerateToken",
+        "callee": "tokenLog.Info"
+      },
+      {
+        "caller": "GenerateToken",
+        "callee": "tokenLog.Debug"
+      }
+    ]
+  },
+  "06_file_deps": {
+    "description": "What does internal/routes/auth_routes.go import?",
+    "query": "deps internal/routes/auth_routes.go",
+    "expected": [
+      "auth",
+      "services",
+      "database",
+      "logger"
+    ]
+  },
+  "07_type_references": {
+    "description": "Type references to TokenError",
+    "query": "refs TokenError",
+    "expected": [
+      {
+        "source": "ValidateToken",
+        "file": "internal/auth/tokens.go",
+        "kind": "references"
+      },
+      {
+        "source": "RevokeToken",
+        "file": "internal/auth/tokens.go",
+        "kind": "references"
+      }
+    ]
+  },
+  "08_symbol_search": {
+    "description": "Find all token-related symbols",
+    "query": "search Token",
+    "expected": [
+      {
+        "name": "TokenError"
+      },
+      {
+        "name": "TokenClaims"
+      },
+      {
+        "name": "tokenLog"
+      },
+      {
+        "name": "TokenExpiry"
+      },
+      {
+        "name": "GenerateToken"
+      },
+      {
+        "name": "ValidateToken"
+      },
+      {
+        "name": "RefreshToken"
+      },
+      {
+        "name": "RevokeToken"
+      },
+      {
+        "name": "RevokeAllTokens"
+      },
+      {
+        "name": "ExtractToken"
+      },
+      {
+        "name": "FindByToken"
+      },
+      {
+        "name": "CleanExpiredTokens"
+      },
+      {
+        "name": "ExpiredTokenError"
+      }
+    ]
+  },
+  "09_ambiguous_symbol": {
+    "description": "Where is 'Validate' defined?",
+    "query": "search Validate",
+    "expected": [
+      {
+        "name": "Validate",
+        "file": "internal/api/v1/auth.go"
+      },
+      {
+        "name": "Validate",
+        "file": "internal/api/v2/auth.go"
+      },
+      {
+        "name": "Validate",
+        "file": "internal/models/payment.go"
+      },
+      {
+        "name": "Validate",
+        "file": "internal/models/user.go"
+      },
+      {
+        "name": "Validate",
+        "file": "internal/validators/payment_validator.go"
+      },
+      {
+        "name": "Validate",
+        "file": "internal/validators/user_validator.go"
+      }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "Who references GetLogger?",
+    "query": "refs GetLogger",
+    "expected": []
+  },
+  "11_deep_call_chain": {
+    "description": "Deep call chain from HandleLogin (5+ hops)",
+    "query_sequence": [
+      "callees HandleLogin",
+      "callees Authenticate",
+      "callees Login",
+      "callees GenerateToken",
+      "callees ExecuteQuery",
+      "callees GetConnection"
+    ],
+    "expected_chain": [
+      {
+        "caller": "HandleLogin",
+        "callee": "authV1Log.Info"
+      },
+      {
+        "caller": "HandleLogin",
+        "callee": "Validate"
+      },
+      {
+        "caller": "HandleLogin",
+        "callee": "authV1Log.Error"
+      },
+      {
+        "caller": "HandleLogin",
+        "callee": "routes.LoginHandler"
+      },
+      {
+        "caller": "HandleLogin",
+        "callee": "authV1Log.Info"
+      },
+      {
+        "caller": "HandleLogin",
+        "callee": "authV2Log.Info"
+      },
+      {
+        "caller": "HandleLogin",
+        "callee": "Validate"
+      },
+      {
+        "caller": "HandleLogin",
+        "callee": "authV2Log.Error"
+      },
+      {
+        "caller": "HandleLogin",
+        "callee": "routes.LoginHandler"
+      },
+      {
+        "caller": "HandleLogin",
+        "callee": "authV2Log.Info"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "authLog.Info"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "s.AuthSvc.Login"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "authLog.Error"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "fmt.Errorf"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "auth.GenerateToken"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "s.DB.Pool.GetConnection"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "authLog.Error"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "fmt.Errorf"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "s.DB.Pool.ReleaseConnection"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "s.DB.ExecuteQuery"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "authLog.Error"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "fmt.Errorf"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "authLog.Info"
+      },
+      {
+        "caller": "Login",
+        "callee": "serviceLog.Info"
+      },
+      {
+        "caller": "Login",
+        "callee": "serviceLog.Warn"
+      },
+      {
+        "caller": "Login",
+        "callee": "fmt.Errorf"
+      },
+      {
+        "caller": "Login",
+        "callee": "serviceLog.Warn"
+      },
+      {
+        "caller": "Login",
+        "callee": "fmt.Errorf"
+      },
+      {
+        "caller": "Login",
+        "callee": "serviceLog.Warn"
+      },
+      {
+        "caller": "Login",
+        "callee": "fmt.Errorf"
+      },
+      {
+        "caller": "Login",
+        "callee": "GenerateToken"
+      },
+      {
+        "caller": "Login",
+        "callee": "serviceLog.Info"
+      },
+      {
+        "caller": "GenerateToken",
+        "callee": "tokenLog.Info"
+      },
+      {
+        "caller": "GenerateToken",
+        "callee": "fmt.Sprintf"
+      },
+      {
+        "caller": "GenerateToken",
+        "callee": "tokenLog.Debug"
+      },
+      {
+        "caller": "ExecuteQuery",
+        "callee": "connLog.Info"
+      },
+      {
+        "caller": "ExecuteQuery",
+        "callee": "d.Pool.GetConnection"
+      },
+      {
+        "caller": "ExecuteQuery",
+        "callee": "connLog.Error"
+      },
+      {
+        "caller": "ExecuteQuery",
+        "callee": "fmt.Errorf"
+      },
+      {
+        "caller": "ExecuteQuery",
+        "callee": "d.Pool.ReleaseConnection"
+      },
+      {
+        "caller": "ExecuteQuery",
+        "callee": "connLog.Debug"
+      },
+      {
+        "caller": "GetConnection",
+        "callee": "p.mu.Lock"
+      },
+      {
+        "caller": "GetConnection",
+        "callee": "p.mu.Unlock"
+      },
+      {
+        "caller": "GetConnection",
+        "callee": "poolLog.Debug"
+      },
+      {
+        "caller": "GetConnection",
+        "callee": "poolLog.Info"
+      },
+      {
+        "caller": "GetConnection",
+        "callee": "poolLog.Error"
+      },
+      {
+        "caller": "GetConnection",
+        "callee": "fmt.Errorf"
+      }
+    ]
+  },
+  "12_deep_impact": {
+    "description": "Deep impact of DatabaseConnection (depth 5)",
+    "query": "impact DatabaseConnection --depth 5",
+    "expected_refs": [
+      "DatabaseConnection",
+      "internal/database/connection.go",
+      "internal/tasks/cleanup_task.go",
+      "internal/tasks/payment_task.go",
+      "internal/services/payment/processor.go",
+      "internal/services/user_service.go",
+      "internal/services/authentication.go",
+      "internal/services/session_service.go",
+      "services.NewSessionService",
+      "cmd/server/main.go",
+      "services.NewAuthenticationService",
+      "internal/routes/auth_routes.go",
+      "routes.LoginHandler",
+      "internal/api/v1/auth.go",
+      "internal/api/v2/auth.go",
+      "services.NewUserService",
+      "internal/routes/user_routes.go",
+      "payment.NewPaymentProcessor",
+      "internal/routes/payment_routes.go",
+      "routes.PaymentHandler"
+    ]
+  }
+}

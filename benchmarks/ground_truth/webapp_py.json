@@ -3,30 +3,92 @@
     "description": "Who calls validate_token?",
     "query": "refs validate_token --kind calls",
     "expected": [
-      {"source": "get_current_user", "file": "auth/service.py"},
-      {"source": "change_password", "file": "auth/service.py"},
-      {"source": "refresh_token", "file": "auth/tokens.py"},
-      {"source": "wrapper", "file": "auth/middleware.py"},
-      {"source": "get_current_user", "file": "auth/middleware.py"}
+      {
+        "source": "auth_middleware",
+        "file": "middleware/auth_mw.py"
+      },
+      {
+        "source": "get_current_user",
+        "file": "auth/service.py"
+      },
+      {
+        "source": "change_password",
+        "file": "auth/service.py"
+      },
+      {
+        "source": "refresh_token",
+        "file": "auth/tokens.py"
+      },
+      {
+        "source": "wrapper",
+        "file": "auth/middleware.py"
+      },
+      {
+        "source": "get_current_user",
+        "file": "auth/middleware.py"
+      },
+      {
+        "source": "verify_token",
+        "file": "services/auth_service.py"
+      }
     ]
   },
   "02_file_structure": {
     "description": "What's in auth/service.py?",
     "query": "outline auth/service.py",
     "expected": [
-      {"name": "BaseService", "kind": "class"},
-      {"name": "__init__", "kind": "method"},
-      {"name": "_log", "kind": "method"},
-      {"name": "AuthService", "kind": "class"},
-      {"name": "__init__", "kind": "method"},
-      {"name": "login", "kind": "method"},
-      {"name": "logout", "kind": "method"},
-      {"name": "get_current_user", "kind": "method"},
-      {"name": "_find_user", "kind": "method"},
-      {"name": "change_password", "kind": "method"},
-      {"name": "AdminService", "kind": "class"},
-      {"name": "impersonate", "kind": "method"},
-      {"name": "list_all_users", "kind": "method"}
+      {
+        "name": "BaseService",
+        "kind": "class"
+      },
+      {
+        "name": "__init__",
+        "kind": "method"
+      },
+      {
+        "name": "_log",
+        "kind": "method"
+      },
+      {
+        "name": "AuthService",
+        "kind": "class"
+      },
+      {
+        "name": "__init__",
+        "kind": "method"
+      },
+      {
+        "name": "login",
+        "kind": "method"
+      },
+      {
+        "name": "logout",
+        "kind": "method"
+      },
+      {
+        "name": "get_current_user",
+        "kind": "method"
+      },
+      {
+        "name": "_find_user",
+        "kind": "method"
+      },
+      {
+        "name": "change_password",
+        "kind": "method"
+      },
+      {
+        "name": "AdminService",
+        "kind": "class"
+      },
+      {
+        "name": "impersonate",
+        "kind": "method"
+      },
+      {
+        "name": "list_all_users",
+        "kind": "method"
+      }
     ]
   },
   "03_refactor_impact": {
@@ -34,8 +96,10 @@
     "query": "impact AuthService --depth 3",
     "expected_refs": [
       "AdminService",
-      "__init__",
+      "auth/__init__.py",
       "routes/auth.py",
+      "services/auth_service.py",
+      "__init__",
       "routes/admin.py"
     ]
   },
@@ -43,9 +107,27 @@
     "description": "Hierarchy of BaseService",
     "query": "hierarchy BaseService",
     "expected": [
-      {"child": "AuthService", "parent": "BaseService"}
-    ],
-    "note": "AdminService inherits AuthService not BaseService directly; use hierarchy AuthService to find it"
+      {
+        "child": "AuthService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "AuthenticationService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "CacheableService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "NotificationManager",
+        "parent": "BaseService"
+      },
+      {
+        "child": "AuditableService",
+        "parent": "BaseService"
+      }
+    ]
   },
   "05_trace_call_chain": {
     "description": "Trace login_route call chain",
@@ -55,10 +137,34 @@
       "callees generate_token"
     ],
     "expected_chain": [
-      {"caller": "login_route", "callee": "login"},
-      {"caller": "login", "callee": "generate_token"},
-      {"caller": "login", "callee": "_find_user"},
-      {"caller": "generate_token", "callee": "Session.create"}
+      {
+        "caller": "login_route",
+        "callee": "_auth_service.login"
+      },
+      {
+        "caller": "login_route",
+        "callee": "logger.info"
+      },
+      {
+        "caller": "login",
+        "callee": "self._find_user"
+      },
+      {
+        "caller": "login",
+        "callee": "user.check_password"
+      },
+      {
+        "caller": "login",
+        "callee": "self._log"
+      },
+      {
+        "caller": "login",
+        "callee": "generate_token"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "Session.create"
+      }
     ]
   },
   "06_file_deps": {
@@ -71,32 +177,521 @@
       "get_logger"
     ]
   },
+  "07_type_references": {
+    "description": "Type references to TokenError",
+    "query": "refs TokenError",
+    "expected": [
+      {
+        "source": "ExpiredTokenError",
+        "file": "auth/tokens.py",
+        "kind": "inherits"
+      },
+      {
+        "source": "InvalidScopeError",
+        "file": "auth/tokens.py",
+        "kind": "inherits"
+      },
+      {
+        "source": "validate_token",
+        "file": "auth/tokens.py",
+        "kind": "raises"
+      },
+      {
+        "source": "validate_token",
+        "file": "auth/tokens.py",
+        "kind": "calls"
+      },
+      {
+        "source": "auth.tokens",
+        "file": "auth/middleware.py",
+        "kind": "imports"
+      },
+      {
+        "source": "get_current_user",
+        "file": "auth/middleware.py",
+        "kind": "references"
+      }
+    ]
+  },
   "08_symbol_search": {
     "description": "Find all token-related symbols",
     "query": "search token",
     "expected": [
-      {"name": "TokenError"},
-      {"name": "ExpiredTokenError"},
-      {"name": "TOKEN_EXPIRY"},
-      {"name": "validate_token"},
-      {"name": "generate_token"},
-      {"name": "refresh_token"},
-      {"name": "revoke_token"},
-      {"name": "revoke_all_tokens"},
-      {"name": "extract_token"},
-      {"name": "find_by_token"}
+      {
+        "name": "TokenError"
+      },
+      {
+        "name": "TOKEN_EXPIRY"
+      },
+      {
+        "name": "handle_token_refresh"
+      },
+      {
+        "name": "extract_token"
+      },
+      {
+        "name": "generate_token"
+      },
+      {
+        "name": "validate_token"
+      },
+      {
+        "name": "refresh_token"
+      },
+      {
+        "name": "revoke_token"
+      },
+      {
+        "name": "revoke_all_tokens"
+      },
+      {
+        "name": "_extract_token"
+      },
+      {
+        "name": "find_by_token"
+      },
+      {
+        "name": "verify_token"
+      },
+      {
+        "name": "ExpiredTokenError"
+      }
     ]
   },
-  "07_type_references": {
-    "description": "Type references in Python (decorators, exception types)",
-    "query": "refs TokenError",
+  "09_ambiguous_symbol": {
+    "description": "Where is 'validate' defined?",
+    "query": "search validate",
     "expected": [
-      {"source": "ExpiredTokenError", "file": "auth/tokens.py", "kind": "inherits"},
-      {"source": "InvalidScopeError", "file": "auth/tokens.py", "kind": "inherits"},
-      {"source": "validate_token", "file": "auth/tokens.py", "kind": "raises"},
-      {"source": "validate_token", "file": "auth/tokens.py", "kind": "calls"},
-      {"source": "auth.tokens", "file": "auth/middleware.py", "kind": "imports"},
-      {"source": "get_current_user", "file": "auth/middleware.py", "kind": "references"}
+      {
+        "name": "validate",
+        "file": "api/v1/auth.py"
+      },
+      {
+        "name": "validate",
+        "file": "api/v2/auth.py"
+      },
+      {
+        "name": "validate",
+        "file": "validators/payment.py"
+      },
+      {
+        "name": "validate",
+        "file": "validators/user.py"
+      }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "Who references get_logger?",
+    "query": "refs get_logger",
+    "expected": [
+      {
+        "file": "api/v1/auth.py"
+      },
+      {
+        "file": "api/v1/payments.py"
+      },
+      {
+        "file": "api/v1/users.py"
+      },
+      {
+        "file": "api/v2/auth.py"
+      },
+      {
+        "file": "api/v2/payments.py"
+      },
+      {
+        "file": "app.py"
+      },
+      {
+        "file": "auth/middleware.py"
+      },
+      {
+        "file": "auth/service.py"
+      },
+      {
+        "file": "cache/base.py"
+      },
+      {
+        "file": "cache/memory_cache.py"
+      },
+      {
+        "file": "cache/redis_cache.py"
+      },
+      {
+        "file": "database/connection.py"
+      },
+      {
+        "file": "database/migrations.py"
+      },
+      {
+        "file": "database/pool.py"
+      },
+      {
+        "file": "database/queries.py"
+      },
+      {
+        "file": "events/dispatcher.py"
+      },
+      {
+        "file": "events/handlers.py"
+      },
+      {
+        "file": "middleware/auth_mw.py"
+      },
+      {
+        "file": "middleware/cors.py"
+      },
+      {
+        "file": "middleware/logging_mw.py"
+      },
+      {
+        "file": "middleware/rate_limit.py"
+      },
+      {
+        "file": "routes/admin.py"
+      },
+      {
+        "file": "routes/auth.py"
+      },
+      {
+        "file": "routes/notifications.py"
+      },
+      {
+        "file": "routes/payments.py"
+      },
+      {
+        "file": "routes/users.py"
+      },
+      {
+        "file": "services/auditable.py"
+      },
+      {
+        "file": "services/auth_service.py"
+      },
+      {
+        "file": "services/base.py"
+      },
+      {
+        "file": "services/cacheable.py"
+      },
+      {
+        "file": "services/email/sender.py"
+      },
+      {
+        "file": "services/email/templates.py"
+      },
+      {
+        "file": "services/notification/manager.py"
+      },
+      {
+        "file": "services/payment/gateway.py"
+      },
+      {
+        "file": "services/payment/processor.py"
+      },
+      {
+        "file": "tasks/cleanup_task.py"
+      },
+      {
+        "file": "tasks/email_task.py"
+      },
+      {
+        "file": "tasks/payment_task.py"
+      },
+      {
+        "file": "utils/__init__.py"
+      },
+      {
+        "file": "utils/helpers.py"
+      },
+      {
+        "file": "validators/common.py"
+      },
+      {
+        "file": "validators/payment.py"
+      },
+      {
+        "file": "validators/user.py"
+      }
+    ]
+  },
+  "11_deep_call_chain": {
+    "description": "Deep call chain from handle_login (5+ hops)",
+    "query_sequence": [
+      "callees handle_login",
+      "callees authenticate",
+      "callees login",
+      "callees generate_token",
+      "callees execute_query",
+      "callees get_connection"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handle_login",
+        "callee": "_logger.info"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "validate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "validate_login"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "AuthenticationService"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "service.initialize"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "request.get"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "service.authenticate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "_logger.info"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "_logger.info"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "validate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "validate_login"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "AuthenticationService"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "service.initialize"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "request.get"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "request.get(\"headers\", {}).get"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "request.get"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "service.authenticate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "_logger.info"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "self._require_initialized"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "_logger.info"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "sanitize_input"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "ValidationError"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "self._auth.login"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "_logger.info"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "self._events.emit"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "AuthenticationError"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "self._events.emit"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "AuthenticationError"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "self._users.find_by_email"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "self._sessions.create_session"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "self._events.emit"
+      },
+      {
+        "caller": "login",
+        "callee": "self._find_user"
+      },
+      {
+        "caller": "login",
+        "callee": "user.check_password"
+      },
+      {
+        "caller": "login",
+        "callee": "self._log"
+      },
+      {
+        "caller": "login",
+        "callee": "generate_token"
+      },
+      {
+        "caller": "login",
+        "callee": "self._log"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "datetime.utcnow().isoformat"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "datetime.utcnow"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "hashlib.sha256(f\"{payload}:{SECRET_KEY}\".encode()).hexdigest"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "hashlib.sha256"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "f\"{payload}:{SECRET_KEY}\".encode"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "Session.create"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "self._acquire"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "time.time"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "_logger.info"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "self._simulate_query"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "time.time"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "QueryResult"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "len"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "_logger.info"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "result.count"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "_logger.info"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "DatabaseError"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "str"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "self._release"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "self.initialize"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "handle.mark_used"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "_logger.info"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "_logger.info"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "DatabaseError"
+      }
+    ]
+  },
+  "12_deep_impact": {
+    "description": "Deep impact of DatabaseConnection (depth 5)",
+    "query": "impact DatabaseConnection --depth 5",
+    "expected_refs": [
+      "DatabaseConnection",
+      "database/migrations.py",
+      "database/queries.py",
+      "tasks/email_task.py",
+      "tasks/cleanup_task.py",
+      "tasks/payment_task.py",
+      "api/v1/auth.py",
+      "api/v1/payments.py",
+      "api/v1/users.py",
+      "api/v2/auth.py",
+      "api/v2/payments.py",
+      "routes/payments.py",
+      "routes/users.py",
+      "routes/notifications.py",
+      "services/auth_service.py",
+      "services/cacheable.py",
+      "services/notification/manager.py",
+      "services/payment/processor.py",
+      "services/auditable.py",
+      "services/base.py"
     ]
   }
 }

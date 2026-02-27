@@ -1,4 +1,6 @@
 /target
 .cartog.db
 .ruff_cache/
+__pycache__/
 benchmarks/results/*.jsonl
+benchmarks/fixtures/webapp_rs/target/

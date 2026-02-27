@@ -1,10 +1,12 @@
 mod cli;
 mod commands;
-mod db;
-mod indexer;
-mod languages;
 mod mcp;
-mod types;
+
+// Re-export lib modules as crate-level so commands/cli/mcp can use crate::db, etc.
+pub use cartog::db;
+pub use cartog::indexer;
+pub use cartog::languages;
+pub use cartog::types;
 
 use anyhow::Result;
 use clap::Parser;

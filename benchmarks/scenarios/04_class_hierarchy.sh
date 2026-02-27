@@ -17,6 +17,8 @@ run_scenario() {
 
     local fixture_dir="$BENCH_DIR/fixtures/$fixture_name"
 
+    should_skip_fixture "$fixture_name" && return 0
+
     echo -e "  ${CYAN}[$fixture_name]${NC} Hierarchy of $symbol?" >&2
 
     # ── Naive grep: search for class name ──
@@ -56,5 +58,7 @@ run_scenario() {
 }
 
 run_scenario "webapp_py" "BaseService" "class.*BaseService\|class.*(BaseService)\|class.*(AuthService)"
+run_scenario "webapp_ts" "BaseService" "class.*BaseService\|extends.*BaseService\|implements.*BaseService"
+run_scenario "webapp_go" "BaseService" "BaseService\|embed"
 run_scenario "webapp_rs" "AuthProvider" "impl.*AuthProvider\|trait AuthProvider"
 run_scenario "webapp_rb" "BaseService" "class.*BaseService\|class.*<.*BaseService\|class.*<.*AuthService"
