@@ -79,7 +79,7 @@ fn extract_node(
             extract_mod(node, source, file_path, parent_id, symbols, edges);
         }
         "const_item" | "static_item" => {
-            extract_const(node, source, file_path, parent_id, symbols);
+            extract_const(node, source, file_path, parent_id, symbols, edges);
         }
         "type_item" => {
             extract_type_alias(node, source, file_path, parent_id, symbols);
@@ -510,6 +510,7 @@ fn extract_const(
     file_path: &str,
     parent_id: Option<&str>,
     symbols: &mut Vec<Symbol>,
+    edges: &mut Vec<Edge>,
 ) {
     let name = match node.child_by_field_name("name") {
         Some(n) => node_text(n, source).to_string(),
@@ -519,6 +520,7 @@ fn extract_const(
     let start_line = node.start_position().row as u32 + 1;
     let visibility = rust_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
+    let sym_id = symbol_id(file_path, &name, start_line);
 
     symbols.push(
         Symbol::new(
@@ -534,6 +536,11 @@ fn extract_const(
         .with_visibility(visibility)
         .with_docstring(docstring),
     );
+
+    // Walk initializer expression for calls
+    if let Some(value) = node.child_by_field_name("value") {
+        walk_for_calls(value, source, file_path, &sym_id, edges);
+    }
 }
 
 // ── Type aliases ──
@@ -1117,6 +1124,15 @@ static DB_POOL: Pool = Pool::new();
         let pool = result.symbols.iter().find(|s| s.name == "DB_POOL").unwrap();
         assert_eq!(pool.kind, SymbolKind::Variable);
         assert_eq!(pool.visibility, Visibility::Private);
+
+        // Static initializer call should be captured
+        let calls: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Calls)
+            .collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].target_name, "Pool::new");
     }
 
     #[test]

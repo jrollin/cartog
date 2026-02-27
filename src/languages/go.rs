@@ -70,10 +70,10 @@ fn extract_node(
             extract_import(node, source, file_path, parent_id, symbols, edges);
         }
         "const_declaration" => {
-            extract_const(node, source, file_path, parent_id, symbols);
+            extract_const(node, source, file_path, parent_id, symbols, edges);
         }
         "var_declaration" => {
-            extract_var(node, source, file_path, parent_id, symbols);
+            extract_var(node, source, file_path, parent_id, symbols, edges);
         }
         _ => {
             for child in node.named_children(&mut node.walk()) {
@@ -414,17 +414,18 @@ fn extract_const(
     file_path: &str,
     parent_id: Option<&str>,
     symbols: &mut Vec<Symbol>,
+    edges: &mut Vec<Edge>,
 ) {
     // const_declaration → const_spec | const_spec_list → const_spec*
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             "const_spec" => {
-                extract_const_spec(child, source, file_path, parent_id, symbols);
+                extract_const_spec(child, source, file_path, parent_id, symbols, edges);
             }
             "const_spec_list" => {
                 for spec in child.named_children(&mut child.walk()) {
                     if spec.kind() == "const_spec" {
-                        extract_const_spec(spec, source, file_path, parent_id, symbols);
+                        extract_const_spec(spec, source, file_path, parent_id, symbols, edges);
                     }
                 }
             }
@@ -439,13 +440,19 @@ fn extract_const_spec(
     file_path: &str,
     parent_id: Option<&str>,
     symbols: &mut Vec<Symbol>,
+    edges: &mut Vec<Edge>,
 ) {
     // const_spec may have multiple identifiers: `const A, B = 1, 2`
+    let mut sym_id = None;
     for child in node.named_children(&mut node.walk()) {
         if child.kind() == "identifier" {
             let name = node_text(child, source).to_string();
             let line = child.start_position().row as u32 + 1;
             let visibility = go_visibility(&name);
+            let id = symbol_id(file_path, &name, line);
+            if sym_id.is_none() {
+                sym_id = Some(id);
+            }
 
             let mut sym = Symbol::new(
                 name,
@@ -463,6 +470,15 @@ fn extract_const_spec(
             symbols.push(sym);
         }
     }
+
+    // Walk initializer expressions for calls
+    if let Some(ref ctx) = sym_id {
+        for child in node.named_children(&mut node.walk()) {
+            if child.kind() == "expression_list" || child.kind() == "call_expression" {
+                walk_for_calls(child, source, file_path, ctx, edges);
+            }
+        }
+    }
 }
 
 // ── Variables ──
@@ -473,16 +489,17 @@ fn extract_var(
     file_path: &str,
     parent_id: Option<&str>,
     symbols: &mut Vec<Symbol>,
+    edges: &mut Vec<Edge>,
 ) {
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             "var_spec" => {
-                extract_var_spec(child, source, file_path, parent_id, symbols);
+                extract_var_spec(child, source, file_path, parent_id, symbols, edges);
             }
             "var_spec_list" => {
                 for spec in child.named_children(&mut child.walk()) {
                     if spec.kind() == "var_spec" {
-                        extract_var_spec(spec, source, file_path, parent_id, symbols);
+                        extract_var_spec(spec, source, file_path, parent_id, symbols, edges);
                     }
                 }
             }
@@ -497,12 +514,18 @@ fn extract_var_spec(
     file_path: &str,
     parent_id: Option<&str>,
     symbols: &mut Vec<Symbol>,
+    edges: &mut Vec<Edge>,
 ) {
+    let mut sym_id = None;
     for child in node.named_children(&mut node.walk()) {
         if child.kind() == "identifier" {
             let name = node_text(child, source).to_string();
             let line = child.start_position().row as u32 + 1;
             let visibility = go_visibility(&name);
+            let id = symbol_id(file_path, &name, line);
+            if sym_id.is_none() {
+                sym_id = Some(id);
+            }
 
             let mut sym = Symbol::new(
                 name,
@@ -518,6 +541,15 @@ fn extract_var_spec(
                 sym = sym.with_visibility(visibility);
             }
             symbols.push(sym);
+        }
+    }
+
+    // Walk initializer expressions for calls
+    if let Some(ref ctx) = sym_id {
+        for child in node.named_children(&mut node.walk()) {
+            if child.kind() == "expression_list" || child.kind() == "call_expression" {
+                walk_for_calls(child, source, file_path, ctx, edges);
+            }
         }
     }
 }
@@ -1191,6 +1223,50 @@ func (c *cache) get(key string) string { return "" }
         let method = result.symbols.iter().find(|s| s.name == "get").unwrap();
         assert_eq!(method.kind, SymbolKind::Method);
         assert_eq!(method.visibility, Visibility::Private);
+    }
+
+    #[test]
+    fn test_package_level_var_calls() {
+        let result = extract(
+            r#"package main
+
+var log = GetLogger("main")
+
+var (
+    ErrNotFound = errors.New("not found")
+    ErrTimeout  = errors.New("timeout")
+)
+"#,
+        );
+
+        let calls: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Calls)
+            .collect();
+        assert_eq!(calls.len(), 3);
+
+        let targets: Vec<&str> = calls.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(targets.contains(&"GetLogger"));
+        assert!(targets.contains(&"errors.New"));
+    }
+
+    #[test]
+    fn test_package_level_const_calls() {
+        let result = extract(
+            r#"package main
+
+const DefaultErr = errors.New("default")
+"#,
+        );
+
+        let calls: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Calls)
+            .collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].target_name, "errors.New");
     }
 
     #[test]

@@ -77,8 +77,8 @@ run_scenario_rs() {
     local best_out="$GREP_OUTPUT"
     local best_cmds=1
 
-    # ── Cartog: type references only ──
-    run_cartog_cmd "$fixture_dir" refs "$symbol" --kind references
+    # ── Cartog: all refs to User (imports + type annotations) ──
+    run_cartog_cmd "$fixture_dir" refs "$symbol"
     local cartog_tok=$CARTOG_TOKENS
     local cartog_out="$CARTOG_OUTPUT"
     local cartog_cmds=1
