@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "False positives from benchmark fixture fake API keys"
+commits = [
+    "0ec090745a0fffbb6fa22a68b52bd0fde8db57ff",
+]
