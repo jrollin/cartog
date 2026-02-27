@@ -132,8 +132,8 @@ pub enum Command {
         #[arg(long)]
         file: Option<String>,
 
-        /// Maximum results to return (default: 20, max: 100)
-        #[arg(long, default_value = "20")]
+        /// Maximum results to return (default: 30, max: 100)
+        #[arg(long, default_value = "30")]
         limit: u32,
     },
 

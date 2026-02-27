@@ -371,15 +371,32 @@ impl Database {
             .replace('%', "\\%")
             .replace('_', "\\_");
         let kind_str = kind_filter.map(|k| k.as_str());
+        // Ranking: match_tier + kind_penalty.
+        //   match_tier: 0 = exact, 1 = prefix, 2 = substring
+        //   kind_penalty: definitions (function/method/class) = 0, variable = 3, import = 6
+        // Definitions always rank above variables/imports across all match tiers:
+        //   exact class=0, prefix function=1, substring method=2,
+        //   exact variable=3, prefix variable=4, substring variable=5,
+        //   exact import=6, ...
+        // Within the same rank score, secondary sort by kind (fn < method < class)
+        // then by file_path and start_line for determinism.
         let mut stmt = self.conn.prepare(
             "SELECT id, name, kind, file_path, start_line, end_line,
                     start_byte, end_byte, parent_id, signature, visibility,
                     is_async, docstring,
-                    CASE
-                      WHEN LOWER(name) = LOWER(?1)                    THEN 0
-                      WHEN LOWER(name) LIKE LOWER(?2) || '%' ESCAPE '\\' THEN 1
-                      ELSE                                                  2
-                    END AS rank
+                    (CASE
+                       WHEN LOWER(name) = LOWER(?1)                    THEN 0
+                       WHEN LOWER(name) LIKE LOWER(?2) || '%' ESCAPE '\\' THEN 1
+                       ELSE                                                  2
+                     END) +
+                    (CASE kind
+                       WHEN 'function' THEN 0
+                       WHEN 'method'   THEN 0
+                       WHEN 'class'    THEN 0
+                       WHEN 'variable' THEN 3
+                       WHEN 'import'   THEN 6
+                       ELSE                 3
+                     END) AS rank
              FROM symbols
              WHERE LOWER(name) LIKE '%' || LOWER(?2) || '%' ESCAPE '\\'
                AND (?3 IS NULL OR kind = ?3)
@@ -1055,6 +1072,33 @@ mod tests {
         let results = db.search("parse_config", None, None, 20).unwrap();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].name, "parse_config");
+    }
+
+    #[test]
+    fn test_search_definitions_outrank_variables() {
+        let db = Database::open_memory().unwrap();
+        // Variables with exact match on "token"
+        let var1 = test_symbol("token", SymbolKind::Variable, "routes/auth.ts", 20);
+        let var2 = test_symbol("token", SymbolKind::Variable, "routes/admin.ts", 11);
+        // Class with prefix match
+        let class = test_symbol("TokenError", SymbolKind::Class, "auth/tokens.ts", 14);
+        // Function with substring match
+        let func = test_symbol("validateToken", SymbolKind::Function, "auth/tokens.ts", 59);
+        // Class with substring match
+        let subclass = test_symbol("ExpiredTokenError", SymbolKind::Class, "auth/tokens.ts", 22);
+        db.insert_symbols(&[var1, var2, class, func, subclass])
+            .unwrap();
+
+        let results = db.search("token", None, None, 20).unwrap();
+        assert_eq!(results.len(), 5);
+        // Definitions (class, function) should all rank above variables
+        let def_names: Vec<&str> = results[..3].iter().map(|s| s.name.as_str()).collect();
+        assert!(def_names.contains(&"TokenError"));
+        assert!(def_names.contains(&"validateToken"));
+        assert!(def_names.contains(&"ExpiredTokenError"));
+        // Variables should be last
+        assert_eq!(results[3].name, "token");
+        assert_eq!(results[4].name, "token");
     }
 
     #[test]

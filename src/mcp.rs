@@ -84,7 +84,7 @@ pub struct SearchParams {
     pub kind: Option<String>,
     /// Filter to a specific file path relative to project root
     pub file: Option<String>,
-    /// Maximum results to return (default 20, max 100)
+    /// Maximum results to return (default 30, max 100)
     pub limit: Option<u32>,
 }
 
@@ -442,7 +442,7 @@ impl CartogServer {
         let query = params.query;
         let kind_str = params.kind;
         let file = params.file;
-        let limit = params.limit.unwrap_or(20).min(MAX_SEARCH_LIMIT);
+        let limit = params.limit.unwrap_or(30).min(MAX_SEARCH_LIMIT);
         let db = Arc::clone(&self.db);
         let cwd = Arc::clone(&self.cwd);
 
@@ -722,7 +722,7 @@ mod tests {
     #[test]
     fn search_limit_is_capped() {
         assert_eq!(999u32.min(MAX_SEARCH_LIMIT), MAX_SEARCH_LIMIT);
-        assert_eq!(20u32.min(MAX_SEARCH_LIMIT), 20);
+        assert_eq!(30u32.min(MAX_SEARCH_LIMIT), 30);
     }
 
     #[test]
