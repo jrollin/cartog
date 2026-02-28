@@ -1,12 +1,17 @@
 ---
 name: cartog
 description: >-
-  Code graph navigation and impact analysis. Use when the user asks
+  Code graph navigation, semantic code search, and impact analysis. Use when the user asks
   "where is X defined?", "what calls X?", "who imports X?", "what depends on X?",
-  "what breaks if I change X?", "help me refactor X", "show me the call graph",
-  "find all usages of X", "show file structure", or needs to navigate code,
-  locate definitions, trace dependencies, assess blast radius of changes,
-  support refactoring (rename, extract, move), or explore an unfamiliar codebase.
+  "what does X call?", "how is X used?", "where is X called from?",
+  "what breaks if I change X?", "is it safe to change/delete X?",
+  "help me refactor X", "show me the call graph", "trace the execution flow",
+  "find all usages of X", "find code related to...", "find the function/class that handles...",
+  "show file structure", "list all functions/classes in a file",
+  "show the inheritance tree", "show class hierarchy",
+  or needs to navigate code, locate definitions, search code by concept or behavior,
+  trace dependencies, assess blast radius of changes, explore how a feature is implemented,
+  support refactoring (rename, extract, move, delete), or explore an unfamiliar codebase.
   Supports Python, TypeScript/JavaScript, Rust, Go, Ruby.
 ---
 
