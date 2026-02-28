@@ -34,7 +34,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 # RAG pipeline: semantic code search (ONNX Runtime via fastembed)
 # default-features=false drops image-models (image embedding support we don't use)
-fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-native-tls", "hf-hub-native-tls"] }
+fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
 sqlite-vec = "0.1"
 
 [dev-dependencies]
