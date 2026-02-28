@@ -159,13 +159,35 @@ Symbols by kind:
   variable: 40
 ```
 
-### `cartog serve`
+### `cartog watch [path] [--debounce N] [--rag] [--rag-delay N]`
+
+Watch for file changes and auto-re-index. Keeps the code graph fresh during development.
+
+```bash
+cartog watch                          # watch CWD, code graph only
+cartog watch src/                     # watch subdirectory
+cartog watch --rag                    # also auto-embed for semantic search
+cartog watch --rag --rag-delay 60     # embed after 60s of inactivity
+cartog watch --debounce 5             # 5s debounce window
+```
+
+The watcher runs an initial incremental index on startup, then re-indexes when supported source files change. Changes are debounced (default 2s) to avoid re-indexing on every keystroke.
+
+When `--rag` is enabled, embedding generation is deferred until `--rag-delay` seconds (default 30) have elapsed without new file changes, batching all pending symbols in one pass.
+
+Press Ctrl+C to stop. Pending RAG embeddings are flushed before exit.
+
+### `cartog serve [--watch] [--rag]`
 
 Start cartog as an MCP server over stdio. See the [MCP Server](#mcp-server) section below for client configuration.
 
 ```bash
-cartog serve
+cartog serve                  # MCP server only
+cartog serve --watch          # MCP server + background file watcher
+cartog serve --watch --rag    # MCP server + watcher + auto RAG embedding
 ```
+
+When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
 
 ## JSON Output
 
@@ -179,10 +201,12 @@ cartog --json stats
 
 ## MCP Server
 
-`cartog serve` runs cartog as an MCP server over stdio, exposing the same 9 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
+`cartog serve` runs cartog as an MCP server over stdio, exposing 11 tools (9 core + 2 RAG) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
 
 ```bash
-cartog serve
+cartog serve                  # basic MCP server
+cartog serve --watch          # auto-re-index on file changes
+cartog serve --watch --rag    # auto-re-index + auto-embed
 ```
 
 ### Installation per Client
@@ -196,7 +220,7 @@ cargo install cartog
 #### Claude Code
 
 ```bash
-claude mcp add cartog -- cartog serve
+claude mcp add cartog -- cartog serve --watch
 ```
 
 Or manually edit `~/.claude/settings.json`:
@@ -206,13 +230,13 @@ Or manually edit `~/.claude/settings.json`:
   "mcpServers": {
     "cartog": {
       "command": "cartog",
-      "args": ["serve"]
+      "args": ["serve", "--watch"]
     }
   }
 }
 ```
 
-For project-scoped config, add to `.claude/settings.local.json` in your repo root.
+For project-scoped config, add to `.claude/settings.local.json` in your repo root. Add `"--rag"` to args if you want automatic embedding updates.
 
 #### Claude Desktop
 
@@ -321,8 +345,10 @@ The config pattern is always the same — point the client at `cartog serve` ove
 | `cartog_hierarchy` | `name` | Inheritance tree |
 | `cartog_deps` | `file` | File-level imports |
 | `cartog_stats` | — | Index summary |
+| `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search |
+| `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
 
-All tool responses are JSON. The `cartog_index` tool restricts indexing to the project directory (CWD subtree).
+All tool responses are JSON. The `cartog_index` and `cartog_rag_index` tools restrict indexing to the project directory (CWD subtree).
 
 ### Logging
 

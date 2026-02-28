@@ -6,22 +6,33 @@ mod mcp;
 pub use cartog::db;
 pub use cartog::indexer;
 pub use cartog::languages;
+pub use cartog::rag;
 pub use cartog::types;
+pub use cartog::watch;
 
 use anyhow::Result;
 use clap::Parser;
 
-use cli::{Cli, Command};
+use cli::{Cli, Command, RagCommand};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let is_serve = matches!(cli.command, Command::Serve);
-    let default_level = if is_serve { "info" } else { "warn" };
+    let is_serve = matches!(cli.command, Command::Serve { .. });
+    let is_watch = matches!(cli.command, Command::Watch { .. });
+    let is_rag = matches!(
+        cli.command,
+        Command::Rag(RagCommand::Index { .. }) | Command::Rag(RagCommand::Setup)
+    );
+    let default_level = if is_serve || is_rag || is_watch {
+        "info"
+    } else {
+        "warn"
+    };
 
     // Initialize tracing to stderr for all commands.
     // - CLI mode: only warnings (e.g., unparseable files) show by default
-    // - Serve mode: info-level lifecycle events + debug per-request with RUST_LOG=debug
+    // - Serve / RAG index / Watch mode: info-level for progress
     // Stdout stays clean for CLI output and MCP protocol.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -46,9 +57,22 @@ fn main() -> Result<()> {
             file,
             limit,
         } => commands::cmd_search(&query, kind, file.as_deref(), limit, cli.json),
-        Command::Serve => {
+        Command::Watch {
+            path,
+            debounce,
+            rag,
+            rag_delay,
+        } => commands::cmd_watch(&path, debounce, rag, rag_delay),
+        Command::Serve { watch, rag } => {
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(mcp::run_server())
+            runtime.block_on(mcp::run_server(watch, rag))
         }
+        Command::Rag(rag_cmd) => match rag_cmd {
+            RagCommand::Setup => commands::cmd_rag_setup(cli.json),
+            RagCommand::Index { path, force } => commands::cmd_rag_index(&path, force, cli.json),
+            RagCommand::Search { query, kind, limit } => {
+                commands::cmd_rag_search(&query, kind, limit, cli.json)
+            }
+        },
     }
 }

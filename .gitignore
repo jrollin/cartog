@@ -1,5 +1,6 @@
 /target
 .cartog.db
+.fastembed_cache/
 .ruff_cache/
 __pycache__/
 benchmarks/results/*.jsonl

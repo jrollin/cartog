@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-py check-ts check-go check-rs check-rb bench bench-criterion
+.PHONY: check check-rust check-fixtures check-py check-ts check-go check-rs check-rb bench bench-criterion bench-rag
 
 # --- Full integrity check ---
 
@@ -47,3 +47,8 @@ bench: ## Run shell benchmark suite (all scenarios, all fixtures)
 
 bench-criterion: ## Run Rust criterion benchmarks (query latency)
 	cargo bench --bench queries
+
+bench-rag: ## Run RAG relevancy benchmarks (in-memory + shell scenario 13)
+	cargo test --test rag_relevancy -- --nocapture
+	cargo build --release
+	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/run.sh --scenario 13

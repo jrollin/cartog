@@ -16,6 +16,7 @@ description: >-
 
 Use cartog **before** reaching for grep, cat, or file reads when you need to:
 - Discover symbols by partial name → `cartog search <query>`
+- Find code by concept or behavior → `cartog rag search "description"`
 - Understand the structure of a file → `cartog outline <file>`
 - Find who references a symbol → `cartog refs <name>` (or `--kind calls` for just callers)
 - See what a function calls → `cartog callees <name>`
@@ -33,15 +34,51 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 ## Workflow Rules
 
 1. **Before you grep or read a file to understand structure**, query cartog first.
-2. **Start with `cartog search <query>`** to locate any symbol before calling `refs`, `callees`, or `impact`:
-   - If the output contains **exactly one result**, use that symbol name and file — proceed.
-   - If multiple results share the same name but different files, add `--file <path>` to pick the right one — proceed.
-   - If multiple results have different names, add `--kind <kind>` to filter, then re-evaluate.
+
+2. **Search routing** — pick the right strategy based on the query:
+
+   **A. Direct keyword search** (`cartog search <name>`) — when the query is clearly a symbol identifier: single token, camelCase/snake_case, partial name. Sub-millisecond, prefix + substring matching.
+   ```
+   cartog search validate_token
+   cartog search AuthService
+   cartog search parse --kind function
+   ```
+
+   **B. Semantic search** (`cartog rag search "<query>"`) — when the query is natural language describing behavior or a concept, and you don't know the symbol name.
+   ```
+   cartog rag search "authentication token validation"
+   cartog rag search "database connection pooling"
+   cartog rag search "error handling in HTTP requests"
+   ```
+
+   **C. Both in parallel** — when the query is a broad keyword that could be a symbol name AND a concept (e.g., `auth`, `config`, `cache`). Run both in parallel to combine exact name matches with semantically related code.
+   ```
+   # run in parallel
+   cartog search auth
+   cartog rag search "authentication and authorization"
+   ```
+
+   **Narrowing pattern**: when `cartog search` returns too many results, use `rag search` with a more descriptive query to narrow down. Example: `search parse` returns 30 hits → `rag search "parse JSON response body"` pinpoints the right ones.
+
+   **Routing rules**:
+   - Single identifier-like token → **A** (direct)
+   - Multi-word natural language → **B** (semantic)
+   - Broad keyword / unsure → **C** (parallel)
+   - Too many results from A → narrow with **B**
+
+3. **When using `cartog search`** to locate a symbol before `refs`/`callees`/`impact`:
+   - Exactly one result → use that symbol name and file, proceed.
+   - Multiple results, same name, different files → add `--file <path>` to disambiguate.
+   - Multiple results, different names → add `--kind <kind>` to filter, then re-evaluate.
    - Never pass an ambiguous name to `refs`/`callees`/`impact` — the result will be wrong.
-3. **Use `cartog outline <file>`** instead of `cat <file>` when you need structure, not content.
-4. **Before refactoring**, run `cartog impact <symbol>` to see the blast radius.
-5. **Only fall back to grep/read** when cartog doesn't have what you need (e.g., reading actual implementation logic, string literals, config values).
-6. **After making code changes**, run `cartog index .` to update the graph.
+
+4. **Use `cartog outline <file>`** instead of `cat <file>` when you need structure, not content.
+
+5. **Before refactoring**, run `cartog impact <symbol>` to see the blast radius.
+
+6. **Only fall back to grep/read** when cartog doesn't have what you need (e.g., reading actual implementation logic, string literals, config values).
+
+7. **After making code changes**, run `cartog index .` to update the graph.
 
 ## Setup
 
@@ -53,7 +90,13 @@ command -v cartog || bash scripts/install.sh
 
 # Index (incremental — safe to re-run)
 cartog index .
+
+# Enable semantic search (required for rag search routing)
+cartog rag setup          # download embedding + re-ranker models (one-time)
+cartog rag index .        # embed all symbols for vector search
 ```
+
+Without `rag setup`, the `rag search` strategy is unavailable and the agent should use `search` + grep as fallback.
 
 ## Commands Reference
 
@@ -61,6 +104,7 @@ cartog index .
 ```bash
 cartog index .                    # Index current directory
 cartog index src/                 # Index specific directory
+cartog index . --force            # Re-index all files (ignore cache)
 ```
 
 ### Search (find symbols by partial name)
@@ -68,11 +112,21 @@ cartog index src/                 # Index specific directory
 cartog search parse                          # prefix + substring match
 cartog search parse --kind function          # filter by symbol kind
 cartog search config --file src/db.rs        # filter to one file
-cartog search parse --limit 10              # cap results
+cartog search parse --limit 10               # cap results
 ```
 Returns symbols ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
 
 Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`.
+
+### RAG Semantic Search (natural language queries)
+```bash
+cartog rag search "authentication token validation"
+cartog rag search "error handling" --kind function
+cartog rag search "database schema setup" --limit 20
+```
+
+Uses hybrid retrieval: FTS5 keyword matching + vector KNN, merged via Reciprocal Rank Fusion.
+When the cross-encoder model is available, results are re-ranked for better precision.
 
 ### Outline (file structure)
 ```bash
@@ -113,12 +167,27 @@ cartog deps src/routes/auth.py
 cartog stats
 ```
 
+### Watch (auto re-index on file changes)
+```bash
+cartog watch .                           # watch current directory
+cartog watch . --rag                     # also re-embed symbols (deferred)
+cartog watch . --debounce 3 --rag-delay 30  # custom timings
+```
+
+### Serve (MCP server)
+```bash
+cartog serve                    # MCP server over stdio
+cartog serve --watch            # with background file watcher
+cartog serve --watch --rag      # watcher + deferred RAG embedding
+```
+
 ## JSON Output
 
 All commands support `--json` for structured output:
 ```bash
 cartog --json refs validate_token
 cartog --json outline src/auth/tokens.py
+cartog --json rag search "authentication"
 ```
 
 ## Refactoring Workflow
@@ -137,17 +206,20 @@ Before changing any symbol (rename, extract, move, delete):
 ## Decision Heuristics
 
 | I need to... | Use |
-|-------------|-----|
-| Discover symbols matching a partial name | `cartog search <query>` |
-| Find where a symbol is defined | `cartog search <query>` then `cartog outline <file>` |
+|---|---|
+| Find a symbol by exact/partial name | `cartog search <name>` |
+| Find code by concept or behavior | `cartog rag search "description"` |
+| Broad keyword, unsure which to use | Both `search` + `rag search` in parallel |
+| Too many results from `search` | Narrow with `rag search "more specific description"` |
 | Know what's in a file | `cartog outline <file>` |
-| Find usages of a function | `cartog refs <name>` (use `--kind calls` for just callers) |
-| Understand what a function does at a high level | `cartog callees <name>` |
-| Check if a change is safe | `cartog impact <name>` |
+| Find usages of a function | `cartog refs <name>` (`--kind calls` for just callers) |
+| See what a function calls | `cartog callees <name>` |
+| Check if a change is safe | `cartog impact <name> --depth 3` |
 | Understand class hierarchy | `cartog hierarchy <class>` |
 | See file dependencies | `cartog deps <file>` |
-| Read actual implementation logic | `cat <file>` (cartog can't help here) |
-| Search for string literals / config | `grep` (cartog indexes structure, not content) |
+| Read actual implementation logic | `cat <file>` (cartog indexes structure, not content) |
+| Search for string literals / config | `grep` (cartog doesn't index these) |
+| Nothing from search or rag | Fall back to `grep` |
 
 ## Limitations
 
@@ -155,3 +227,10 @@ Before changing any symbol (rename, extract, move, delete):
 - Currently supports: Python, TypeScript/JavaScript, Rust, Go, Ruby. Java planned.
 - Does not index string literals, comments (except docstrings), or config values.
 - Method resolution is name-based — `foo.bar()` resolves `bar`, not `Foo.bar` specifically.
+
+### RAG search limitations
+
+- **No substring matching**: `"valid"` does NOT match `validate_token`. FTS5 is token-based. Use `cartog search` for substring matches (this is why parallel routing is valuable).
+- **Requires setup**: if `cartog rag setup` was not run, `rag search` is unavailable.
+- **Scores are relative**: `rrf_score` and `rerank_score` values are only meaningful for ranking within a single query — don't compare scores across different queries.
+- **Re-ranking latency**: cross-encoder scores all candidates in a single batch ONNX call (up to 50 candidates). Expect ~150-500ms total overhead depending on candidate count.

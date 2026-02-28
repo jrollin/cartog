@@ -40,11 +40,12 @@ All fixtures model the same domain (auth service, tokens, routes, middleware, da
 | 10 | "High-fanout: who uses get_logger?" | `refs` (precise call sites) vs grep (every mention) |
 | 11 | "Deep call chain (5+ hops)" | Sequential `callees` x6 vs 6 grep rounds with noise |
 | 12 | "Deep impact at depth 5" | `impact --depth 5` (transitive BFS) vs flat grep |
+| 13 | "Find authentication logic" | `rag search` (FTS5 + vector KNN + reranker) vs grep keywords |
 
 ## Usage
 
 ```bash
-# Run all scenarios (01-12) across all 5 languages
+# Run all scenarios (01-13) across all 5 languages
 ./benchmarks/run.sh
 
 # Run single scenario

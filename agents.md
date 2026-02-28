@@ -11,7 +11,7 @@ See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/
 ```bash
 cargo build              # debug build
 cargo build --release    # release build
-cargo test               # run all tests (156 unit tests)
+cargo test               # run all tests (271 tests)
 cargo fmt --check        # check formatting
 cargo clippy --all-targets -- -D warnings  # lint
 ```
@@ -23,10 +23,11 @@ Always run `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` b
 ```bash
 make check            # all checks (Rust project + fixture codebases)
 make check-rust       # cargo fmt + clippy + test
-make check-fixtures   # validate all 5 fixture codebases (py, go, rs, rb)
+make check-fixtures   # validate all 4 fixture codebases (py, go, rs, rb)
 make check-ts         # TypeScript fixtures (requires npx/tsc)
-make bench            # shell benchmark suite (12 scenarios x 5 languages)
+make bench            # shell benchmark suite (13 scenarios x 5 languages)
 make bench-criterion  # Rust criterion benchmarks (query latency)
+make bench-rag        # RAG relevancy benchmarks (in-memory + shell scenario 13)
 ```
 
 Run `make check` before committing benchmark fixture changes.
@@ -43,15 +44,27 @@ Run `make check` before committing benchmark fixture changes.
 ```
 main.rs → cli.rs (clap) → command handlers (sync)
                          ↓
-              indexer.rs (walk + extract + store)
+              indexer.rs (walk + extract + store + symbol content)
               ├── languages/*.rs (tree-sitter extractors)
-              ├── db.rs (SQLite)
+              ├── db.rs (SQLite: core schema + RAG schema)
               └── types.rs (shared structs)
 
+         → Rag → rag/setup.rs (model download via fastembed auto-download)
+              → rag/embeddings.rs (ONNX Runtime inference via fastembed)
+              → rag/indexer.rs (embed symbols → sqlite-vec)
+              → rag/search.rs (FTS5 + vector KNN → RRF merge)
+              → rag/reranker.rs (cross-encoder re-ranking via fastembed)
+
+         → Watch → watch.rs (file watcher, debounced re-index + deferred RAG)
+              ├── notify-debouncer-mini (kqueue/inotify/ReadDirectoryChangesW)
+              ├── WatchConfig (debounce, rag, rag_delay)
+              └── run_watch() / spawn_watch() (foreground / background)
+
          → Serve → mcp.rs (MCP server over stdio, async via tokio)
-              ├── CartogServer (9 tool handlers)
+              ├── CartogServer (11 tool handlers: 9 core + 2 RAG)
               ├── Path validation (CWD subtree restriction)
-              └── spawn_blocking → db.rs / indexer.rs (sync)
+              ├── --watch flag → spawn_watch() background thread
+              └── spawn_blocking → db.rs / indexer.rs / rag (sync)
 ```
 
 Each language extractor implements the `Extractor` trait from `src/languages/mod.rs`:
@@ -88,5 +101,5 @@ The script bumps `Cargo.toml`, commits, tags `vX.Y.Z`, and pushes. The release w
 
 ## Current State
 
-- **Working**: Python, TypeScript/JavaScript, Rust, Go, Ruby extractors, SQLite storage, all 9 CLI commands + MCP server (`cartog serve`), incremental indexing (git-based + SHA-256 fallback), `--force` re-index flag, CI/CD pipelines, `EdgeKind::References` extraction (type annotations, decorators, exception types, composite literals, `new` expressions, rescue clause types), symbol search (`cartog search`)
+- **Working**: Python, TypeScript/JavaScript, Rust, Go, Ruby extractors, SQLite storage, all 9 CLI commands + MCP server (`cartog serve`, 11 tools: 9 core + 2 RAG), incremental indexing (git-based + SHA-256 fallback), `--force` re-index flag, CI/CD pipelines, `EdgeKind::References` extraction (type annotations, decorators, exception types, composite literals, `new` expressions, rescue clause types), symbol search (`cartog search`), RAG semantic search (`cartog rag` subcommand group: setup/index/search), hybrid FTS5+vector search with RRF merge, fastembed ONNX Runtime embeddings (`BAAI/bge-small-en-v1.5`), sqlite-vec vector storage, cross-encoder re-ranking (`BAAI/bge-reranker-base` via fastembed, batch scoring, auto-enabled when model downloaded via `cartog rag setup`), shared model cache (`~/.cache/cartog/models`, XDG-compliant), file watcher (`cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding)
 - **Pending**: Java extractor
