@@ -17,22 +17,23 @@ Code is a graph of relationships (calls, imports, inherits, type references). Pr
 
 ## Key Features
 
-- **Zero dependencies**: Single binary + SQLite file. No language server, no embedding model, no graph DB.
+- **Zero dependencies**: Single binary + SQLite file. No language server, no graph DB.
 - **Works everywhere**: Claude.ai (as skill), Claude Code (as skill or MCP), any LLM with bash access.
 - **Instant queries**: Pre-computed graph, microsecond lookups.
 - **Incremental indexing**: Git-based change detection, only re-indexes modified files.
+- **Semantic search (opt-in)**: Hybrid FTS5 keyword + vector similarity search over code symbols, with optional cross-encoder re-ranking. ONNX Runtime inference via fastembed. Models auto-downloaded via `cartog rag setup`.
 
 ## Differentiation
 
 | vs Serena MCP | vs codanna | vs Aider |
 |---------------|-----------|----------|
-| No LSP process needed | No embedding model (150MB) | Pre-computed graph, not per-query |
+| No LSP process needed | Optional embedding model | Pre-computed graph, not per-query |
 | Works in claude.ai | No MCP server required | SQLite vs in-memory NetworkX |
-| Single binary | Deterministic results | Full query interface |
+| Single binary | Deterministic + semantic results | Full query interface |
 
 ## Trade-off
 
-Structural/heuristic name resolution, not full semantic. 90% accuracy — enough for most navigation tasks. LSP can be added as optional precision layer later.
+Structural/heuristic name resolution, not full semantic. 90% accuracy — enough for most navigation tasks. LSP can be added as optional precision layer later. Semantic search adds neural embeddings for natural language queries over code.
 
 ## Distribution
 

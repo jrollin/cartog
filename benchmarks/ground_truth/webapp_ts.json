@@ -666,6 +666,20 @@
       }
     ]
   },
+  "13_rag_search": {
+    "description": "Semantic search: validate token",
+    "query": "rag search \"validate token\"",
+    "expected": [
+      { "name": "validateToken" },
+      { "name": "verifyToken" },
+      { "name": "TokenError" },
+      { "name": "ExpiredTokenError" },
+      { "name": "extractToken" },
+      { "name": "generateToken" },
+      { "name": "refreshToken" },
+      { "name": "ValidationError" }
+    ]
+  },
   "12_deep_impact": {
     "description": "Deep impact of DatabaseConnection (depth 5)",
     "query": "impact DatabaseConnection --depth 5",

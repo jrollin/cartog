@@ -32,30 +32,40 @@ Type "cartog index ."
 Enter
 Sleep 2s
 
-# Step 2: Search
+# Step 2: Keyword search (fast, symbol names)
 Type ""
 Enter
-Type "# Step 2: Find symbols by name"
+Type "# Step 2: Find symbols by name (sub-millisecond)"
 Enter
 Sleep 500ms
 Type "cartog search validate"
 Enter
 Sleep 3s
 
-# Step 3: Refs
+# Step 3: Semantic search (natural language)
 Type ""
 Enter
-Type "# Step 3: Who calls validate_token?"
+Type "# Step 3: Find code by concept (semantic search)"
 Enter
 Sleep 500ms
-Type "cartog refs validate_token"
+Type 'cartog rag search "authentication token validation"'
+Enter
+Sleep 4s
+
+# Step 4: Refs
+Type ""
+Enter
+Type "# Step 4: Who calls validate_token?"
+Enter
+Sleep 500ms
+Type "cartog refs validate_token --kind calls"
 Enter
 Sleep 3s
 
-# Step 4: Impact
+# Step 5: Impact
 Type ""
 Enter
-Type "# Step 4: What breaks if I change it?"
+Type "# Step 5: What breaks if I change it?"
 Enter
 Sleep 500ms
 Type "cartog impact validate_token --depth 3"

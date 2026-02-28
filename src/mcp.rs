@@ -16,7 +16,9 @@ use tracing::{debug, info};
 
 use crate::db::{Database, DB_FILE, MAX_SEARCH_LIMIT};
 use crate::indexer;
+use crate::rag;
 use crate::types::EdgeKind;
+use crate::watch::{self, WatchConfig, WatchHandle};
 
 const MAX_IMPACT_DEPTH: u32 = 10;
 
@@ -85,6 +87,26 @@ pub struct SearchParams {
     /// Filter to a specific file path relative to project root
     pub file: Option<String>,
     /// Maximum results to return (default 30, max 100)
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RagIndexParams {
+    /// Directory to index relative to project root (defaults to ".")
+    #[serde(default = "default_dot")]
+    pub path: String,
+    /// Force re-embed all symbols (ignore existing embeddings)
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RagSearchParams {
+    /// Natural language query for semantic code search
+    pub query: String,
+    /// Filter by symbol kind: function, class, method, variable
+    pub kind: Option<String>,
+    /// Maximum results to return (default 10)
     pub limit: Option<u32>,
 }
 
@@ -506,6 +528,84 @@ impl CartogServer {
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
     }
+
+    /// Build embedding index for semantic code search.
+    #[tool(
+        description = "Build embedding index for semantic code search. Requires the embedding model to be downloaded first (run 'cartog rag setup' from CLI). Embeds all code symbols for vector similarity search."
+    )]
+    async fn cartog_rag_index(
+        &self,
+        Parameters(params): Parameters<RagIndexParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let path = params.path;
+        let force = params.force;
+        let db = Arc::clone(&self.db);
+        let cwd = Arc::clone(&self.cwd);
+
+        tokio::task::spawn_blocking(move || {
+            let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
+            debug!(path = %validated.display(), force, "rag index");
+
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+
+            // Ensure the code graph index is up to date first
+            let _ = indexer::index_directory(&db, &validated, false)
+                .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
+
+            let result = rag::indexer::index_embeddings(&db, force)
+                .map_err(|e| mcp_err(format!("embedding indexing failed: {e}")))?;
+
+            let json = serde_json::to_string_pretty(&result)
+                .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            Ok(CallToolResult::success(vec![Content::text(json)]))
+        })
+        .await
+        .map_err(|e| mcp_err(format!("task join failed: {e}")))?
+    }
+
+    /// Semantic search over code symbols using hybrid FTS5 + vector search.
+    #[tool(
+        description = "Semantic search over code symbols. Combines keyword (FTS5/BM25) and vector similarity search with Reciprocal Rank Fusion. Returns ranked code symbols with content. Use for natural language queries about code functionality."
+    )]
+    async fn cartog_rag_search(
+        &self,
+        Parameters(params): Parameters<RagSearchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let query = params.query;
+        let kind_str = params.kind;
+        let limit = params.limit.unwrap_or(10).min(MAX_SEARCH_LIMIT);
+        let db = Arc::clone(&self.db);
+
+        tokio::task::spawn_blocking(move || {
+            if query.is_empty() {
+                return Err(mcp_err("query cannot be empty"));
+            }
+
+            debug!(query = %query, kind = ?kind_str, limit, "rag search");
+            let db = db.lock().map_err(|_| mcp_err("database lock poisoned"))?;
+
+            let kind_filter = match kind_str {
+                Some(kind_s) => {
+                    let kind = kind_s.parse::<crate::types::SymbolKind>().map_err(|_| {
+                        mcp_err(
+                            "invalid symbol kind. Valid: function, class, method, variable, import",
+                        )
+                    })?;
+                    Some(kind)
+                }
+                None => None,
+            };
+
+            let result = rag::search::hybrid_search(&db, &query, limit, kind_filter)
+                .map_err(|e| mcp_err(format!("semantic search failed: {e}")))?;
+
+            let json = serde_json::to_string_pretty(&result)
+                .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            json_response(&db, json)
+        })
+        .await
+        .map_err(|e| mcp_err(format!("task join failed: {e}")))?
+    }
 }
 
 #[tool_handler]
@@ -519,7 +619,7 @@ impl ServerHandler for CartogServer {
                 version: env!("CARGO_PKG_VERSION").into(),
             },
             instructions: Some(
-                "cartog is a code graph indexer. It pre-computes a graph of symbols \
+                "cartog is a code graph indexer with semantic search. It pre-computes a graph of symbols \
                  (functions, classes, methods, imports) and edges (calls, imports, inherits, \
                  type references, raises) using tree-sitter, stored in SQLite.\n\n\
                   Workflow:\n\
@@ -530,6 +630,10 @@ impl ServerHandler for CartogServer {
                   5. Use cartog_impact before refactoring to assess blast radius.\n\
                   6. Re-run cartog_index after making code changes to keep the graph current.\n\
                   7. Only fall back to reading files when you need actual implementation logic.\n\n\
+                  Semantic search (if embedding model is installed):\n\
+                  - Run cartog_rag_index to build the embedding index (after cartog_index).\n\
+                  - Use cartog_rag_search for natural language queries about code functionality.\n\
+                  - Combines keyword (BM25) and vector similarity search for best results.\n\n\
                  Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby."
                     .into(),
             ),
@@ -538,13 +642,36 @@ impl ServerHandler for CartogServer {
 }
 
 /// Start the MCP server over stdio.
-pub async fn run_server() -> anyhow::Result<()> {
+///
+/// When `watch` is true, a background file watcher keeps the index fresh.
+/// When `rag` is true (requires `watch`), embeddings are also auto-updated.
+pub async fn run_server(watch: bool, rag: bool) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
+
+    // Optionally spawn a background file watcher
+    let _watch_handle: Option<WatchHandle> = if watch {
+        let cwd = std::env::current_dir()?;
+        let mut config = WatchConfig::new(cwd);
+        config.rag = rag;
+        match watch::spawn_watch(config, DB_FILE) {
+            Ok(handle) => {
+                info!(rag, "background file watcher started");
+                Some(handle)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to start background watcher, continuing without it");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let server = CartogServer::new()?;
     let service = server.serve(stdio()).await?;
     service.waiting().await?;
 
+    // WatchHandle is dropped here, signaling the watcher thread to stop.
     info!("cartog MCP server stopped");
     Ok(())
 }

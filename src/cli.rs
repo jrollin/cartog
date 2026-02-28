@@ -137,6 +137,68 @@ pub enum Command {
         limit: u32,
     },
 
+    /// Watch for file changes and auto-re-index
+    Watch {
+        /// Directory to watch (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Debounce window in seconds
+        #[arg(long, default_value = "2")]
+        debounce: u64,
+
+        /// Enable automatic RAG embedding after index
+        #[arg(long)]
+        rag: bool,
+
+        /// Delay in seconds before batch embedding after last index
+        #[arg(long, default_value = "30")]
+        rag_delay: u64,
+    },
+
     /// Start MCP server over stdio (for Claude Code, Cursor, and other MCP clients)
-    Serve,
+    Serve {
+        /// Enable file watching with auto-re-index during MCP session
+        #[arg(long)]
+        watch: bool,
+
+        /// Enable automatic RAG embedding when watching
+        #[arg(long)]
+        rag: bool,
+    },
+
+    /// Semantic code search (RAG pipeline)
+    #[command(subcommand)]
+    Rag(RagCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RagCommand {
+    /// Download embedding + re-ranker models from HuggingFace
+    Setup,
+
+    /// Build embedding index for semantic search (requires setup first)
+    Index {
+        /// Directory to index (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Force re-embed all symbols
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Semantic search over code symbols
+    Search {
+        /// Natural language query
+        query: String,
+
+        /// Filter by symbol kind
+        #[arg(long)]
+        kind: Option<SymbolKindFilter>,
+
+        /// Maximum results to return
+        #[arg(long, default_value = "10")]
+        limit: u32,
+    },
 }

@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
+use rusqlite::ffi::sqlite3_auto_extension;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+use sqlite_vec::sqlite3_vec_init;
 use tracing::warn;
 
 use crate::types::{Edge, EdgeKind, FileInfo, Symbol, SymbolKind, Visibility};
@@ -65,12 +67,113 @@ CREATE INDEX IF NOT EXISTS idx_edges_target_id ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
 "#;
 
+/// Schema for RAG semantic search tables.
+///
+/// - `symbol_content`: stores raw source code for each symbol (extracted via byte offsets)
+/// - `symbol_fts`: FTS5 virtual table for keyword/BM25 search over symbol names and content
+/// - `symbol_embedding_map`: maps integer rowids (for sqlite-vec) to symbol IDs
+/// - `symbol_vec`: sqlite-vec virtual table for vector KNN search (384-dim float32)
+const RAG_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS symbol_content (
+    symbol_id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    header TEXT NOT NULL,
+    normalized_name TEXT NOT NULL DEFAULT ''
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS symbol_fts USING fts5(
+    symbol_name,
+    normalized_name,
+    content,
+    content=symbol_content,
+    content_rowid=rowid
+);
+
+-- Triggers to keep FTS5 in sync with symbol_content
+CREATE TRIGGER IF NOT EXISTS symbol_content_ai AFTER INSERT ON symbol_content BEGIN
+    INSERT INTO symbol_fts(rowid, symbol_name, normalized_name, content)
+    VALUES (new.rowid, (SELECT name FROM symbols WHERE id = new.symbol_id), new.normalized_name, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS symbol_content_ad AFTER DELETE ON symbol_content BEGIN
+    INSERT INTO symbol_fts(symbol_fts, rowid, symbol_name, normalized_name, content)
+    VALUES ('delete', old.rowid, (SELECT name FROM symbols WHERE id = old.symbol_id), old.normalized_name, old.content);
+END;
+
+CREATE TABLE IF NOT EXISTS symbol_embedding_map (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol_id TEXT NOT NULL UNIQUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_embedding_map_symbol ON symbol_embedding_map(symbol_id);
+"#;
+
+/// SQL to create the sqlite-vec virtual table (must run after sqlite-vec extension is loaded).
+const RAG_VEC_SCHEMA: &str =
+    "CREATE VIRTUAL TABLE IF NOT EXISTS symbol_vec USING vec0(embedding float[384])";
+
 /// Default database filename, stored in the project root.
 pub const DB_FILE: &str = ".cartog.db";
 
 /// Maximum number of results returned by [`Database::search`].
 /// Enforced here and referenced by CLI and MCP layers.
 pub const MAX_SEARCH_LIMIT: u32 = 100;
+
+/// Split a symbol name into lowercase words for FTS5 indexing.
+///
+/// Handles camelCase, PascalCase, snake_case, SCREAMING_SNAKE_CASE, and
+/// mixed conventions. Examples:
+/// - `validateToken` → `"validate token"`
+/// - `DatabaseConnection` → `"database connection"`
+/// - `validate_token` → `"validate token"`
+/// - `TOKEN_EXPIRY` → `"token expiry"`
+/// - `getHTTPResponse` → `"get http response"`
+/// - `__init__` → `"init"`
+pub fn normalize_symbol_name(name: &str) -> String {
+    let mut words = Vec::new();
+    let mut current = String::new();
+
+    let chars: Vec<char> = name.chars().collect();
+    let len = chars.len();
+
+    for i in 0..len {
+        let c = chars[i];
+
+        if c == '_' || c == '-' {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+
+        if c.is_uppercase() {
+            let next_is_lower = i + 1 < len && chars[i + 1].is_lowercase();
+            let prev_is_lower = !current.is_empty() && chars[i - 1].is_lowercase();
+
+            if prev_is_lower {
+                // camelCase boundary: `validateT` → split before T
+                words.push(std::mem::take(&mut current));
+            } else if !current.is_empty() && next_is_lower {
+                // SCREAMING to PascalCase boundary: `HTTPResponse` → split before R
+                words.push(std::mem::take(&mut current));
+            }
+            current.push(c.to_lowercase().next().unwrap());
+        } else if c.is_alphanumeric() {
+            current.push(c.to_lowercase().next().unwrap());
+        } else {
+            // Non-alphanumeric (other than _ and -): treat as separator
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        words.push(current);
+    }
+
+    words.join(" ")
+}
 
 pub struct Database {
     conn: Connection,
@@ -82,9 +185,23 @@ impl std::fmt::Debug for Database {
     }
 }
 
+/// Register the sqlite-vec extension globally.
+///
+/// Must be called once before opening any database connections.
+/// Safe to call multiple times (idempotent via `std::sync::Once`).
+pub fn register_sqlite_vec() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| unsafe {
+        #[allow(clippy::missing_transmute_annotations)]
+        sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+    });
+}
+
 impl Database {
     /// Open or create the database at the given path.
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        register_sqlite_vec();
         let conn = Connection::open(path.as_ref()).context("Failed to open database")?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -97,15 +214,22 @@ impl Database {
         .context("Failed to set pragmas")?;
         conn.execute_batch(SCHEMA)
             .context("Failed to create schema")?;
+        conn.execute_batch(RAG_SCHEMA)
+            .context("Failed to create RAG schema")?;
+        conn.execute_batch(RAG_VEC_SCHEMA)
+            .context("Failed to create sqlite-vec table")?;
         Ok(Self { conn })
     }
 
     /// Open an in-memory database (for tests and benchmarks).
     #[doc(hidden)]
     pub fn open_memory() -> Result<Self> {
+        register_sqlite_vec();
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(RAG_SCHEMA)?;
+        conn.execute_batch(RAG_VEC_SCHEMA)?;
         Ok(Self { conn })
     }
 
@@ -170,8 +294,9 @@ impl Database {
             .context("Failed to query file")
     }
 
-    /// Remove all symbols and edges for a file (before re-indexing it).
+    /// Remove all symbols, edges, and RAG data for a file (before re-indexing it).
     pub fn clear_file_data(&self, path: &str) -> Result<()> {
+        self.clear_rag_data_for_file(path)?;
         self.conn
             .execute("DELETE FROM edges WHERE file_path = ?1", params![path])?;
         self.conn
@@ -628,6 +753,371 @@ impl Database {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
+
+    // ── RAG: Symbol Content ──
+
+    /// Insert or replace symbol content (raw source + metadata header for embedding).
+    ///
+    /// `symbol_name` is used to compute a normalized form (camelCase/snake_case split)
+    /// stored in the FTS5 index for better keyword matching.
+    pub fn upsert_symbol_content(
+        &self,
+        symbol_id: &str,
+        symbol_name: &str,
+        content: &str,
+        header: &str,
+    ) -> Result<()> {
+        let normalized = normalize_symbol_name(symbol_name);
+        self.conn.execute(
+            "INSERT OR REPLACE INTO symbol_content (symbol_id, content, header, normalized_name)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![symbol_id, content, header, normalized],
+        )?;
+        Ok(())
+    }
+
+    /// Insert multiple symbol contents in a single transaction.
+    ///
+    /// Tuples: `(symbol_id, symbol_name, content, header)`.
+    pub fn insert_symbol_contents(&self, items: &[(String, String, String, String)]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut stmt = self.conn.prepare_cached(
+            "INSERT OR REPLACE INTO symbol_content (symbol_id, content, header, normalized_name)
+             VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        for (symbol_id, name, content, header) in items {
+            let normalized = normalize_symbol_name(name);
+            stmt.execute(params![symbol_id, content, header, normalized])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Remove symbol content for all symbols in a file.
+    pub fn clear_symbol_content_for_file(&self, file_path: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM symbol_content WHERE symbol_id IN
+             (SELECT id FROM symbols WHERE file_path = ?1)",
+            params![file_path],
+        )?;
+        Ok(())
+    }
+
+    /// Get the content + header for a symbol.
+    pub fn get_symbol_content(&self, symbol_id: &str) -> Result<Option<(String, String)>> {
+        self.conn
+            .query_row(
+                "SELECT content, header FROM symbol_content WHERE symbol_id = ?1",
+                params![symbol_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .context("Failed to query symbol content")
+    }
+
+    /// Batch fetch content + header for multiple symbols.
+    ///
+    /// Returns a map of `symbol_id → (content, header)` for all found symbols.
+    pub fn get_symbol_contents_batch(
+        &self,
+        symbol_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, (String, String)>> {
+        let mut result = std::collections::HashMap::with_capacity(symbol_ids.len());
+        if symbol_ids.is_empty() {
+            return Ok(result);
+        }
+        let placeholders: Vec<&str> = symbol_ids.iter().map(|_| "?").collect();
+        let sql = format!(
+            "SELECT symbol_id, content, header FROM symbol_content WHERE symbol_id IN ({})",
+            placeholders.join(",")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<Box<dyn rusqlite::types::ToSql>> = symbol_ids
+            .iter()
+            .map(|id| Box::new(id.clone()) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for (id, content, header) in rows {
+            result.insert(id, (content, header));
+        }
+        Ok(result)
+    }
+
+    // ── RAG: FTS5 Search ──
+
+    /// Full-text search over symbol names and content using BM25 ranking.
+    ///
+    /// Returns symbol IDs ordered by relevance (best match first).
+    pub fn fts5_search(&self, query: &str, limit: u32) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sc.symbol_id
+             FROM symbol_fts f
+             JOIN symbol_content sc ON sc.rowid = f.rowid
+             WHERE symbol_fts MATCH ?1
+             ORDER BY rank
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![query, limit], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    // ── RAG: Embedding Map ──
+
+    /// Get or create an integer ID for a symbol in the embedding map.
+    ///
+    /// Returns the `id` (integer rowid) used as key in the vec0 virtual table.
+    pub fn get_or_create_embedding_id(&self, symbol_id: &str) -> Result<i64> {
+        // Try to get existing
+        let existing: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM symbol_embedding_map WHERE symbol_id = ?1",
+                params![symbol_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+
+        // Insert new
+        self.conn.execute(
+            "INSERT INTO symbol_embedding_map (symbol_id) VALUES (?1)",
+            params![symbol_id],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Look up the symbol ID for an embedding map rowid.
+    pub fn symbol_id_for_embedding(&self, embedding_id: i64) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT symbol_id FROM symbol_embedding_map WHERE id = ?1",
+                params![embedding_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("Failed to query embedding map")
+    }
+
+    /// Batch look up symbol IDs for multiple embedding map rowids.
+    pub fn symbol_ids_for_embeddings(&self, embedding_ids: &[i64]) -> Result<Vec<(i64, String)>> {
+        if embedding_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Use a temporary approach for variable-length IN clause
+        let placeholders: Vec<String> = embedding_ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "SELECT id, symbol_id FROM symbol_embedding_map WHERE id IN ({})",
+            placeholders.join(",")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<Box<dyn rusqlite::types::ToSql>> = embedding_ids
+            .iter()
+            .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    // ── RAG: Vector Storage (sqlite-vec) ──
+
+    /// Insert or replace an embedding vector for a symbol.
+    ///
+    /// `embedding_id` is the integer key from `symbol_embedding_map`.
+    /// `embedding` is a 384-dim f32 vector serialized as little-endian bytes.
+    pub fn upsert_embedding(&self, embedding_id: i64, embedding: &[u8]) -> Result<()> {
+        // Delete existing entry if any (vec0 doesn't support REPLACE)
+        self.conn.execute(
+            "DELETE FROM symbol_vec WHERE rowid = ?1",
+            params![embedding_id],
+        )?;
+        self.conn.execute(
+            "INSERT INTO symbol_vec (rowid, embedding) VALUES (?1, ?2)",
+            params![embedding_id, embedding],
+        )?;
+        Ok(())
+    }
+
+    /// Insert multiple embeddings in a single transaction.
+    pub fn insert_embeddings(&self, items: &[(i64, Vec<u8>)]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for (id, embedding) in items {
+            self.conn
+                .execute("DELETE FROM symbol_vec WHERE rowid = ?1", params![id])?;
+            self.conn.execute(
+                "INSERT INTO symbol_vec (rowid, embedding) VALUES (?1, ?2)",
+                params![id, embedding],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// KNN vector search: find the `limit` nearest neighbors to `query_embedding`.
+    ///
+    /// Returns `(embedding_id, distance)` pairs ordered by distance (ascending).
+    pub fn vector_search(&self, query_embedding: &[u8], limit: u32) -> Result<Vec<(i64, f64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT rowid, distance
+             FROM symbol_vec
+             WHERE embedding MATCH ?1
+             ORDER BY distance
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![query_embedding, limit], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Count the number of embeddings stored.
+    pub fn embedding_count(&self) -> Result<u32> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM symbol_embedding_map", [], |row| {
+                row.get(0)
+            })?)
+    }
+
+    /// Check if a symbol already has an embedding.
+    pub fn has_embedding(&self, symbol_id: &str) -> Result<bool> {
+        let map_id: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM symbol_embedding_map WHERE symbol_id = ?1",
+                params![symbol_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(id) = map_id {
+            let exists: bool = self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM symbol_vec WHERE rowid = ?1)",
+                params![id],
+                |row| row.get(0),
+            )?;
+            Ok(exists)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Remove all RAG data (content, FTS, embeddings, embedding map) for symbols in a file.
+    pub fn clear_rag_data_for_file(&self, file_path: &str) -> Result<()> {
+        // Delete embeddings via the map
+        self.conn.execute(
+            "DELETE FROM symbol_vec WHERE rowid IN
+             (SELECT em.id FROM symbol_embedding_map em
+              JOIN symbols s ON em.symbol_id = s.id
+              WHERE s.file_path = ?1)",
+            params![file_path],
+        )?;
+        // Delete embedding map entries
+        self.conn.execute(
+            "DELETE FROM symbol_embedding_map WHERE symbol_id IN
+             (SELECT id FROM symbols WHERE file_path = ?1)",
+            params![file_path],
+        )?;
+        // Delete content (triggers will clean up FTS)
+        self.clear_symbol_content_for_file(file_path)?;
+        Ok(())
+    }
+
+    /// Get a symbol by its ID.
+    pub fn get_symbol(&self, id: &str) -> Result<Option<Symbol>> {
+        self.conn
+            .query_row(
+                "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
+                        parent_id, signature, visibility, is_async, docstring
+                 FROM symbols WHERE id = ?1",
+                params![id],
+                row_to_symbol,
+            )
+            .optional()
+            .context("Failed to query symbol")
+    }
+
+    /// Get multiple symbols by their IDs, preserving order.
+    pub fn get_symbols_by_ids(&self, ids: &[String]) -> Result<Vec<Symbol>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut result = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(sym) = self.get_symbol(id)? {
+                result.push(sym);
+            }
+        }
+        Ok(result)
+    }
+
+    /// Get all symbol IDs that have content stored but no embedding yet.
+    ///
+    /// Variables are excluded — they are too numerous and low-signal for embedding.
+    pub fn symbols_needing_embeddings(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sc.symbol_id FROM symbol_content sc
+             JOIN symbols s ON s.id = sc.symbol_id
+             WHERE s.kind != ?1
+             AND NOT EXISTS (
+                 SELECT 1 FROM symbol_embedding_map em
+                 JOIN symbol_vec sv ON sv.rowid = em.id
+                 WHERE em.symbol_id = sc.symbol_id
+             )",
+        )?;
+        let rows = stmt
+            .query_map(params![SymbolKind::Variable.as_str()], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Count symbols that have content stored.
+    pub fn symbol_content_count(&self) -> Result<u32> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM symbol_content", [], |row| row.get(0))?)
+    }
+
+    /// Get all symbol IDs that have content stored (excluding variables).
+    pub fn all_content_symbol_ids(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sc.symbol_id FROM symbol_content sc
+             JOIN symbols s ON s.id = sc.symbol_id
+             WHERE s.kind != ?1
+             ORDER BY sc.symbol_id",
+        )?;
+        let rows = stmt
+            .query_map(params![SymbolKind::Variable.as_str()], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Clear all embedding data (for force re-embed).
+    pub fn clear_all_embeddings(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM symbol_vec", [])?;
+        self.conn.execute("DELETE FROM symbol_embedding_map", [])?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -695,6 +1185,65 @@ mod tests {
 
     fn test_symbol(name: &str, kind: SymbolKind, file: &str, line: u32) -> Symbol {
         Symbol::new(name, kind, file, line, line + 5, 0, 100)
+    }
+
+    // ── normalize_symbol_name tests ──
+
+    #[test]
+    fn test_normalize_snake_case() {
+        assert_eq!(normalize_symbol_name("validate_token"), "validate token");
+        assert_eq!(
+            normalize_symbol_name("get_current_user"),
+            "get current user"
+        );
+        assert_eq!(normalize_symbol_name("_private_method"), "private method");
+        assert_eq!(normalize_symbol_name("__init__"), "init");
+    }
+
+    #[test]
+    fn test_normalize_camel_case() {
+        assert_eq!(normalize_symbol_name("validateToken"), "validate token");
+        assert_eq!(normalize_symbol_name("getCurrentUser"), "get current user");
+        assert_eq!(normalize_symbol_name("findByToken"), "find by token");
+    }
+
+    #[test]
+    fn test_normalize_pascal_case() {
+        assert_eq!(
+            normalize_symbol_name("DatabaseConnection"),
+            "database connection"
+        );
+        assert_eq!(normalize_symbol_name("AuthService"), "auth service");
+        assert_eq!(normalize_symbol_name("TokenError"), "token error");
+    }
+
+    #[test]
+    fn test_normalize_screaming_snake() {
+        assert_eq!(normalize_symbol_name("TOKEN_EXPIRY"), "token expiry");
+        assert_eq!(normalize_symbol_name("MAX_RETRY_COUNT"), "max retry count");
+    }
+
+    #[test]
+    fn test_normalize_acronyms() {
+        assert_eq!(
+            normalize_symbol_name("getHTTPResponse"),
+            "get http response"
+        );
+        assert_eq!(normalize_symbol_name("parseJSON"), "parse json");
+        assert_eq!(normalize_symbol_name("HTMLParser"), "html parser");
+    }
+
+    #[test]
+    fn test_normalize_single_word() {
+        assert_eq!(normalize_symbol_name("validate"), "validate");
+        assert_eq!(normalize_symbol_name("Token"), "token");
+    }
+
+    #[test]
+    fn test_normalize_empty_and_special() {
+        assert_eq!(normalize_symbol_name(""), "");
+        assert_eq!(normalize_symbol_name("_"), "");
+        assert_eq!(normalize_symbol_name("___"), "");
     }
 
     #[test]
@@ -1228,5 +1777,395 @@ mod tests {
 
         let results = db.search("%", None, None, 20).unwrap();
         assert!(results.is_empty(), "% should not act as a wildcard");
+    }
+
+    // ── RAG: Symbol Content Tests ──
+
+    #[test]
+    fn test_upsert_and_get_symbol_content() {
+        let db = Database::open_memory().unwrap();
+        let sym = test_symbol("my_func", SymbolKind::Function, "a.py", 1);
+        db.insert_symbol(&sym).unwrap();
+
+        db.upsert_symbol_content(
+            &sym.id,
+            "my_func",
+            "def my_func(): pass",
+            "// File: a.py\n// Type: function\n// Name: my_func",
+        )
+        .unwrap();
+
+        let result = db.get_symbol_content(&sym.id).unwrap();
+        assert!(result.is_some());
+        let (content, header) = result.unwrap();
+        assert_eq!(content, "def my_func(): pass");
+        assert!(header.contains("my_func"));
+    }
+
+    #[test]
+    fn test_insert_symbol_contents_batch() {
+        let db = Database::open_memory().unwrap();
+        let sym1 = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        let sym2 = test_symbol("bar", SymbolKind::Function, "a.py", 10);
+        db.insert_symbols(&[sym1.clone(), sym2.clone()]).unwrap();
+
+        let items = vec![
+            (
+                sym1.id.clone(),
+                "foo".to_string(),
+                "def foo(): pass".to_string(),
+                "header1".to_string(),
+            ),
+            (
+                sym2.id.clone(),
+                "bar".to_string(),
+                "def bar(): pass".to_string(),
+                "header2".to_string(),
+            ),
+        ];
+        db.insert_symbol_contents(&items).unwrap();
+
+        assert_eq!(db.symbol_content_count().unwrap(), 2);
+        assert!(db.get_symbol_content(&sym1.id).unwrap().is_some());
+        assert!(db.get_symbol_content(&sym2.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn test_clear_symbol_content_for_file() {
+        let db = Database::open_memory().unwrap();
+        let sym1 = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        let sym2 = test_symbol("bar", SymbolKind::Function, "b.py", 1);
+        db.insert_symbols(&[sym1.clone(), sym2.clone()]).unwrap();
+
+        db.upsert_symbol_content(&sym1.id, "foo", "content1", "header1")
+            .unwrap();
+        db.upsert_symbol_content(&sym2.id, "bar", "content2", "header2")
+            .unwrap();
+        assert_eq!(db.symbol_content_count().unwrap(), 2);
+
+        db.clear_symbol_content_for_file("a.py").unwrap();
+        assert_eq!(db.symbol_content_count().unwrap(), 1);
+        assert!(db.get_symbol_content(&sym1.id).unwrap().is_none());
+        assert!(db.get_symbol_content(&sym2.id).unwrap().is_some());
+    }
+
+    // ── RAG: FTS5 Tests ──
+
+    #[test]
+    fn test_fts5_search_by_content() {
+        let db = Database::open_memory().unwrap();
+        let sym = test_symbol("validate_token", SymbolKind::Function, "auth.py", 1);
+        db.insert_symbol(&sym).unwrap();
+
+        db.upsert_symbol_content(
+            &sym.id,
+            "validate_token",
+            "def validate_token(token: str) -> bool:\n    return token.is_valid()",
+            "// File: auth.py",
+        )
+        .unwrap();
+
+        // Search by content keyword
+        let results = db.fts5_search("\"validate\"", 10).unwrap();
+        assert!(!results.is_empty());
+        assert_eq!(results[0], sym.id);
+    }
+
+    #[test]
+    fn test_fts5_search_no_match() {
+        let db = Database::open_memory().unwrap();
+        let sym = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        db.insert_symbol(&sym).unwrap();
+        db.upsert_symbol_content(&sym.id, "foo", "def foo(): pass", "header")
+            .unwrap();
+
+        let results = db.fts5_search("\"nonexistent_term_xyz\"", 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ── RAG: Embedding Map Tests ──
+
+    #[test]
+    fn test_get_or_create_embedding_id() {
+        let db = Database::open_memory().unwrap();
+
+        let id1 = db.get_or_create_embedding_id("a.py:foo:1").unwrap();
+        let id2 = db.get_or_create_embedding_id("a.py:foo:1").unwrap();
+        let id3 = db.get_or_create_embedding_id("b.py:bar:5").unwrap();
+
+        assert_eq!(id1, id2, "same symbol should return same ID");
+        assert_ne!(id1, id3, "different symbols should get different IDs");
+    }
+
+    #[test]
+    fn test_symbol_id_for_embedding() {
+        let db = Database::open_memory().unwrap();
+        let eid = db.get_or_create_embedding_id("test:sym:1").unwrap();
+
+        let sym_id = db.symbol_id_for_embedding(eid).unwrap();
+        assert_eq!(sym_id, Some("test:sym:1".to_string()));
+
+        let none = db.symbol_id_for_embedding(99999).unwrap();
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn test_symbol_ids_for_embeddings_batch() {
+        let db = Database::open_memory().unwrap();
+        let eid1 = db.get_or_create_embedding_id("a:foo:1").unwrap();
+        let eid2 = db.get_or_create_embedding_id("b:bar:2").unwrap();
+
+        let results = db.symbol_ids_for_embeddings(&[eid1, eid2]).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    // ── RAG: Vector Storage Tests ──
+
+    #[test]
+    fn test_upsert_and_search_embedding() {
+        let db = Database::open_memory().unwrap();
+        let eid = db.get_or_create_embedding_id("a:foo:1").unwrap();
+
+        // Create a simple 384-dim vector
+        let mut embedding = vec![0.0f32; 384];
+        embedding[0] = 1.0;
+        let bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        db.upsert_embedding(eid, &bytes).unwrap();
+
+        // Search with a similar vector
+        let query = bytes.clone();
+        let results = db.vector_search(&query, 5).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, eid);
+        assert!(
+            results[0].1 < 0.01,
+            "self-match should have near-zero distance"
+        );
+    }
+
+    #[test]
+    fn test_insert_embeddings_batch() {
+        let db = Database::open_memory().unwrap();
+        let eid1 = db.get_or_create_embedding_id("a:foo:1").unwrap();
+        let eid2 = db.get_or_create_embedding_id("b:bar:2").unwrap();
+
+        let make_vec = |val: f32| -> Vec<u8> {
+            let v = vec![val; 384];
+            v.iter().flat_map(|f| f.to_le_bytes()).collect()
+        };
+
+        let items = vec![(eid1, make_vec(0.1)), (eid2, make_vec(0.9))];
+        db.insert_embeddings(&items).unwrap();
+
+        assert_eq!(db.embedding_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_has_embedding() {
+        let db = Database::open_memory().unwrap();
+        assert!(!db.has_embedding("nonexistent").unwrap());
+
+        let eid = db.get_or_create_embedding_id("a:foo:1").unwrap();
+        // Map exists but no vector yet
+        assert!(!db.has_embedding("a:foo:1").unwrap());
+
+        // Insert vector
+        let bytes: Vec<u8> = vec![0.0f32; 384]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        db.upsert_embedding(eid, &bytes).unwrap();
+        assert!(db.has_embedding("a:foo:1").unwrap());
+    }
+
+    #[test]
+    fn test_clear_all_embeddings() {
+        let db = Database::open_memory().unwrap();
+        let eid1 = db.get_or_create_embedding_id("a:foo:1").unwrap();
+        let eid2 = db.get_or_create_embedding_id("b:bar:2").unwrap();
+
+        let bytes: Vec<u8> = vec![0.0f32; 384]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        db.upsert_embedding(eid1, &bytes).unwrap();
+        db.upsert_embedding(eid2, &bytes).unwrap();
+        assert_eq!(db.embedding_count().unwrap(), 2);
+
+        db.clear_all_embeddings().unwrap();
+        assert_eq!(db.embedding_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_symbols_needing_embeddings() {
+        let db = Database::open_memory().unwrap();
+        let sym1 = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        let sym2 = test_symbol("bar", SymbolKind::Function, "a.py", 10);
+        db.insert_symbols(&[sym1.clone(), sym2.clone()]).unwrap();
+
+        // Add content for both
+        db.upsert_symbol_content(&sym1.id, "foo", "def foo(): pass", "header")
+            .unwrap();
+        db.upsert_symbol_content(&sym2.id, "bar", "def bar(): pass", "header")
+            .unwrap();
+
+        // Both need embeddings initially
+        let needing = db.symbols_needing_embeddings().unwrap();
+        assert_eq!(needing.len(), 2);
+
+        // Embed one
+        let eid = db.get_or_create_embedding_id(&sym1.id).unwrap();
+        let bytes: Vec<u8> = vec![0.0f32; 384]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        db.upsert_embedding(eid, &bytes).unwrap();
+
+        // Only one needs embedding now
+        let needing = db.symbols_needing_embeddings().unwrap();
+        assert_eq!(needing.len(), 1);
+        assert_eq!(needing[0], sym2.id);
+    }
+
+    #[test]
+    fn test_clear_rag_data_for_file() {
+        let db = Database::open_memory().unwrap();
+        let sym1 = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        let sym2 = test_symbol("bar", SymbolKind::Function, "b.py", 1);
+        db.insert_symbols(&[sym1.clone(), sym2.clone()]).unwrap();
+
+        db.upsert_symbol_content(&sym1.id, "foo", "content1", "header1")
+            .unwrap();
+        db.upsert_symbol_content(&sym2.id, "bar", "content2", "header2")
+            .unwrap();
+
+        let eid1 = db.get_or_create_embedding_id(&sym1.id).unwrap();
+        let eid2 = db.get_or_create_embedding_id(&sym2.id).unwrap();
+        let bytes: Vec<u8> = vec![0.0f32; 384]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        db.upsert_embedding(eid1, &bytes).unwrap();
+        db.upsert_embedding(eid2, &bytes).unwrap();
+
+        // Clear RAG data for a.py only
+        db.clear_rag_data_for_file("a.py").unwrap();
+
+        // a.py data gone
+        assert!(db.get_symbol_content(&sym1.id).unwrap().is_none());
+        assert!(!db.has_embedding(&sym1.id).unwrap());
+
+        // b.py data intact
+        assert!(db.get_symbol_content(&sym2.id).unwrap().is_some());
+        assert!(db.has_embedding(&sym2.id).unwrap());
+    }
+
+    #[test]
+    fn test_all_content_symbol_ids() {
+        let db = Database::open_memory().unwrap();
+        let sym1 = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        let sym2 = test_symbol("bar", SymbolKind::Function, "b.py", 1);
+        db.insert_symbols(&[sym1.clone(), sym2.clone()]).unwrap();
+
+        db.upsert_symbol_content(&sym1.id, "foo", "content1", "header1")
+            .unwrap();
+        db.upsert_symbol_content(&sym2.id, "bar", "content2", "header2")
+            .unwrap();
+
+        let all = db.all_content_symbol_ids().unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_symbols_needing_embeddings_excludes_variables() {
+        let db = Database::open_memory().unwrap();
+        let func = test_symbol("process", SymbolKind::Function, "a.py", 1);
+        let var = test_symbol("MAX_RETRIES", SymbolKind::Variable, "a.py", 10);
+        let cls = test_symbol("Service", SymbolKind::Class, "a.py", 20);
+        db.insert_symbols(&[func.clone(), var.clone(), cls.clone()])
+            .unwrap();
+
+        // Add content for all three
+        db.upsert_symbol_content(&func.id, "process", "def process(): pass", "header")
+            .unwrap();
+        db.upsert_symbol_content(&var.id, "MAX_RETRIES", "MAX_RETRIES = 3", "header")
+            .unwrap();
+        db.upsert_symbol_content(&cls.id, "Service", "class Service: pass", "header")
+            .unwrap();
+
+        // Only function and class should need embeddings (variable excluded)
+        let needing = db.symbols_needing_embeddings().unwrap();
+        assert_eq!(needing.len(), 2);
+        assert!(!needing.contains(&var.id), "variables should be excluded");
+        assert!(needing.contains(&func.id));
+        assert!(needing.contains(&cls.id));
+    }
+
+    #[test]
+    fn test_all_content_symbol_ids_excludes_variables() {
+        let db = Database::open_memory().unwrap();
+        let func = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        let var = test_symbol("MY_VAR", SymbolKind::Variable, "a.py", 10);
+        let method = test_symbol("bar", SymbolKind::Method, "a.py", 20);
+        db.insert_symbols(&[func.clone(), var.clone(), method.clone()])
+            .unwrap();
+
+        db.upsert_symbol_content(&func.id, "foo", "def foo(): pass", "header")
+            .unwrap();
+        db.upsert_symbol_content(&var.id, "MY_VAR", "MY_VAR = 42", "header")
+            .unwrap();
+        db.upsert_symbol_content(&method.id, "bar", "def bar(self): pass", "header")
+            .unwrap();
+
+        let all = db.all_content_symbol_ids().unwrap();
+        assert_eq!(all.len(), 2, "variables should be excluded");
+        assert!(!all.contains(&var.id));
+    }
+
+    #[test]
+    fn test_get_symbol_contents_batch() {
+        let db = Database::open_memory().unwrap();
+        let sym1 = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        let sym2 = test_symbol("bar", SymbolKind::Function, "a.py", 10);
+        let sym3 = test_symbol("baz", SymbolKind::Function, "a.py", 20);
+        db.insert_symbols(&[sym1.clone(), sym2.clone(), sym3.clone()])
+            .unwrap();
+
+        db.upsert_symbol_content(&sym1.id, "foo", "def foo(): pass", "h1")
+            .unwrap();
+        db.upsert_symbol_content(&sym2.id, "bar", "def bar(): pass", "h2")
+            .unwrap();
+        // sym3 has no content
+
+        let ids = vec![sym1.id.clone(), sym2.id.clone(), sym3.id.clone()];
+        let map = db.get_symbol_contents_batch(&ids).unwrap();
+        assert_eq!(map.len(), 2);
+        assert!(map.contains_key(&sym1.id));
+        assert!(map.contains_key(&sym2.id));
+        assert!(!map.contains_key(&sym3.id));
+        assert_eq!(map[&sym1.id].0, "def foo(): pass");
+    }
+
+    #[test]
+    fn test_get_symbol_contents_batch_empty() {
+        let db = Database::open_memory().unwrap();
+        let map = db.get_symbol_contents_batch(&[]).unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_get_symbol_by_id() {
+        let db = Database::open_memory().unwrap();
+        let sym = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        db.insert_symbol(&sym).unwrap();
+
+        let found = db.get_symbol(&sym.id).unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "foo");
+
+        let not_found = db.get_symbol("nonexistent").unwrap();
+        assert!(not_found.is_none());
     }
 }

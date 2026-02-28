@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -6,7 +7,9 @@ use serde::Serialize;
 use crate::cli::{EdgeKindFilter, SymbolKindFilter};
 use crate::db::{Database, DB_FILE, MAX_SEARCH_LIMIT};
 use crate::indexer;
+use crate::rag;
 use crate::types::{EdgeKind, SymbolKind};
+use crate::watch::{self, WatchConfig};
 
 fn open_db() -> Result<Database> {
     Database::open(DB_FILE).context("Failed to open cartog database")
@@ -275,4 +278,116 @@ pub fn cmd_stats(json: bool) -> Result<()> {
             }
         }
     })
+}
+
+// ── RAG Commands ──
+
+/// Download the embedding model.
+pub fn cmd_rag_setup(json: bool) -> Result<()> {
+    // Download bi-encoder (embeddings)
+    let embed_result = rag::setup::download_model()?;
+    // Download cross-encoder (re-ranking)
+    let rerank_result = rag::setup::download_cross_encoder()?;
+
+    #[derive(serde::Serialize)]
+    struct CombinedSetup {
+        embedding: rag::setup::SetupResult,
+        reranker: rag::setup::SetupResult,
+    }
+
+    let combined = CombinedSetup {
+        embedding: embed_result,
+        reranker: rerank_result,
+    };
+
+    output(&combined, json, |c| {
+        println!("Embedding model: {}", c.embedding.model_dir);
+        println!("Re-ranker model: {}", c.reranker.model_dir);
+        println!("Models ready. You can now run 'cartog rag index'.");
+    })
+}
+
+/// Build embedding index for semantic search.
+pub fn cmd_rag_index(path: &str, force: bool, json: bool) -> Result<()> {
+    // First ensure the standard code graph index is up to date
+    let root = Path::new(path);
+    let db = open_db()?;
+    let _index_result = indexer::index_directory(&db, root, false)?;
+
+    let result = rag::indexer::index_embeddings(&db, force)?;
+
+    output(&result, json, |r| {
+        println!(
+            "Embedded {} symbols ({} skipped, {} total with content)",
+            r.symbols_embedded, r.symbols_skipped, r.total_content_symbols
+        );
+    })
+}
+
+/// Semantic search over code symbols.
+pub fn cmd_rag_search(
+    query: &str,
+    kind: Option<SymbolKindFilter>,
+    limit: u32,
+    json: bool,
+) -> Result<()> {
+    let db = open_db()?;
+    let kind_filter = kind.map(crate::types::SymbolKind::from);
+
+    let search_result = rag::search::hybrid_search(&db, query, limit, kind_filter)?;
+
+    output(&search_result, json, |sr| {
+        if sr.results.is_empty() {
+            println!("No results found for '{query}'");
+            if sr.fts_count == 0 && sr.vec_count == 0 {
+                println!("Hint: run 'cartog rag index' to build the semantic search index.");
+            }
+            return;
+        }
+        println!(
+            "Found {} results (FTS: {}, vector: {}, merged: {})\n",
+            sr.results.len(),
+            sr.fts_count,
+            sr.vec_count,
+            sr.merged_count
+        );
+        for (i, r) in sr.results.iter().enumerate() {
+            let sources = r.sources.join("+");
+            let rerank_str = r
+                .rerank_score
+                .map(|s| format!(" rerank={s:.2}"))
+                .unwrap_or_default();
+            println!(
+                "{}. {} {}  {}:{}-{}  [{}] score={:.4}{rerank_str}",
+                i + 1,
+                r.symbol.kind,
+                r.symbol.name,
+                r.symbol.file_path,
+                r.symbol.start_line,
+                r.symbol.end_line,
+                sources,
+                r.rrf_score,
+            );
+            if let Some(ref content) = r.content {
+                // Show first 3 lines of content as preview
+                let preview: String = content
+                    .lines()
+                    .take(3)
+                    .map(|l| format!("    {l}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                println!("{preview}\n");
+            }
+        }
+    })
+}
+
+/// Watch for file changes and auto-re-index.
+pub fn cmd_watch(path: &str, debounce: u64, rag: bool, rag_delay: u64) -> Result<()> {
+    let mut config = WatchConfig::new(PathBuf::from(path));
+    config.debounce = Duration::from_secs(debounce);
+    config.rag = rag;
+    config.rag_delay = Duration::from_secs(rag_delay);
+
+    watch::run_watch(config, DB_FILE)
 }

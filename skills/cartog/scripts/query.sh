@@ -10,7 +10,7 @@ set -euo pipefail
 
 if [ $# -lt 1 ]; then
     echo "Usage: query.sh <command> [args...]"
-    echo "Commands: outline, callees, impact, refs, hierarchy, deps, stats"
+    echo "Commands: search, outline, callees, impact, refs, hierarchy, deps, stats, rag"
     exit 1
 fi
 
