@@ -1,0 +1,199 @@
+# Golden examples for cartog skill behavioral testing.
+#
+# Each scenario defines a user query and the expected agent behavior
+# when the SKILL.md is loaded. Used for:
+#   - Manual regression checks
+#   - LLM-as-judge automated evaluation (see eval.sh)
+#
+# Schema:
+#   - id: unique identifier
+#     description: what this tests
+#     user_query: the user's message to the agent
+#     context: optional context provided before the query
+#     expected:
+#       tool_calls: list of expected tool invocations (the FIRST command matters most)
+#       reasoning: why this is the correct behavior
+#     anti_patterns: things the agent must NOT do as its FIRST action
+#     tags: [routing, setup, refactoring, ...]
+#
+# Judging rules:
+#   - The FIRST command the agent lists is what matters most
+#   - Follow-up/conditional commands are acceptable as long as the first is correct
+#   - Anti-patterns apply to the FIRST action, not hypothetical follow-ups
+
+# ============================================================
+# Search routing: rag search as default
+# ============================================================
+
+- id: search_natural_language
+  description: Natural language query should use rag search as FIRST command
+  user_query: "Find the code that handles authentication token validation"
+  expected:
+    tool_calls:
+      - 'cartog rag search "authentication token validation"'
+    reasoning: >
+      Natural language query describing behavior. The FIRST command must be
+      cartog rag search. Follow-up structural commands (refs, callees) after
+      seeing results are acceptable.
+  anti_patterns:
+    - cartog search as the FIRST command
+    - Running cartog search BEFORE or IN PARALLEL with rag search
+  tags: [routing]
+
+- id: search_single_keyword
+  description: Broad keyword should use rag search as FIRST command
+  user_query: "Find code related to config"
+  expected:
+    tool_calls:
+      - 'cartog rag search "config"'
+    reasoning: >
+      Even single keywords go through rag search first. It handles FTS5 keyword
+      matching internally. cartog search should not be the first command.
+  anti_patterns:
+    - cartog search as the FIRST command
+    - Running cartog search BEFORE or IN PARALLEL with rag search
+  tags: [routing]
+
+- id: search_identifier_like
+  description: '"Where is X used?" can use either rag search or refs'
+  user_query: "Where is validate_token used?"
+  expected:
+    tool_calls:
+      - 'cartog rag search "validate_token"'
+      - "cartog refs validate_token"
+    reasoning: >
+      "Where is X used?" is ambiguous — it maps to both code finding (rag search)
+      and structural navigation (refs). Either cartog rag search or cartog refs
+      as the FIRST command is acceptable. Both are correct approaches.
+  anti_patterns:
+    - cartog search as the FIRST and ONLY command (without refs follow-up)
+    - grep or cat as the first command
+  tags: [routing]
+
+- id: search_for_structural_navigation
+  description: When user asks "what calls X", use refs --kind calls
+  user_query: "What calls validate_token?"
+  expected:
+    tool_calls:
+      - "cartog refs validate_token --kind calls"
+    reasoning: >
+      "What calls X?" is a structural navigation question. The correct command
+      is cartog refs --kind calls (who calls X), NOT cartog callees (what X calls).
+      The agent may optionally run cartog search first to confirm the symbol name,
+      but refs --kind calls is the key command.
+  anti_patterns:
+    - cartog callees (callees shows what X calls, not what calls X)
+    - Using only cartog rag search without a structural command
+  tags: [routing, structural]
+
+- id: search_impact_analysis
+  description: Impact analysis requires cartog search then impact
+  user_query: "Is it safe to rename SessionManager?"
+  expected:
+    tool_calls:
+      - "cartog search SessionManager"
+      - "cartog impact SessionManager --depth 3"
+    reasoning: >
+      Impact analysis is a structural command requiring exact symbol name.
+      cartog search provides the name, impact shows the blast radius.
+  anti_patterns:
+    - Using only cartog rag search without a structural impact command
+    - Skipping impact analysis entirely
+  tags: [routing, refactoring]
+
+- id: no_parallel_double_call
+  description: Single rag search call, not multiple parallel searches
+  user_query: "Find code related to contract management and timesheet signing"
+  expected:
+    tool_calls:
+      - 'cartog rag search "contract management and timesheet signing"'
+    reasoning: >
+      A single rag search call handles everything (FTS5 keyword + vector + reranking).
+      The agent should make ONE rag search call, not split into multiple queries
+      or run cartog search in parallel. The hybrid search handles multi-concept
+      queries internally.
+  anti_patterns:
+    - Multiple rag search calls for the same query (splitting into sub-queries)
+    - cartog search as FIRST command or in parallel
+  tags: [routing, do-dont]
+
+# ============================================================
+# Graceful degradation
+# ============================================================
+
+- id: rag_search_without_embeddings
+  description: rag search should be used even if rag index hasn't completed yet
+  user_query: "Find database connection pooling code"
+  context: "RAG embedding is still running in background (started by ensure_indexed.sh)"
+  expected:
+    tool_calls:
+      - 'cartog rag search "database connection pooling"'
+    reasoning: >
+      rag search degrades gracefully. FTS5 keyword search works immediately
+      after cartog index. The agent should NOT wait for RAG indexing to complete
+      and should NOT fall back to grep.
+  anti_patterns:
+    - Waiting for RAG indexing to complete before searching
+    - Falling back to grep because "RAG isn't ready"
+    - Running cartog rag index in the foreground and blocking
+  tags: [degradation, do-dont]
+
+# ============================================================
+# Setup behavior
+# ============================================================
+
+- id: setup_non_blocking
+  description: Setup should not block on RAG embedding
+  user_query: "Help me explore this new codebase"
+  context: "First time using cartog on this project, no .cartog.db exists"
+  expected:
+    tool_calls:
+      - "bash scripts/ensure_indexed.sh"
+      - "cartog index ."
+    reasoning: >
+      The agent should run ensure_indexed.sh or at minimum cartog index .
+      to build the code graph. Either is acceptable as the first command.
+      The key constraint: the agent must NOT run cartog rag index in the
+      foreground and block waiting for it to complete before proceeding.
+  anti_patterns:
+    - Running cartog rag index in the foreground as a blocking step
+    - Telling the user to wait for RAG indexing to complete before proceeding
+  tags: [setup, do-dont]
+
+# ============================================================
+# Fallback to cartog search for substring matching
+# ============================================================
+
+- id: substring_fallback
+  description: Fall back to cartog search when rag search returned no results
+  user_query: "Find the validate function"
+  context: "cartog rag search returned no results for this query"
+  expected:
+    tool_calls:
+      - "cartog search validate"
+    reasoning: >
+      The context says rag search already returned no results. The agent should
+      now fall back to cartog search which supports substring matching.
+      It should NOT re-run rag search since we know it failed.
+  anti_patterns:
+    - Re-running cartog rag search (already tried and returned no results)
+    - Giving up without trying cartog search
+  tags: [routing, fallback]
+
+# ============================================================
+# Outline vs read
+# ============================================================
+
+- id: outline_over_cat
+  description: Use outline instead of cat for file structure
+  user_query: "What functions are in src/auth/tokens.py?"
+  expected:
+    tool_calls:
+      - "cartog outline src/auth/tokens.py"
+    reasoning: >
+      outline shows symbols with types, signatures, and line ranges.
+      No need to read the full file content.
+  anti_patterns:
+    - cat src/auth/tokens.py
+    - Reading the full file when only structure is needed
+  tags: [outline]

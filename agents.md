@@ -21,16 +21,18 @@ Always run `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` b
 ### Integrity checks
 
 ```bash
-make check            # all checks (Rust project + fixture codebases)
+make check            # all checks (Rust project + fixtures + skill)
 make check-rust       # cargo fmt + clippy + test
 make check-fixtures   # validate all 4 fixture codebases (py, go, rs, rb)
+make check-skill      # skill tests (ensure_indexed.sh unit tests)
 make check-ts         # TypeScript fixtures (requires npx/tsc)
+make eval-skill       # LLM-as-judge skill evaluation (requires claude CLI)
 make bench            # shell benchmark suite (13 scenarios x 5 languages)
 make bench-criterion  # Rust criterion benchmarks (query latency)
 make bench-rag        # RAG relevancy benchmarks (in-memory + shell scenario 13)
 ```
 
-Run `make check` before committing benchmark fixture changes.
+Run `make check` before committing. Run `make eval-skill` after changing skill SKILL.md or search routing.
 
 ## Code Conventions
 

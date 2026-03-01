@@ -20,8 +20,7 @@ description: >-
 ## When to Use
 
 Use cartog **before** reaching for grep, cat, or file reads when you need to:
-- Discover symbols by partial name → `cartog search <query>`
-- Find code by concept or behavior → `cartog rag search "description"`
+- Find code by name, concept, or behavior → `cartog rag search "query"`
 - Understand the structure of a file → `cartog outline <file>`
 - Find who references a symbol → `cartog refs <name>` (or `--kind calls` for just callers)
 - See what a function calls → `cartog callees <name>`
@@ -42,34 +41,22 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 2. **Search routing** — pick the right strategy based on the query:
 
-   **A. Direct keyword search** (`cartog search <name>`) — when the query is clearly a symbol identifier: single token, camelCase/snake_case, partial name. Sub-millisecond, prefix + substring matching.
-   ```
-   cartog search validate_token
-   cartog search AuthService
-   cartog search parse --kind function
-   ```
-
-   **B. Semantic search** (`cartog rag search "<query>"`) — when the query is natural language describing behavior or a concept, and you don't know the symbol name.
+   **A. Semantic search** (`cartog rag search "<query>"`) — **default for all searches**. Handles keyword matching (FTS5), vector similarity, and cross-encoder reranking in a single call. Works for both natural language and keyword-style queries. Always use ONE call with the full query — never split a query into multiple rag search calls.
    ```
    cartog rag search "authentication token validation"
-   cartog rag search "database connection pooling"
-   cartog rag search "error handling in HTTP requests"
+   cartog rag search "contract management and timesheet signing"
+   cartog rag search "config"
    ```
 
-   **C. Both in parallel** — when the query is a broad keyword that could be a symbol name AND a concept (e.g., `auth`, `config`, `cache`). Run both in parallel to combine exact name matches with semantically related code.
+   **B. Structural search** (`cartog search <name>`) — use **only** when you need a symbol name to feed into `refs`, `callees`, `impact`, or `hierarchy`. These commands require exact symbol names, not search results.
    ```
-   # run in parallel
-   cartog search auth
-   cartog rag search "authentication and authorization"
+   cartog search validate_token
+   cartog search AuthService --kind class
    ```
-
-   **Narrowing pattern**: when `cartog search` returns too many results, use `rag search` with a more descriptive query to narrow down. Example: `search parse` returns 30 hits → `rag search "parse JSON response body"` pinpoints the right ones.
 
    **Routing rules**:
-   - Single identifier-like token → **A** (direct)
-   - Multi-word natural language → **B** (semantic)
-   - Broad keyword / unsure → **C** (parallel)
-   - Too many results from A → narrow with **B**
+   - Need to find code? → **A** (rag search) — always
+   - Need a symbol name for `refs`/`callees`/`impact`? → **B** (search) first, then the structural command
 
 3. **When using `cartog search`** to locate a symbol before `refs`/`callees`/`impact`:
    - Exactly one result → use that symbol name and file, proceed.
@@ -85,6 +72,19 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 7. **After making code changes**, run `cartog index .` to update the graph.
 
+## Do / Don't
+
+**DO:**
+- Use `cartog rag search` as your default search — it combines FTS5 keyword + vector + reranking in one call
+- Use `cartog search` only to get a symbol name for structural commands (`refs`, `callees`, `impact`, `hierarchy`)
+- Trust that `rag search` degrades gracefully — FTS5 works even without vector embeddings
+
+**DON'T:**
+- Run `cartog search` and `cartog rag search` in parallel for the same query — this wastes a tool call. `rag search` already includes FTS5 keyword matching internally
+- Split one query into multiple `rag search` calls with rephrased variants — one call is enough. The hybrid search (FTS5 + vector + reranker) handles synonyms and related terms internally
+- Block on RAG embedding at setup — background indexing is fine, `rag search` works immediately with FTS5 + reranker
+- Assume `rag search` requires `rag index` — it works (at reduced quality) with just `cartog index .`
+
 ## Setup
 
 Before first use, ensure cartog is installed and indexed:
@@ -93,15 +93,23 @@ Before first use, ensure cartog is installed and indexed:
 # Install if missing
 command -v cartog || bash scripts/install.sh
 
-# Index (incremental — safe to re-run)
-cartog index .
-
-# Enable semantic search (required for rag search routing)
-cartog rag setup          # download embedding + re-ranker models (one-time)
-cartog rag index .        # embed all symbols for vector search
+# Run the setup script (handles all 3 phases)
+bash scripts/ensure_indexed.sh
 ```
 
-Without `rag setup`, the `rag search` strategy is unavailable and the agent should use `search` + grep as fallback.
+### Search quality tiers
+
+`cartog rag search` works at three quality levels depending on setup state:
+
+| Tier | After | FTS5 | Reranker | Vector | Quality |
+|---|---|---|---|---|---|
+| 1 | `cartog index .` | Yes | No | No | Keyword matching only |
+| 2 | `+ cartog rag setup` | Yes | **Yes** | No | Keyword + neural reranking |
+| 3 | `+ cartog rag index .` | Yes | Yes | **Yes** | Full hybrid (best) |
+
+The setup script runs tier 1+2 blocking (fast), then tier 3 in the background.
+`cartog rag search` is usable immediately after tier 2 — vector search becomes available
+transparently once background embedding completes.
 
 ## Commands Reference
 
@@ -123,7 +131,7 @@ Returns symbols ranked: exact match → prefix → substring. Case-insensitive. 
 
 Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`.
 
-### RAG Semantic Search (natural language queries)
+### RAG Search (hybrid keyword + semantic)
 ```bash
 cartog rag search "authentication token validation"
 cartog rag search "error handling" --kind function
@@ -212,10 +220,8 @@ Before changing any symbol (rename, extract, move, delete):
 
 | I need to... | Use |
 |---|---|
-| Find a symbol by exact/partial name | `cartog search <name>` |
-| Find code by concept or behavior | `cartog rag search "description"` |
-| Broad keyword, unsure which to use | Both `search` + `rag search` in parallel |
-| Too many results from `search` | Narrow with `rag search "more specific description"` |
+| Find code by name, concept, or behavior | `cartog rag search "query"` |
+| Get a symbol name for structural commands | `cartog search <name>` |
 | Know what's in a file | `cartog outline <file>` |
 | Find usages of a function | `cartog refs <name>` (`--kind calls` for just callers) |
 | See what a function calls | `cartog callees <name>` |
@@ -235,7 +241,7 @@ Before changing any symbol (rename, extract, move, delete):
 
 ### RAG search limitations
 
-- **No substring matching**: `"valid"` does NOT match `validate_token`. FTS5 is token-based. Use `cartog search` for substring matches (this is why parallel routing is valuable).
-- **Requires setup**: if `cartog rag setup` was not run, `rag search` is unavailable.
+- **No substring matching**: `"valid"` does NOT match `validate_token`. FTS5 is token-based. If `rag search` returns no results for a known symbol name, fall back to `cartog search` which supports substring matching.
+- **Graceful degradation**: `rag search` works without `rag setup` or `rag index` (FTS5-only). Quality improves with each setup tier (see Search quality tiers above).
 - **Scores are relative**: `rrf_score` and `rerank_score` values are only meaningful for ranking within a single query — don't compare scores across different queries.
 - **Re-ranking latency**: cross-encoder scores all candidates in a single batch ONNX call (up to 50 candidates). Expect ~150-500ms total overhead depending on candidate count.

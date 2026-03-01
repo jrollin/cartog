@@ -39,6 +39,10 @@ cartog/
 │       │   ├── install.sh
 │       │   ├── ensure_indexed.sh
 │       │   └── query.sh
+│       ├── tests/
+│       │   ├── golden_examples.yaml  # Behavioral test scenarios (expected tool calls)
+│       │   ├── test_ensure_indexed.sh # Bash unit tests for ensure_indexed.sh
+│       │   └── eval.sh              # LLM-as-judge evaluation via claude CLI
 │       └── references/
 │           ├── query_cookbook.md
 │           └── supported_languages.md

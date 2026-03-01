@@ -33,7 +33,7 @@
 | Model cache | `~/.cache/cartog/models` | XDG-compliant shared cache. Precedence: `FASTEMBED_CACHE_DIR` > `XDG_CACHE_HOME/cartog/models` > `~/.cache/cartog/models` |
 | LSP | Deferred | Tree-sitter handles 90% of cases |
 | MCP server | `cartog serve` (stdio) | Skill remains primary; MCP as secondary for zero-context-cost tool access |
-| Watch mode | No | On-demand re-index is sufficient for agent use |
+| Watch mode | `cartog watch` / `serve --watch` | Debounced re-index on file changes, optional deferred RAG embedding |
 | Language detection | File extension | Simple, predictable, covers 99% |
 | Monorepo | Deferred | Index from CWD, user can cd into subproject |
 | Output format | Human default + `--json` flag | Readable for humans, parseable for scripts |

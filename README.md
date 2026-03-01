@@ -265,7 +265,7 @@ Or install manually:
 cp -r skills/cartog ~/.claude/skills/
 ```
 
-The skill teaches your AI agent **when and how** to use cartog — including smart search routing (keyword vs semantic vs parallel), refactoring workflows, and when to fall back to grep. See [Claude Code Integration](docs/claude-code.md) for details.
+The skill teaches your AI agent **when and how** to use cartog — including search routing (rag search as default, structural search for refs/callees/impact), refactoring workflows, and when to fall back to grep. See [Claude Code Integration](docs/claude-code.md) for details.
 
 ## Privacy
 

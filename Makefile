@@ -1,8 +1,8 @@
-.PHONY: check check-rust check-fixtures check-py check-ts check-go check-rs check-rb bench bench-criterion bench-rag
+.PHONY: check check-rust check-fixtures check-skill check-py check-ts check-go check-rs check-rb bench bench-criterion bench-rag eval-skill
 
 # --- Full integrity check ---
 
-check: check-rust check-fixtures ## Run all integrity checks
+check: check-rust check-fixtures check-skill ## Run all integrity checks
 
 # --- Rust project checks ---
 
@@ -39,6 +39,15 @@ check-rb: ## Validate Ruby fixtures (ruby -c)
 	@echo "==> Checking Ruby fixtures..."
 	@find benchmarks/fixtures/webapp_rb -name '*.rb' -exec ruby -c {} + > /dev/null
 	@echo "    OK"
+
+# --- Skill tests ---
+
+check-skill: ## Run skill tests (ensure_indexed.sh unit tests)
+	@echo "==> Checking skill tests..."
+	@bash skills/cartog/tests/test_ensure_indexed.sh
+
+eval-skill: ## Run LLM-as-judge skill evaluation (requires claude CLI)
+	bash skills/cartog/tests/eval.sh
 
 # --- Benchmarks ---
 

@@ -96,14 +96,15 @@ cartog rag index .        # incremental — only new/changed symbols
 cartog rag index . --force  # re-embed everything
 ```
 
-### Good vs bad RAG queries
+### RAG query quality tips
 
 | Query | Quality | Why |
 |---|---|---|
-| `"authentication token validation"` | Good | Describes behavior, multiple relevant terms |
-| `"handle HTTP request errors"` | Good | Natural language, matches content in function bodies |
-| `"parse"` | Bad | Too short — use `cartog search parse` instead |
-| `"validate_token"` | Bad | Looks like a symbol name — use `cartog search validate_token` |
+| `"authentication token validation"` | Best | Describes behavior, multiple relevant terms |
+| `"handle HTTP request errors"` | Best | Natural language, matches content in function bodies |
+| `"config"` | Good | Single keyword works — FTS5 matches token in names and content |
+| `"validate_token"` | Good | FTS5 matches the full token; use `cartog search` only if you need substring matching |
+| `"parse"` | OK | Short queries return broad results; add context if too many hits |
 | `"auth*"` | Bad | FTS5 wraps queries in quotes, disabling wildcards |
 
 ### Interpreting results
