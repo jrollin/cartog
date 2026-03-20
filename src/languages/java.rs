@@ -97,7 +97,11 @@ fn extract_class_like(
     let sym_id = symbol_id(file_path, &name, start_line);
     let mut sym = Symbol::new(
         name.clone(),
-        if node.kind() == "enum_declaration" { SymbolKind::Enum } else { SymbolKind::Class },
+        if node.kind() == "enum_declaration" {
+            SymbolKind::Enum
+        } else {
+            SymbolKind::Class
+        },
         file_path,
         start_line,
         end_line,
@@ -121,7 +125,15 @@ fn extract_class_like(
 
     // implements (super_interfaces)
     if let Some(si) = node.child_by_field_name("interfaces") {
-        extract_super_interfaces_edges(si, source, file_path, &sym_id, start_line, EdgeKind::Implements, edges);
+        extract_super_interfaces_edges(
+            si,
+            source,
+            file_path,
+            &sym_id,
+            start_line,
+            EdgeKind::Implements,
+            edges,
+        );
     }
 
     // Walk body for methods, constructors, fields, nested named classes
@@ -177,7 +189,15 @@ fn extract_interface(
     // extends (extends_interfaces)
     for child in node.named_children(&mut node.walk()) {
         if child.kind() == "extends_interfaces" {
-            extract_super_interfaces_edges(child, source, file_path, &sym_id, start_line, EdgeKind::Inherits, edges);
+            extract_super_interfaces_edges(
+                child,
+                source,
+                file_path,
+                &sym_id,
+                start_line,
+                EdgeKind::Inherits,
+                edges,
+            );
         }
     }
 
@@ -1167,7 +1187,8 @@ public class UserService extends BaseService implements Repository, Auditable {
             .iter()
             .filter(|e| e.kind == EdgeKind::Implements)
             .collect();
-        let implements_targets: Vec<&str> = implements.iter().map(|e| e.target_name.as_str()).collect();
+        let implements_targets: Vec<&str> =
+            implements.iter().map(|e| e.target_name.as_str()).collect();
         assert!(implements_targets.contains(&"Repository"));
         assert!(implements_targets.contains(&"Auditable"));
     }

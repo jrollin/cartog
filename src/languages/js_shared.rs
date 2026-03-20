@@ -263,14 +263,7 @@ fn extract_variable_declaration(
             extract_fn_type_refs_q(val, source, file_path, &sym_id, queries, edges);
 
             if let Some(body) = val.child_by_field_name("body") {
-                walk_for_calls_and_throws_q(
-                    body,
-                    source,
-                    file_path,
-                    Some(&sym_id),
-                    queries,
-                    edges,
-                );
+                walk_for_calls_and_throws_q(body, source, file_path, Some(&sym_id), queries, edges);
                 walk_body_for_nested(body, source, file_path, &sym_id, queries, symbols, edges);
             }
         } else {

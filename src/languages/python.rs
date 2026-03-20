@@ -26,10 +26,8 @@ impl PythonExtractor {
             .set_language(&lang)
             .expect("Python grammar should always load");
 
-        let call_query = CachedQuery::new(
-            &lang,
-            "(call function: [(identifier) (attribute)] @callee)",
-        );
+        let call_query =
+            CachedQuery::new(&lang, "(call function: [(identifier) (attribute)] @callee)");
         let raise_query = CachedQuery::new(
             &lang,
             r#"(raise_statement
@@ -246,7 +244,15 @@ fn extract_function(
         for child in body.named_children(&mut body.walk()) {
             match child.kind() {
                 "function_definition" | "class_definition" | "decorated_definition" => {
-                    extract_node(queries, child, source, file_path, Some(&sym_id), symbols, edges);
+                    extract_node(
+                        queries,
+                        child,
+                        source,
+                        file_path,
+                        Some(&sym_id),
+                        symbols,
+                        edges,
+                    );
                 }
                 _ => {}
             }
@@ -310,7 +316,15 @@ fn extract_class(
     // Walk class body for methods, nested classes, assignments
     if let Some(body) = node.child_by_field_name("body") {
         for child in body.named_children(&mut body.walk()) {
-            extract_node(queries, child, source, file_path, Some(&sym_id), symbols, edges);
+            extract_node(
+                queries,
+                child,
+                source,
+                file_path,
+                Some(&sym_id),
+                symbols,
+                edges,
+            );
         }
     }
 }
@@ -447,16 +461,8 @@ fn walk_for_calls_and_raises_q(
                     }
                     let line = capture.node.start_position().row as u32 + 1;
                     let exc_name = node_text(capture.node, source);
-                    if !exc_name.is_empty()
-                        && seen_raises.insert((exc_name.to_string(), line))
-                    {
-                        edges.push(Edge::new(
-                            ctx,
-                            exc_name,
-                            EdgeKind::Raises,
-                            file_path,
-                            line,
-                        ));
+                    if !exc_name.is_empty() && seen_raises.insert((exc_name.to_string(), line)) {
+                        edges.push(Edge::new(ctx, exc_name, EdgeKind::Raises, file_path, line));
                     }
                 }
             }
