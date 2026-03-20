@@ -636,7 +636,7 @@ fn extract_super_interfaces_edges(
             // direct type_identifier (e.g. extends_interfaces on interface)
             let name = extract_simple_type_name(child, source);
             if !name.is_empty() {
-                edges.push(Edge::new(sym_id, name, edge_kind.clone(), file_path, line));
+                edges.push(Edge::new(sym_id, name, edge_kind, file_path, line));
             }
         }
     }
