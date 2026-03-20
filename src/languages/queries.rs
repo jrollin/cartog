@@ -24,6 +24,12 @@ impl CachedQuery {
         Self { query }
     }
 
+    /// Try to compile a query, returning `None` if the pattern is invalid
+    /// (e.g. the node type doesn't exist in this grammar).
+    pub fn try_new(language: &Language, pattern: &str) -> Option<Self> {
+        Query::new(language, pattern).ok().map(|query| Self { query })
+    }
+
     /// Get the index of a named capture, or panic if it doesn't exist.
     pub fn capture_index(&self, name: &str) -> u32 {
         self.query

@@ -24,8 +24,8 @@ pub struct JsQueries {
     /// `throw new Error()`, `throw expr`
     throw_query: CachedQuery,
     throw_exc_idx: u32,
-    /// Type identifiers in annotations
-    type_ref_query: CachedQuery,
+    /// Type identifiers in annotations (TypeScript only; JS has no `type_identifier` node)
+    type_ref_query: Option<CachedQuery>,
     type_ref_idx: u32,
 }
 
@@ -53,8 +53,15 @@ impl JsQueries {
         );
         let throw_exc_idx = throw_query.capture_index("exception");
 
-        let type_ref_query = CachedQuery::new(language, "(type_identifier) @type_ref");
-        let type_ref_idx = type_ref_query.capture_index("type_ref");
+        // `type_identifier` exists only in TypeScript grammars, not plain JavaScript.
+        let (type_ref_query, type_ref_idx) =
+            match CachedQuery::try_new(language, "(type_identifier) @type_ref") {
+                Some(q) => {
+                    let idx = q.capture_index("type_ref");
+                    (Some(q), idx)
+                }
+                None => (None, 0),
+            };
 
         Self {
             call_query,
@@ -820,8 +827,12 @@ fn collect_type_refs_q(
     queries: &JsQueries,
     edges: &mut Vec<Edge>,
 ) {
+    let type_ref_query = match &queries.type_ref_query {
+        Some(q) => q,
+        None => return,
+    };
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&queries.type_ref_query.query, node, source.as_bytes());
+    let mut matches = cursor.matches(&type_ref_query.query, node, source.as_bytes());
     while let Some(m) = matches.next() {
         for capture in m.captures {
             if capture.index == queries.type_ref_idx {

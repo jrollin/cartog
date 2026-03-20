@@ -197,6 +197,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlite-vec",
+ "streaming-iterator",
  "tokio",
  "tracing",
  "tracing-subscriber",
