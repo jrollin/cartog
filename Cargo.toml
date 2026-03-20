@@ -11,6 +11,7 @@ categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
 tree-sitter = "0.24"
+streaming-iterator = "0.1"
 tree-sitter-python = "0.23"
 tree-sitter-javascript = "0.23"
 tree-sitter-typescript = "0.23"

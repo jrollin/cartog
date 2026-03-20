@@ -5,6 +5,7 @@
 //! kinds for functions, classes, imports, and calls are identical.
 
 use anyhow::Result;
+use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Node, Parser, QueryCursor};
 
 use crate::types::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
@@ -698,7 +699,8 @@ fn walk_for_calls_and_throws_q(
 
     // Collect call edges
     let mut cursor = QueryCursor::new();
-    for m in cursor.matches(&queries.call_query.query, node, source.as_bytes()) {
+    let mut matches = cursor.matches(&queries.call_query.query, node, source.as_bytes());
+    while let Some(m) = matches.next() {
         for capture in m.captures {
             if capture.index == queries.call_callee_idx
                 && !is_inside_nested_scope(capture.node, node, JS_SCOPE_KINDS)
@@ -719,7 +721,8 @@ fn walk_for_calls_and_throws_q(
 
     // Collect new expression edges (also treated as calls)
     let mut cursor = QueryCursor::new();
-    for m in cursor.matches(&queries.new_query.query, node, source.as_bytes()) {
+    let mut matches = cursor.matches(&queries.new_query.query, node, source.as_bytes());
+    while let Some(m) = matches.next() {
         for capture in m.captures {
             if capture.index == queries.new_ctor_idx
                 && !is_inside_nested_scope(capture.node, node, JS_SCOPE_KINDS)
@@ -741,7 +744,8 @@ fn walk_for_calls_and_throws_q(
     // Collect throw edges
     let mut cursor = QueryCursor::new();
     let mut seen_throws = std::collections::HashSet::new();
-    for m in cursor.matches(&queries.throw_query.query, node, source.as_bytes()) {
+    let mut matches = cursor.matches(&queries.throw_query.query, node, source.as_bytes());
+    while let Some(m) = matches.next() {
         for capture in m.captures {
             if capture.index == queries.throw_exc_idx
                 && !is_inside_nested_scope(capture.node, node, JS_SCOPE_KINDS)
@@ -817,7 +821,8 @@ fn collect_type_refs_q(
     edges: &mut Vec<Edge>,
 ) {
     let mut cursor = QueryCursor::new();
-    for m in cursor.matches(&queries.type_ref_query.query, node, source.as_bytes()) {
+    let mut matches = cursor.matches(&queries.type_ref_query.query, node, source.as_bytes());
+    while let Some(m) = matches.next() {
         for capture in m.captures {
             if capture.index == queries.type_ref_idx {
                 let name = node_text(capture.node, source);
