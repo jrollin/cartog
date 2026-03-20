@@ -1,21 +1,62 @@
 use anyhow::Result;
-use tree_sitter::{Language, Node, Parser};
+use tree_sitter::{Language, Node, Parser, QueryCursor};
 
 use crate::types::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
+use super::queries::CachedQuery;
 use super::{node_text, ExtractionResult, Extractor};
 
 pub struct PythonExtractor {
     parser: Parser,
+    /// Query for call expressions: `foo()`, `obj.method()`
+    call_query: CachedQuery,
+    /// Query for raise statements: `raise ValueError("msg")`
+    raise_query: CachedQuery,
+    /// Query for except clauses: `except ValueError:`
+    except_query: CachedQuery,
+    /// Query for type identifiers in annotations
+    type_ref_query: CachedQuery,
 }
 
 impl PythonExtractor {
     pub fn new() -> Self {
+        let lang = Language::new(tree_sitter_python::LANGUAGE);
         let mut parser = Parser::new();
         parser
-            .set_language(&Language::new(tree_sitter_python::LANGUAGE))
+            .set_language(&lang)
             .expect("Python grammar should always load");
-        Self { parser }
+
+        let call_query = CachedQuery::new(
+            &lang,
+            "(call function: [(identifier) (attribute)] @callee)",
+        );
+        let raise_query = CachedQuery::new(
+            &lang,
+            r#"(raise_statement
+              [(call function: [(identifier) (attribute)] @exception)
+               (identifier) @exception
+               (attribute) @exception])"#,
+        );
+        let except_query = CachedQuery::new(
+            &lang,
+            r#"(except_clause
+              [(identifier) @exception_type
+               (tuple (identifier) @exception_type)
+               (attribute) @exception_type])"#,
+        );
+        let type_ref_query = CachedQuery::new(
+            &lang,
+            r#"[(identifier) @type_ref
+               (attribute) @type_ref]"#,
+        );
+
+        Self {
+            parser,
+            call_query,
+            raise_query,
+            except_query,
+            type_ref_query,
+        }
     }
 }
 
@@ -23,6 +64,14 @@ impl Default for PythonExtractor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Bundled query references passed through extraction functions.
+struct Queries<'a> {
+    call: &'a CachedQuery,
+    raise: &'a CachedQuery,
+    except: &'a CachedQuery,
+    type_ref: &'a CachedQuery,
 }
 
 impl Extractor for PythonExtractor {
@@ -35,8 +84,16 @@ impl Extractor for PythonExtractor {
         let mut symbols = Vec::new();
         let mut edges = Vec::new();
 
+        let queries = Queries {
+            call: &self.call_query,
+            raise: &self.raise_query,
+            except: &self.except_query,
+            type_ref: &self.type_ref_query,
+        };
+
         let root = tree.root_node();
         extract_node(
+            &queries,
             root,
             source,
             file_path,
@@ -50,6 +107,7 @@ impl Extractor for PythonExtractor {
 }
 
 fn extract_node(
+    queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
@@ -59,10 +117,10 @@ fn extract_node(
 ) {
     match node.kind() {
         "function_definition" => {
-            extract_function(node, source, file_path, parent_id, symbols, edges);
+            extract_function(queries, node, source, file_path, parent_id, symbols, edges);
         }
         "class_definition" => {
-            extract_class(node, source, file_path, parent_id, symbols, edges);
+            extract_class(queries, node, source, file_path, parent_id, symbols, edges);
         }
         "decorated_definition" => {
             // Find the actual definition first to compute its symbol ID for decorator edges
@@ -83,7 +141,7 @@ fn extract_node(
                 } else if child.kind() == "function_definition"
                     || child.kind() == "class_definition"
                 {
-                    extract_node(child, source, file_path, parent_id, symbols, edges);
+                    extract_node(queries, child, source, file_path, parent_id, symbols, edges);
                 }
             }
         }
@@ -97,18 +155,19 @@ fn extract_node(
                 }
             }
             // Still walk children for call expressions
-            walk_for_calls_and_raises(node, source, file_path, parent_id, edges);
+            walk_for_calls_and_raises_q(queries, node, source, file_path, parent_id, edges);
         }
         _ => {
             // Recurse into children
             for child in node.named_children(&mut node.walk()) {
-                extract_node(child, source, file_path, parent_id, symbols, edges);
+                extract_node(queries, child, source, file_path, parent_id, symbols, edges);
             }
         }
     }
 }
 
 fn extract_function(
+    queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
@@ -178,16 +237,16 @@ fn extract_function(
     symbols.push(sym);
 
     // Extract type annotation references from parameters and return type
-    extract_fn_type_refs(node, source, file_path, &sym_id, edges);
+    extract_fn_type_refs(queries, node, source, file_path, &sym_id, edges);
 
     // Walk the function body for calls, raises, etc.
     if let Some(body) = node.child_by_field_name("body") {
-        walk_for_calls_and_raises(body, source, file_path, Some(&sym_id), edges);
+        walk_for_calls_and_raises_q(queries, body, source, file_path, Some(&sym_id), edges);
         // Recurse for nested functions/classes
         for child in body.named_children(&mut body.walk()) {
             match child.kind() {
                 "function_definition" | "class_definition" | "decorated_definition" => {
-                    extract_node(child, source, file_path, Some(&sym_id), symbols, edges);
+                    extract_node(queries, child, source, file_path, Some(&sym_id), symbols, edges);
                 }
                 _ => {}
             }
@@ -196,6 +255,7 @@ fn extract_function(
 }
 
 fn extract_class(
+    queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
@@ -250,7 +310,7 @@ fn extract_class(
     // Walk class body for methods, nested classes, assignments
     if let Some(body) = node.child_by_field_name("body") {
         for child in body.named_children(&mut body.walk()) {
-            extract_node(child, source, file_path, Some(&sym_id), symbols, edges);
+            extract_node(queries, child, source, file_path, Some(&sym_id), symbols, edges);
         }
     }
 }
@@ -332,131 +392,125 @@ fn extract_assignment(
     }
 }
 
-/// Walk a subtree looking for call expressions and raise statements.
-fn walk_for_calls_and_raises(
+/// Walk a subtree looking for call expressions, raise statements, and except clauses.
+///
+/// Uses tree-sitter queries instead of manual cursor walks for clarity and correctness.
+fn walk_for_calls_and_raises_q(
+    queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
     context_id: Option<&str>,
     edges: &mut Vec<Edge>,
 ) {
-    let mut cursor = node.walk();
-    let mut did_visit_children = false;
+    let Some(ctx) = context_id else { return };
 
-    loop {
-        let current = cursor.node();
+    let callee_idx = queries.call.capture_index("callee");
+    let exception_idx = queries.raise.capture_index("exception");
+    let except_type_idx = queries.except.capture_index("exception_type");
 
-        if !did_visit_children {
-            match current.kind() {
-                "call" => {
-                    if let Some(ctx) = context_id {
-                        if let Some(func) = current.child_by_field_name("function") {
-                            let callee_name = node_text(func, source);
-                            if !callee_name.is_empty() {
-                                edges.push(Edge::new(
-                                    ctx,
-                                    callee_name,
-                                    EdgeKind::Calls,
-                                    file_path,
-                                    current.start_position().row as u32 + 1,
-                                ));
-                            }
-                        }
+    // Calls: foo(), obj.method()
+    {
+        let mut cursor = QueryCursor::new();
+        // Exclude nested function/class bodies from call detection
+        for m in cursor.matches(&queries.call.query, node, source.as_bytes()) {
+            for capture in m.captures {
+                if capture.index == callee_idx {
+                    // Skip if inside a nested function/class definition
+                    if is_inside_nested_scope(capture.node, node) {
+                        continue;
+                    }
+                    let callee_name = node_text(capture.node, source);
+                    if !callee_name.is_empty() {
+                        edges.push(Edge::new(
+                            ctx,
+                            callee_name,
+                            EdgeKind::Calls,
+                            file_path,
+                            capture.node.start_position().row as u32 + 1,
+                        ));
                     }
                 }
-                "raise_statement" => {
-                    if let Some(ctx) = context_id {
-                        if let Some(exc) = current.named_child(0) {
-                            let exc_name = if exc.kind() == "call" {
-                                exc.child_by_field_name("function")
-                                    .map(|f| node_text(f, source))
-                                    .unwrap_or("")
-                            } else {
-                                node_text(exc, source)
-                            };
-                            if !exc_name.is_empty() {
-                                edges.push(Edge::new(
-                                    ctx,
-                                    exc_name,
-                                    EdgeKind::Raises,
-                                    file_path,
-                                    current.start_position().row as u32 + 1,
-                                ));
-                            }
-                        }
-                    }
-                }
-                "except_clause" => {
-                    // except ValueError as e: — extract exception type reference
-                    if let Some(ctx) = context_id {
-                        for child in current.named_children(&mut current.walk()) {
-                            if child.kind() == "identifier" || child.kind() == "attribute" {
-                                let type_name = node_text(child, source);
-                                if !type_name.is_empty()
-                                    && type_name.chars().next().is_some_and(|c| c.is_uppercase())
-                                {
-                                    edges.push(Edge::new(
-                                        ctx,
-                                        type_name,
-                                        EdgeKind::References,
-                                        file_path,
-                                        child.start_position().row as u32 + 1,
-                                    ));
-                                }
-                                break; // only the first identifier/attribute is the exception type
-                            }
-                            // except (TypeError, ValueError):
-                            if child.kind() == "tuple" {
-                                for tc in child.named_children(&mut child.walk()) {
-                                    let type_name = node_text(tc, source);
-                                    if !type_name.is_empty() {
-                                        edges.push(Edge::new(
-                                            ctx,
-                                            type_name,
-                                            EdgeKind::References,
-                                            file_path,
-                                            tc.start_position().row as u32 + 1,
-                                        ));
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                    }
-                }
-                // Don't descend into nested function/class definitions
-                "function_definition" | "class_definition" => {
-                    did_visit_children = true;
-                    continue;
-                }
-                _ => {}
-            }
-        }
-
-        // Tree walking logic
-        if !did_visit_children && cursor.goto_first_child() {
-            did_visit_children = false;
-            continue;
-        }
-        did_visit_children = false;
-        if cursor.goto_next_sibling() {
-            continue;
-        }
-        loop {
-            if !cursor.goto_parent() {
-                return;
-            }
-            if cursor.goto_next_sibling() {
-                break;
             }
         }
     }
+
+    // Raises: raise ValueError("msg")
+    {
+        let mut cursor = QueryCursor::new();
+        let mut seen_raises = std::collections::HashSet::new();
+        for m in cursor.matches(&queries.raise.query, node, source.as_bytes()) {
+            for capture in m.captures {
+                if capture.index == exception_idx {
+                    if is_inside_nested_scope(capture.node, node) {
+                        continue;
+                    }
+                    let line = capture.node.start_position().row as u32 + 1;
+                    let exc_name = node_text(capture.node, source);
+                    if !exc_name.is_empty() && seen_raises.insert(line) {
+                        edges.push(Edge::new(
+                            ctx,
+                            exc_name,
+                            EdgeKind::Raises,
+                            file_path,
+                            line,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Except clauses: except ValueError as e:
+    {
+        let mut cursor = QueryCursor::new();
+        for m in cursor.matches(&queries.except.query, node, source.as_bytes()) {
+            for capture in m.captures {
+                if capture.index == except_type_idx {
+                    if is_inside_nested_scope(capture.node, node) {
+                        continue;
+                    }
+                    let type_name = node_text(capture.node, source);
+                    if !type_name.is_empty()
+                        && type_name.chars().next().is_some_and(|c| c.is_uppercase())
+                    {
+                        edges.push(Edge::new(
+                            ctx,
+                            type_name,
+                            EdgeKind::References,
+                            file_path,
+                            capture.node.start_position().row as u32 + 1,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Check if a node is inside a nested function/class definition relative to the scope root.
+///
+/// Returns true if there's a function_definition or class_definition between
+/// `node` and `scope_root`, meaning the node belongs to a nested scope.
+fn is_inside_nested_scope(node: Node, scope_root: Node) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.id() == scope_root.id() {
+            return false;
+        }
+        if parent.kind() == "function_definition" || parent.kind() == "class_definition" {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
 }
 
 // ── Reference helpers ──
 
 /// Extract type annotation references from function parameters and return type.
 fn extract_fn_type_refs(
+    queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
@@ -468,56 +522,54 @@ fn extract_fn_type_refs(
         for param in params.named_children(&mut params.walk()) {
             // typed_parameter, typed_default_parameter
             if let Some(type_node) = param.child_by_field_name("type") {
-                collect_type_refs(type_node, source, file_path, sym_id, edges);
+                collect_type_refs(queries, type_node, source, file_path, sym_id, edges);
             }
         }
     }
     // Return type annotation
     if let Some(ret) = node.child_by_field_name("return_type") {
-        collect_type_refs(ret, source, file_path, sym_id, edges);
+        collect_type_refs(queries, ret, source, file_path, sym_id, edges);
     }
 }
 
-/// Recursively collect type name references from a type annotation node.
+/// Collect type name references from a type annotation node using queries.
 fn collect_type_refs(
+    queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
     sym_id: &str,
     edges: &mut Vec<Edge>,
 ) {
-    match node.kind() {
-        "identifier" => {
-            let name = node_text(node, source);
-            // Skip builtins and lowercase names (int, str, bool, etc.)
-            if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_uppercase()) {
-                edges.push(Edge::new(
-                    sym_id,
-                    name,
-                    EdgeKind::References,
-                    file_path,
-                    node.start_position().row as u32 + 1,
-                ));
-            }
-        }
-        "attribute" => {
-            // e.g. typing.Optional — emit the full dotted name
-            let name = node_text(node, source);
-            if !name.is_empty() {
-                edges.push(Edge::new(
-                    sym_id,
-                    name,
-                    EdgeKind::References,
-                    file_path,
-                    node.start_position().row as u32 + 1,
-                ));
-            }
-        }
-        // For subscript types like Optional[str], List[int], Dict[str, int]
-        // recurse into children to capture the outer type and inner types
-        _ => {
-            for child in node.named_children(&mut node.walk()) {
-                collect_type_refs(child, source, file_path, sym_id, edges);
+    let type_ref_idx = queries.type_ref.capture_index("type_ref");
+    let mut cursor = QueryCursor::new();
+    for m in cursor.matches(&queries.type_ref.query, node, source.as_bytes()) {
+        for capture in m.captures {
+            if capture.index == type_ref_idx {
+                let name = node_text(capture.node, source);
+                if capture.node.kind() == "identifier" {
+                    // Skip builtins and lowercase names (int, str, bool, etc.)
+                    if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                        edges.push(Edge::new(
+                            sym_id,
+                            name,
+                            EdgeKind::References,
+                            file_path,
+                            capture.node.start_position().row as u32 + 1,
+                        ));
+                    }
+                } else if capture.node.kind() == "attribute" {
+                    // e.g. typing.Optional — emit the full dotted name
+                    if !name.is_empty() {
+                        edges.push(Edge::new(
+                            sym_id,
+                            name,
+                            EdgeKind::References,
+                            file_path,
+                            capture.node.start_position().row as u32 + 1,
+                        ));
+                    }
+                }
             }
         }
     }

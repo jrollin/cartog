@@ -245,8 +245,9 @@ fn extract_type_spec(
     let type_node = node.child_by_field_name("type");
 
     let kind = match type_node.map(|t| t.kind()) {
-        Some("struct_type") | Some("interface_type") => SymbolKind::Class,
-        _ => SymbolKind::Variable, // type alias
+        Some("struct_type") => SymbolKind::Class,
+        Some("interface_type") => SymbolKind::Interface,
+        _ => SymbolKind::TypeAlias,
     };
 
     let sym_id = symbol_id(file_path, &name, start_line);
@@ -910,7 +911,7 @@ type Reader interface {
 
         let iface = result.symbols.iter().find(|s| s.name == "Reader");
         assert!(iface.is_some());
-        assert_eq!(iface.unwrap().kind, SymbolKind::Class);
+        assert_eq!(iface.unwrap().kind, SymbolKind::Interface);
     }
 
     #[test]
@@ -1200,13 +1201,13 @@ type UserID int64
 "#,
         );
 
-        // Non-struct/interface types are Variable (type alias)
+        // Non-struct/interface types are TypeAlias
         let handler = result.symbols.iter().find(|s| s.name == "Handler").unwrap();
-        assert_eq!(handler.kind, SymbolKind::Variable);
+        assert_eq!(handler.kind, SymbolKind::TypeAlias);
         assert_eq!(handler.visibility, Visibility::Public);
 
         let uid = result.symbols.iter().find(|s| s.name == "UserID").unwrap();
-        assert_eq!(uid.kind, SymbolKind::Variable);
+        assert_eq!(uid.kind, SymbolKind::TypeAlias);
     }
 
     #[test]

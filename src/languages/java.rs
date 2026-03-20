@@ -97,7 +97,7 @@ fn extract_class_like(
     let sym_id = symbol_id(file_path, &name, start_line);
     let mut sym = Symbol::new(
         name.clone(),
-        SymbolKind::Class,
+        if node.kind() == "enum_declaration" { SymbolKind::Enum } else { SymbolKind::Class },
         file_path,
         start_line,
         end_line,
@@ -121,7 +121,7 @@ fn extract_class_like(
 
     // implements (super_interfaces)
     if let Some(si) = node.child_by_field_name("interfaces") {
-        extract_super_interfaces_edges(si, source, file_path, &sym_id, start_line, edges);
+        extract_super_interfaces_edges(si, source, file_path, &sym_id, start_line, EdgeKind::Implements, edges);
     }
 
     // Walk body for methods, constructors, fields, nested named classes
@@ -157,7 +157,7 @@ fn extract_interface(
     let sym_id = symbol_id(file_path, &name, start_line);
     let mut sym = Symbol::new(
         name.clone(),
-        SymbolKind::Class,
+        SymbolKind::Interface,
         file_path,
         start_line,
         end_line,
@@ -177,7 +177,7 @@ fn extract_interface(
     // extends (extends_interfaces)
     for child in node.named_children(&mut node.walk()) {
         if child.kind() == "extends_interfaces" {
-            extract_super_interfaces_edges(child, source, file_path, &sym_id, start_line, edges);
+            extract_super_interfaces_edges(child, source, file_path, &sym_id, start_line, EdgeKind::Inherits, edges);
         }
     }
 
@@ -599,6 +599,7 @@ fn extract_super_interfaces_edges(
     file_path: &str,
     sym_id: &str,
     line: u32,
+    edge_kind: EdgeKind,
     edges: &mut Vec<Edge>,
 ) {
     // super_interfaces → type_list → type_identifier / scoped_type_identifier / generic_type
@@ -608,14 +609,14 @@ fn extract_super_interfaces_edges(
             for type_node in child.named_children(&mut child.walk()) {
                 let name = extract_simple_type_name(type_node, source);
                 if !name.is_empty() {
-                    edges.push(Edge::new(sym_id, name, EdgeKind::Inherits, file_path, line));
+                    edges.push(Edge::new(sym_id, name, edge_kind.clone(), file_path, line));
                 }
             }
         } else {
             // direct type_identifier (e.g. extends_interfaces on interface)
             let name = extract_simple_type_name(child, source);
             if !name.is_empty() {
-                edges.push(Edge::new(sym_id, name, EdgeKind::Inherits, file_path, line));
+                edges.push(Edge::new(sym_id, name, edge_kind.clone(), file_path, line));
             }
         }
     }
@@ -984,7 +985,7 @@ public interface Repository {
             .iter()
             .find(|s| s.name == "Repository")
             .unwrap();
-        assert_eq!(sym.kind, SymbolKind::Class);
+        assert_eq!(sym.kind, SymbolKind::Interface);
         assert_eq!(sym.visibility, Visibility::Public);
     }
 
@@ -998,7 +999,7 @@ public enum Status {
 "#,
         );
         let sym = result.symbols.iter().find(|s| s.name == "Status").unwrap();
-        assert_eq!(sym.kind, SymbolKind::Class);
+        assert_eq!(sym.kind, SymbolKind::Enum);
         assert_eq!(sym.visibility, Visibility::Public);
     }
 
@@ -1158,10 +1159,17 @@ public class UserService extends BaseService implements Repository, Auditable {
             .iter()
             .filter(|e| e.kind == EdgeKind::Inherits)
             .collect();
-        let targets: Vec<&str> = inherits.iter().map(|e| e.target_name.as_str()).collect();
-        assert!(targets.contains(&"BaseService"));
-        assert!(targets.contains(&"Repository"));
-        assert!(targets.contains(&"Auditable"));
+        let inherits_targets: Vec<&str> = inherits.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(inherits_targets.contains(&"BaseService"));
+
+        let implements: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Implements)
+            .collect();
+        let implements_targets: Vec<&str> = implements.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(implements_targets.contains(&"Repository"));
+        assert!(implements_targets.contains(&"Auditable"));
     }
 
     #[test]

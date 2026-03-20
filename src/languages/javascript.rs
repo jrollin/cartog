@@ -5,15 +5,18 @@ use super::{js_shared, ExtractionResult, Extractor};
 
 pub struct JavaScriptExtractor {
     parser: Parser,
+    queries: js_shared::JsQueries,
 }
 
 impl JavaScriptExtractor {
     pub fn new() -> Self {
+        let lang = Language::new(tree_sitter_javascript::LANGUAGE);
         let mut parser = Parser::new();
         parser
-            .set_language(&Language::new(tree_sitter_javascript::LANGUAGE))
+            .set_language(&lang)
             .expect("JavaScript grammar should always load");
-        Self { parser }
+        let queries = js_shared::JsQueries::new(&lang);
+        Self { parser, queries }
     }
 }
 
@@ -25,7 +28,7 @@ impl Default for JavaScriptExtractor {
 
 impl Extractor for JavaScriptExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        js_shared::extract(&mut self.parser, source, file_path)
+        js_shared::extract(&mut self.parser, &self.queries, source, file_path)
     }
 }
 

@@ -5,15 +5,18 @@ use super::{js_shared, ExtractionResult, Extractor};
 
 pub struct TypeScriptExtractor {
     parser: Parser,
+    queries: js_shared::JsQueries,
 }
 
 impl TypeScriptExtractor {
     pub fn new() -> Self {
+        let lang = Language::new(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
         let mut parser = Parser::new();
         parser
-            .set_language(&Language::new(tree_sitter_typescript::LANGUAGE_TYPESCRIPT))
+            .set_language(&lang)
             .expect("TypeScript grammar should always load");
-        Self { parser }
+        let queries = js_shared::JsQueries::new(&lang);
+        Self { parser, queries }
     }
 }
 
@@ -25,21 +28,24 @@ impl Default for TypeScriptExtractor {
 
 impl Extractor for TypeScriptExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        js_shared::extract(&mut self.parser, source, file_path)
+        js_shared::extract(&mut self.parser, &self.queries, source, file_path)
     }
 }
 
 pub struct TsxExtractor {
     parser: Parser,
+    queries: js_shared::JsQueries,
 }
 
 impl TsxExtractor {
     pub fn new() -> Self {
+        let lang = Language::new(tree_sitter_typescript::LANGUAGE_TSX);
         let mut parser = Parser::new();
         parser
-            .set_language(&Language::new(tree_sitter_typescript::LANGUAGE_TSX))
+            .set_language(&lang)
             .expect("TSX grammar should always load");
-        Self { parser }
+        let queries = js_shared::JsQueries::new(&lang);
+        Self { parser, queries }
     }
 }
 
@@ -51,7 +57,7 @@ impl Default for TsxExtractor {
 
 impl Extractor for TsxExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        js_shared::extract(&mut self.parser, source, file_path)
+        js_shared::extract(&mut self.parser, &self.queries, source, file_path)
     }
 }
 
@@ -150,11 +156,16 @@ class AdminService extends UserService implements Loggable {
             .iter()
             .filter(|e| e.kind == EdgeKind::Inherits)
             .collect();
-        assert_eq!(inherits.len(), 2);
+        assert_eq!(inherits.len(), 1);
+        assert_eq!(inherits[0].target_name, "UserService");
 
-        let targets: Vec<&str> = inherits.iter().map(|e| e.target_name.as_str()).collect();
-        assert!(targets.contains(&"UserService"));
-        assert!(targets.contains(&"Loggable"));
+        let implements: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Implements)
+            .collect();
+        assert_eq!(implements.len(), 1);
+        assert_eq!(implements[0].target_name, "Loggable");
     }
 
     #[test]
@@ -169,6 +180,7 @@ interface Serializable extends Readable {
 
         let iface = result.symbols.iter().find(|s| s.name == "Serializable");
         assert!(iface.is_some());
+        assert_eq!(iface.unwrap().kind, SymbolKind::Interface);
 
         let inherits: Vec<_> = result
             .edges
@@ -270,7 +282,7 @@ enum Status {
 
         let e = result.symbols.iter().find(|s| s.name == "Status");
         assert!(e.is_some());
-        assert_eq!(e.unwrap().kind, SymbolKind::Class);
+        assert_eq!(e.unwrap().kind, SymbolKind::Enum);
     }
 
     #[test]
@@ -283,7 +295,7 @@ type UserId = string;
 
         let t = result.symbols.iter().find(|s| s.name == "UserId");
         assert!(t.is_some());
-        assert_eq!(t.unwrap().kind, SymbolKind::Variable);
+        assert_eq!(t.unwrap().kind, SymbolKind::TypeAlias);
     }
 
     #[test]

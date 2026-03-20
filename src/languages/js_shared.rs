@@ -5,14 +5,76 @@
 //! kinds for functions, classes, imports, and calls are identical.
 
 use anyhow::Result;
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Language, Node, Parser, QueryCursor};
 
 use crate::types::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
+use super::queries::CachedQuery;
 use super::{node_text, ExtractionResult};
 
+/// Pre-compiled tree-sitter queries for JS/TS extraction.
+pub struct JsQueries {
+    /// `foo()`, `obj.method()`
+    call_query: CachedQuery,
+    call_callee_idx: u32,
+    /// `new Foo()`
+    new_query: CachedQuery,
+    new_ctor_idx: u32,
+    /// `throw new Error()`, `throw expr`
+    throw_query: CachedQuery,
+    throw_exc_idx: u32,
+    /// Type identifiers in annotations
+    type_ref_query: CachedQuery,
+    type_ref_idx: u32,
+}
+
+impl JsQueries {
+    pub fn new(language: &Language) -> Self {
+        let call_query = CachedQuery::new(
+            language,
+            "(call_expression function: [(identifier) (member_expression)] @callee)",
+        );
+        let call_callee_idx = call_query.capture_index("callee");
+
+        let new_query = CachedQuery::new(
+            language,
+            "(new_expression constructor: [(identifier) (member_expression)] @ctor)",
+        );
+        let new_ctor_idx = new_query.capture_index("ctor");
+
+        let throw_query = CachedQuery::new(
+            language,
+            r#"(throw_statement
+              [(new_expression constructor: [(identifier) (member_expression)] @exception)
+               (call_expression function: [(identifier) (member_expression)] @exception)
+               (identifier) @exception
+               (member_expression) @exception])"#,
+        );
+        let throw_exc_idx = throw_query.capture_index("exception");
+
+        let type_ref_query = CachedQuery::new(language, "(type_identifier) @type_ref");
+        let type_ref_idx = type_ref_query.capture_index("type_ref");
+
+        Self {
+            call_query,
+            call_callee_idx,
+            new_query,
+            new_ctor_idx,
+            throw_query,
+            throw_exc_idx,
+            type_ref_query,
+            type_ref_idx,
+        }
+    }
+}
+
 /// Parse source and extract symbols + edges. Works for JS, TS, and TSX.
-pub fn extract(parser: &mut Parser, source: &str, file_path: &str) -> Result<ExtractionResult> {
+pub fn extract(
+    parser: &mut Parser,
+    queries: &JsQueries,
+    source: &str,
+    file_path: &str,
+) -> Result<ExtractionResult> {
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;
@@ -25,6 +87,7 @@ pub fn extract(parser: &mut Parser, source: &str, file_path: &str) -> Result<Ext
         source,
         file_path,
         None,
+        queries,
         &mut symbols,
         &mut edges,
     );
@@ -37,21 +100,24 @@ fn extract_node(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
     match node.kind() {
         // Functions
         "function_declaration" => {
-            extract_function(node, source, file_path, parent_id, symbols, edges);
+            extract_function(node, source, file_path, parent_id, queries, symbols, edges);
         }
         // Arrow functions and function expressions assigned to variables
         "lexical_declaration" | "variable_declaration" => {
-            extract_variable_declaration(node, source, file_path, parent_id, symbols, edges);
+            extract_variable_declaration(
+                node, source, file_path, parent_id, queries, symbols, edges,
+            );
         }
         // Classes
         "class_declaration" => {
-            extract_class(node, source, file_path, parent_id, symbols, edges);
+            extract_class(node, source, file_path, parent_id, queries, symbols, edges);
         }
         // Imports
         "import_statement" => {
@@ -60,12 +126,12 @@ fn extract_node(
         // Exports that wrap declarations
         "export_statement" => {
             for child in node.named_children(&mut node.walk()) {
-                extract_node(child, source, file_path, parent_id, symbols, edges);
+                extract_node(child, source, file_path, parent_id, queries, symbols, edges);
             }
         }
         // Expression statements — scan for calls
         "expression_statement" => {
-            walk_for_calls_and_throws(node, source, file_path, parent_id, edges);
+            walk_for_calls_and_throws_q(node, source, file_path, parent_id, queries, edges);
         }
         // TypeScript-specific
         "interface_declaration" => {
@@ -79,7 +145,7 @@ fn extract_node(
         }
         _ => {
             for child in node.named_children(&mut node.walk()) {
-                extract_node(child, source, file_path, parent_id, symbols, edges);
+                extract_node(child, source, file_path, parent_id, queries, symbols, edges);
             }
         }
     }
@@ -92,6 +158,7 @@ fn extract_function(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -131,12 +198,12 @@ fn extract_function(
     );
 
     // Extract type annotation references from parameters and return type
-    extract_fn_type_refs(node, source, file_path, &sym_id, edges);
+    extract_fn_type_refs_q(node, source, file_path, &sym_id, queries, edges);
 
     // Walk body for calls/throws
     if let Some(body) = node.child_by_field_name("body") {
-        walk_for_calls_and_throws(body, source, file_path, Some(&sym_id), edges);
-        walk_body_for_nested(body, source, file_path, &sym_id, symbols, edges);
+        walk_for_calls_and_throws_q(body, source, file_path, Some(&sym_id), queries, edges);
+        walk_body_for_nested(body, source, file_path, &sym_id, queries, symbols, edges);
     }
 }
 
@@ -147,6 +214,7 @@ fn extract_variable_declaration(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -192,11 +260,18 @@ fn extract_variable_declaration(
                 .with_docstring(docstring),
             );
 
-            extract_fn_type_refs(val, source, file_path, &sym_id, edges);
+            extract_fn_type_refs_q(val, source, file_path, &sym_id, queries, edges);
 
             if let Some(body) = val.child_by_field_name("body") {
-                walk_for_calls_and_throws(body, source, file_path, Some(&sym_id), edges);
-                walk_body_for_nested(body, source, file_path, &sym_id, symbols, edges);
+                walk_for_calls_and_throws_q(
+                    body,
+                    source,
+                    file_path,
+                    Some(&sym_id),
+                    queries,
+                    edges,
+                );
+                walk_body_for_nested(body, source, file_path, &sym_id, queries, symbols, edges);
             }
         } else {
             // Plain variable
@@ -214,8 +289,6 @@ fn extract_variable_declaration(
                 .with_parent(parent_id)
                 .with_docstring(docstring),
             );
-            // Note: don't walk for calls here — the parent function body
-            // already walks the entire subtree via walk_for_calls_and_throws
         }
     }
 }
@@ -227,6 +300,7 @@ fn extract_class(
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
+    queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -261,7 +335,6 @@ fn extract_class(
                 for clause in child.named_children(&mut child.walk()) {
                     match clause.kind() {
                         "extends_clause" => {
-                            // TS: extends_clause has a "value" field
                             if let Some(val) = clause.child_by_field_name("value") {
                                 let base_name = extract_type_name(val, source);
                                 if !base_name.is_empty() {
@@ -282,7 +355,7 @@ fn extract_class(
                                     edges.push(Edge::new(
                                         sym_id.clone(),
                                         iface_name,
-                                        EdgeKind::Inherits,
+                                        EdgeKind::Implements,
                                         file_path,
                                         tc.start_position().row as u32 + 1,
                                     ));
@@ -314,7 +387,7 @@ fn extract_class(
         for child in body.named_children(&mut body.walk()) {
             match child.kind() {
                 "method_definition" => {
-                    extract_method(child, source, file_path, &sym_id, symbols, edges);
+                    extract_method(child, source, file_path, &sym_id, queries, symbols, edges);
                 }
                 "public_field_definition" | "field_definition" | "property_definition" => {
                     extract_field(child, source, file_path, &sym_id, symbols);
@@ -330,6 +403,7 @@ fn extract_method(
     source: &str,
     file_path: &str,
     class_id: &str,
+    queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -363,10 +437,10 @@ fn extract_method(
         .with_docstring(docstring),
     );
 
-    extract_fn_type_refs(node, source, file_path, &sym_id, edges);
+    extract_fn_type_refs_q(node, source, file_path, &sym_id, queries, edges);
 
     if let Some(body) = node.child_by_field_name("body") {
-        walk_for_calls_and_throws(body, source, file_path, Some(&sym_id), edges);
+        walk_for_calls_and_throws_q(body, source, file_path, Some(&sym_id), queries, edges);
     }
 }
 
@@ -517,7 +591,7 @@ fn extract_interface(
     symbols.push(
         Symbol::new(
             &name,
-            SymbolKind::Class,
+            SymbolKind::Interface,
             file_path,
             start_line,
             end_line,
@@ -567,7 +641,7 @@ fn extract_type_alias(
     symbols.push(
         Symbol::new(
             &name,
-            SymbolKind::Variable,
+            SymbolKind::TypeAlias,
             file_path,
             start_line,
             node.end_position().row as u32 + 1,
@@ -597,7 +671,7 @@ fn extract_enum(
     symbols.push(
         Symbol::new(
             &name,
-            SymbolKind::Class,
+            SymbolKind::Enum,
             file_path,
             start_line,
             node.end_position().row as u32 + 1,
@@ -609,107 +683,92 @@ fn extract_enum(
     );
 }
 
-// ── Call / Throw walking ──
+// ── Call / Throw walking (query-based) ──
 
-fn walk_for_calls_and_throws(
+/// Check whether a captured node is inside a nested function or class scope
+/// relative to the search root. If so, it belongs to a different scope and
+/// should be skipped.
+fn is_inside_nested_scope(node: Node, root: Node) -> bool {
+    let mut parent = node.parent();
+    while let Some(p) = parent {
+        if p.id() == root.id() {
+            return false;
+        }
+        match p.kind() {
+            "function_declaration" | "arrow_function" | "function_expression"
+            | "class_declaration" | "method_definition" => return true,
+            _ => {}
+        }
+        parent = p.parent();
+    }
+    false
+}
+
+fn walk_for_calls_and_throws_q(
     node: Node,
     source: &str,
     file_path: &str,
     context_id: Option<&str>,
+    queries: &JsQueries,
     edges: &mut Vec<Edge>,
 ) {
-    let mut cursor = node.walk();
-    let mut did_visit_children = false;
+    let Some(ctx) = context_id else { return };
 
-    loop {
-        let current = cursor.node();
-
-        if !did_visit_children {
-            match current.kind() {
-                "call_expression" => {
-                    if let Some(ctx) = context_id {
-                        if let Some(func) = current.child_by_field_name("function") {
-                            let callee_name = node_text(func, source).to_string();
-                            if !callee_name.is_empty() {
-                                edges.push(Edge::new(
-                                    ctx.to_string(),
-                                    callee_name,
-                                    EdgeKind::Calls,
-                                    file_path,
-                                    current.start_position().row as u32 + 1,
-                                ));
-                            }
-                        }
-                    }
+    // Collect call edges
+    let mut cursor = QueryCursor::new();
+    for m in cursor.matches(&queries.call_query.query, node, source.as_bytes()) {
+        for capture in m.captures {
+            if capture.index == queries.call_callee_idx
+                && !is_inside_nested_scope(capture.node, node)
+            {
+                let name = node_text(capture.node, source);
+                if !name.is_empty() {
+                    edges.push(Edge::new(
+                        ctx,
+                        name,
+                        EdgeKind::Calls,
+                        file_path,
+                        capture.node.start_position().row as u32 + 1,
+                    ));
                 }
-                "new_expression" => {
-                    if let Some(ctx) = context_id {
-                        if let Some(ctor) = current.child_by_field_name("constructor") {
-                            let ctor_name = node_text(ctor, source).to_string();
-                            if !ctor_name.is_empty() {
-                                edges.push(Edge::new(
-                                    ctx.to_string(),
-                                    ctor_name,
-                                    EdgeKind::Calls,
-                                    file_path,
-                                    current.start_position().row as u32 + 1,
-                                ));
-                            }
-                        }
-                    }
-                }
-                "throw_statement" => {
-                    if let Some(ctx) = context_id {
-                        if let Some(exc) = current.named_child(0) {
-                            let exc_name = if exc.kind() == "new_expression" {
-                                exc.child_by_field_name("constructor")
-                                    .map(|c| node_text(c, source).to_string())
-                                    .unwrap_or_default()
-                            } else if exc.kind() == "call_expression" {
-                                exc.child_by_field_name("function")
-                                    .map(|f| node_text(f, source).to_string())
-                                    .unwrap_or_default()
-                            } else {
-                                node_text(exc, source).to_string()
-                            };
-                            if !exc_name.is_empty() {
-                                edges.push(Edge::new(
-                                    ctx.to_string(),
-                                    exc_name,
-                                    EdgeKind::Raises,
-                                    file_path,
-                                    current.start_position().row as u32 + 1,
-                                ));
-                            }
-                        }
-                    }
-                }
-                // Don't descend into nested function/class scopes
-                "function_declaration"
-                | "class_declaration"
-                | "arrow_function"
-                | "function_expression" => {
-                    did_visit_children = true;
-                    continue;
-                }
-                _ => {}
             }
         }
+    }
 
-        if !did_visit_children && cursor.goto_first_child() {
-            did_visit_children = false;
-            continue;
-        }
-        did_visit_children = false;
-        if cursor.goto_next_sibling() {
-            continue;
-        }
-        loop {
-            if !cursor.goto_parent() {
-                return;
+    // Collect new expression edges (also treated as calls)
+    let mut cursor = QueryCursor::new();
+    for m in cursor.matches(&queries.new_query.query, node, source.as_bytes()) {
+        for capture in m.captures {
+            if capture.index == queries.new_ctor_idx
+                && !is_inside_nested_scope(capture.node, node)
+            {
+                let name = node_text(capture.node, source);
+                if !name.is_empty() {
+                    edges.push(Edge::new(
+                        ctx,
+                        name,
+                        EdgeKind::Calls,
+                        file_path,
+                        capture.node.start_position().row as u32 + 1,
+                    ));
+                }
             }
-            if cursor.goto_next_sibling() {
-                break;
+        }
+    }
+
+    // Collect throw edges
+    let mut cursor = QueryCursor::new();
+    let mut seen_throws = std::collections::HashSet::new();
+    for m in cursor.matches(&queries.throw_query.query, node, source.as_bytes()) {
+        for capture in m.captures {
+            if capture.index == queries.throw_exc_idx
+                && !is_inside_nested_scope(capture.node, node)
+            {
+                let line = capture.node.start_position().row as u32 + 1;
+                let name = node_text(capture.node, source);
+                if !name.is_empty() && seen_throws.insert((name.to_string(), line)) {
+                    edges.push(Edge::new(ctx, name, EdgeKind::Raises, file_path, line));
+                }
             }
         }
     }
@@ -720,6 +779,7 @@ fn walk_body_for_nested(
     source: &str,
     file_path: &str,
     parent_id: &str,
+    queries: &JsQueries,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -729,56 +789,67 @@ fn walk_body_for_nested(
             | "class_declaration"
             | "lexical_declaration"
             | "variable_declaration" => {
-                extract_node(child, source, file_path, Some(parent_id), symbols, edges);
+                extract_node(
+                    child,
+                    source,
+                    file_path,
+                    Some(parent_id),
+                    queries,
+                    symbols,
+                    edges,
+                );
             }
             _ => {}
         }
     }
 }
 
-// ── Type reference extraction ──
+// ── Type reference extraction (query-based) ──
 
 /// Extract type annotation references from function parameters and return type.
-fn extract_fn_type_refs(
+fn extract_fn_type_refs_q(
     node: Node,
     source: &str,
     file_path: &str,
     sym_id: &str,
+    queries: &JsQueries,
     edges: &mut Vec<Edge>,
 ) {
-    // Walk parameters looking for type_annotation nodes
+    // Walk parameters looking for type_identifier nodes
     if let Some(params) = node.child_by_field_name("parameters") {
-        collect_type_refs_recursive(params, source, file_path, sym_id, edges);
+        collect_type_refs_q(params, source, file_path, sym_id, queries, edges);
     }
     // Return type annotation
     if let Some(ret) = node.child_by_field_name("return_type") {
-        collect_type_refs_recursive(ret, source, file_path, sym_id, edges);
+        collect_type_refs_q(ret, source, file_path, sym_id, queries, edges);
     }
 }
 
-/// Recursively walk a subtree collecting type_identifier references.
-fn collect_type_refs_recursive(
+/// Collect type_identifier references from a subtree using query API.
+fn collect_type_refs_q(
     node: Node,
     source: &str,
     file_path: &str,
     sym_id: &str,
+    queries: &JsQueries,
     edges: &mut Vec<Edge>,
 ) {
-    if node.kind() == "type_identifier" {
-        let name = node_text(node, source);
-        // Skip built-in types (lowercase: string, number, boolean, void, etc.)
-        if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_uppercase()) {
-            edges.push(Edge::new(
-                sym_id,
-                name,
-                EdgeKind::References,
-                file_path,
-                node.start_position().row as u32 + 1,
-            ));
-        }
-    } else {
-        for child in node.named_children(&mut node.walk()) {
-            collect_type_refs_recursive(child, source, file_path, sym_id, edges);
+    let mut cursor = QueryCursor::new();
+    for m in cursor.matches(&queries.type_ref_query.query, node, source.as_bytes()) {
+        for capture in m.captures {
+            if capture.index == queries.type_ref_idx {
+                let name = node_text(capture.node, source);
+                // Skip built-in types (lowercase: string, number, boolean, void, etc.)
+                if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_uppercase()) {
+                    edges.push(Edge::new(
+                        sym_id,
+                        name,
+                        EdgeKind::References,
+                        file_path,
+                        capture.node.start_position().row as u32 + 1,
+                    ));
+                }
+            }
         }
     }
 }

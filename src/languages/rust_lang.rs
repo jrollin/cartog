@@ -206,7 +206,7 @@ fn extract_enum(
     symbols.push(
         Symbol::new(
             name,
-            SymbolKind::Class,
+            SymbolKind::Enum,
             file_path,
             start_line,
             node.end_position().row as u32 + 1,
@@ -240,7 +240,7 @@ fn extract_trait(
     symbols.push(
         Symbol::new(
             name,
-            SymbolKind::Class,
+            SymbolKind::Trait,
             file_path,
             start_line,
             node.end_position().row as u32 + 1,
@@ -298,7 +298,7 @@ fn extract_impl(
             edges.push(Edge::new(
                 impl_parent_id.clone(),
                 trait_n.clone(),
-                EdgeKind::Inherits,
+                EdgeKind::Implements,
                 file_path,
                 start_line,
             ));
@@ -485,7 +485,7 @@ fn extract_mod(
         symbols.push(
             Symbol::new(
                 name,
-                SymbolKind::Class,
+                SymbolKind::Module,
                 file_path,
                 start_line,
                 node.end_position().row as u32 + 1,
@@ -563,7 +563,7 @@ fn extract_type_alias(
     symbols.push(
         Symbol::new(
             name,
-            SymbolKind::Variable,
+            SymbolKind::TypeAlias,
             file_path,
             start_line,
             node.end_position().row as u32 + 1,
@@ -921,7 +921,7 @@ impl Serializable for UserService {
         let inherits: Vec<_> = result
             .edges
             .iter()
-            .filter(|e| e.kind == EdgeKind::Inherits)
+            .filter(|e| e.kind == EdgeKind::Implements)
             .collect();
         assert_eq!(inherits.len(), 1);
         assert_eq!(inherits[0].target_name, "Serializable");
@@ -941,7 +941,7 @@ pub enum Status {
 
         let e = result.symbols.iter().find(|s| s.name == "Status");
         assert!(e.is_some());
-        assert_eq!(e.unwrap().kind, SymbolKind::Class);
+        assert_eq!(e.unwrap().kind, SymbolKind::Enum);
         assert_eq!(e.unwrap().visibility, Visibility::Public);
     }
 
@@ -1145,7 +1145,7 @@ type Handler = Box<dyn Fn()>;
         );
 
         let alias = result.symbols.iter().find(|s| s.name == "Result").unwrap();
-        assert_eq!(alias.kind, SymbolKind::Variable);
+        assert_eq!(alias.kind, SymbolKind::TypeAlias);
         assert_eq!(alias.visibility, Visibility::Public);
 
         let handler = result.symbols.iter().find(|s| s.name == "Handler").unwrap();
@@ -1164,7 +1164,7 @@ pub mod auth {
         );
 
         let module = result.symbols.iter().find(|s| s.name == "auth").unwrap();
-        assert_eq!(module.kind, SymbolKind::Class);
+        assert_eq!(module.kind, SymbolKind::Module);
         assert_eq!(module.visibility, Visibility::Public);
 
         let login = result.symbols.iter().find(|s| s.name == "login").unwrap();

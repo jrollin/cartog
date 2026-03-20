@@ -3,6 +3,7 @@ pub mod java;
 pub mod javascript;
 mod js_shared;
 pub mod python;
+pub(crate) mod queries;
 pub mod ruby;
 pub mod rust_lang;
 pub mod typescript;

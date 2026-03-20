@@ -289,7 +289,7 @@ fn extract_module(
     let sym_id = symbol_id(file_path, &name, start_line);
     let sym = Symbol::new(
         &name,
-        SymbolKind::Class,
+        SymbolKind::Module,
         file_path,
         start_line,
         end_line,
@@ -755,7 +755,7 @@ end
 
         let module = result.symbols.iter().find(|s| s.name == "Authentication");
         assert!(module.is_some());
-        assert_eq!(module.unwrap().kind, SymbolKind::Class);
+        assert_eq!(module.unwrap().kind, SymbolKind::Module);
 
         let method = result.symbols.iter().find(|s| s.name == "authenticate");
         assert!(method.is_some());

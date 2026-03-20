@@ -90,6 +90,11 @@ pub enum SymbolKind {
     Method,
     Variable,
     Import,
+    Interface,
+    Enum,
+    TypeAlias,
+    Trait,
+    Module,
 }
 
 impl SymbolKind {
@@ -100,6 +105,11 @@ impl SymbolKind {
             Self::Method => "method",
             Self::Variable => "variable",
             Self::Import => "import",
+            Self::Interface => "interface",
+            Self::Enum => "enum",
+            Self::TypeAlias => "type_alias",
+            Self::Trait => "trait",
+            Self::Module => "module",
         }
     }
 }
@@ -114,6 +124,11 @@ impl std::str::FromStr for SymbolKind {
             "method" => Ok(Self::Method),
             "variable" => Ok(Self::Variable),
             "import" => Ok(Self::Import),
+            "interface" => Ok(Self::Interface),
+            "enum" => Ok(Self::Enum),
+            "type_alias" => Ok(Self::TypeAlias),
+            "trait" => Ok(Self::Trait),
+            "module" => Ok(Self::Module),
             _ => Err(anyhow::anyhow!("unknown symbol kind: '{s}'")),
         }
     }
@@ -196,6 +211,8 @@ pub enum EdgeKind {
     Inherits,
     References,
     Raises,
+    Implements,
+    TypeOf,
 }
 
 impl EdgeKind {
@@ -206,6 +223,8 @@ impl EdgeKind {
             Self::Inherits => "inherits",
             Self::References => "references",
             Self::Raises => "raises",
+            Self::Implements => "implements",
+            Self::TypeOf => "type_of",
         }
     }
 }
@@ -220,6 +239,8 @@ impl std::str::FromStr for EdgeKind {
             "inherits" => Ok(Self::Inherits),
             "references" => Ok(Self::References),
             "raises" => Ok(Self::Raises),
+            "implements" => Ok(Self::Implements),
+            "type_of" => Ok(Self::TypeOf),
             _ => Err(anyhow::anyhow!("unknown edge kind: '{s}'")),
         }
     }

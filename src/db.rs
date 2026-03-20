@@ -399,17 +399,25 @@ impl Database {
     // ── Edge Resolution ──
 
     /// Resolve target_name → target_id for all unresolved edges.
-    /// Priority: exact match in same file > same directory > unique project-wide match.
+    ///
+    /// 5-tier priority resolution:
+    /// 1. Same file — symbol with matching name in the same file
+    /// 2. Import-path — follow imports to find the target in the imported file
+    /// 3. Same directory — symbol in a file in the same directory
+    /// 4. Parent scope preference — when multiple global matches, prefer same parent scope
+    /// 5. Unique project-wide match — exactly one symbol with that name globally
     pub fn resolve_edges(&self) -> Result<u32> {
         let mut resolved = 0u32;
 
         let mut unresolved_stmt = self.conn.prepare(
-            "SELECT e.id, e.target_name, e.file_path
+            "SELECT e.id, e.target_name, e.file_path, e.source_id
              FROM edges e WHERE e.target_id IS NULL",
         )?;
 
-        let unresolved: Vec<(i64, String, String)> = unresolved_stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        let unresolved: Vec<(i64, String, String, String)> = unresolved_stmt
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         let tx = self.conn.unchecked_transaction()?;
@@ -417,17 +425,38 @@ impl Database {
         let mut same_file_stmt = self
             .conn
             .prepare("SELECT id FROM symbols WHERE name = ?1 AND file_path = ?2 LIMIT 1")?;
+
+        // Import-path resolution: find files that the source file imports from,
+        // then look for the target symbol in those files
+        let mut import_resolve_stmt = self.conn.prepare(
+            "SELECT s.id FROM symbols s
+             INNER JOIN edges ie ON ie.kind = 'imports' AND ie.target_name = ?1
+             INNER JOIN symbols is2 ON is2.id = ie.source_id AND is2.file_path = ?2
+             WHERE s.name = ?1 AND s.kind != 'import'
+             LIMIT 1",
+        )?;
+
         let mut same_dir_stmt = self
             .conn
             .prepare("SELECT id FROM symbols WHERE name = ?1 AND file_path LIKE ?2 LIMIT 1")?;
+
+        // Parent scope preference: find symbols with same name and same parent scope
+        let mut parent_scope_stmt = self.conn.prepare(
+            "SELECT s.id FROM symbols s
+             INNER JOIN symbols source ON source.id = ?2
+             WHERE s.name = ?1 AND s.parent_id = source.parent_id AND s.id != source.id
+             LIMIT 1",
+        )?;
+
         let mut anywhere_stmt = self
             .conn
-            .prepare("SELECT id FROM symbols WHERE name = ?1 LIMIT 2")?;
+            .prepare("SELECT id FROM symbols WHERE name = ?1 AND kind != 'import' LIMIT 2")?;
+
         let mut update_stmt = self
             .conn
             .prepare("UPDATE edges SET target_id = ?1 WHERE id = ?2")?;
 
-        for (edge_id, target_name, edge_file) in &unresolved {
+        for (edge_id, target_name, edge_file, source_id) in &unresolved {
             let simple_name = target_name.rsplit('.').next().unwrap_or(target_name);
 
             // 1) Same file
@@ -441,7 +470,19 @@ impl Database {
                 continue;
             }
 
-            // 2) Same directory
+            // 2) Import-path resolution: if this file imports the target name,
+            //    find the symbol in any file that could be the import source
+            let target_id: Option<String> = import_resolve_stmt
+                .query_row(params![simple_name, edge_file], |row| row.get(0))
+                .optional()?;
+
+            if let Some(tid) = target_id {
+                update_stmt.execute(params![tid, edge_id])?;
+                resolved += 1;
+                continue;
+            }
+
+            // 3) Same directory
             let dir = edge_file
                 .rsplit_once('/')
                 .map(|(d, _)| format!("{d}/%"))
@@ -459,7 +500,19 @@ impl Database {
                 }
             }
 
-            // 3) Unique project-wide match — fetch at most 2 rows; resolve only if exactly 1
+            // 4) Parent scope preference: if the source symbol has a parent,
+            //    prefer a target in the same parent scope
+            let target_id: Option<String> = parent_scope_stmt
+                .query_row(params![simple_name, source_id], |row| row.get(0))
+                .optional()?;
+
+            if let Some(tid) = target_id {
+                update_stmt.execute(params![tid, edge_id])?;
+                resolved += 1;
+                continue;
+            }
+
+            // 5) Unique project-wide match — fetch at most 2 rows; resolve only if exactly 1
             let mut rows = anywhere_stmt.query(params![simple_name])?;
             let first = rows.next()?.and_then(|r| r.get::<_, String>(0).ok());
             let has_second = rows.next()?.is_some();

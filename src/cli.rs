@@ -23,6 +23,11 @@ pub enum SymbolKindFilter {
     Method,
     Variable,
     Import,
+    Interface,
+    Enum,
+    TypeAlias,
+    Trait,
+    Module,
 }
 
 impl From<SymbolKindFilter> for SymbolKind {
@@ -33,6 +38,11 @@ impl From<SymbolKindFilter> for SymbolKind {
             SymbolKindFilter::Method => SymbolKind::Method,
             SymbolKindFilter::Variable => SymbolKind::Variable,
             SymbolKindFilter::Import => SymbolKind::Import,
+            SymbolKindFilter::Interface => SymbolKind::Interface,
+            SymbolKindFilter::Enum => SymbolKind::Enum,
+            SymbolKindFilter::TypeAlias => SymbolKind::TypeAlias,
+            SymbolKindFilter::Trait => SymbolKind::Trait,
+            SymbolKindFilter::Module => SymbolKind::Module,
         }
     }
 }
@@ -45,6 +55,8 @@ pub enum EdgeKindFilter {
     Inherits,
     References,
     Raises,
+    Implements,
+    TypeOf,
 }
 
 impl From<EdgeKindFilter> for EdgeKind {
@@ -55,6 +67,8 @@ impl From<EdgeKindFilter> for EdgeKind {
             EdgeKindFilter::Inherits => EdgeKind::Inherits,
             EdgeKindFilter::References => EdgeKind::References,
             EdgeKindFilter::Raises => EdgeKind::Raises,
+            EdgeKindFilter::Implements => EdgeKind::Implements,
+            EdgeKindFilter::TypeOf => EdgeKind::TypeOf,
         }
     }
 }
