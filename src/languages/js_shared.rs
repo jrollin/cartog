@@ -9,7 +9,7 @@ use tree_sitter::{Language, Node, Parser, QueryCursor};
 
 use crate::types::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
-use super::queries::CachedQuery;
+use super::queries::{is_inside_nested_scope, CachedQuery};
 use super::{node_text, ExtractionResult};
 
 /// Pre-compiled tree-sitter queries for JS/TS extraction.
@@ -685,24 +685,13 @@ fn extract_enum(
 
 // ── Call / Throw walking (query-based) ──
 
-/// Check whether a captured node is inside a nested function or class scope
-/// relative to the search root. If so, it belongs to a different scope and
-/// should be skipped.
-fn is_inside_nested_scope(node: Node, root: Node) -> bool {
-    let mut parent = node.parent();
-    while let Some(p) = parent {
-        if p.id() == root.id() {
-            return false;
-        }
-        match p.kind() {
-            "function_declaration" | "arrow_function" | "function_expression"
-            | "class_declaration" | "method_definition" => return true,
-            _ => {}
-        }
-        parent = p.parent();
-    }
-    false
-}
+const JS_SCOPE_KINDS: &[&str] = &[
+    "function_declaration",
+    "arrow_function",
+    "function_expression",
+    "class_declaration",
+    "method_definition",
+];
 
 fn walk_for_calls_and_throws_q(
     node: Node,
@@ -719,7 +708,7 @@ fn walk_for_calls_and_throws_q(
     for m in cursor.matches(&queries.call_query.query, node, source.as_bytes()) {
         for capture in m.captures {
             if capture.index == queries.call_callee_idx
-                && !is_inside_nested_scope(capture.node, node)
+                && !is_inside_nested_scope(capture.node, node, JS_SCOPE_KINDS)
             {
                 let name = node_text(capture.node, source);
                 if !name.is_empty() {
@@ -740,7 +729,7 @@ fn walk_for_calls_and_throws_q(
     for m in cursor.matches(&queries.new_query.query, node, source.as_bytes()) {
         for capture in m.captures {
             if capture.index == queries.new_ctor_idx
-                && !is_inside_nested_scope(capture.node, node)
+                && !is_inside_nested_scope(capture.node, node, JS_SCOPE_KINDS)
             {
                 let name = node_text(capture.node, source);
                 if !name.is_empty() {
@@ -762,7 +751,7 @@ fn walk_for_calls_and_throws_q(
     for m in cursor.matches(&queries.throw_query.query, node, source.as_bytes()) {
         for capture in m.captures {
             if capture.index == queries.throw_exc_idx
-                && !is_inside_nested_scope(capture.node, node)
+                && !is_inside_nested_scope(capture.node, node, JS_SCOPE_KINDS)
             {
                 let line = capture.node.start_position().row as u32 + 1;
                 let name = node_text(capture.node, source);

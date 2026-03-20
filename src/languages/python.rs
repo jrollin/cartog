@@ -3,7 +3,7 @@ use tree_sitter::{Language, Node, Parser, QueryCursor};
 
 use crate::types::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
-use super::queries::CachedQuery;
+use super::queries::{is_inside_nested_scope, CachedQuery};
 use super::{node_text, ExtractionResult, Extractor};
 
 pub struct PythonExtractor {
@@ -417,7 +417,7 @@ fn walk_for_calls_and_raises_q(
             for capture in m.captures {
                 if capture.index == callee_idx {
                     // Skip if inside a nested function/class definition
-                    if is_inside_nested_scope(capture.node, node) {
+                    if is_inside_nested_scope(capture.node, node, PY_SCOPE_KINDS) {
                         continue;
                     }
                     let callee_name = node_text(capture.node, source);
@@ -442,12 +442,14 @@ fn walk_for_calls_and_raises_q(
         for m in cursor.matches(&queries.raise.query, node, source.as_bytes()) {
             for capture in m.captures {
                 if capture.index == exception_idx {
-                    if is_inside_nested_scope(capture.node, node) {
+                    if is_inside_nested_scope(capture.node, node, PY_SCOPE_KINDS) {
                         continue;
                     }
                     let line = capture.node.start_position().row as u32 + 1;
                     let exc_name = node_text(capture.node, source);
-                    if !exc_name.is_empty() && seen_raises.insert(line) {
+                    if !exc_name.is_empty()
+                        && seen_raises.insert((exc_name.to_string(), line))
+                    {
                         edges.push(Edge::new(
                             ctx,
                             exc_name,
@@ -467,7 +469,7 @@ fn walk_for_calls_and_raises_q(
         for m in cursor.matches(&queries.except.query, node, source.as_bytes()) {
             for capture in m.captures {
                 if capture.index == except_type_idx {
-                    if is_inside_nested_scope(capture.node, node) {
+                    if is_inside_nested_scope(capture.node, node, PY_SCOPE_KINDS) {
                         continue;
                     }
                     let type_name = node_text(capture.node, source);
@@ -488,23 +490,7 @@ fn walk_for_calls_and_raises_q(
     }
 }
 
-/// Check if a node is inside a nested function/class definition relative to the scope root.
-///
-/// Returns true if there's a function_definition or class_definition between
-/// `node` and `scope_root`, meaning the node belongs to a nested scope.
-fn is_inside_nested_scope(node: Node, scope_root: Node) -> bool {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if parent.id() == scope_root.id() {
-            return false;
-        }
-        if parent.kind() == "function_definition" || parent.kind() == "class_definition" {
-            return true;
-        }
-        current = parent.parent();
-    }
-    false
-}
+const PY_SCOPE_KINDS: &[&str] = &["function_definition", "class_definition"];
 
 // ── Reference helpers ──
 

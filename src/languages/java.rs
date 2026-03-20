@@ -609,7 +609,7 @@ fn extract_super_interfaces_edges(
             for type_node in child.named_children(&mut child.walk()) {
                 let name = extract_simple_type_name(type_node, source);
                 if !name.is_empty() {
-                    edges.push(Edge::new(sym_id, name, edge_kind.clone(), file_path, line));
+                    edges.push(Edge::new(sym_id, name, edge_kind, file_path, line));
                 }
             }
         } else {

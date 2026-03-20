@@ -426,13 +426,19 @@ impl Database {
             .conn
             .prepare("SELECT id FROM symbols WHERE name = ?1 AND file_path = ?2 LIMIT 1")?;
 
-        // Import-path resolution: find files that the source file imports from,
-        // then look for the target symbol in those files
+        // Import-path resolution: if this file has a resolved import edge for the
+        // target name, follow it to find the target's file, then look for a
+        // non-import symbol with that name in that file.
+        // Only works when the import edge was already resolved (e.g. via same-file
+        // match in an earlier iteration); otherwise returns no rows and falls through.
         let mut import_resolve_stmt = self.conn.prepare(
             "SELECT s.id FROM symbols s
              INNER JOIN edges ie ON ie.kind = 'imports' AND ie.target_name = ?1
+                 AND ie.target_id IS NOT NULL
              INNER JOIN symbols is2 ON is2.id = ie.source_id AND is2.file_path = ?2
+             INNER JOIN symbols resolved ON resolved.id = ie.target_id
              WHERE s.name = ?1 AND s.kind != 'import'
+                 AND s.file_path = resolved.file_path
              LIMIT 1",
         )?;
 
