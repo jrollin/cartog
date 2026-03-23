@@ -18,7 +18,7 @@ fn open_db() -> Result<Database> {
 /// Estimate token count from a string using chars/4 approximation.
 #[cfg(test)]
 fn estimate_tokens(s: &str) -> u32 {
-    (s.len() as u32 + 3) / 4
+    (s.len() as u32).div_ceil(4)
 }
 
 /// Truncate a string to fit within a token budget, appending a truncation notice.
