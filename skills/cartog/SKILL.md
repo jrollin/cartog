@@ -99,9 +99,16 @@ Before first use, ensure cartog is installed and indexed:
 # Install if missing
 command -v cartog || bash scripts/install.sh
 
-# Run the setup script (handles all 3 phases)
+# Run the setup script (handles version check + 3 indexing phases)
 bash scripts/ensure_indexed.sh
 ```
+
+The setup script checks for newer cartog versions (cached, at most once per 24h).
+If an update is available it prints a notice like:
+```
+New cartog version available: 0.7.0 (installed: 0.6.1). Update with: bash scripts/install.sh 0.7.0
+```
+When you see this notice, ask the user if they want to update before continuing. If they agree, run the suggested command, then re-run `bash scripts/ensure_indexed.sh`.
 
 ### Search quality tiers
 

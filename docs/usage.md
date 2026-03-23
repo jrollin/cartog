@@ -374,7 +374,7 @@ Or install manually:
 cp -r skills/cartog ~/.claude/skills/
 ```
 
-At session start, run the setup script (3-phase: blocking index + model download, background RAG embedding). First run downloads ~1.2GB of ONNX models and may take a few minutes — subsequent runs are instant:
+At session start, run the setup script (version check + 3-phase: blocking index + model download, background RAG embedding). Checks for newer cartog versions (cached, at most once per 24h). First run downloads ~1.2GB of ONNX models and may take a few minutes — subsequent runs are instant:
 
 ```bash
 bash scripts/ensure_indexed.sh
@@ -385,10 +385,11 @@ bash scripts/ensure_indexed.sh
 | File | Purpose |
 |------|---------|
 | [`SKILL.md`](../skills/cartog/SKILL.md) | Behavioral instructions, commands, and workflows |
-| [`scripts/install.sh`](../skills/cartog/scripts/install.sh) | Automated installation (pre-built binary or cargo install) |
-| [`scripts/ensure_indexed.sh`](../skills/cartog/scripts/ensure_indexed.sh) | 3-phase setup: blocking index + rag setup, background rag index |
+| [`scripts/install.sh`](../skills/cartog/scripts/install.sh) | Automated installation (pre-built binary or cargo install), accepts optional version arg |
+| [`scripts/ensure_indexed.sh`](../skills/cartog/scripts/ensure_indexed.sh) | Version check + 3-phase setup: blocking index + rag setup, background rag index |
 | [`tests/golden_examples.yaml`](../skills/cartog/tests/golden_examples.yaml) | Behavioral test scenarios (expected tool calls per query) |
 | [`tests/test_ensure_indexed.sh`](../skills/cartog/tests/test_ensure_indexed.sh) | Bash unit tests for ensure_indexed.sh |
+| [`tests/test_install.sh`](../skills/cartog/tests/test_install.sh) | Bash unit tests for install.sh |
 | [`tests/eval.sh`](../skills/cartog/tests/eval.sh) | LLM-as-judge evaluation via `claude` CLI |
 | [`references/query_cookbook.md`](../skills/cartog/references/query_cookbook.md) | Recipes for common navigation patterns |
 | [`references/supported_languages.md`](../skills/cartog/references/supported_languages.md) | Language support matrix |
@@ -408,7 +409,8 @@ cartog serve --watch --rag    # auto-re-index + auto-embed
 All clients need `cartog` on your `PATH` first:
 
 ```bash
-cargo install cartog
+cargo install cartog            # latest version
+cargo install cartog@0.7.0      # specific version
 ```
 
 #### Claude Code

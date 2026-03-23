@@ -86,8 +86,13 @@ assert_file_exists() {
 create_mock_cartog() {
     local exit_rag_setup="${1:-0}"
     local rag_setup_stderr="${2:-}"
+    local mock_version="${3:-0.6.1}"
     cat > "$TEST_DIR/bin/cartog" <<MOCK
 #!/usr/bin/env bash
+if [ "\$1" = "--version" ]; then
+    echo "cartog $mock_version"
+    exit 0
+fi
 echo "\$@" >> "$CARTOG_TEST_LOG"
 
 # Simulate different subcommands
@@ -106,12 +111,28 @@ MOCK
     chmod +x "$TEST_DIR/bin/cartog"
 }
 
-# Run ensure_indexed.sh with mocked cartog, in a temp workdir
+# Create a mock curl that returns a fake GitHub release response
+create_mock_curl() {
+    local latest_version="${1:-0.7.0}"
+    local exit_code="${2:-0}"
+    cat > "$TEST_DIR/bin/curl" <<MOCK
+#!/usr/bin/env bash
+if [ "$exit_code" -ne 0 ]; then
+    exit $exit_code
+fi
+echo '{ "tag_name": "v$latest_version" }'
+MOCK
+    chmod +x "$TEST_DIR/bin/curl"
+}
+
+# Run ensure_indexed.sh with mocked cartog and curl, in a temp workdir
 run_ensure_indexed() {
     local workdir="$TEST_DIR/workdir"
     mkdir -p "$workdir"
     (
         export PATH="$TEST_DIR/bin:$PATH"
+        export HOME="$TEST_DIR/home"
+        mkdir -p "$HOME"
         cd "$workdir"
         bash "$ENSURE_SCRIPT" 2>&1
     )
@@ -266,6 +287,8 @@ test_lock_cleaned_after_rag_index() {
 
 test_stale_lock_removed() {
     echo "TEST: stale lock (>1 hour) is removed and rag index proceeds"
+    # Wait for any background rag index from previous tests to finish and release lock
+    sleep 0.5
     setup
     create_mock_cartog
 
@@ -299,6 +322,101 @@ test_output_messages() {
     teardown
 }
 
+# --- version check tests ---
+
+test_no_cache_triggers_fetch() {
+    echo "TEST: no cache file triggers GitHub API fetch and creates cache"
+    setup
+    create_mock_cartog 0 "" "0.6.1"
+    create_mock_curl "0.7.0"
+
+    local output
+    output=$(run_ensure_indexed)
+
+    assert_contains "prints update notice" "New cartog version available: 0.7.0 (installed: 0.6.1)" "$output"
+    assert_file_exists "cache file created" "$TEST_DIR/home/.cache/cartog/latest_version"
+    teardown
+}
+
+test_fresh_cache_skips_fetch() {
+    echo "TEST: fresh cache (<24h) skips GitHub API fetch"
+    setup
+    create_mock_cartog 0 "" "0.6.1"
+    # Do NOT create mock curl — if curl is called, the test would fail or use real curl
+    # Instead, pre-populate cache and create a curl that would return a different version
+    create_mock_curl "0.9.0"
+    mkdir -p "$TEST_DIR/home/.cache/cartog"
+    echo "0.7.0 $(date +%s)" > "$TEST_DIR/home/.cache/cartog/latest_version"
+
+    local output
+    output=$(run_ensure_indexed)
+
+    # Should use cached 0.7.0, not the curl 0.9.0
+    assert_contains "uses cached version" "New cartog version available: 0.7.0 (installed: 0.6.1)" "$output"
+    teardown
+}
+
+test_stale_cache_triggers_fetch() {
+    echo "TEST: stale cache (>24h) triggers fresh GitHub API fetch"
+    setup
+    create_mock_cartog 0 "" "0.6.1"
+    create_mock_curl "0.8.0"
+    mkdir -p "$TEST_DIR/home/.cache/cartog"
+    local old_ts=$(( $(date +%s) - 90000 ))  # 25 hours ago
+    echo "0.7.0 $old_ts" > "$TEST_DIR/home/.cache/cartog/latest_version"
+
+    local output
+    output=$(run_ensure_indexed)
+
+    # Should fetch fresh and get 0.8.0 from mock curl
+    assert_contains "uses fetched version" "New cartog version available: 0.8.0 (installed: 0.6.1)" "$output"
+    teardown
+}
+
+test_same_version_no_notice() {
+    echo "TEST: same version prints no update notice"
+    setup
+    create_mock_cartog 0 "" "0.7.0"
+    create_mock_curl "0.7.0"
+
+    local output
+    output=$(run_ensure_indexed)
+
+    assert_not_contains "no update notice" "New cartog version available" "$output"
+    teardown
+}
+
+test_newer_installed_no_notice() {
+    echo "TEST: installed version newer than latest prints no notice"
+    setup
+    create_mock_cartog 0 "" "0.8.0"
+    create_mock_curl "0.7.0"
+
+    local output
+    output=$(run_ensure_indexed)
+
+    assert_not_contains "no update notice" "New cartog version available" "$output"
+    teardown
+}
+
+test_fetch_failure_continues() {
+    echo "TEST: GitHub API failure silently continues to indexing"
+    setup
+    create_mock_cartog 0 "" "0.6.1"
+    create_mock_curl "" 1
+
+    local output
+    output=$(run_ensure_indexed)
+    sleep 0.3
+
+    assert_not_contains "no update notice" "New cartog version available" "$output"
+    # Indexing should still proceed
+    local line1
+    line1=$(sed -n '1p' "$CARTOG_TEST_LOG")
+    assert_eq "indexing still runs" "index ." "$line1"
+    teardown
+}
+
 # --- run all tests ---
 
 echo "=== ensure_indexed.sh unit tests ==="
@@ -323,6 +441,18 @@ echo ""
 test_stale_lock_removed
 echo ""
 test_output_messages
+echo ""
+test_no_cache_triggers_fetch
+echo ""
+test_fresh_cache_skips_fetch
+echo ""
+test_stale_cache_triggers_fetch
+echo ""
+test_same_version_no_notice
+echo ""
+test_newer_installed_no_notice
+echo ""
+test_fetch_failure_continues
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

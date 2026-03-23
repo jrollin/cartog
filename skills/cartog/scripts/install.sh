@@ -8,10 +8,19 @@ set -euo pipefail
 REPO="jrollin/cartog"
 MIN_RUST_MAJOR=1
 MIN_RUST_MINOR=70
+REQUESTED_VERSION="${1:-}"
 
 if command -v cartog &>/dev/null; then
-    echo "cartog is already installed: $(cartog --version)"
-    exit 0
+    local_version="$(cartog --version | sed -E 's/^cartog //')"
+    if [ -z "$REQUESTED_VERSION" ]; then
+        echo "cartog is already installed: cartog $local_version"
+        exit 0
+    fi
+    if [ "$local_version" = "$REQUESTED_VERSION" ]; then
+        echo "cartog $REQUESTED_VERSION already installed."
+        exit 0
+    fi
+    echo "Upgrading cartog from $local_version to $REQUESTED_VERSION..."
 fi
 
 has_cmd() { command -v "$1" &>/dev/null; }
@@ -69,18 +78,22 @@ install_from_github() {
     fi
 
     local target="$1"
-    local latest_tag
+    local tag
 
-    latest_tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')"
-    if [ -z "$latest_tag" ]; then
-        return 1
+    if [ -n "$REQUESTED_VERSION" ]; then
+        tag="v${REQUESTED_VERSION}"
+    else
+        tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')"
+        if [ -z "$tag" ]; then
+            return 1
+        fi
     fi
 
-    local url="https://github.com/${REPO}/releases/download/${latest_tag}/cartog-${target}.tar.gz"
+    local url="https://github.com/${REPO}/releases/download/${tag}/cartog-${target}.tar.gz"
     local install_dir="${CARGO_HOME:-$HOME/.cargo}/bin"
     mkdir -p "$install_dir"
 
-    echo "Downloading cartog ${latest_tag} for ${target}..."
+    echo "Downloading cartog ${tag} for ${target}..."
     if curl -fsSL "$url" | tar xz -C "$install_dir"; then
         chmod +x "${install_dir}/cartog"
         echo "cartog installed to ${install_dir}/cartog"
@@ -142,5 +155,9 @@ if ! check_rust_version; then
 fi
 
 echo "Installing cartog via cargo..."
-cargo install cartog
+if [ -n "$REQUESTED_VERSION" ]; then
+    cargo install "cartog@${REQUESTED_VERSION}"
+else
+    cargo install cartog
+fi
 verify_install

@@ -47,9 +47,10 @@ check-java: ## Validate Java fixtures (javac)
 
 # --- Skill tests ---
 
-check-skill: ## Run skill tests (ensure_indexed.sh unit tests)
+check-skill: ## Run skill tests (ensure_indexed.sh + install.sh unit tests)
 	@echo "==> Checking skill tests..."
 	@bash skills/cartog/tests/test_ensure_indexed.sh
+	@bash skills/cartog/tests/test_install.sh
 
 eval-skill: ## Run LLM-as-judge skill evaluation (requires claude CLI)
 	bash skills/cartog/tests/eval.sh
