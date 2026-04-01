@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>cartog — Documentation</title>
-  <meta name="description" content="CLI reference, agent skill setup, MCP server configuration, and semantic search for cartog.">
+  <title>Cartog — Documentation</title>
+  <meta name="description" content="CLI reference, agent skill setup, MCP server configuration, and semantic search for Cartog.">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,13 +12,13 @@
 <!-- ── Nav ──────────────────────────────────────── -->
 <header class="nav">
   <div class="nav-inner">
-    <a href="index.html" class="nav-logo">cartog</a>
+    <a href="index.html" class="nav-logo">Cartog</a>
     <button class="nav-toggle" aria-label="Toggle navigation" onclick="document.querySelector('.nav-links').classList.toggle('open')">
       <span></span><span></span><span></span>
     </button>
     <ul class="nav-links">
       <li><a href="index.html#features">Features</a></li>
-      <li><a href="index.html#why">Why cartog</a></li>
+      <li><a href="index.html#why">Why Cartog</a></li>
       <li><a href="index.html#compare">Compare</a></li>
       <li><a href="index.html#install">Install</a></li>
       <li><a href="usage.html">Docs</a></li>
@@ -61,6 +61,11 @@
           <a href="#cmd-serve">cartog serve</a>
         </div>
         <div class="sidebar-group">
+          <div class="sidebar-label">Configuration</div>
+          <a href="#config">Config File</a>
+          <a href="#config-providers">Embedding Providers</a>
+        </div>
+        <div class="sidebar-group">
           <div class="sidebar-label">Semantic Search</div>
           <a href="#rag-setup">rag setup</a>
           <a href="#rag-index">rag index</a>
@@ -86,7 +91,7 @@
     <main class="docs-content">
 
       <p style="margin-bottom: 24px;">
-        <span class="badge">v0.7.0</span>
+        <span class="badge">v0.9.4</span>
         <a href="https://github.com/jrollin/cartog/releases/latest" style="margin-left: 8px; font-size: 13px;">View changelog →</a>
       </p>
 
@@ -103,9 +108,13 @@ cartog impact validate_token <span class="comment"># what breaks if I change thi
 cartog rag index .           <span class="comment"># embed all symbols + documents</span>
 cartog rag search "authentication token validation"</pre>
       <p>Indexes both <strong>code</strong> (functions, classes, methods) and <strong>Markdown documents</strong> (READMEs, design docs, API docs). Models are downloaded once to <code>~/.cache/cartog/models/</code> and run locally via ONNX Runtime. No API keys needed.</p>
+      <p><strong>Using Ollama instead?</strong> Add this to your <code>.cartog.toml</code> and skip <code>rag setup</code>:</p>
+      <pre>[embedding]
+provider = "ollama"</pre>
+      <p>See <a href="#config-providers">Embedding Providers</a> for full setup.</p>
 
       <h2 id="search-modes">Search Modes</h2>
-      <p>cartog offers two search modes that complement each other:</p>
+      <p>Cartog offers two search modes that complement each other:</p>
       <table>
         <thead>
           <tr>
@@ -144,6 +153,103 @@ cartog refs foo         <span class="comment"># 3. find all usages</span>
 cartog callees foo      <span class="comment"># 4. see what it depends on</span>
 cartog impact foo       <span class="comment"># 5. assess blast radius</span>
 cartog index .          <span class="comment"># 6. re-index after changes</span></pre>
+
+      <!-- ── Configuration ─────────────────────── -->
+
+      <h2 id="config">Configuration</h2>
+      <p>Cartog works with zero configuration. Optionally, place a <code>.cartog.toml</code> at your project root to customize database path, embedding provider, and re-ranking.</p>
+      <pre><span class="comment"># .cartog.toml — full reference</span>
+
+[database]
+path = "~/.local/share/cartog/myproject.db"
+
+<span class="comment"># Embedding provider (optional — defaults to local ONNX)</span>
+[embedding]
+provider = "local"               <span class="comment"># "local" (default) or "ollama"</span>
+model = "BAAI/bge-small-en-v1.5" <span class="comment"># model name (provider-specific)</span>
+dimension = 384                  <span class="comment"># auto-detected for built-in models</span>
+
+<span class="comment"># Local provider: asymmetric model prefixes</span>
+[embedding.local]
+query_prefix = "search_query: "
+document_prefix = "search_document: "
+
+<span class="comment"># Ollama provider settings</span>
+[embedding.ollama]
+base_url = "http://localhost:11434"
+model = "nomic-embed-text"
+
+<span class="comment"># Reranker (optional — defaults to local cross-encoder)</span>
+[reranker]
+provider = "local"               <span class="comment"># "local" (default) or "none"</span></pre>
+
+      <p>Database path resolution priority: <code>--db</code> flag / <code>CARTOG_DB</code> env > <code>.cartog.toml</code> > git root auto-detection > cwd fallback.</p>
+
+      <h2 id="config-providers">Embedding Providers</h2>
+      <p>Semantic search requires an embedding provider. Two options:</p>
+      <table>
+        <thead>
+          <tr><th>Provider</th><th>Config</th><th>Setup</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>local</strong> (default)</td>
+            <td>No config needed</td>
+            <td><code>cartog rag setup</code></td>
+            <td>ONNX Runtime via fastembed. ~1.2GB model download. Runs on CPU.</td>
+          </tr>
+          <tr>
+            <td><strong>ollama</strong></td>
+            <td><code>[embedding]<br>provider = "ollama"</code></td>
+            <td><code>ollama pull nomic-embed-text</code></td>
+            <td>HTTP API. GPU acceleration via Ollama. No model download by cartog.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Example: Ollama with GPU acceleration</h3>
+      <pre><span class="comment"># 1. Install with Ollama feature</span>
+cargo install cartog --features ollama-embedding
+
+<span class="comment"># 2. Start Ollama and pull a model</span>
+ollama serve
+ollama pull nomic-embed-text
+
+<span class="comment"># 3. Configure .cartog.toml</span>
+cat > .cartog.toml &lt;&lt;EOF
+[embedding]
+provider = "ollama"
+model = "nomic-embed-text"
+
+[embedding.ollama]
+base_url = "http://localhost:11434"
+EOF
+
+<span class="comment"># 4. Index and search — no rag setup needed</span>
+cartog index .
+cartog rag index .
+cartog rag search "authentication flow"</pre>
+
+      <h3>Example: Local with a different model</h3>
+      <pre><span class="comment"># Use a larger model for better quality</span>
+cat > .cartog.toml &lt;&lt;EOF
+[embedding]
+provider = "local"
+model = "BAAI/bge-base-en-v1.5"
+EOF
+
+cartog rag setup     <span class="comment"># downloads the configured model</span>
+cartog rag index .
+cartog rag search "error handling"</pre>
+
+      <h3>Example: Disable re-ranking</h3>
+      <pre><span class="comment"># Skip the 1.1GB reranker model download</span>
+cat > .cartog.toml &lt;&lt;EOF
+[reranker]
+provider = "none"
+EOF
+
+cartog rag setup     <span class="comment"># only downloads embedding model (~80MB)</span></pre>
 
       <!-- ── CLI Reference ─────────────────────── -->
 
@@ -223,12 +329,16 @@ cartog serve --watch --rag    <span class="comment"># + watcher + auto RAG</span
       <!-- ── Semantic Search ───────────────────── -->
 
       <h2 id="rag-setup"><code>cartog rag setup</code></h2>
-      <p>Download embedding and re-ranker models from HuggingFace. Run once before using semantic search.</p>
+      <p>Download embedding and re-ranker models from HuggingFace. Run once before using semantic search with the <strong>local</strong> provider.</p>
       <pre>cartog rag setup</pre>
       <p>Downloads ~1.2GB of ONNX models (embedding ~80MB + reranker ~1.1GB). Cached in <code>~/.cache/cartog/models/</code>.</p>
+      <p><strong>Note:</strong> When using Ollama, skip this — models are managed by the Ollama server.</p>
+      <pre><span class="comment"># To also skip the reranker download:</span>
+[reranker]
+provider = "none"</pre>
 
       <h2 id="rag-index"><code>cartog rag index</code></h2>
-      <p>Build the embedding index for semantic search. Indexes both code symbols and Markdown documents (<code>.md</code> files). Requires <code>cartog index</code> and <code>cartog rag setup</code> first.</p>
+      <p>Build the embedding index for semantic search. Indexes both code symbols and Markdown documents (<code>.md</code> files). Requires <code>cartog index</code> first. For the local provider, also requires <code>cartog rag setup</code>.</p>
       <pre>cartog rag index              <span class="comment"># embed all symbols + documents</span>
 cartog rag index src/         <span class="comment"># embed subdirectory</span>
 cartog rag index --force      <span class="comment"># re-embed all</span></pre>
@@ -423,7 +533,7 @@ cartog --tokens 200 outline src/db.rs</pre>
 <footer class="footer">
   <div class="container">
     <div class="footer-inner">
-      <span>cartog · MIT License · v0.7.0</span>
+      <span>Cartog · MIT License · v0.9.4</span>
       <ul class="footer-links">
         <li><a href="https://github.com/jrollin/cartog">GitHub</a></li>
         <li><a href="https://crates.io/crates/cartog">crates.io</a></li>

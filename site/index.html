@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>cartog — Stop grepping blind. Query your code graph.</title>
-  <meta name="description" content="Pre-computed code graph for LLM coding agents. 83% fewer tokens, 97% recall, 100% local. Single binary, zero config.">
+  <title>Cartog — Stop grepping blind. Query your code graph.</title>
+  <meta name="description" content="Code graph navigator. Pre-computed symbols, calls, imports and inheritance — queried in microseconds. Single binary, 100% local, 7 languages.">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,14 +12,14 @@
 <!-- ── Nav ──────────────────────────────────────── -->
 <header class="nav">
   <div class="nav-inner">
-    <a href="index.html" class="nav-logo">cartog</a>
+    <a href="index.html" class="nav-logo">Cartog</a>
     <button class="nav-toggle" aria-label="Toggle navigation" onclick="document.querySelector('.nav-links').classList.toggle('open')">
       <span></span><span></span><span></span>
     </button>
     <ul class="nav-links">
       <li><a href="#features">Features</a></li>
-      <li><a href="#why">Why cartog</a></li>
-      <li><a href="#compare">Compare</a></li>
+      <li><a href="#why">Why Cartog</a></li>
+      <li><a href="#agents">Agents</a></li>
       <li><a href="#install">Install</a></li>
       <li><a href="usage.html">Docs</a></li>
       <li>
@@ -34,7 +34,7 @@
 <!-- ── Hero ─────────────────────────────────────── -->
 <section class="hero">
   <div class="container">
-    <div class="hero-eyebrow">Code Graph for LLM Agents</div>
+    <div class="hero-eyebrow">Code Graph Navigator</div>
 
     <h1>
       <span class="line-plain">Stop grepping blind.</span>
@@ -42,7 +42,7 @@
     </h1>
 
     <p class="subtitle">
-      Pre-computed symbols, calls, imports and inheritance — queried in microseconds, not tokens.
+      Pre-computed symbols, calls, imports and inheritance — queried in microseconds.
     </p>
 
     <div class="hero-installs">
@@ -61,10 +61,12 @@
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>
         </button>
       </div>
+      <a href="#install" style="font-size: 13px; color: var(--text-tertiary); margin-top: 4px;">More install options ↓</a>
     </div>
 
-    <div class="hero-ctas">
-      <a href="#why" class="btn-secondary">Why cartog ↓</a>
+    <div class="hero-ctas" style="margin-top: 32px;">
+      <a href="#why" class="btn-secondary">Why Cartog ↓</a>
+      <a href="#agents" class="btn-secondary">For LLM Agents ↓</a>
     </div>
 
     <div class="hero-meta">
@@ -77,9 +79,9 @@
         <div class="terminal-dot red"></div>
         <div class="terminal-dot yellow"></div>
         <div class="terminal-dot green"></div>
-        <span class="terminal-title">cartog demo</span>
+        <span class="terminal-title">Cartog demo</span>
       </div>
-      <img src="demo.gif" alt="cartog demo — index, search, refs, impact" class="terminal-gif">
+      <img src="demo.gif" alt="Cartog demo — index, search, refs, impact" class="terminal-gif">
     </div>
   </div>
 </section>
@@ -88,20 +90,20 @@
 <div class="stats-bar">
   <div class="container">
     <div class="stat-item">
-      <div class="stat-value">💰 83%</div>
-      <div class="stat-label">fewer tokens per query</div>
-    </div>
-    <div class="stat-item">
-      <div class="stat-value">🎯 97%</div>
-      <div class="stat-label">recall (completeness)</div>
-    </div>
-    <div class="stat-item">
       <div class="stat-value">⚡ 8μs</div>
       <div class="stat-label">query latency</div>
     </div>
     <div class="stat-item">
+      <div class="stat-value">🎯 97%</div>
+      <div class="stat-label">symbol recall</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value">🌐 7</div>
+      <div class="stat-label">languages supported</div>
+    </div>
+    <div class="stat-item">
       <div class="stat-value">🔒 100%</div>
-      <div class="stat-label">local — no API calls</div>
+      <div class="stat-label">local — your code stays private</div>
     </div>
   </div>
 </div>
@@ -116,7 +118,7 @@
       <div class="how-step">
         <div class="how-step-number">1</div>
         <div class="how-step-title">Index</div>
-        <code>cartog index</code>
+        <code>cartog index .</code>
         <p>Walks your repo, extracts symbols, calls, imports, inheritance. Stores everything in a local SQLite file.</p>
       </div>
 
@@ -135,7 +137,47 @@
         <div class="how-step-number">3</div>
         <div class="how-step-title">Query</div>
         <code>cartog refs AuthService</code>
-        <p>Your agent calls refs, impact, search — gets precise answers in microseconds, not tokens.</p>
+        <p>Precise answers in microseconds. References, callers, impact analysis, semantic search.</p>
+      </div>
+    </div>
+
+    <p style="margin-top: 32px; text-align: center; font-size: 14px; color: var(--text-secondary);">
+      16 commands for search, navigation, and analysis. <a href="usage.html">See full documentation →</a>
+    </p>
+  </div>
+</section>
+
+<!-- ── Features ─────────────────────────────────── -->
+<section id="features">
+  <div class="container">
+    <div class="section-label">Features</div>
+    <h2 class="section-heading">Navigate your codebase, not file contents.</h2>
+    <p class="section-subtitle">Single binary, zero config, zero dependencies.</p>
+
+    <div class="features-grid" style="margin-top: 40px;">
+      <div class="feature-card">
+        <h3><span class="feature-icon">⚡</span> Zero dependencies</h3>
+        <p>Single binary + SQLite file. No Docker, no language servers required, no graph databases. <code>cargo install</code> and you're done.</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="feature-icon">🔄</span> Live index</h3>
+        <p><code>cartog watch</code> auto re-indexes on file changes. Debounced, incremental, near-instant. Always query fresh data.</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="feature-icon">🔍</span> Dual search</h3>
+        <p>Keyword search (sub-ms, symbol names) + semantic search (natural language). Local embeddings with optional GPU acceleration via Ollama.</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="feature-icon">🎯</span> Impact analysis</h3>
+        <p><code>cartog impact --depth 3</code> traces callers-of-callers instantly. Know the blast radius before you change anything.</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="feature-icon">🔬</span> Optional LSP precision</h3>
+        <p>Auto-detects language servers on PATH. Boosts edge resolution from ~25% to ~42-81%. Works without them, better with them.</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="feature-icon">🔒</span> 100% local</h3>
+        <p>tree-sitter parsing, SQLite storage, local embeddings. No API keys, no telemetry. Works in air-gapped environments.</p>
       </div>
     </div>
   </div>
@@ -145,7 +187,7 @@
 <section class="languages-section">
   <div class="container">
     <div class="section-label">Languages</div>
-    <h2 class="section-heading">7 languages supported</h2>
+    <h2 class="section-heading">7 languages supported <span style="font-size: 14px; font-weight: 500; color: var(--text-tertiary);">— more coming</span></h2>
     <div class="lang-grid">
       <span class="lang-tag">
         <svg width="20" height="20" viewBox="0 0 256 255"><defs><linearGradient id="py-a" x1="12.96%" x2="79.68%" y1="12.04%" y2="93.06%"><stop offset="0%" stop-color="#387EB8"/><stop offset="100%" stop-color="#366994"/></linearGradient><linearGradient id="py-b" x1="19.13%" x2="90.43%" y1="20.58%" y2="88.72%"><stop offset="0%" stop-color="#FFC331"/><stop offset="100%" stop-color="#F5A623"/></linearGradient></defs><path fill="url(#py-a)" d="M126.916.072c-64.832 0-60.784 28.115-60.784 28.115l.072 29.128h61.868v8.745H41.631S.145 61.355.145 126.77c0 65.417 36.21 63.097 36.21 63.097h21.61v-30.356s-1.165-36.21 35.632-36.21h61.362s34.475.557 34.475-33.319V33.97S194.67.072 126.916.072zM92.802 19.66a11.12 11.12 0 110 22.24 11.12 11.12 0 010-22.24z"/><path fill="url(#py-b)" d="M128.757 254.126c64.832 0 60.784-28.115 60.784-28.115l-.072-29.127H127.6v-8.745h86.441s41.486 4.705 41.486-60.712c0-65.416-36.21-63.096-36.21-63.096h-21.61v30.355s1.165 36.21-35.632 36.21h-61.362s-34.475-.557-34.475 33.32v56.013s-5.235 33.897 62.518 33.897zm34.114-19.586a11.12 11.12 0 110-22.24 11.12 11.12 0 010 22.24z"/></svg>
@@ -179,103 +221,54 @@
   </div>
 </section>
 
-<!-- ── Features ─────────────────────────────────── -->
-<section id="features">
-  <div class="container">
-    <div class="section-label">Features</div>
-    <h2 class="section-heading">Everything your agent needs. Nothing it doesn't.</h2>
-    <p class="section-subtitle">Single binary, zero config, zero dependencies. Works with any LLM that has bash or MCP access.</p>
-
-    <div class="features-grid" style="margin-top: 40px;">
-      <div class="feature-card">
-        <h3><span class="feature-icon">⚡</span> Zero dependencies</h3>
-        <p>Single binary + SQLite file. No Docker, no language servers required, no graph databases. <code>cargo install</code> and you're done.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="feature-icon">🔄</span> Live index</h3>
-        <p><code>cartog watch</code> auto re-indexes on file changes. Your agent always queries fresh data. Debounced, incremental, near-instant.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="feature-icon">🔌</span> MCP server</h3>
-        <p><code>cartog serve</code> exposes 12 tools over stdio. Plug into Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible agent.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="feature-icon">🔍</span> Dual search</h3>
-        <p>Keyword search (sub-ms, symbol names) + semantic search (natural language, local ONNX embeddings). Code by default, Markdown docs with <code>--kind document</code>.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="feature-icon">🎯</span> Optional LSP precision</h3>
-        <p>Auto-detects language servers on PATH. Boosts edge resolution from ~25% to ~42-81%. Works without them, better with them.</p>
-      </div>
-      <div class="feature-card">
-        <h3><span class="feature-icon">🌐</span> 7 languages</h3>
-        <p>Python, TypeScript, JavaScript, Rust, Go, Ruby, Java. Symbols, calls, imports, inheritance, type references — all extracted.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ── Why cartog ───────────────────────────────── -->
+<!-- ── Why Cartog ───────────────────────────────── -->
 <section id="why">
   <div class="container">
-    <div class="section-label">Why cartog</div>
-    <h2 class="section-heading">Stop grepping blind</h2>
-    <p class="section-subtitle">Code is a graph of relationships. Pre-compute it once, query it in microseconds.</p>
+    <div class="section-label">Why Cartog</div>
+    <h2 class="section-heading">Code is a graph. Query it like one.</h2>
+    <p class="section-subtitle">Pre-compute the structure once, then answer any question in microseconds.</p>
 
     <div class="why-grid">
       <div class="why-card">
         <div class="why-number">01</div>
-        <h3>Your agent wastes tokens rediscovering structure</h3>
-        <p>Every grep + cat + filter cycle costs tokens and context window. cartog pre-computes the code graph — one <code>refs</code> call replaces 6+ discovery steps. 83% fewer tokens, 97% recall.</p>
-      </div>
-      <div class="why-card">
-        <div class="why-number">02</div>
         <h3>Grep can't trace what breaks</h3>
         <p>Transitive impact analysis is impossible with grep. <code>cartog impact --depth 3</code> traces callers-of-callers instantly. Know the blast radius before you change anything.</p>
       </div>
       <div class="why-card">
+        <div class="why-number">02</div>
+        <h3>Structured answers, not file dumps</h3>
+        <p>One <code>refs</code> call returns every caller, importer, and type reference — with file paths and line numbers. No parsing output, no false positives.</p>
+      </div>
+      <div class="why-card">
         <div class="why-number">03</div>
         <h3>Your code stays on your machine</h3>
-        <p>tree-sitter parsing, SQLite storage, ONNX embeddings — everything runs locally. No API keys, no telemetry, no network calls. Works in air-gapped environments.</p>
+        <p>tree-sitter parsing, SQLite storage, local embeddings. No API keys, no telemetry, no cloud. Works in air-gapped environments.</p>
       </div>
     </div>
-  </div>
-</section>
 
-<!-- ── Compare ──────────────────────────────────── -->
-<section id="compare">
-  <div class="container">
-    <div class="section-label">Compare</div>
-    <h2 class="section-heading">How cartog compares</h2>
-
-    <div class="table-wrapper">
+    <!-- Comparison table -->
+    <div class="table-wrapper" style="margin-top: 48px;">
       <table>
         <thead>
           <tr>
             <th></th>
             <th>grep / cat / find</th>
             <th>Language server (LSP)</th>
-            <th>cartog</th>
+            <th>Cartog</th>
           </tr>
         </thead>
         <tbody>
-          <tr>
-            <td>Tokens per query</td>
-            <td>~1,700</td>
-            <td>varies</td>
-            <td><span class="badge">~280</span></td>
-          </tr>
-          <tr>
-            <td>Recall</td>
-            <td>78%</td>
-            <td>~100%</td>
-            <td><span class="badge">97%</span></td>
-          </tr>
           <tr>
             <td>Transitive analysis</td>
             <td>impossible</td>
             <td>limited</td>
             <td><code>impact --depth 3</code></td>
+          </tr>
+          <tr>
+            <td>Query latency</td>
+            <td>multi-step</td>
+            <td>seconds</td>
+            <td><span class="badge">8-450 μs</span></td>
           </tr>
           <tr>
             <td>Setup</td>
@@ -299,7 +292,7 @@
             <td>Semantic search</td>
             <td>no</td>
             <td>no</td>
-            <td><span class="badge">local ONNX</span></td>
+            <td><span class="badge">local ONNX / Ollama</span></td>
           </tr>
           <tr>
             <td>Privacy</td>
@@ -317,32 +310,95 @@
   </div>
 </section>
 
+<!-- ── LLM Agents ──────────────────────────────── -->
+<section id="agents">
+  <div class="container">
+    <div class="section-label">LLM Agents</div>
+    <h2 class="section-heading">Supercharge your AI coding agent</h2>
+    <p class="section-subtitle">83% fewer tokens per query, 97% recall. Your agent queries the graph instead of grepping blind.</p>
+
+    <div class="why-grid" style="margin-top: 40px;">
+      <div class="why-card">
+        <div class="why-number">01</div>
+        <h3>MCP Server</h3>
+        <p><code>cartog serve</code> exposes 12 tools over stdio. Plug into Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible agent.</p>
+      </div>
+      <div class="why-card">
+        <div class="why-number">02</div>
+        <h3>Agent Skill</h3>
+        <p>The bundled skill teaches your agent <em>when</em> and <em>how</em> to use Cartog — search routing, refactoring workflows, fallback heuristics.</p>
+      </div>
+      <div class="why-card">
+        <div class="why-number">03</div>
+        <h3>Token efficient</h3>
+        <p>One <code>refs</code> call replaces 6+ grep/cat cycles. Pre-computed graph means structured results — not raw file dumps that burn context window.</p>
+      </div>
+    </div>
+
+    <div class="table-wrapper" style="margin-top: 40px;">
+      <table>
+        <thead>
+          <tr>
+            <th>Integration</th>
+            <th>Setup</th>
+            <th>What it does</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Claude Code plugin</td>
+            <td><code>/plugin install cartog@cartog-plugins</code></td>
+            <td>Skill + MCP + auto-setup, all-in-one</td>
+          </tr>
+          <tr>
+            <td>MCP server</td>
+            <td><code>cartog serve --watch --rag</code></td>
+            <td>12 tools over stdio, live index + semantic search</td>
+          </tr>
+          <tr>
+            <td>Agent skill</td>
+            <td><code>npx skills add jrollin/cartog</code></td>
+            <td>Behavioral rules for any compatible agent</td>
+          </tr>
+          <tr>
+            <td>CLI (any agent with bash)</td>
+            <td><code>cargo install cartog</code></td>
+            <td>Direct commands — works with any tool-using LLM</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top: 16px; font-size: 14px; color: var(--text-secondary);">
+      See <a href="usage.html#mcp-server">MCP Server docs</a> and <a href="usage.html#agent-skill">Agent Skill docs</a> for per-client setup (Claude Desktop, Cursor, Windsurf, Zed, OpenCode).
+    </p>
+  </div>
+</section>
+
 <!-- ── Install ──────────────────────────────────── -->
 <section id="install">
   <div class="container">
     <div class="section-label">Install</div>
     <h2 class="section-heading">Get started in seconds</h2>
 
-    <div class="install-options">
+    <div class="install-options" style="grid-template-columns: 1fr;">
       <div class="install-card">
         <h3>Claude Code (recommended)</h3>
         <pre>/plugin marketplace add jrollin/cartog
 /plugin install cartog@cartog-plugins</pre>
         <p>Installs the agent skill, setup scripts, and MCP server config.</p>
       </div>
-      <div class="install-card" style="margin-top: 16px;">
+      <div class="install-card">
         <h3>Agent Skill</h3>
         <pre>npx skills add jrollin/cartog</pre>
         <p>Works with any agent runtime that supports the skills protocol.</p>
       </div>
-    </div>
-
-    <div class="install-options" style="margin-top: 16px;">
       <div class="install-card">
         <h3>From crates.io</h3>
-        <pre>cargo install cartog                  <span class="comment"># core</span>
-cargo install cartog --features lsp   <span class="comment"># + LSP (recommended)</span></pre>
-        <p>The <code>lsp</code> feature auto-detects language servers on PATH for higher precision edge resolution.</p>
+        <pre>cargo install cartog                              <span class="comment"># core</span>
+cargo install cartog --features lsp               <span class="comment"># + LSP (recommended)</span>
+cargo install cartog --features ollama-embedding  <span class="comment"># + Ollama support</span></pre>
+        <p>The <code>lsp</code> feature auto-detects language servers on PATH. The <code>ollama-embedding</code> feature enables Ollama as an embedding provider.</p>
       </div>
       <div class="install-card">
         <h3>Pre-built binaries</h3>
@@ -371,6 +427,7 @@ sudo mv cartog /usr/local/bin/</pre>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>
       </button>
     </div>
+    <p style="margin-top: 32px; font-size: 14px;"><a href="usage.html">Read the documentation →</a></p>
   </div>
 </section>
 
@@ -378,7 +435,7 @@ sudo mv cartog /usr/local/bin/</pre>
 <footer class="footer">
   <div class="container">
     <div class="footer-inner">
-      <span>cartog · MIT License · v0.8.1</span>
+      <span>Cartog · MIT License · v0.9.4</span>
       <ul class="footer-links">
         <li><a href="https://github.com/jrollin/cartog">GitHub</a></li>
         <li><a href="https://crates.io/crates/cartog">crates.io</a></li>
@@ -390,28 +447,13 @@ sudo mv cartog /usr/local/bin/</pre>
 
 <script>
 function copyCmd(btn, text) {
-  navigator.clipboard.writeText(text).then(function() {
-    var svg = btn.innerHTML;
+  navigator.clipboard.writeText(text).then(() => {
     btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/></svg>';
-    setTimeout(function() { btn.innerHTML = svg; }, 2000);
+    setTimeout(() => {
+      btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>';
+    }, 2000);
   });
 }
-</script>
-
-<script>
-  // Live GitHub star count — silent fail, static fallback shown
-  fetch('https://api.github.com/repos/jrollin/cartog')
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      var el = document.getElementById('gh-stars');
-      if (el && d.stargazers_count) {
-        var count = d.stargazers_count;
-        el.textContent = count >= 1000
-          ? (count / 1000).toFixed(1) + 'k'
-          : String(count);
-      }
-    })
-    .catch(function() {});
 </script>
 
 </body>

@@ -80,11 +80,18 @@ if [[ -f "$PLUGIN_JSON" ]]; then
   sed "s/\"version\": \".*\"/\"version\": \"${NEW}\"/" "$PLUGIN_JSON" > "$PLUGIN_JSON.tmp" && mv "$PLUGIN_JSON.tmp" "$PLUGIN_JSON"
 fi
 
+# update site version references (footers + badges)
+for f in site/index.html site/usage.html; do
+  if [[ -f "$f" ]]; then
+    sed "s/v${CURRENT}/v${NEW}/g" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
+done
+
 # update Cargo.lock
 cargo generate-lockfile --quiet 2>/dev/null || true
 
 info "committing version bump"
-git add "$CARGO_TOML" Cargo.lock "$PLUGIN_JSON"
+git add "$CARGO_TOML" Cargo.lock "$PLUGIN_JSON" site/
 git commit -m "chore: bump version to ${NEW}"
 
 info "tagging $TAG"

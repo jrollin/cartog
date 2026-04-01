@@ -21,7 +21,7 @@ Configurable via `.cartog.toml` `[embedding]` section. Supports pluggable provid
 
 **Reranker**: BGE-reranker-base — cross-encoder that scores (query, document) pairs jointly (~1.1GB, optional, local only).
 
-Models cached in `~/.cache/cartog/models/` (respects `FASTEMBED_CACHE_DIR` and `XDG_CACHE_HOME`).
+Local models cached in `~/.cache/cartog/models/` (respects `FASTEMBED_CACHE_DIR` and `XDG_CACHE_HOME`). Ollama models are managed by the Ollama server.
 
 ```toml
 # .cartog.toml — example with Ollama
@@ -30,7 +30,8 @@ provider = "ollama"
 model = "nomic-embed-text"
 # dimension = 768  # auto-detected if omitted
 
-[embedding.local]
+# Local provider only: asymmetric model prefixes
+# [embedding.local]
 # query_prefix = "search_query: "
 # document_prefix = "search_document: "
 ```
