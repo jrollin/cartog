@@ -59,6 +59,8 @@ Indexes both **code** (functions, classes, methods) and **Markdown documents** (
 
 Models are downloaded once to `~/.cache/cartog/models/` and run locally via ONNX Runtime. No API keys, no network calls at query time.
 
+> **Using Ollama instead?** Configure `.cartog.toml` with `[embedding] provider = "ollama"` and skip `rag setup` — models are managed by Ollama. See [Configuration](#configuration).
+
 ## Install
 
 ### From crates.io
@@ -66,6 +68,7 @@ Models are downloaded once to `~/.cache/cartog/models/` and run locally via ONNX
 ```bash
 cargo install cartog                    # core (heuristic resolution only)
 cargo install cartog --features lsp     # + LSP-based resolution (recommended)
+cargo install cartog --features ollama-embedding  # + Ollama embedding support
 ```
 
 The `lsp` feature adds ~50KB to the binary. It auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph) and uses them to resolve edges that heuristic matching can't. No extra config needed — if a server is on PATH, it's used automatically.
@@ -116,6 +119,18 @@ cartog --db /tmp/x.db stats
 ```toml
 [database]
 path = "~/.local/share/cartog/myproject.db"
+
+# Embedding provider (optional — defaults to local ONNX)
+[embedding]
+provider = "ollama"          # "local" (default) or "ollama"
+model = "nomic-embed-text"
+
+[embedding.ollama]
+base_url = "http://localhost:11434"
+
+# Reranker (optional — defaults to local cross-encoder)
+[reranker]
+provider = "none"            # "local" (default) or "none"
 ```
 
 Useful when indexing from a parent directory across multiple projects, or when storing the DB outside the repo. See [`docs/usage.md`](docs/usage.md) for details.
@@ -246,7 +261,7 @@ graph LR
 2. **Store** — writes everything to a local `.cartog.db` SQLite file
 3. **Resolve (heuristic)** — links edges by name with scope-aware matching (same file > import path > same directory > unique project match)
 4. **Resolve (LSP, optional)** — for edges the heuristic couldn't resolve, sends `textDocument/definition` to language servers for compiler-grade precision. Results persist in the DB.
-5. **Embed** (optional) — generates vector embeddings locally with ONNX Runtime (`BAAI/bge-small-en-v1.5`), stored in sqlite-vec
+5. **Embed** (optional) — generates vector embeddings via configurable provider (local ONNX or Ollama), stored in sqlite-vec
 6. **Query** — instant lookups against the pre-computed graph, hybrid FTS5 + vector search with RRF merge and cross-encoder re-ranking
 
 Re-indexing is incremental: git diff + SHA-256 skips unchanged files, and Merkle-tree diffing within changed files updates only modified symbols. `cartog watch` automates this on file changes.
@@ -364,7 +379,7 @@ Remaining unresolved edges are mostly calls to external libraries (std, node_mod
 - **Two-tier resolution** — fast heuristic pass (~1s) for daily use, optional LSP for precision refactoring. Results persist in SQLite — pay the LSP cost once.
 - **Self-contained** — single binary, all dependencies compiled in. LSP is opt-in via language servers already on your PATH.
 - **Incremental** — git diff + SHA256 per file, Merkle-tree diff per symbol. Stable IDs survive line movements.
-- **Local-first** — embedding models run via ONNX Runtime on your CPU. Slower than API calls, but your code stays private.
+- **Local-first** — embedding models run locally via ONNX Runtime by default. Alternatively, use Ollama for GPU acceleration. Either way, your code stays private — no external API calls.
 
 ## Documentation
 

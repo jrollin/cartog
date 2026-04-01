@@ -38,6 +38,8 @@ Database path is resolved with a 4-tier priority:
 3. Auto git-root detection — `.cartog.db` next to `.git/`
 4. Fallback — `.cartog.db` in the current directory
 
+`.cartog.toml` also configures RAG providers via `[embedding]` (provider, model, dimension) and `[reranker]` (provider) sections. See `crates/cartog-rag/README.md` for details.
+
 ### Logging
 
 All log output goes to **stderr** (stdout is reserved for CLI output and MCP protocol). Default level is `warn` for CLI commands, `info` for `serve`, `watch`, and `rag` operations. Override with `RUST_LOG`.

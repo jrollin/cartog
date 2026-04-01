@@ -18,6 +18,11 @@ cargo clippy --all-targets -- -D warnings  # lint
 
 Always run `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` before committing.
 
+```bash
+cargo check --no-default-features -p cartog-rag     # verify builds without ONNX
+cargo check --features provider-ollama -p cartog-rag # verify Ollama feature
+```
+
 ### Integrity checks
 
 ```bash
@@ -125,4 +130,6 @@ After implementation, mark checklist items complete — the spec stays as a desi
 - **AST-aware embeddings**: significant body lines (skip blanks/comments/braces) for better vector search recall
 - **Embedding format versioning**: auto-detects embedding strategy changes, triggers re-embed on next `rag index`
 - **Schema versioning**: metadata-based migration system for DB schema evolution
+- **Pluggable embedding providers**: local ONNX (default) and Ollama, configured via `.cartog.toml`
+- **Feature flags**: `provider-local` (default), `provider-ollama`
 - **Pending**: Java extractor improvements

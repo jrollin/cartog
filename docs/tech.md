@@ -70,7 +70,7 @@ BERT attention is **O(n²) in sequence length**. Keeping input short is the sing
 
 This drives two key decisions:
 
-1. **Small embedding model** — BGE-small-en-v1.5 quantized (384 dimensions). 2-3x faster than full precision with negligible quality loss for code symbol matching. Outputs are L2-normalized, enabling L2 distance in sqlite-vec (equivalent to cosine ranking). Trade-off: English-only model — non-English identifiers/comments get degraded embeddings.
+1. **Small embedding model** — BGE-small-en-v1.5 quantized (default, 384 dimensions). 2-3x faster than full precision with negligible quality loss for code symbol matching. Outputs are L2-normalized, enabling L2 distance in sqlite-vec (equivalent to cosine ranking). Model and dimension are configurable via `.cartog.toml`. Trade-off: English-only model — non-English identifiers/comments get degraded embeddings.
 
 2. **AST-aware embedding text** — For code: header + signature + significant body lines (skipping blanks, comments, closing braces) up to ~200 tokens (~800 bytes):
    ```
@@ -108,7 +108,7 @@ Query
   │
   ├─→ Vector KNN search (sqlite-vec, L2 distance)
   │     L2-normalized embeddings → L2 distance ≡ cosine ranking
-  │     Query embedded with same BGE-small-en-v1.5 model
+  │     Query embedded with configured provider (default: BGE-small-en-v1.5)
   │
   ├─→ Reciprocal Rank Fusion (RRF, k=60)
   │     Merges both ranked lists: score = Σ 1/(k + rank + 1)
@@ -136,7 +136,7 @@ Returns the first non-empty result. Only FTS5 syntax errors trigger fallback —
 
 | Constant | Value | Rationale |
 |----------|-------|-----------|
-| `EMBEDDING_DIM` | 384 | BGE-small-en-v1.5 output dimension |
+| `EMBEDDING_DIM` | 384 | BGE-small-en-v1.5 output dimension (default, overridable per-provider) |
 | `EMBED_BATCH_SIZE` | 64 | Limits ONNX padding waste when text lengths vary |
 | `CHUNK_SIZE` | 512 | Symbols per embedding engine call |
 | `DB_BATCH_LIMIT` | 256 | Pending DB writes before flush |
@@ -148,6 +148,10 @@ Returns the first non-empty result. Only FTS5 syntax errors trigger fallback —
 | RRF `k` | 60.0 | Standard constant from Cormack et al. 2009 |
 | Over-retrieval | `limit × 3` (min 20) | Enough candidates for effective RRF merge |
 | `MAX_SEARCH_LIMIT` | 100 | Hard cap on returned results |
+
+### Provider architecture
+
+Embedding providers implement the `EmbeddingProvider` trait with `embed_query()`/`embed_document()` separation for asymmetric models. Providers are selected at runtime via `.cartog.toml` and gated behind Cargo feature flags (`provider-local`, `provider-ollama`).
 
 ## SQLite Tuning
 

@@ -36,7 +36,7 @@ Both modes open their own `Database` connection (SQLite WAL allows concurrent re
 
 | Export | Description |
 |--------|-------------|
-| `WatchConfig` | Configuration: root path, debounce window, RAG toggle, RAG delay |
+| `WatchConfig` | Configuration: root path, debounce window, RAG toggle, RAG delay, `rag_config` (RAG provider configuration for embedding + reranker, threaded from `.cartog.toml`) |
 | `WatchHandle` | Handle to stop a background watcher (via `stop()` or `Drop`) |
 | `spawn_watch()` | Start watching on a background thread |
 | `run_watch()` | Start watching in the foreground (blocking) |

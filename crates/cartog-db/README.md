@@ -19,7 +19,7 @@ Four core tables plus four RAG-specific tables:
 - **`symbol_content`** — raw source code per symbol (for FTS and embedding)
 - **`symbol_fts`** — FTS5 virtual table over symbol names and content (BM25 ranking)
 - **`symbol_embedding_map`** — maps integer rowids (for sqlite-vec) to symbol IDs
-- **`symbol_vec`** — sqlite-vec virtual table with 384-dim float32 vectors for KNN search
+- **`symbol_vec`** — sqlite-vec virtual table with float32 vectors for KNN search. The vector dimension is configurable via `.cartog.toml` (default: 384). When the configured dimension changes, the vector table is automatically recreated.
 
 ### Edge resolution (6-tier heuristic)
 

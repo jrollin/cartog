@@ -53,6 +53,55 @@ cartog --db /tmp/x.db stats
 cartog --db /tmp/x.db map
 ```
 
+### Embedding Provider Configuration
+
+Configure the embedding provider in `.cartog.toml`:
+
+```toml
+# Default: local ONNX model (no config needed)
+
+# Use Ollama instead of local ONNX
+[embedding]
+provider = "ollama"
+model = "nomic-embed-text"
+
+[embedding.ollama]
+base_url = "http://localhost:11434"
+```
+
+**Provider options:**
+
+| Provider | Config | Setup | Notes |
+|----------|--------|-------|-------|
+| `local` (default) | No config needed | `cartog rag setup` to download models | ONNX Runtime via fastembed, ~1.2GB models |
+| `ollama` | `provider = "ollama"` | Ollama server running with model pulled | No model download needed, dimension auto-detected |
+
+**Advanced local configuration:**
+
+```toml
+[embedding]
+provider = "local"
+model = "BAAI/bge-base-en-v1.5"    # any fastembed built-in model
+
+[embedding.local]
+query_prefix = "search_query: "     # for asymmetric models
+document_prefix = "search_document: "
+```
+
+**Disable re-ranking** (saves ~1.1GB model download):
+
+```toml
+[reranker]
+provider = "none"
+```
+
+**Compile-time feature flags** (for minimal binary size):
+
+```bash
+cargo install cartog                                    # default: local ONNX provider
+cargo install cartog --features ollama-embedding         # + Ollama support
+```
+
 ---
 
 ## Commands
@@ -298,6 +347,8 @@ cartog rag setup
 ```
 
 **First-time download**: ~1.2GB of ONNX models (embedding ~80MB + reranker ~1.1GB). May take a few minutes depending on network speed. Models are cached in `~/.cache/cartog/models/` and reused across all projects — subsequent runs are instant.
+
+Note: `rag setup` downloads models for the **local** provider only. When using Ollama, models are managed by the Ollama server — run `ollama pull nomic-embed-text` instead.
 
 ### `cartog rag index [path] [--force]`
 

@@ -46,7 +46,7 @@ All user-supplied paths are validated against the project root:
 
 | Export | Description |
 |--------|-------------|
-| `run_server()` | Start the MCP server over stdio (async) |
+| `run_server()` | Start the MCP server over stdio (async). Accepts `EmbeddingProviderConfig` and threads it through to all RAG operations (indexing and search). |
 
 ## Crate dependencies
 

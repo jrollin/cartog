@@ -45,8 +45,13 @@ cartog/
 │   ├── cartog-rag/          # Semantic search and RAG pipeline
 │   │   └── src/
 │   │       ├── lib.rs       # Constants (EMBEDDING_DIM), model cache helpers
+│   │       ├── provider.rs  # EmbeddingProvider and RerankerProvider traits
+│   │       ├── providers/
+│   │       │   ├── mod.rs   # Provider module (feature-gated)
+│   │       │   ├── local.rs # Local ONNX provider via fastembed
+│   │       │   └── ollama.rs # Ollama HTTP provider
 │   │       ├── setup.rs     # Model download (fastembed auto-download)
-│   │       ├── embeddings.rs # ONNX embedding inference (BGE-small-en-v1.5)
+│   │       ├── embeddings.rs # ONNX embedding helpers (byte serialization)
 │   │       ├── indexer.rs   # Embed symbols, store vectors in sqlite-vec
 │   │       ├── reranker.rs  # Cross-encoder re-ranking (BGE-reranker-base)
 │   │       └── search.rs    # FTS5 + vector KNN, RRF merge, optional re-ranking
@@ -137,7 +142,7 @@ Each crate has a `README.md` with detailed technical documentation. Summary:
 - **[cartog-db](../crates/cartog-db/README.md)**: SQLite connection, schema (core + RAG tables), all query methods (search, refs, impact, hierarchy, callees), 6-tier heuristic edge resolution, FTS5 keyword search, sqlite-vec vector KNN.
 - **[cartog-languages](../crates/cartog-languages/README.md)**: `Extractor` trait + 8 code language extractors (Python, TS, TSX, JS, Rust, Go, Ruby, Java) + Markdown document extractor. Code extractors use declarative tree-sitter S-expression queries via `CachedQuery`; Markdown extractor uses heading-based chunking.
 - **[cartog-indexer](../crates/cartog-indexer/README.md)**: Directory walking, 3-tier change detection (git diff → SHA-256 → force), Merkle tree hashing for surgical symbol-level updates. Optionally delegates to `cartog-lsp` for unresolved edges.
-- **[cartog-rag](../crates/cartog-rag/README.md)**: Embedding (BGE-small-en-v1.5, 384-dim), hybrid search (FTS5 + vector KNN → RRF merge → cross-encoder reranking), model cache management. Indexes both code symbols and Markdown documents.
+- **[cartog-rag](../crates/cartog-rag/README.md)**: Pluggable embedding providers (local ONNX, Ollama), hybrid search (FTS5 + vector KNN → RRF merge → cross-encoder reranking), model cache management. Indexes both code symbols and Markdown documents.
 - **[cartog-lsp](../crates/cartog-lsp/README.md)**: Optional LSP-based edge resolution. Spawns language servers, sends `textDocument/definition`, maps responses to cartog symbol IDs.
 - **[cartog-watch](../crates/cartog-watch/README.md)**: Debounced file watcher (`notify-debouncer-mini`), incremental re-index on changes, deferred RAG embedding with configurable timer. See [spec-watch.md](spec-watch.md) for design details.
 - **[cartog-mcp](../crates/cartog-mcp/README.md)**: MCP server over stdio (`rmcp`). 12 tool handlers with JSON Schema params, path validation (canonicalization), `Arc<Mutex<Database>>` for shared state.

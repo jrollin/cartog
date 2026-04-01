@@ -135,6 +135,23 @@ cartog rag setup          # download embedding + re-ranker models
 cartog rag index .        # embed all symbols + documents
 ```
 
+#### Ollama provider
+
+If the project uses Ollama for embeddings (configured in `.cartog.toml`):
+
+```bash
+# No rag setup needed — models are managed by Ollama
+ollama pull nomic-embed-text        # ensure model is available
+cartog rag index .                  # embed with Ollama
+cartog rag search "error handling"  # search works the same
+```
+
+#### Troubleshooting
+
+- **"Unknown or disabled embedding provider: 'ollama'"** — Install with `cargo install cartog --features ollama-embedding`.
+- **"Failed to connect to Ollama server"** — Ensure Ollama is running (`ollama serve`).
+- **"Embedding dimension changed"** — Provider switch detected. Run `cartog rag index` to re-embed.
+
 ### "Find code related to a concept"
 ```bash
 cartog rag search "parse abstract syntax tree"

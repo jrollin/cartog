@@ -131,6 +131,8 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 Before first use, ensure cartog is installed and indexed.
 
+If the project uses Ollama (check `.cartog.toml` for `[embedding] provider = "ollama"`), skip `rag setup` — models are managed by the Ollama server.
+
 The `scripts/` directory is located next to this SKILL.md file. **Before running any setup command**, look at the absolute path from which this SKILL.md was loaded (visible in your tool call history), take its parent directory, and use that as the scripts root in the bash commands below.
 
 For example: if this file was loaded from `/home/user/.claude/skills/cartog/SKILL.md`, run:
