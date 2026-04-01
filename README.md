@@ -1,4 +1,4 @@
-# cartog
+# Cartog
 
 [![CI](https://github.com/jrollin/cartog/actions/workflows/ci.yml/badge.svg)](https://github.com/jrollin/cartog/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/jrollin/cartog/branch/main/graph/badge.svg)](https://codecov.io/gh/jrollin/cartog)
@@ -9,30 +9,36 @@
 
 **Map your codebase. Navigate by graph, not grep.**
 
-cartog gives your AI coding agent a pre-computed code graph — symbols, calls, imports, inheritance — so it queries structure in 1-2 calls instead of 6+. Everything runs locally: no API calls, no cloud, no data leaves your machine.
+Cartog pre-computes a code graph — symbols, calls, imports, inheritance — and lets you query it in microseconds. Use it from the CLI, as an MCP server for AI agents, or both. Everything runs locally: no API calls, no cloud, no data leaves your machine.
 
-## Why cartog
+> **[Documentation site →](https://jrollin.github.io/cartog/)**
 
-| | grep/cat workflow | cartog |
+## Why Cartog
+
+| | grep/cat/find | Cartog |
 |---|---|---|
-| **Tokens per query** | ~1,700 | ~280 (**83% fewer**) |
+| **Query latency** | multi-step | 8-450 μs |
 | **Recall** (completeness) | 78% | 97% |
-| **Query latency** | multi-step | 8-450 us |
-| **Privacy** | n/a | **100% local** — no remote calls |
 | **Transitive analysis** | impossible | `impact --depth 3` traces callers-of-callers |
-
-Where cartog shines most: tracing call chains (88% token reduction, 35% grep recall vs 100% cartog), finding callers (95% reduction), and type references (93% reduction).
+| **Semantic search** | no | local ONNX / Ollama |
+| **Privacy** | local | **100% local** — no remote calls |
 
 Measured across 13 scenarios, 5 languages ([full benchmark suite](benchmarks/)).
 
-### What you get immediately
+### What you get
 
 - **Single binary, self-contained** — `cargo install cartog` and you're done. No Docker, no config.
-- **100% offline** — tree-sitter parsing + SQLite storage + ONNX embeddings. Your code never leaves your machine, ever.
-- **Optional LSP precision** — auto-detects language servers on PATH to boost edge resolution from ~25% to ~42-81%. Works without them, better with them.
-- **Smart search routing** — keyword search (sub-ms, symbol names) and semantic search (natural language queries) work together. Run both in parallel when unsure.
-- **Live index** — `cartog watch` auto re-indexes on file changes. Your agent always queries fresh data.
+- **100% local** — tree-sitter parsing + SQLite storage + local embeddings. Your code never leaves your machine.
+- **Dual search** — keyword search (sub-ms, symbol names) and semantic search (natural language). Configurable embedding providers (local ONNX or [Ollama](https://ollama.com)).
+- **Impact analysis** — `cartog impact --depth 3` traces callers-of-callers. Know the blast radius before you change anything.
+- **Live index** — `cartog watch` auto re-indexes on file changes. Always query fresh data.
+- **Optional LSP precision** — auto-detects language servers on PATH to boost edge resolution from ~25% to ~42-81%.
+
+### For LLM agents
+
 - **MCP server** — `cartog serve` exposes 12 tools over stdio. Plug into Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible agent.
+- **Agent skill** — teaches your agent when and how to use Cartog. Search routing, refactoring workflows, fallback heuristics.
+- **Token efficient** — 83% fewer tokens per query vs grep/cat workflows. One `refs` call replaces 6+ discovery steps.
 
 ![cartog demo](docs/demo.gif)
 
@@ -318,11 +324,11 @@ The skill teaches your AI agent **when and how** to use cartog — including sea
 
 ## Privacy
 
-cartog is designed for air-gapped and privacy-conscious environments:
+Cartog is designed for air-gapped and privacy-conscious environments:
 
 - **Parsing**: tree-sitter runs in-process, no external calls
 - **Storage**: SQLite file in your project directory (`.cartog.db`)
-- **Embeddings**: ONNX Runtime inference, models cached locally (`~/.cache/cartog/models/`)
+- **Embeddings**: local ONNX by default (`~/.cache/cartog/models/`), or Ollama on localhost — no external API calls either way
 - **Re-ranking**: cross-encoder runs locally via ONNX, no API
 - **MCP server**: communicates over stdio only, no network sockets
 - **No telemetry**, no analytics, no phone-home of any kind
@@ -383,7 +389,8 @@ Remaining unresolved edges are mostly calls to external libraries (std, node_mod
 
 ## Documentation
 
-- [Usage](docs/usage.md)
+- **[Documentation site](https://jrollin.github.io/cartog/)** — quick start, CLI reference, configuration, MCP setup
+- [Usage](docs/usage.md) — full CLI reference and integration guides
 - [Product Overview](docs/product.md)
 - [Technology Stack](docs/tech.md)
 - [Project Structure](docs/structure.md)
