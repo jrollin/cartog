@@ -193,7 +193,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cartog"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-db"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-indexer"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-languages"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -271,7 +271,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-lsp"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-mcp"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -302,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-rag"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -314,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-watch"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "cartog-core",
