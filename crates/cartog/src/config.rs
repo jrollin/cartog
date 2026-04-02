@@ -119,7 +119,7 @@ pub fn load_config() -> CartogConfig {
 
 /// Path to the local project config: `.cartog.toml` found by walking up from
 /// cwd to the git root. Returns `None` if no such file exists.
-fn local_config_path() -> Option<PathBuf> {
+pub fn local_config_path() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
         let candidate = dir.join(".cartog.toml");

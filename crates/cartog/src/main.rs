@@ -62,6 +62,7 @@ fn main() -> Result<()> {
         }
         Command::Deps { file } => commands::cmd_deps(&db_path, &file, cli.json, token_budget),
         Command::Stats => commands::cmd_stats(&db_path, cli.json),
+        Command::Config => commands::cmd_config(&cartog_config, &db_path, cli.json),
         Command::Search {
             query,
             kind,

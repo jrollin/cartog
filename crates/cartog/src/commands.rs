@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::cli::{EdgeKindFilter, SymbolKindFilter};
+use crate::config::CartogConfig;
 use cartog_core::{EdgeKind, SymbolKind};
 use cartog_db::{Database, MAX_SEARCH_LIMIT};
 use cartog_indexer as indexer;
@@ -669,6 +670,170 @@ pub fn cmd_rag_search(
         }
         out
     })
+}
+
+/// Display the current configuration with default-value indicators.
+pub fn cmd_config(config: &CartogConfig, db_path: &Path, json: bool) -> Result<()> {
+    let config_file = crate::config::local_config_path();
+
+    let embed = config.embedding.as_ref();
+    let ollama = embed.and_then(|e| e.ollama.as_ref());
+    let local = embed.and_then(|e| e.local.as_ref());
+    let reranker = config.reranker.as_ref();
+
+    let display = ConfigDisplay {
+        config_file: config_file.map(|p| p.to_string_lossy().into_owned()),
+        db_path: db_path.to_string_lossy().into_owned(),
+        embedding: EmbeddingDisplay {
+            provider: ValueDisplay {
+                value: embed.map_or("local".into(), |e| e.provider().to_string()),
+                is_default: embed.map_or(true, |e| e.provider.is_none()),
+                default: "local".into(),
+            },
+            model: embed.and_then(|e| e.model.clone()),
+            dimension: embed.and_then(|e| e.dimension),
+            local: LocalEmbeddingDisplay {
+                query_prefix: local.and_then(|l| l.query_prefix.clone()),
+                document_prefix: local.and_then(|l| l.document_prefix.clone()),
+            },
+            ollama: OllamaDisplay {
+                base_url: ValueDisplay {
+                    value: ollama.map_or("http://localhost:11434".into(), |o| {
+                        o.base_url().to_string()
+                    }),
+                    is_default: ollama.map_or(true, |o| o.base_url.is_none()),
+                    default: "http://localhost:11434".into(),
+                },
+                model: ValueDisplay {
+                    value: ollama.map_or("nomic-embed-text".into(), |o| o.model().to_string()),
+                    is_default: ollama.map_or(true, |o| o.model.is_none()),
+                    default: "nomic-embed-text".into(),
+                },
+            },
+        },
+        reranker: RerankerDisplay {
+            provider: ValueDisplay {
+                value: reranker.map_or("local".into(), |r| r.provider().to_string()),
+                is_default: reranker.map_or(true, |r| r.provider.is_none()),
+                default: "local".into(),
+            },
+        },
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&display)?);
+    } else {
+        print!("{}", format_config_human(&display));
+    }
+    Ok(())
+}
+
+fn format_value(v: &ValueDisplay) -> String {
+    if v.is_default {
+        format!("{} (default)", v.value)
+    } else {
+        format!("{} (default: {})", v.value, v.default)
+    }
+}
+
+fn format_optional(v: &Option<String>) -> &str {
+    match v {
+        Some(s) => s.as_str(),
+        None => "–",
+    }
+}
+
+fn format_config_human(d: &ConfigDisplay) -> String {
+    let mut out = String::new();
+
+    out.push_str(&format!(
+        "Config file: {}\n",
+        d.config_file.as_deref().unwrap_or("none")
+    ));
+    out.push_str(&format!("Database:    {}\n", d.db_path));
+
+    out.push_str("\n[embedding]\n");
+    out.push_str(&format!(
+        "  provider:          {}\n",
+        format_value(&d.embedding.provider)
+    ));
+    out.push_str(&format!(
+        "  model:             {}\n",
+        format_optional(&d.embedding.model)
+    ));
+    out.push_str(&format!(
+        "  dimension:         {}\n",
+        d.embedding.dimension.map_or("–".into(), |d| d.to_string())
+    ));
+
+    out.push_str("\n[embedding.local]\n");
+    out.push_str(&format!(
+        "  query_prefix:      {}\n",
+        format_optional(&d.embedding.local.query_prefix)
+    ));
+    out.push_str(&format!(
+        "  document_prefix:   {}\n",
+        format_optional(&d.embedding.local.document_prefix)
+    ));
+
+    out.push_str("\n[embedding.ollama]\n");
+    out.push_str(&format!(
+        "  base_url:          {}\n",
+        format_value(&d.embedding.ollama.base_url)
+    ));
+    out.push_str(&format!(
+        "  model:             {}\n",
+        format_value(&d.embedding.ollama.model)
+    ));
+
+    out.push_str("\n[reranker]\n");
+    out.push_str(&format!(
+        "  provider:          {}\n",
+        format_value(&d.reranker.provider)
+    ));
+
+    out
+}
+
+#[derive(Serialize)]
+struct ConfigDisplay {
+    config_file: Option<String>,
+    db_path: String,
+    embedding: EmbeddingDisplay,
+    reranker: RerankerDisplay,
+}
+
+#[derive(Serialize)]
+struct EmbeddingDisplay {
+    provider: ValueDisplay,
+    model: Option<String>,
+    dimension: Option<usize>,
+    local: LocalEmbeddingDisplay,
+    ollama: OllamaDisplay,
+}
+
+#[derive(Serialize)]
+struct LocalEmbeddingDisplay {
+    query_prefix: Option<String>,
+    document_prefix: Option<String>,
+}
+
+#[derive(Serialize)]
+struct OllamaDisplay {
+    base_url: ValueDisplay,
+    model: ValueDisplay,
+}
+
+#[derive(Serialize)]
+struct RerankerDisplay {
+    provider: ValueDisplay,
+}
+
+#[derive(Serialize)]
+struct ValueDisplay {
+    value: String,
+    is_default: bool,
+    default: String,
 }
 
 /// Watch for file changes and auto-re-index.

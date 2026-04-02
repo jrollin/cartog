@@ -153,6 +153,9 @@ pub enum Command {
     /// Index statistics summary
     Stats,
 
+    /// Display the current configuration
+    Config,
+
     /// Search symbols by name (case-insensitive prefix + substring match)
     Search {
         /// Query string to match against symbol names
