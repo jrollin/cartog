@@ -673,8 +673,16 @@ pub fn cmd_rag_search(
 }
 
 /// Display the current configuration with default-value indicators.
-pub fn cmd_config(config: &CartogConfig, db_path: &Path, json: bool) -> Result<()> {
-    let config_file = crate::config::local_config_path();
+pub fn cmd_config(
+    config: &CartogConfig,
+    config_path: Option<&Path>,
+    db_path: &Path,
+    json: bool,
+) -> Result<()> {
+    use crate::config::{
+        DEFAULT_EMBEDDING_PROVIDER, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL,
+        DEFAULT_RERANKER_PROVIDER,
+    };
 
     let embed = config.embedding.as_ref();
     let ollama = embed.and_then(|e| e.ollama.as_ref());
@@ -682,13 +690,15 @@ pub fn cmd_config(config: &CartogConfig, db_path: &Path, json: bool) -> Result<(
     let reranker = config.reranker.as_ref();
 
     let display = ConfigDisplay {
-        config_file: config_file.map(|p| p.to_string_lossy().into_owned()),
+        config_file: config_path.map(|p| p.to_string_lossy().into_owned()),
         db_path: db_path.to_string_lossy().into_owned(),
         embedding: EmbeddingDisplay {
             provider: ValueDisplay {
-                value: embed.map_or("local".into(), |e| e.provider().to_string()),
+                value: embed.map_or(DEFAULT_EMBEDDING_PROVIDER.into(), |e| {
+                    e.provider().to_string()
+                }),
                 is_default: embed.map_or(true, |e| e.provider.is_none()),
-                default: "local".into(),
+                default: DEFAULT_EMBEDDING_PROVIDER.into(),
             },
             model: embed.and_then(|e| e.model.clone()),
             dimension: embed.and_then(|e| e.dimension),
@@ -698,24 +708,25 @@ pub fn cmd_config(config: &CartogConfig, db_path: &Path, json: bool) -> Result<(
             },
             ollama: OllamaDisplay {
                 base_url: ValueDisplay {
-                    value: ollama.map_or("http://localhost:11434".into(), |o| {
-                        o.base_url().to_string()
-                    }),
+                    value: ollama
+                        .map_or(DEFAULT_OLLAMA_BASE_URL.into(), |o| o.base_url().to_string()),
                     is_default: ollama.map_or(true, |o| o.base_url.is_none()),
-                    default: "http://localhost:11434".into(),
+                    default: DEFAULT_OLLAMA_BASE_URL.into(),
                 },
                 model: ValueDisplay {
-                    value: ollama.map_or("nomic-embed-text".into(), |o| o.model().to_string()),
+                    value: ollama.map_or(DEFAULT_OLLAMA_MODEL.into(), |o| o.model().to_string()),
                     is_default: ollama.map_or(true, |o| o.model.is_none()),
-                    default: "nomic-embed-text".into(),
+                    default: DEFAULT_OLLAMA_MODEL.into(),
                 },
             },
         },
         reranker: RerankerDisplay {
             provider: ValueDisplay {
-                value: reranker.map_or("local".into(), |r| r.provider().to_string()),
+                value: reranker.map_or(DEFAULT_RERANKER_PROVIDER.into(), |r| {
+                    r.provider().to_string()
+                }),
                 is_default: reranker.map_or(true, |r| r.provider.is_none()),
-                default: "local".into(),
+                default: DEFAULT_RERANKER_PROVIDER.into(),
             },
         },
     };
@@ -744,53 +755,63 @@ fn format_optional(v: &Option<String>) -> &str {
 }
 
 fn format_config_human(d: &ConfigDisplay) -> String {
+    use std::fmt::Write;
     let mut out = String::new();
 
-    out.push_str(&format!(
-        "Config file: {}\n",
+    let _ = writeln!(
+        out,
+        "Config file: {}",
         d.config_file.as_deref().unwrap_or("none")
-    ));
-    out.push_str(&format!("Database:    {}\n", d.db_path));
+    );
+    let _ = writeln!(out, "Database:    {}", d.db_path);
 
-    out.push_str("\n[embedding]\n");
-    out.push_str(&format!(
-        "  provider:          {}\n",
+    let _ = writeln!(out, "\n[embedding]");
+    let _ = writeln!(
+        out,
+        "  provider:          {}",
         format_value(&d.embedding.provider)
-    ));
-    out.push_str(&format!(
-        "  model:             {}\n",
+    );
+    let _ = writeln!(
+        out,
+        "  model:             {}",
         format_optional(&d.embedding.model)
-    ));
-    out.push_str(&format!(
-        "  dimension:         {}\n",
-        d.embedding.dimension.map_or("–".into(), |d| d.to_string())
-    ));
+    );
+    let _ = writeln!(
+        out,
+        "  dimension:         {}",
+        d.embedding.dimension.map_or("–".into(), |v| v.to_string())
+    );
 
-    out.push_str("\n[embedding.local]\n");
-    out.push_str(&format!(
-        "  query_prefix:      {}\n",
+    let _ = writeln!(out, "\n[embedding.local]");
+    let _ = writeln!(
+        out,
+        "  query_prefix:      {}",
         format_optional(&d.embedding.local.query_prefix)
-    ));
-    out.push_str(&format!(
-        "  document_prefix:   {}\n",
+    );
+    let _ = writeln!(
+        out,
+        "  document_prefix:   {}",
         format_optional(&d.embedding.local.document_prefix)
-    ));
+    );
 
-    out.push_str("\n[embedding.ollama]\n");
-    out.push_str(&format!(
-        "  base_url:          {}\n",
+    let _ = writeln!(out, "\n[embedding.ollama]");
+    let _ = writeln!(
+        out,
+        "  base_url:          {}",
         format_value(&d.embedding.ollama.base_url)
-    ));
-    out.push_str(&format!(
-        "  model:             {}\n",
+    );
+    let _ = writeln!(
+        out,
+        "  model:             {}",
         format_value(&d.embedding.ollama.model)
-    ));
+    );
 
-    out.push_str("\n[reranker]\n");
-    out.push_str(&format!(
-        "  provider:          {}\n",
+    let _ = writeln!(out, "\n[reranker]");
+    let _ = writeln!(
+        out,
+        "  provider:          {}",
         format_value(&d.reranker.provider)
-    ));
+    );
 
     out
 }

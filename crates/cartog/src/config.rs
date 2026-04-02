@@ -36,9 +36,13 @@ pub struct EmbeddingConfig {
     pub ollama: Option<OllamaConfig>,
 }
 
+pub const DEFAULT_EMBEDDING_PROVIDER: &str = "local";
+
 impl EmbeddingConfig {
     pub fn provider(&self) -> &str {
-        self.provider.as_deref().unwrap_or("local")
+        self.provider
+            .as_deref()
+            .unwrap_or(DEFAULT_EMBEDDING_PROVIDER)
     }
 }
 
@@ -58,13 +62,16 @@ pub struct OllamaConfig {
     pub model: Option<String>,
 }
 
+pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
+pub const DEFAULT_OLLAMA_MODEL: &str = "nomic-embed-text";
+
 impl OllamaConfig {
     pub fn base_url(&self) -> &str {
-        self.base_url.as_deref().unwrap_or("http://localhost:11434")
+        self.base_url.as_deref().unwrap_or(DEFAULT_OLLAMA_BASE_URL)
     }
 
     pub fn model(&self) -> &str {
-        self.model.as_deref().unwrap_or("nomic-embed-text")
+        self.model.as_deref().unwrap_or(DEFAULT_OLLAMA_MODEL)
     }
 }
 
@@ -74,9 +81,13 @@ pub struct RerankerConfig {
     pub provider: Option<String>,
 }
 
+pub const DEFAULT_RERANKER_PROVIDER: &str = "local";
+
 impl RerankerConfig {
     pub fn provider(&self) -> &str {
-        self.provider.as_deref().unwrap_or("local")
+        self.provider
+            .as_deref()
+            .unwrap_or(DEFAULT_RERANKER_PROVIDER)
     }
 }
 
@@ -111,15 +122,20 @@ pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProvide
 }
 
 /// Load the local project config from `.cartog.toml`.
-pub fn load_config() -> CartogConfig {
-    local_config_path()
-        .and_then(|p| read_config(&p))
-        .unwrap_or_default()
+/// Returns the parsed config and the path it was loaded from (if any).
+pub fn load_config() -> (CartogConfig, Option<PathBuf>) {
+    match local_config_path() {
+        Some(p) => {
+            let cfg = read_config(&p).unwrap_or_default();
+            (cfg, Some(p))
+        }
+        None => (CartogConfig::default(), None),
+    }
 }
 
 /// Path to the local project config: `.cartog.toml` found by walking up from
 /// cwd to the git root. Returns `None` if no such file exists.
-pub fn local_config_path() -> Option<PathBuf> {
+fn local_config_path() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
         let candidate = dir.join(".cartog.toml");

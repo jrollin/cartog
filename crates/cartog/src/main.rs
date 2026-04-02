@@ -12,7 +12,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Resolve database path: --db / CARTOG_DB > .cartog.toml > git root > cwd
-    let cartog_config = config::load_config();
+    let (cartog_config, config_path) = config::load_config();
     let db_path = config::resolve_db_path(cli.db.clone(), &cartog_config);
     let provider_config = config::to_provider_config(&cartog_config);
 
@@ -62,7 +62,9 @@ fn main() -> Result<()> {
         }
         Command::Deps { file } => commands::cmd_deps(&db_path, &file, cli.json, token_budget),
         Command::Stats => commands::cmd_stats(&db_path, cli.json),
-        Command::Config => commands::cmd_config(&cartog_config, &db_path, cli.json),
+        Command::Config => {
+            commands::cmd_config(&cartog_config, config_path.as_deref(), &db_path, cli.json)
+        }
         Command::Search {
             query,
             kind,
