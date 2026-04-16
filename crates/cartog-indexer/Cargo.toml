@@ -16,6 +16,7 @@ serde = { workspace = true }
 sha2 = { workspace = true }
 tracing = { workspace = true }
 walkdir = { workspace = true }
+rayon = { workspace = true }
 cartog-lsp = { workspace = true, optional = true }
 
 [dev-dependencies]

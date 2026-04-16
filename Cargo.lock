@@ -247,6 +247,7 @@ dependencies = [
  "cartog-db",
  "cartog-languages",
  "cartog-lsp",
+ "rayon",
  "serde",
  "sha2",
  "tempfile",

@@ -1393,6 +1393,20 @@ impl Database {
         Ok(rows)
     }
 
+    /// Load (path, hash) pairs for every indexed file in one query.
+    ///
+    /// Used by the parallel indexer to avoid per-file DB round trips when
+    /// deciding whether a file needs re-parsing.
+    pub fn all_file_hashes(&self) -> Result<std::collections::HashMap<String, String>> {
+        let mut stmt = self.conn.prepare("SELECT path, hash FROM files")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows.into_iter().collect())
+    }
+
     // ── RAG: Symbol Content ──
 
     /// Insert or replace symbol content (raw source + metadata header for embedding).
