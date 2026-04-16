@@ -170,32 +170,27 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
 
             dirty_files.insert(rel_path.clone());
 
-            // Remove deleted symbols
-            for id in &diff.removed {
-                db.delete_symbol(id)?;
-                result.symbols_removed += 1;
-            }
+            // Bulk delete removed symbols in one transaction.
+            db.delete_symbols(&diff.removed)?;
+            result.symbols_removed += diff.removed.len() as u32;
 
-            // Insert new symbols
-            for &idx in &diff.added {
-                db.insert_symbol(&extraction.symbols[idx])?;
-                result.symbols_added += 1;
-            }
+            // Batch all added + modified + children_changed into a single
+            // `insert_symbols` transaction. INSERT OR REPLACE handles both
+            // fresh inserts and full-field replacements.
+            let mut changed: Vec<cartog_core::Symbol> = Vec::with_capacity(
+                diff.added.len() + diff.modified.len() + diff.children_changed.len(),
+            );
+            changed.extend(diff.added.iter().map(|&i| extraction.symbols[i].clone()));
+            changed.extend(diff.modified.iter().map(|&i| extraction.symbols[i].clone()));
+            changed.extend(
+                diff.children_changed
+                    .iter()
+                    .map(|&i| extraction.symbols[i].clone()),
+            );
+            db.insert_symbols(&changed)?;
 
-            // Update modified symbols (full replace)
-            for &idx in &diff.modified {
-                let sym = &extraction.symbols[idx];
-                db.insert_symbol(sym)?; // INSERT OR REPLACE
-                result.symbols_modified += 1;
-            }
-
-            // Update symbols whose children changed (own content same, subtree differs)
-            // Need to update position + subtree_hash so next diff sees current state
-            for &idx in &diff.children_changed {
-                let sym = &extraction.symbols[idx];
-                db.insert_symbol(sym)?; // INSERT OR REPLACE updates all fields including hashes
-            }
-
+            result.symbols_added += diff.added.len() as u32;
+            result.symbols_modified += diff.modified.len() as u32;
             result.symbols_unchanged += diff.unchanged as u32;
 
             // Always re-insert edges for changed files (edge extraction is per-file)

@@ -71,6 +71,9 @@ CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path);
 CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_id);
+-- Composite: speeds up same-directory edge resolution
+-- (WHERE name = ? AND file_path LIKE ?) in `resolve_edges_pass`.
+CREATE INDEX IF NOT EXISTS idx_symbols_name_file ON symbols(name, file_path);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_name);
 CREATE INDEX IF NOT EXISTS idx_edges_target_id ON edges(target_id);
@@ -592,6 +595,50 @@ impl Database {
                     start_byte = ?4, end_byte = ?5 WHERE id = ?1",
             params![id, start_line, end_line, start_byte, end_byte],
         )?;
+        Ok(())
+    }
+
+    /// Delete multiple symbols and cascade (edges, content, embeddings) in a
+    /// single transaction.
+    pub fn delete_symbols(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let mut del_out = self
+            .conn
+            .prepare_cached("DELETE FROM edges WHERE source_id = ?1")?;
+        let mut null_in = self
+            .conn
+            .prepare_cached("UPDATE edges SET target_id = NULL WHERE target_id = ?1")?;
+        let mut del_vec = self.conn.prepare_cached(
+            "DELETE FROM symbol_vec WHERE rowid IN \
+             (SELECT id FROM symbol_embedding_map WHERE symbol_id = ?1)",
+        )?;
+        let mut del_map = self
+            .conn
+            .prepare_cached("DELETE FROM symbol_embedding_map WHERE symbol_id = ?1")?;
+        let mut del_content = self
+            .conn
+            .prepare_cached("DELETE FROM symbol_content WHERE symbol_id = ?1")?;
+        let mut del_sym = self
+            .conn
+            .prepare_cached("DELETE FROM symbols WHERE id = ?1")?;
+        for id in ids {
+            del_out.execute(params![id])?;
+            null_in.execute(params![id])?;
+            let _ = del_vec.execute(params![id]);
+            let _ = del_map.execute(params![id]);
+            let _ = del_content.execute(params![id]);
+            del_sym.execute(params![id])?;
+        }
+        drop(del_out);
+        drop(null_in);
+        drop(del_vec);
+        drop(del_map);
+        drop(del_content);
+        drop(del_sym);
+        tx.commit()?;
         Ok(())
     }
 
@@ -1140,29 +1187,67 @@ impl Database {
     }
 
     /// Transitive impact analysis: everything reachable within `depth` hops.
+    ///
+    /// Evaluated as a single recursive CTE rather than iterating `refs()` per
+    /// frontier node — saves N round-trips and lets SQLite's planner amortize
+    /// the LEFT JOINs. Each unique edge is returned once, labeled with the
+    /// minimum depth at which it was reached.
     pub fn impact(&self, name: &str, max_depth: u32) -> Result<Vec<(Edge, u32)>> {
-        let mut results = Vec::new();
-        let mut visited = std::collections::HashSet::new();
-        let mut frontier: Vec<(String, u32)> = vec![(name.to_string(), 0)];
-
-        while let Some((current, depth)) = frontier.pop() {
-            if depth >= max_depth || visited.contains(&current) {
-                continue;
-            }
-            visited.insert(current.clone());
-
-            let refs = self.refs(&current, None)?;
-            for (edge, sym) in refs {
-                results.push((edge, depth + 1));
-                if let Some(s) = sym {
-                    if !visited.contains(&s.name) {
-                        frontier.push((s.name, depth + 1));
-                    }
-                }
-            }
+        if max_depth == 0 {
+            return Ok(Vec::new());
         }
 
-        Ok(results)
+        let sql = "
+            WITH RECURSIVE impacted(
+                edge_id, source_id, target_name, target_id, kind,
+                file_path, line, source_name, depth
+            ) AS (
+                SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
+                       e.file_path, e.line, s.name, 1
+                FROM edges e
+                LEFT JOIN symbols s ON e.source_id = s.id
+                LEFT JOIN symbols sym2 ON e.target_id = sym2.id
+                WHERE e.target_name = ?1 OR sym2.name = ?1
+
+                UNION
+
+                SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
+                       e.file_path, e.line, s.name, i.depth + 1
+                FROM impacted i
+                JOIN edges e
+                  ON (e.target_name = i.source_name
+                      OR EXISTS (
+                          SELECT 1 FROM symbols t
+                          WHERE t.id = e.target_id AND t.name = i.source_name
+                      ))
+                LEFT JOIN symbols s ON e.source_id = s.id
+                WHERE i.source_name IS NOT NULL AND i.depth < ?2
+            )
+            SELECT source_id, target_name, target_id, kind, file_path, line,
+                   MIN(depth) AS depth
+            FROM impacted
+            GROUP BY edge_id
+            ORDER BY depth, edge_id
+        ";
+
+        let mut stmt = self.conn.prepare_cached(sql)?;
+        let rows = stmt
+            .query_map(params![name, max_depth], |row| {
+                let kind_str: String = row.get(3)?;
+                let kind = kind_str.parse().unwrap_or(EdgeKind::References);
+                let edge = Edge {
+                    source_id: row.get(0)?,
+                    target_name: row.get(1)?,
+                    target_id: row.get(2)?,
+                    kind,
+                    file_path: row.get(4)?,
+                    line: row.get(5)?,
+                };
+                let depth: u32 = row.get(6)?;
+                Ok((edge, depth))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Index statistics.
@@ -2318,6 +2403,92 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].1, 1); // first hop
         assert_eq!(results[1].1, 2); // second hop
+    }
+
+    #[test]
+    fn test_impact_depth_zero_returns_empty() {
+        let db = Database::open_memory().unwrap();
+        let a = test_symbol("a", SymbolKind::Function, "a.py", 1);
+        db.insert_symbols(&[a]).unwrap();
+        assert!(db.impact("a", 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_impact_cycle_terminates() {
+        // Cycle: a → b → a. impact("a", 3) must not loop forever.
+        let db = Database::open_memory().unwrap();
+        let a = test_symbol("a", SymbolKind::Function, "a.py", 1);
+        let b = test_symbol("b", SymbolKind::Function, "b.py", 1);
+        db.insert_symbols(&[a.clone(), b.clone()]).unwrap();
+        db.insert_edges(&[
+            Edge {
+                source_id: a.id.clone(),
+                target_name: "b".to_string(),
+                target_id: Some(b.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "a.py".to_string(),
+                line: 2,
+            },
+            Edge {
+                source_id: b.id.clone(),
+                target_name: "a".to_string(),
+                target_id: Some(a.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "b.py".to_string(),
+                line: 2,
+            },
+        ])
+        .unwrap();
+
+        // Each of the two edges is returned once, labeled with its shallowest depth.
+        let results = db.impact("a", 5).unwrap();
+        assert_eq!(results.len(), 2);
+        for (_, depth) in &results {
+            assert!(*depth >= 1 && *depth <= 5);
+        }
+    }
+
+    #[test]
+    fn test_impact_fanout_dedupes_by_edge() {
+        // Two callers of `shared`, each also calling each other → diamond.
+        // Each edge should appear once.
+        let db = Database::open_memory().unwrap();
+        let shared = test_symbol("shared", SymbolKind::Function, "s.py", 1);
+        let x = test_symbol("x", SymbolKind::Function, "x.py", 1);
+        let y = test_symbol("y", SymbolKind::Function, "y.py", 1);
+        db.insert_symbols(&[shared.clone(), x.clone(), y.clone()])
+            .unwrap();
+        db.insert_edges(&[
+            Edge {
+                source_id: x.id.clone(),
+                target_name: "shared".to_string(),
+                target_id: Some(shared.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "x.py".to_string(),
+                line: 1,
+            },
+            Edge {
+                source_id: y.id.clone(),
+                target_name: "shared".to_string(),
+                target_id: Some(shared.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "y.py".to_string(),
+                line: 1,
+            },
+            Edge {
+                source_id: y.id.clone(),
+                target_name: "x".to_string(),
+                target_id: Some(x.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "y.py".to_string(),
+                line: 2,
+            },
+        ])
+        .unwrap();
+
+        let results = db.impact("shared", 3).unwrap();
+        // 3 distinct edges, each reported exactly once.
+        assert_eq!(results.len(), 3);
     }
 
     #[test]
