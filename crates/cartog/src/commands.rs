@@ -713,6 +713,7 @@ pub fn cmd_rag_index(
 }
 
 /// Semantic search over code symbols.
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_rag_search(
     db_path: &Path,
     query: &str,
