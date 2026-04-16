@@ -149,5 +149,12 @@ fn main() -> Result<()> {
             clap_complete::generate(shell, &mut cmd, "cartog", &mut std::io::stdout());
             Ok(())
         }
+        Command::Manpage => {
+            use clap::CommandFactory;
+            let cmd = Cli::command();
+            clap_mangen::Man::new(cmd)
+                .render(&mut std::io::stdout())
+                .map_err(Into::into)
+        }
     }
 }

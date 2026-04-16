@@ -44,6 +44,7 @@ notify-debouncer-mini = "0.7"
 ctrlc = "3"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
+clap_mangen = "0.2"
 rayon = "1.10"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }

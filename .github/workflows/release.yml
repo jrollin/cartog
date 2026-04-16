@@ -90,12 +90,24 @@ jobs:
 
           echo "Smoke test passed"
 
+      # Generate man page from the built binary so it always matches shipped subcommands.
+      - name: Generate manpage (unix)
+        if: runner.os != 'Windows'
+        run: |
+          BIN=target/${{ matrix.target }}/release/cartog
+          # Skip on cross-arch runners where the binary won't execute.
+          if $BIN --version >/dev/null 2>&1; then
+            $BIN manpage > target/${{ matrix.target }}/release/cartog.1
+          fi
+
       # Package unix
       - name: Package (unix)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../cartog-${{ matrix.target }}.tar.gz cartog
+          files="cartog"
+          [ -f cartog.1 ] && files="$files cartog.1"
+          tar czf ../../../cartog-${{ matrix.target }}.tar.gz $files
           cd ../../..
 
       # Package windows

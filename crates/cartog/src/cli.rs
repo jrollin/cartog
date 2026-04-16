@@ -236,6 +236,13 @@ pub enum Command {
         /// Shell to generate completions for
         shell: clap_complete::Shell,
     },
+
+    /// Emit a troff-formatted manpage for `cartog` on stdout.
+    ///
+    /// Example:
+    ///   cartog manpage > cartog.1
+    ///   man ./cartog.1
+    Manpage,
 }
 
 #[derive(Debug, Subcommand)]
