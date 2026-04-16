@@ -732,27 +732,22 @@ pub fn cmd_rag_search(
         None => rag::search::KindFilter::CodeOnly,
     };
 
-    let mut reranker = rag::create_reranker_provider(&provider_config.reranker_provider);
-    let search_result = match reranker.as_mut() {
-        Some(r) => rag::search::hybrid_search_tuned(
-            &db,
-            query,
-            limit,
-            kind_filter,
-            provider.as_mut(),
-            Some(r.as_mut()),
-            tuning,
-        ),
-        None => rag::search::hybrid_search_tuned(
-            &db,
-            query,
-            limit,
-            kind_filter,
-            provider.as_mut(),
-            None,
-            tuning,
-        ),
-    }?;
+    // Lazy reranker: the cross-encoder ONNX model is loaded only if retrieval
+    // produced enough candidates for `rerank_min` to fire. For a one-shot CLI
+    // command that could return <rerank_min results, this avoids ~100-200ms of
+    // model-load latency + memory on every invocation.
+    let reranker_name = provider_config.reranker_provider.clone();
+    let reranker_factory =
+        (reranker_name != "none").then_some(move || rag::create_reranker_provider(&reranker_name));
+    let search_result = rag::search::hybrid_search_tuned_lazy(
+        &db,
+        query,
+        limit,
+        kind_filter,
+        provider.as_mut(),
+        reranker_factory,
+        tuning,
+    )?;
     let query = query.to_string();
 
     output(&search_result, json, token_budget, |sr| {
@@ -817,6 +812,18 @@ pub fn cmd_config(
     let ollama = embed.and_then(|e| e.ollama.as_ref());
     let local = embed.and_then(|e| e.local.as_ref());
     let reranker = config.reranker.as_ref();
+    let rag = config.rag.as_ref();
+    let tuning_defaults = cartog_rag::search::SearchTuning::default();
+    // `to_search_tuning()` applies the clamps (retrieval_multiplier.max(1),
+    // rerank_min.min(rerank_max)) so what we show matches what the search
+    // pipeline will actually use.
+    let effective_tuning = rag.map(|r| r.to_search_tuning()).unwrap_or(tuning_defaults);
+
+    let rag_value = |set: Option<u32>, effective: u32, default: u32| ValueDisplay {
+        value: effective.to_string(),
+        is_default: set.is_none(),
+        default: default.to_string(),
+    };
 
     let display = ConfigDisplay {
         config_file: config_path.map(|p| p.to_string_lossy().into_owned()),
@@ -857,6 +864,28 @@ pub fn cmd_config(
                 is_default: reranker.map_or(true, |r| r.provider.is_none()),
                 default: DEFAULT_RERANKER_PROVIDER.into(),
             },
+        },
+        rag: RagDisplay {
+            retrieval_multiplier: rag_value(
+                rag.and_then(|r| r.retrieval_multiplier),
+                effective_tuning.retrieval_multiplier,
+                tuning_defaults.retrieval_multiplier,
+            ),
+            retrieval_floor: rag_value(
+                rag.and_then(|r| r.retrieval_floor),
+                effective_tuning.retrieval_floor,
+                tuning_defaults.retrieval_floor,
+            ),
+            rerank_max: rag_value(
+                rag.and_then(|r| r.rerank_max),
+                effective_tuning.rerank_max,
+                tuning_defaults.rerank_max,
+            ),
+            rerank_min: rag_value(
+                rag.and_then(|r| r.rerank_min),
+                effective_tuning.rerank_min,
+                tuning_defaults.rerank_min,
+            ),
         },
     };
 
@@ -951,6 +980,32 @@ fn format_config_human(d: &ConfigDisplay) -> String {
     )
     .unwrap();
 
+    writeln!(out, "\n[rag]").unwrap();
+    writeln!(
+        out,
+        "  retrieval_multiplier: {}",
+        format_value(&d.rag.retrieval_multiplier)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  retrieval_floor:      {}",
+        format_value(&d.rag.retrieval_floor)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  rerank_max:           {}",
+        format_value(&d.rag.rerank_max)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  rerank_min:           {}",
+        format_value(&d.rag.rerank_min)
+    )
+    .unwrap();
+
     out
 }
 
@@ -960,6 +1015,15 @@ struct ConfigDisplay {
     db_path: String,
     embedding: EmbeddingDisplay,
     reranker: RerankerDisplay,
+    rag: RagDisplay,
+}
+
+#[derive(Serialize)]
+struct RagDisplay {
+    retrieval_multiplier: ValueDisplay,
+    retrieval_floor: ValueDisplay,
+    rerank_max: ValueDisplay,
+    rerank_min: ValueDisplay,
 }
 
 #[derive(Serialize)]
