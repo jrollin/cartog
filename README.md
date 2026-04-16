@@ -45,10 +45,16 @@ Every code navigation tool makes you choose: fast but shallow (grep), or precise
 | **Setup** | none | per-language config | **one binary, zero config** |
 | **Languages** | all (text) | one per server | **8 languages, one tool** |
 | **Token cost** (LLM context) | ~1,700 tokens/query | n/a | **~280 tokens/query** |
-| **Recall** (completeness) | 78% | ~100% | **97%** |
+| **Recall** (completeness) | 78% | ~100% | **97%** [*](#benchmark-notes) |
 | **Privacy** | local | local | **100% local** |
 
 Measured across 13 scenarios, 5 languages ([benchmark suite](crates/cartog/benches/queries.rs)).
+
+<a id="benchmark-notes"></a>
+> **\*** 97 % recall is with the `lsp` feature compiled in and a matching
+> language server on PATH. Heuristic-only resolution (no LSP) lands around
+> 25–37 %, with specifics varying by language. Install via
+> `cargo install cartog --features lsp` to match the benchmark numbers.
 
 ## What You Get
 
@@ -362,6 +368,7 @@ Your code never leaves your machine.
 
 - **[Documentation site](https://jrollin.github.io/cartog/)** — quick start, CLI reference, configuration, MCP setup
 - [Usage](docs/usage.md) — full CLI reference and integration guides
+- [Troubleshooting](docs/troubleshooting.md) — common issues and fixes
 - [Product Overview](docs/product.md)
 - [Technology Stack](docs/tech.md)
 - [Project Structure](docs/structure.md)
