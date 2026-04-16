@@ -41,6 +41,15 @@ fn main() -> Result<()> {
         )
         .init();
 
+    // Surface resolved paths once tracing is live so `-v` / RUST_LOG=info users
+    // can see which config and DB are actually in effect.
+    if let Some(ref p) = config_path {
+        tracing::info!(path = %p.display(), "loaded .cartog.toml");
+    } else {
+        tracing::debug!("no .cartog.toml found; using defaults");
+    }
+    tracing::debug!(path = %db_path.display(), "resolved database path");
+
     // Token budget only applies to human-readable output
     let token_budget = if cli.json { None } else { cli.tokens };
 
