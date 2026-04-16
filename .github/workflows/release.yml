@@ -90,24 +90,23 @@ jobs:
 
           echo "Smoke test passed"
 
-      # Generate man page from the built binary so it always matches shipped subcommands.
+      # Generate man page from the built binary so it always matches shipped
+      # subcommands. All matrix entries run natively (see smoke-test comment
+      # above), so this must succeed on every unix runner.
       - name: Generate manpage (unix)
         if: runner.os != 'Windows'
         run: |
+          set -e
           BIN=target/${{ matrix.target }}/release/cartog
-          # Skip on cross-arch runners where the binary won't execute.
-          if $BIN --version >/dev/null 2>&1; then
-            $BIN manpage > target/${{ matrix.target }}/release/cartog.1
-          fi
+          $BIN manpage > target/${{ matrix.target }}/release/cartog.1
+          test -s target/${{ matrix.target }}/release/cartog.1
 
-      # Package unix
+      # Package unix — hard-require both the binary and the manpage.
       - name: Package (unix)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          files="cartog"
-          [ -f cartog.1 ] && files="$files cartog.1"
-          tar czf ../../../cartog-${{ matrix.target }}.tar.gz $files
+          tar czf ../../../cartog-${{ matrix.target }}.tar.gz cartog cartog.1
           cd ../../..
 
       # Package windows
