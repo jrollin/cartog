@@ -186,12 +186,12 @@ where
         &mut candidates[..]
     };
     // Only touch the factory once we know we'd actually use its output.
-    if rerank_slice.len() >= rerank_min {
-        if let Some(factory) = reranker_factory {
-            if let Some(mut reranker) = factory() {
-                rerank_candidates(reranker.as_mut(), query, rerank_slice);
-            }
-        }
+    let maybe_reranker = match reranker_factory {
+        Some(f) if rerank_slice.len() >= rerank_min => f(),
+        _ => None,
+    };
+    if let Some(mut reranker) = maybe_reranker {
+        rerank_candidates(reranker.as_mut(), query, rerank_slice);
     }
 
     Ok(finalize_results(candidates, counts, limit, kind_filter))
