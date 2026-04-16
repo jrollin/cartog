@@ -328,10 +328,14 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         result.files_indexed += 1;
     }
 
-    // Remove files that no longer exist
+    // Remove files that no longer exist. Treat deletions as "dirty" so the
+    // scoped incremental-repair branch below still runs when the *only* change
+    // is a file deletion — otherwise unchanged files keep dangling target_ids
+    // and stale in-degrees until the next edit.
     let all_indexed = db.all_files()?;
     for indexed_path in all_indexed {
         if !current_files.contains(&indexed_path) {
+            dirty_files.insert(indexed_path.clone());
             db.remove_file(&indexed_path)?;
             result.files_removed += 1;
         }

@@ -667,7 +667,7 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         let config = WatchConfig::new(PathBuf::from("."));
-        assert_eq!(config.debounce, Duration::from_secs(2));
+        assert_eq!(config.debounce, Duration::from_secs(5));
         assert!(!config.rag);
         assert_eq!(config.rag_delay, Duration::from_secs(30));
     }

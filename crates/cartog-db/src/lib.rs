@@ -627,9 +627,9 @@ impl Database {
         for id in ids {
             del_out.execute(params![id])?;
             null_in.execute(params![id])?;
-            let _ = del_vec.execute(params![id]);
-            let _ = del_map.execute(params![id]);
-            let _ = del_content.execute(params![id]);
+            del_vec.execute(params![id])?;
+            del_map.execute(params![id])?;
+            del_content.execute(params![id])?;
             del_sym.execute(params![id])?;
         }
         drop(del_out);
