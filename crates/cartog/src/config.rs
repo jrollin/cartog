@@ -38,15 +38,75 @@ pub struct RagConfig {
 }
 
 impl RagConfig {
-    /// Build a `SearchTuning` with caller-provided overrides applied on top of defaults.
+    /// Build a `SearchTuning` with caller-provided overrides applied on top
+    /// of defaults, clamping invalid combinations so search never degrades
+    /// to zero candidates or a silently-disabled reranker.
     pub fn to_search_tuning(&self) -> cartog_rag::search::SearchTuning {
         let d = cartog_rag::search::SearchTuning::default();
+        // Multipliers and floors of 0 would collapse retrieval to nothing —
+        // clamp to 1.
+        let retrieval_multiplier = self
+            .retrieval_multiplier
+            .unwrap_or(d.retrieval_multiplier)
+            .max(1);
+        let retrieval_floor = self.retrieval_floor.unwrap_or(d.retrieval_floor).max(1);
+        let rerank_max = self.rerank_max.unwrap_or(d.rerank_max);
+        let rerank_min = self.rerank_min.unwrap_or(d.rerank_min);
+        // If a user wrote `rerank_min > rerank_max`, the reranker would
+        // silently never fire. Cap rerank_min at rerank_max.
+        let rerank_min = rerank_min.min(rerank_max);
         cartog_rag::search::SearchTuning {
-            retrieval_multiplier: self.retrieval_multiplier.unwrap_or(d.retrieval_multiplier),
-            retrieval_floor: self.retrieval_floor.unwrap_or(d.retrieval_floor),
-            rerank_max: self.rerank_max.unwrap_or(d.rerank_max),
-            rerank_min: self.rerank_min.unwrap_or(d.rerank_min),
+            retrieval_multiplier,
+            retrieval_floor,
+            rerank_max,
+            rerank_min,
         }
+    }
+}
+
+#[cfg(test)]
+mod rag_config_tests {
+    use super::*;
+
+    #[test]
+    fn to_search_tuning_clamps_zero_retrieval() {
+        let cfg = RagConfig {
+            retrieval_multiplier: Some(0),
+            retrieval_floor: Some(0),
+            rerank_max: None,
+            rerank_min: None,
+        };
+        let t = cfg.to_search_tuning();
+        assert_eq!(t.retrieval_multiplier, 1);
+        assert_eq!(t.retrieval_floor, 1);
+    }
+
+    #[test]
+    fn to_search_tuning_caps_rerank_min_at_max() {
+        let cfg = RagConfig {
+            retrieval_multiplier: None,
+            retrieval_floor: None,
+            rerank_max: Some(10),
+            rerank_min: Some(50),
+        };
+        let t = cfg.to_search_tuning();
+        assert_eq!(t.rerank_max, 10);
+        assert_eq!(t.rerank_min, 10);
+    }
+
+    #[test]
+    fn to_search_tuning_passes_valid_values() {
+        let cfg = RagConfig {
+            retrieval_multiplier: Some(5),
+            retrieval_floor: Some(40),
+            rerank_max: Some(100),
+            rerank_min: Some(10),
+        };
+        let t = cfg.to_search_tuning();
+        assert_eq!(t.retrieval_multiplier, 5);
+        assert_eq!(t.retrieval_floor, 40);
+        assert_eq!(t.rerank_max, 100);
+        assert_eq!(t.rerank_min, 10);
     }
 }
 

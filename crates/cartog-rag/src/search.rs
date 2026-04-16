@@ -132,7 +132,12 @@ pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
     reranker: Option<&mut dyn RerankerProvider>,
     tuning: &SearchTuning,
 ) -> Result<HybridSearchResult> {
-    let retrieval_limit = (limit * tuning.retrieval_multiplier).max(tuning.retrieval_floor);
+    // `retrieval_multiplier` is user-controlled via `.cartog.toml` and `limit`
+    // can be up to `MAX_SEARCH_LIMIT`; use saturating math so a pathological
+    // config never overflows in release (panic in debug, wrap in release).
+    let retrieval_limit = limit
+        .saturating_mul(tuning.retrieval_multiplier)
+        .max(tuning.retrieval_floor);
 
     // 1. FTS5 keyword search
     let fts_results = fts5_search_safe(db, query, retrieval_limit)?;
@@ -196,10 +201,11 @@ pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
     } else {
         &mut candidates[..]
     };
-    if let Some(reranker) = reranker {
-        if rerank_slice.len() >= rerank_min {
-            rerank_candidates(reranker, query, rerank_slice);
+    match reranker {
+        Some(r) if rerank_slice.len() >= rerank_min => {
+            rerank_candidates(r, query, rerank_slice);
         }
+        _ => {}
     }
 
     // 5b. Stable tiebreaker: within same score, prefer higher in-degree (more referenced).
