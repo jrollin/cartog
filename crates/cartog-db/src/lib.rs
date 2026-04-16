@@ -5,7 +5,6 @@
 //! full-text search via FTS5, vector KNN search via sqlite-vec, and a
 //! 6-tier heuristic edge resolution algorithm.
 
-use anyhow::{Context, Result};
 use rusqlite::ffi::sqlite3_auto_extension;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -14,14 +13,12 @@ use tracing::{info, warn};
 
 use cartog_core::{Edge, EdgeKind, FileInfo, Symbol, SymbolKind, Visibility};
 
-/// Typed errors for the database-open and schema-migration paths.
+/// Typed errors for the cartog-db API.
 ///
-/// The rest of the query API still returns `anyhow::Result` for now;
-/// this enum exists so callers (the binary, MCP server, plugin authors)
-/// can pattern-match on the actionable failure modes around opening a
-/// database — especially distinguishing a corrupt file from a missing
-/// one from a schema incompatibility. A `From<DbError>` impl on
-/// `anyhow::Error` is provided automatically by the trait blanket, so
+/// Callers (the binary, MCP server, plugin authors) can pattern-match on
+/// the actionable failure modes — especially distinguishing a corrupt file
+/// from a missing one from a schema incompatibility. A `From<DbError>` impl
+/// on `anyhow::Error` is provided automatically by the trait blanket, so
 /// existing `?`-based call sites keep working unchanged.
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -59,14 +56,34 @@ pub enum DbError {
     #[error("embedding dimension migration failed: {0}")]
     EmbeddingDimension(#[source] rusqlite::Error),
 
-    /// A catch-all for other rusqlite-level failures inside `open` —
-    /// use more specific variants whenever they fit.
+    /// A query against the persisted graph failed. `op` names the logical
+    /// operation (e.g. "query metadata", "query file") for diagnostics —
+    /// it mirrors the `.context()` strings the API used to carry.
+    #[error("{op}: {source}")]
+    Query {
+        op: &'static str,
+        #[source]
+        source: rusqlite::Error,
+    },
+
+    /// A query rejected a caller-supplied argument before touching SQLite
+    /// (empty query string, zero limit, etc.).
+    #[error("invalid input: {0}")]
+    InvalidInput(&'static str),
+
+    /// A catch-all for other rusqlite-level failures.
+    /// Use more specific variants whenever they fit.
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 }
 
-/// Result alias for the typed-error helpers below.
+/// Result alias for the cartog-db API. Every `pub fn` in this crate returns
+/// `DbResult<T>`; downstream callers using `anyhow::Result` compose via `?`.
 pub type DbResult<T> = std::result::Result<T, DbError>;
+
+/// Internal `Result` alias so this crate can keep its pre-existing
+/// `-> Result<T>` signatures while the actual error type is `DbError`.
+type Result<T, E = DbError> = std::result::Result<T, E>;
 
 const SQL_INSERT_SYMBOL: &str = "INSERT OR REPLACE INTO symbols
      (id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
@@ -497,7 +514,10 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()
-            .context("Failed to query metadata")
+            .map_err(|source| DbError::Query {
+                op: "query metadata",
+                source,
+            })
     }
 
     /// Store a metadata key-value pair (upserts on conflict).
@@ -544,7 +564,10 @@ impl Database {
                 },
             )
             .optional()
-            .context("Failed to query file")
+            .map_err(|source| DbError::Query {
+                op: "query file",
+                source,
+            })
     }
 
     /// Remove edges only for a file (used by Merkle diff which updates symbols surgically).
@@ -1071,8 +1094,12 @@ impl Database {
         file_filter: Option<&str>,
         limit: u32,
     ) -> Result<Vec<Symbol>> {
-        anyhow::ensure!(!query.is_empty(), "search query cannot be empty");
-        anyhow::ensure!(limit > 0, "search limit must be at least 1");
+        if query.is_empty() {
+            return Err(DbError::InvalidInput("search query cannot be empty"));
+        }
+        if limit == 0 {
+            return Err(DbError::InvalidInput("search limit must be at least 1"));
+        }
 
         // Escape LIKE special characters so query is matched literally.
         let escaped = query
@@ -1530,7 +1557,10 @@ impl Database {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
-            .context("Failed to query symbol content")
+            .map_err(|source| DbError::Query {
+                op: "query symbol content",
+                source,
+            })
     }
 
     /// Batch fetch content + header for multiple symbols.
@@ -1630,7 +1660,10 @@ impl Database {
                 |row| row.get(0),
             )
             .optional()
-            .context("Failed to query embedding map")
+            .map_err(|source| DbError::Query {
+                op: "query embedding map",
+                source,
+            })
     }
 
     /// Batch look up symbol IDs for multiple embedding map rowids.
@@ -1778,7 +1811,10 @@ impl Database {
                 row_to_symbol,
             )
             .optional()
-            .context("Failed to query symbol")
+            .map_err(|source| DbError::Query {
+                op: "query symbol",
+                source,
+            })
     }
 
     /// Get multiple symbols by their IDs, preserving order.
@@ -3748,5 +3784,25 @@ mod tests {
             DbError::Open { path, .. } => assert_eq!(path, bad_path),
             other => panic!("expected DbError::Open, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_search_rejects_empty_query_with_typed_error() {
+        let db = Database::open_memory().unwrap();
+        let err = db.search("", None, None, 10).unwrap_err();
+        assert!(
+            matches!(err, DbError::InvalidInput(msg) if msg.contains("empty")),
+            "expected DbError::InvalidInput for empty query, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_search_rejects_zero_limit_with_typed_error() {
+        let db = Database::open_memory().unwrap();
+        let err = db.search("foo", None, None, 0).unwrap_err();
+        assert!(
+            matches!(err, DbError::InvalidInput(msg) if msg.contains("limit")),
+            "expected DbError::InvalidInput for zero limit, got {err:?}"
+        );
     }
 }

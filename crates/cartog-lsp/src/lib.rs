@@ -135,7 +135,7 @@ pub fn lsp_resolve_edges(
                                     loc.line
                                 );
                             }
-                            Err(e) => return Err(e), // DB errors propagate
+                            Err(e) => return Err(e.into()), // DB errors propagate
                         }
                     }
                     Ok(None) => {} // LSP couldn't resolve either

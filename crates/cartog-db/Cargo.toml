@@ -9,7 +9,6 @@ repository.workspace = true
 
 [dependencies]
 cartog-core = { workspace = true }
-anyhow = { workspace = true }
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
@@ -17,4 +16,5 @@ sqlite-vec = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
 tempfile = { workspace = true }
