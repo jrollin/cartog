@@ -93,16 +93,34 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # --- Security (informational) ---
-
   deny:
     name: Dependency Policy
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: taiki-e/install-action@cargo-deny
       - run: cargo deny check
+
+  # --- Performance (informational) ---
+
+  bench:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    # Benchmarks on shared GitHub runners are noisy — never fail a PR on a
+    # variance-driven regression, but surface results as an artifact so
+    # reviewers can spot outliers.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run criterion benches
+        run: cargo bench --bench queries -- --warm-up-time 1 --measurement-time 3
+      - uses: actions/upload-artifact@v7
+        with:
+          name: criterion-report
+          path: target/criterion
+          retention-days: 14
 
   sbom:
     name: SBOM
