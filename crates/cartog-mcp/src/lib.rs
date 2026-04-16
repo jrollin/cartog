@@ -223,13 +223,65 @@ fn suggestions_for(tool: &str) -> Option<&'static str> {
     }
 }
 
+/// Default upper bound on response size. Keeps individual MCP tool calls
+/// well under Claude's ~25K-token tool budget (~4 chars/token ≈ 100KB) with
+/// headroom for model-side formatting. Override with `CARTOG_MCP_MAX_BYTES`.
+const DEFAULT_MCP_MAX_BYTES: usize = 64 * 1024;
+
+fn mcp_max_bytes() -> usize {
+    std::env::var("CARTOG_MCP_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n: &usize| n > 256) // sanity: don't let a typo trim everything
+        .unwrap_or(DEFAULT_MCP_MAX_BYTES)
+}
+
+/// Suggest a narrower tool when we've truncated a large response.
+fn narrowing_hint_for(tool: &str) -> &'static str {
+    match tool {
+        "cartog_impact" => "Re-run with a smaller --depth, or call cartog_refs on a specific symbol to narrow the blast radius.",
+        "cartog_map" => "Re-run with a smaller --tokens budget, or call cartog_outline on a specific file.",
+        "cartog_changes" => "Re-run with a smaller --commits window.",
+        "cartog_search" | "cartog_rag_search" => "Re-run with a tighter query or --limit.",
+        "cartog_refs" => "Re-run with a more specific symbol name, or filter by --kind.",
+        _ => "Re-run with a narrower scope or filter.",
+    }
+}
+
 /// Build a JSON text response with next-tool suggestions appended.
+///
+/// Caps total response size at `mcp_max_bytes()` so individual tool calls
+/// don't blow the caller's context window. On overflow the payload is cut
+/// at a safe char boundary and an overflow notice pointing at a narrower
+/// tool is appended.
 fn tool_response(db: &Database, json: String, tool: &str) -> Result<CallToolResult, McpError> {
     let is_empty = !db
         .has_indexed_files()
         .map_err(|e| mcp_err(format!("stats check failed: {e}")))?;
-    let mut text = json;
-    if is_empty {
+
+    let budget = mcp_max_bytes();
+    let (mut text, truncated_bytes) = if json.len() > budget {
+        // Leave room for the truncation notice.
+        let notice_cap = 256;
+        let target = budget.saturating_sub(notice_cap);
+        // UTF-8 chars are at most 4 bytes; step back to a char boundary.
+        let cut = (target.saturating_sub(3)..=target)
+            .rev()
+            .find(|&i| json.is_char_boundary(i))
+            .unwrap_or(0);
+        let removed = json.len() - cut;
+        (json[..cut].to_string(), removed)
+    } else {
+        (json, 0)
+    };
+
+    if truncated_bytes > 0 {
+        text.push_str(&format!(
+            "\n\n(Response truncated: {truncated_bytes} bytes omitted to stay under the \
+             {budget}-byte cap. {hint})",
+            hint = narrowing_hint_for(tool),
+        ));
+    } else if is_empty {
         text.push_str("\n\n(Index is empty. Run cartog_index first to build the code graph.)");
     } else if let Some(hint) = suggestions_for(tool) {
         text.push_str("\n\n");
