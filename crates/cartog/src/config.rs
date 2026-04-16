@@ -13,6 +13,41 @@ pub struct CartogConfig {
     pub database: Option<DatabaseConfig>,
     pub embedding: Option<EmbeddingConfig>,
     pub reranker: Option<RerankerConfig>,
+    pub rag: Option<RagConfig>,
+}
+
+/// Tuning knobs for the hybrid search pipeline.
+///
+/// ```toml
+/// [rag]
+/// retrieval_multiplier = 3
+/// retrieval_floor      = 20
+/// rerank_max           = 50
+/// rerank_min           = 8
+/// ```
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct RagConfig {
+    /// Over-retrieval multiplier for FTS5 + vector candidate pools.
+    pub retrieval_multiplier: Option<u32>,
+    /// Lower bound on candidate retrieval, independent of `limit`.
+    pub retrieval_floor: Option<u32>,
+    /// Cap on candidates passed to the cross-encoder.
+    pub rerank_max: Option<u32>,
+    /// Skip the cross-encoder entirely below this many candidates.
+    pub rerank_min: Option<u32>,
+}
+
+impl RagConfig {
+    /// Build a `SearchTuning` with caller-provided overrides applied on top of defaults.
+    pub fn to_search_tuning(&self) -> cartog_rag::search::SearchTuning {
+        let d = cartog_rag::search::SearchTuning::default();
+        cartog_rag::search::SearchTuning {
+            retrieval_multiplier: self.retrieval_multiplier.unwrap_or(d.retrieval_multiplier),
+            retrieval_floor: self.retrieval_floor.unwrap_or(d.retrieval_floor),
+            rerank_max: self.rerank_max.unwrap_or(d.rerank_max),
+            rerank_min: self.rerank_min.unwrap_or(d.rerank_min),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]

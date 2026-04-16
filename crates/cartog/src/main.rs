@@ -16,6 +16,11 @@ fn main() -> Result<()> {
     let db_path = config::resolve_db_path(cli.db.clone(), &cartog_config);
     let provider_config = config::to_provider_config(&cartog_config);
     let embedding_dim = provider_config.resolved_dimension();
+    let search_tuning = cartog_config
+        .rag
+        .as_ref()
+        .map(|r| r.to_search_tuning())
+        .unwrap_or_default();
 
     let is_serve = matches!(cli.command, Command::Serve { .. });
     let is_watch = matches!(cli.command, Command::Watch { .. });
@@ -141,6 +146,7 @@ fn main() -> Result<()> {
                 cli.json,
                 token_budget,
                 &provider_config,
+                &search_tuning,
             ),
         },
         Command::Completions { shell } => {

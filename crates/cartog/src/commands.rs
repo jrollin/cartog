@@ -721,6 +721,7 @@ pub fn cmd_rag_search(
     json: bool,
     token_budget: Option<u32>,
     provider_config: &rag::EmbeddingProviderConfig,
+    tuning: &rag::search::SearchTuning,
 ) -> Result<()> {
     let mut provider = rag::create_embedding_provider(provider_config)?;
     let db = open_db(db_path, provider.dimension())?;
@@ -732,15 +733,24 @@ pub fn cmd_rag_search(
 
     let mut reranker = rag::create_reranker_provider(&provider_config.reranker_provider);
     let search_result = match reranker.as_mut() {
-        Some(r) => rag::search::hybrid_search(
+        Some(r) => rag::search::hybrid_search_tuned(
             &db,
             query,
             limit,
             kind_filter,
             provider.as_mut(),
             Some(r.as_mut()),
+            tuning,
         ),
-        None => rag::search::hybrid_search(&db, query, limit, kind_filter, provider.as_mut(), None),
+        None => rag::search::hybrid_search_tuned(
+            &db,
+            query,
+            limit,
+            kind_filter,
+            provider.as_mut(),
+            None,
+            tuning,
+        ),
     }?;
     let query = query.to_string();
 

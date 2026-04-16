@@ -68,10 +68,37 @@ fn rrf_merge(ranked_lists: &[(&str, Vec<String>)], k: f64) -> Vec<(String, f64, 
     results
 }
 
-/// Run hybrid search: FTS5 keyword + vector KNN, merged with RRF.
-///
-/// When `kind_filter` is set, results are filtered before applying `limit`,
-/// so the caller always gets up to `limit` results of the requested kind.
+/// Tunable parameters for the hybrid-search pipeline. Defaults match the
+/// original hard-coded values so passing `SearchTuning::default()` preserves
+/// historical behavior.
+#[derive(Debug, Clone, Copy)]
+pub struct SearchTuning {
+    /// Over-retrieval multiplier. FTS and vector stages fetch
+    /// `max(limit * retrieval_multiplier, retrieval_floor)` candidates so
+    /// RRF + reranking have enough signal after filtering.
+    pub retrieval_multiplier: u32,
+    /// Minimum number of candidates to retrieve regardless of `limit`.
+    pub retrieval_floor: u32,
+    /// Maximum number of candidates scored by the cross-encoder. Bounds worst-
+    /// case latency on wide queries.
+    pub rerank_max: u32,
+    /// Skip the cross-encoder entirely if fewer than this many candidates
+    /// survived RRF merge. Keeps small-corpus queries fast.
+    pub rerank_min: u32,
+}
+
+impl Default for SearchTuning {
+    fn default() -> Self {
+        Self {
+            retrieval_multiplier: 3,
+            retrieval_floor: 20,
+            rerank_max: 50,
+            rerank_min: 8,
+        }
+    }
+}
+
+/// Run hybrid search with default tuning. See [`hybrid_search_tuned`] for knobs.
 pub fn hybrid_search<E: EmbeddingProvider + ?Sized>(
     db: &Database,
     query: &str,
@@ -80,7 +107,32 @@ pub fn hybrid_search<E: EmbeddingProvider + ?Sized>(
     embedding_provider: &mut E,
     reranker: Option<&mut dyn RerankerProvider>,
 ) -> Result<HybridSearchResult> {
-    let retrieval_limit = (limit * 3).max(20); // Over-retrieve for better merge
+    hybrid_search_tuned(
+        db,
+        query,
+        limit,
+        kind_filter,
+        embedding_provider,
+        reranker,
+        &SearchTuning::default(),
+    )
+}
+
+/// Run hybrid search: FTS5 keyword + vector KNN, merged with RRF.
+///
+/// When `kind_filter` is set, results are filtered before applying `limit`,
+/// so the caller always gets up to `limit` results of the requested kind.
+/// `tuning` lets the caller override retrieval/rerank thresholds from config.
+pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
+    db: &Database,
+    query: &str,
+    limit: u32,
+    kind_filter: KindFilter,
+    embedding_provider: &mut E,
+    reranker: Option<&mut dyn RerankerProvider>,
+    tuning: &SearchTuning,
+) -> Result<HybridSearchResult> {
+    let retrieval_limit = (limit * tuning.retrieval_multiplier).max(tuning.retrieval_floor);
 
     // 1. FTS5 keyword search
     let fts_results = fts5_search_safe(db, query, retrieval_limit)?;
@@ -134,15 +186,20 @@ pub fn hybrid_search<E: EmbeddingProvider + ?Sized>(
     }
 
     // 5. Cross-encoder re-ranking (if provider is available).
-    //    Cap at 50 candidates to bound latency.
-    const RERANK_MAX: usize = 50;
-    let rerank_slice = if candidates.len() > RERANK_MAX {
-        &mut candidates[..RERANK_MAX]
+    //    Cap at `rerank_max` candidates to bound latency; skip entirely
+    //    when fewer than `rerank_min` candidates survived RRF (no benefit
+    //    from a cross-encoder over a trivially small candidate pool).
+    let rerank_cap = tuning.rerank_max as usize;
+    let rerank_min = tuning.rerank_min as usize;
+    let rerank_slice = if candidates.len() > rerank_cap {
+        &mut candidates[..rerank_cap]
     } else {
         &mut candidates[..]
     };
     if let Some(reranker) = reranker {
-        rerank_candidates(reranker, query, rerank_slice);
+        if rerank_slice.len() >= rerank_min {
+            rerank_candidates(reranker, query, rerank_slice);
+        }
     }
 
     // 5b. Stable tiebreaker: within same score, prefer higher in-degree (more referenced).
