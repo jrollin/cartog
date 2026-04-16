@@ -1490,6 +1490,20 @@ mod tests {
                     default: DEFAULT_RERANKER_PROVIDER.into(),
                 },
             },
+            rag: {
+                let t = cartog_rag::search::SearchTuning::default();
+                let v = |n: u32| ValueDisplay {
+                    value: n.to_string(),
+                    is_default: true,
+                    default: n.to_string(),
+                };
+                RagDisplay {
+                    retrieval_multiplier: v(t.retrieval_multiplier),
+                    retrieval_floor: v(t.retrieval_floor),
+                    rerank_max: v(t.rerank_max),
+                    rerank_min: v(t.rerank_min),
+                }
+            },
         }
     }
 
