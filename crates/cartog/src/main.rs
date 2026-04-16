@@ -128,7 +128,15 @@ fn main() -> Result<()> {
             debounce,
             rag,
             rag_delay,
-        } => commands::cmd_watch(&db_path, &path, debounce, rag, rag_delay, provider_config),
+        } => commands::cmd_watch(
+            &db_path,
+            &path,
+            debounce,
+            rag,
+            rag_delay,
+            provider_config,
+            cli.json,
+        ),
         Command::Serve { watch, rag } => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(mcp::run_server(&db_path, watch, rag, provider_config))

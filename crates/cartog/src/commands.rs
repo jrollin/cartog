@@ -1394,6 +1394,7 @@ pub fn cmd_doctor(
 }
 
 /// Watch for file changes and auto-re-index.
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_watch(
     db_path: &Path,
     path: &str,
@@ -1401,12 +1402,14 @@ pub fn cmd_watch(
     rag: bool,
     rag_delay: u64,
     provider_config: rag::EmbeddingProviderConfig,
+    json: bool,
 ) -> Result<()> {
     let mut config = WatchConfig::new(PathBuf::from(path));
     config.debounce = Duration::from_secs(debounce);
     config.rag = rag;
     config.rag_delay = Duration::from_secs(rag_delay);
     config.rag_config = provider_config;
+    config.json_events = json;
 
     let db_path_str = db_path.to_string_lossy();
     watch::run_watch(config, &db_path_str)

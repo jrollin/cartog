@@ -4,6 +4,7 @@
 //! triggers incremental re-indexing, and optionally defers RAG embedding to batch
 //! changed symbols after a configurable quiet period.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
+use serde::Serialize;
 use tracing::{debug, info, warn};
 
 use cartog_core::detect_language;
@@ -31,6 +33,9 @@ pub struct WatchConfig {
     pub rag_delay: Duration,
     /// RAG provider configuration (embedding + reranker).
     pub rag_config: rag::EmbeddingProviderConfig,
+    /// Emit newline-delimited JSON events on stdout. When false, the loop
+    /// only produces tracing logs on stderr (existing behavior).
+    pub json_events: bool,
 }
 
 impl WatchConfig {
@@ -44,7 +49,57 @@ impl WatchConfig {
             rag: false,
             rag_delay: Duration::from_secs(30),
             rag_config: rag::EmbeddingProviderConfig::default(),
+            json_events: false,
         }
+    }
+}
+
+/// A single event emitted by the watch loop when `json_events` is enabled.
+///
+/// Serialized to stdout as one compact JSON object per line (NDJSON) so
+/// downstream tooling can parse events as they arrive.
+#[derive(Debug, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+enum WatchEvent<'a> {
+    /// Emitted once when the watcher begins observing the tree.
+    Started {
+        root: &'a str,
+        debounce_ms: u128,
+        rag: bool,
+        rag_delay_s: u64,
+    },
+    /// A debounced re-index pass completed successfully.
+    Reindex {
+        files_indexed: u32,
+        files_skipped: u32,
+        files_removed: u32,
+        symbols_added: u32,
+        edges_added: u32,
+        edges_resolved: u32,
+        duration_ms: u128,
+    },
+    /// A debounced re-index pass failed; the loop keeps running.
+    ReindexFailed { error: String },
+    /// RAG deferred-embedding pass completed.
+    RagEmbedded {
+        symbols_embedded: u32,
+        symbols_skipped: u32,
+        total_content_symbols: u32,
+        duration_ms: u128,
+    },
+    /// RAG deferred-embedding pass failed; the loop keeps running.
+    RagFailed { error: String },
+    /// Emitted once when the watcher has stopped (Ctrl+C, drop, etc.).
+    Shutdown,
+}
+
+/// Write one NDJSON line to stdout, flushing immediately so consumers see
+/// events in real time rather than when the pipe buffers flush.
+fn emit_event(event: &WatchEvent<'_>) {
+    if let Ok(line) = serde_json::to_string(event) {
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
     }
 }
 
@@ -151,17 +206,46 @@ fn watch_loop(
         rag_delay_s = config.rag_delay.as_secs(),
         "starting watch"
     );
+    if config.json_events {
+        emit_event(&WatchEvent::Started {
+            root: &root.to_string_lossy(),
+            debounce_ms: config.debounce.as_millis(),
+            rag: config.rag,
+            rag_delay_s: config.rag_delay.as_secs(),
+        });
+    }
 
     // Initial incremental index to ensure DB is current
+    let initial_start = Instant::now();
     match indexer::index_directory(&db, root, false, false) {
-        Ok(r) => info!(
-            files = r.files_indexed,
-            skipped = r.files_skipped,
-            removed = r.files_removed,
-            symbols = r.symbols_added,
-            "initial index complete"
-        ),
-        Err(e) => warn!(error = %e, "initial index failed"),
+        Ok(r) => {
+            info!(
+                files = r.files_indexed,
+                skipped = r.files_skipped,
+                removed = r.files_removed,
+                symbols = r.symbols_added,
+                "initial index complete"
+            );
+            if config.json_events {
+                emit_event(&WatchEvent::Reindex {
+                    files_indexed: r.files_indexed,
+                    files_skipped: r.files_skipped,
+                    files_removed: r.files_removed,
+                    symbols_added: r.symbols_added,
+                    edges_added: r.edges_added,
+                    edges_resolved: r.edges_resolved,
+                    duration_ms: initial_start.elapsed().as_millis(),
+                });
+            }
+        }
+        Err(e) => {
+            warn!(error = %e, "initial index failed");
+            if config.json_events {
+                emit_event(&WatchEvent::ReindexFailed {
+                    error: e.to_string(),
+                });
+            }
+        }
     }
 
     // Set up the debounced file watcher
@@ -224,6 +308,7 @@ fn watch_loop(
                         count = events.len(),
                         "file change events received, re-indexing"
                     );
+                    let reindex_start = Instant::now();
                     match indexer::index_directory(&db, root, false, false) {
                         Ok(r) => {
                             if r.files_indexed > 0 || r.files_removed > 0 {
@@ -234,6 +319,17 @@ fn watch_loop(
                                     symbols = r.symbols_added,
                                     "re-indexed"
                                 );
+                            }
+                            if config.json_events && (r.files_indexed > 0 || r.files_removed > 0) {
+                                emit_event(&WatchEvent::Reindex {
+                                    files_indexed: r.files_indexed,
+                                    files_skipped: r.files_skipped,
+                                    files_removed: r.files_removed,
+                                    symbols_added: r.symbols_added,
+                                    edges_added: r.edges_added,
+                                    edges_resolved: r.edges_resolved,
+                                    duration_ms: reindex_start.elapsed().as_millis(),
+                                });
                             }
                             // Check if RAG embedding is needed
                             if config.rag {
@@ -256,7 +352,14 @@ fn watch_loop(
                                 }
                             }
                         }
-                        Err(e) => warn!(error = %e, "re-index failed"),
+                        Err(e) => {
+                            warn!(error = %e, "re-index failed");
+                            if config.json_events {
+                                emit_event(&WatchEvent::ReindexFailed {
+                                    error: e.to_string(),
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -275,6 +378,7 @@ fn watch_loop(
                                 continue;
                             }
                             if let Some(ref mut provider) = rag_provider {
+                                let embed_start = Instant::now();
                                 match rag::indexer::index_embeddings(&db, provider.as_mut(), false)
                                 {
                                     Ok(r) => {
@@ -283,9 +387,22 @@ fn watch_loop(
                                             skipped = r.symbols_skipped,
                                             "RAG embedding complete"
                                         );
+                                        if config.json_events {
+                                            emit_event(&WatchEvent::RagEmbedded {
+                                                symbols_embedded: r.symbols_embedded,
+                                                symbols_skipped: r.symbols_skipped,
+                                                total_content_symbols: r.total_content_symbols,
+                                                duration_ms: embed_start.elapsed().as_millis(),
+                                            });
+                                        }
                                     }
                                     Err(e) => {
                                         warn!(error = %e, "RAG embedding failed");
+                                        if config.json_events {
+                                            emit_event(&WatchEvent::RagFailed {
+                                                error: e.to_string(),
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -315,6 +432,9 @@ fn watch_loop(
     }
 
     info!("watch stopped");
+    if config.json_events {
+        emit_event(&WatchEvent::Shutdown);
+    }
     Ok(())
 }
 
@@ -670,6 +790,52 @@ mod tests {
         assert_eq!(config.debounce, Duration::from_secs(5));
         assert!(!config.rag);
         assert_eq!(config.rag_delay, Duration::from_secs(30));
+        assert!(!config.json_events);
+    }
+
+    // ── NDJSON event serialization ──
+    //
+    // Lock in the wire format of the events `cartog watch --json` produces:
+    // downstream tools parse these, so a field rename would be a breaking
+    // change that should show up in a diff review.
+
+    #[test]
+    fn test_watch_event_started_shape() {
+        let e = WatchEvent::Started {
+            root: "/proj",
+            debounce_ms: 5000,
+            rag: true,
+            rag_delay_s: 30,
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(s.contains("\"event\":\"started\""));
+        assert!(s.contains("\"root\":\"/proj\""));
+        assert!(s.contains("\"debounce_ms\":5000"));
+        assert!(s.contains("\"rag\":true"));
+        assert!(s.contains("\"rag_delay_s\":30"));
+    }
+
+    #[test]
+    fn test_watch_event_reindex_shape() {
+        let e = WatchEvent::Reindex {
+            files_indexed: 1,
+            files_skipped: 2,
+            files_removed: 0,
+            symbols_added: 10,
+            edges_added: 4,
+            edges_resolved: 3,
+            duration_ms: 42,
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(s.contains("\"event\":\"reindex\""));
+        assert!(s.contains("\"files_indexed\":1"));
+        assert!(s.contains("\"duration_ms\":42"));
+    }
+
+    #[test]
+    fn test_watch_event_shutdown_shape() {
+        let s = serde_json::to_string(&WatchEvent::Shutdown).unwrap();
+        assert_eq!(s, "{\"event\":\"shutdown\"}");
     }
 
     #[test]
