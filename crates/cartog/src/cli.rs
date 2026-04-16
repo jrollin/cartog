@@ -4,10 +4,24 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use cartog_core::{EdgeKind, SymbolKind};
 
+/// Extended version string printed by `cartog --version` (long form).
+/// Short form (`-V`) keeps the bare semver. Populated by `build.rs`.
+pub const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    "\nbuild:    ",
+    env!("CARTOG_BUILD_SHA"),
+    "\nfeatures: ",
+    env!("CARTOG_BUILD_FEATURES"),
+    "\nrustc:    ",
+    env!("CARGO_PKG_RUST_VERSION"),
+    " (MSRV)",
+);
+
 #[derive(Debug, Parser)]
 #[command(name = "cartog")]
 #[command(about = "Map your codebase. Navigate by graph, not grep.")]
 #[command(version)]
+#[command(long_version = LONG_VERSION)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
