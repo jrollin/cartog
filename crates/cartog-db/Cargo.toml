@@ -11,6 +11,7 @@ repository.workspace = true
 cartog-core = { workspace = true }
 anyhow = { workspace = true }
 rusqlite = { workspace = true }
+thiserror = { workspace = true }
 serde = { workspace = true }
 sqlite-vec = { workspace = true }
 tracing = { workspace = true }

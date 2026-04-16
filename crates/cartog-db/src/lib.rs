@@ -14,6 +14,60 @@ use tracing::{info, warn};
 
 use cartog_core::{Edge, EdgeKind, FileInfo, Symbol, SymbolKind, Visibility};
 
+/// Typed errors for the database-open and schema-migration paths.
+///
+/// The rest of the query API still returns `anyhow::Result` for now;
+/// this enum exists so callers (the binary, MCP server, plugin authors)
+/// can pattern-match on the actionable failure modes around opening a
+/// database — especially distinguishing a corrupt file from a missing
+/// one from a schema incompatibility. A `From<DbError>` impl on
+/// `anyhow::Error` is provided automatically by the trait blanket, so
+/// existing `?`-based call sites keep working unchanged.
+#[derive(Debug, thiserror::Error)]
+pub enum DbError {
+    /// Failure opening or creating the SQLite file itself (permission
+    /// denied, path missing, disk full, etc.).
+    #[error("failed to open database at {path}: {source}")]
+    Open {
+        path: std::path::PathBuf,
+        #[source]
+        source: rusqlite::Error,
+    },
+
+    /// Could not apply one of the startup PRAGMAs (journal_mode, WAL, …).
+    #[error("failed to set startup pragmas: {0}")]
+    Pragma(#[source] rusqlite::Error),
+
+    /// Could not apply the `CREATE TABLE IF NOT EXISTS` schema bootstrap.
+    #[error("failed to create schema: {0}")]
+    Schema(#[source] rusqlite::Error),
+
+    /// Could not create or migrate the RAG (FTS + vector) tables.
+    #[error("failed to create RAG schema: {0}")]
+    RagSchema(#[source] rusqlite::Error),
+
+    /// Pre-migration backup via `VACUUM INTO` failed.
+    #[error("failed to back up database before destructive migration to {path}: {source}")]
+    BackupFailed {
+        path: std::path::PathBuf,
+        #[source]
+        source: rusqlite::Error,
+    },
+
+    /// Embedding-dimension reconciliation failed (the stored `symbol_vec`
+    /// shape didn't match the requested one and we couldn't rebuild it).
+    #[error("embedding dimension migration failed: {0}")]
+    EmbeddingDimension(#[source] rusqlite::Error),
+
+    /// A catch-all for other rusqlite-level failures inside `open` —
+    /// use more specific variants whenever they fit.
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+}
+
+/// Result alias for the typed-error helpers below.
+pub type DbResult<T> = std::result::Result<T, DbError>;
+
 const SQL_INSERT_SYMBOL: &str = "INSERT OR REPLACE INTO symbols
      (id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
       parent_id, signature, visibility, is_async, docstring, content_hash, subtree_hash)
@@ -277,7 +331,13 @@ fn migrate(conn: &Connection) {
 
 /// Check stored embedding dimension against requested dimension.
 /// If they differ, drop the vector table and clear the embedding map.
-fn handle_embedding_dimension(conn: &Connection, requested_dim: usize) -> Result<()> {
+///
+/// Returns rusqlite's `Result` so the caller (`Database::open`) can wrap
+/// any failure into `DbError::EmbeddingDimension` with precise context.
+fn handle_embedding_dimension(
+    conn: &Connection,
+    requested_dim: usize,
+) -> std::result::Result<(), rusqlite::Error> {
     let stored_dim: Option<usize> = conn
         .query_row(
             "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'embedding_dimension'",
@@ -302,28 +362,27 @@ fn handle_embedding_dimension(conn: &Connection, requested_dim: usize) -> Result
                 new = effective_dim,
                 "Embedding dimension changed — clearing vector index. Run `cartog rag index` to re-embed."
             );
-            conn.execute("DROP TABLE IF EXISTS symbol_vec", [])
-                .context("Failed to drop old vector table during dimension migration")?;
-            conn.execute("DELETE FROM symbol_embedding_map", [])
-                .context("Failed to clear embedding map during dimension migration")?;
+            conn.execute("DROP TABLE IF EXISTS symbol_vec", [])?;
+            conn.execute("DELETE FROM symbol_embedding_map", [])?;
         }
     }
 
-    conn.execute_batch(&rag_vec_schema(effective_dim))
-        .context("Failed to create sqlite-vec table")?;
+    conn.execute_batch(&rag_vec_schema(effective_dim))?;
 
     conn.execute(
         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_dimension', ?1)",
         params![effective_dim.to_string()],
-    )
-    .context("Failed to store embedding dimension")?;
+    )?;
 
     Ok(())
 }
 
 /// If the next migration will wipe existing data, copy the database to a
 /// timestamped backup file first. No-op for in-memory or empty databases.
-fn backup_before_destructive_migration(conn: &Connection, db_path: &std::path::Path) -> Result<()> {
+fn backup_before_destructive_migration(
+    conn: &Connection,
+    db_path: &std::path::Path,
+) -> DbResult<()> {
     let current: u32 = conn
         .query_row(
             "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
@@ -366,7 +425,10 @@ fn backup_before_destructive_migration(conn: &Connection, db_path: &std::path::P
     // Escape any single-quotes in the path literal.
     let escaped = backup_path.to_string_lossy().replace('\'', "''");
     conn.execute(&format!("VACUUM INTO '{escaped}'"), [])
-        .with_context(|| format!("Failed to back up database to {}", backup_path.display()))?;
+        .map_err(|source| DbError::BackupFailed {
+            path: backup_path.clone(),
+            source,
+        })?;
 
     info!(
         backup = %backup_path.display(),
@@ -385,10 +447,13 @@ impl Database {
     /// `embedding_dim` sets the vector dimension for the sqlite-vec table.
     /// If the stored dimension differs from the requested one, the vector index
     /// is cleared and recreated (a re-index via `cartog rag index` is needed).
-    pub fn open(path: impl AsRef<std::path::Path>, embedding_dim: usize) -> Result<Self> {
+    pub fn open(path: impl AsRef<std::path::Path>, embedding_dim: usize) -> DbResult<Self> {
         register_sqlite_vec();
         let db_path = path.as_ref();
-        let conn = Connection::open(db_path).context("Failed to open database")?;
+        let conn = Connection::open(db_path).map_err(|source| DbError::Open {
+            path: db_path.to_path_buf(),
+            source,
+        })?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
@@ -397,26 +462,26 @@ impl Database {
              PRAGMA temp_store=MEMORY;
              PRAGMA mmap_size=268435456;",
         )
-        .context("Failed to set pragmas")?;
-        conn.execute_batch(SCHEMA)
-            .context("Failed to create schema")?;
-        conn.execute_batch(RAG_SCHEMA)
-            .context("Failed to create RAG schema")?;
+        .map_err(DbError::Pragma)?;
+        conn.execute_batch(SCHEMA).map_err(DbError::Schema)?;
+        conn.execute_batch(RAG_SCHEMA).map_err(DbError::RagSchema)?;
         backup_before_destructive_migration(&conn, db_path)?;
         migrate(&conn);
-        handle_embedding_dimension(&conn, embedding_dim)?;
+        handle_embedding_dimension(&conn, embedding_dim).map_err(DbError::EmbeddingDimension)?;
         Ok(Self { conn })
     }
 
     /// Open an in-memory database (for tests and benchmarks).
     #[doc(hidden)]
-    pub fn open_memory() -> Result<Self> {
+    pub fn open_memory() -> DbResult<Self> {
         register_sqlite_vec();
         let conn = Connection::open_in_memory()?;
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        conn.execute_batch(SCHEMA)?;
-        conn.execute_batch(RAG_SCHEMA)?;
-        conn.execute_batch(&rag_vec_schema(DEFAULT_EMBEDDING_DIM))?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")
+            .map_err(DbError::Pragma)?;
+        conn.execute_batch(SCHEMA).map_err(DbError::Schema)?;
+        conn.execute_batch(RAG_SCHEMA).map_err(DbError::RagSchema)?;
+        conn.execute_batch(&rag_vec_schema(DEFAULT_EMBEDDING_DIM))
+            .map_err(DbError::RagSchema)?;
         migrate(&conn);
         Ok(Self { conn })
     }
@@ -3657,5 +3722,31 @@ mod tests {
             backups.is_empty(),
             "fresh DB should not create a backup file"
         );
+    }
+
+    // ── Typed error surface ──
+
+    #[test]
+    fn test_db_error_wraps_into_anyhow() {
+        // Callers that keep using anyhow::Result must still compose with DbError
+        // transparently via `?`, thanks to the std::error::Error blanket impl.
+        fn downstream() -> anyhow::Result<()> {
+            let _db = Database::open_memory()?; // returns DbResult<Database>
+            Ok(())
+        }
+        downstream().unwrap();
+    }
+
+    #[test]
+    fn test_db_error_open_variant_has_path() {
+        // Give Database::open a path inside a non-writable location to force
+        // rusqlite::Error::SqliteFailure. The `Open` variant should preserve
+        // the path we asked it to touch.
+        let bad_path = std::path::PathBuf::from("/dev/null/definitely/not/a/db.sqlite");
+        let err = Database::open(&bad_path, DEFAULT_EMBEDDING_DIM).unwrap_err();
+        match err {
+            DbError::Open { path, .. } => assert_eq!(path, bad_path),
+            other => panic!("expected DbError::Open, got {other:?}"),
+        }
     }
 }
