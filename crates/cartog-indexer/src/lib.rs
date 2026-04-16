@@ -362,7 +362,7 @@ fn file_modified(path: &Path) -> f64 {
 /// (e.g., conditional function definitions), the second occurrence gets `:2`, third `:3`, etc.
 /// Edge source_ids and parent_ids are updated to match.
 fn dedup_symbol_ids(symbols: &mut [Symbol], edges: &mut [cartog_core::Edge]) {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     let mut seen: HashMap<String, u32> = HashMap::new();
     let mut renames: HashMap<String, String> = HashMap::new();
@@ -372,31 +372,44 @@ fn dedup_symbol_ids(symbols: &mut [Symbol], edges: &mut [cartog_core::Edge]) {
         *count += 1;
         if *count > 1 {
             let old_id = sym.id.clone();
-            sym.id = format!("{}:{}", old_id, count);
-            // Only insert if not already present — keeps the *first* renamed ID
-            // for edge fixup, avoiding the 3+ collision overwrite bug where
-            // the last rename would silently win.
+            sym.id = format!("{old_id}:{count}");
+            // First-rename wins: edges originally pointing at the collided id
+            // (which the extractor produced without knowing which instance was
+            // the owner) get attributed to the first renamed instance. The
+            // zero-th instance keeps the short id and keeps its own edges only
+            // if none collided — any ambiguity is resolved by sending the
+            // ambiguous edges to the first-rename bucket, leaving the unrenamed
+            // instance clean.
             renames.entry(old_id).or_insert_with(|| sym.id.clone());
         }
     }
 
-    if renames.is_empty() {
-        return;
-    }
-
-    for edge in edges.iter_mut() {
-        if let Some(new_id) = renames.get(&edge.source_id) {
-            edge.source_id = new_id.clone();
+    if !renames.is_empty() {
+        for edge in edges.iter_mut() {
+            if let Some(new_id) = renames.get(&edge.source_id) {
+                edge.source_id = new_id.clone();
+            }
         }
-    }
 
-    for sym in symbols.iter_mut() {
-        if let Some(ref pid) = sym.parent_id {
-            if let Some(new_id) = renames.get(pid) {
-                sym.parent_id = Some(new_id.clone());
+        for sym in symbols.iter_mut() {
+            if let Some(ref pid) = sym.parent_id {
+                if let Some(new_id) = renames.get(pid) {
+                    sym.parent_id = Some(new_id.clone());
+                }
             }
         }
     }
+
+    // Invariant: after dedup, every edge.source_id must correspond to a
+    // surviving symbol id. Broken invariants here cause foreign-key cascades
+    // later and silent data loss, so bail loudly in debug builds.
+    debug_assert!(
+        {
+            let ids: HashSet<&str> = symbols.iter().map(|s| s.id.as_str()).collect();
+            edges.iter().all(|e| ids.contains(e.source_id.as_str()))
+        },
+        "dedup_symbol_ids left an edge with a dangling source_id"
+    );
 }
 
 // ── Merkle-tree hashing ──
@@ -898,6 +911,96 @@ mod tests {
         // Content should be truncated before the '─' (snapped to char boundary)
         assert_eq!(content.len(), MAX_CONTENT_BYTES - 1);
         assert!(content.is_char_boundary(content.len()));
+    }
+
+    // ── Dedup tests ──
+
+    #[test]
+    fn test_dedup_3way_collision_preserves_invariant() {
+        // Three symbols with the same stable id — simulates conditional
+        // redefinitions (e.g. `if/elif/else: def foo`).
+        let mk_sym = || {
+            cartog_core::Symbol::new(
+                "foo",
+                cartog_core::SymbolKind::Function,
+                "test.py",
+                1,
+                2,
+                0,
+                10,
+                None,
+            )
+        };
+        let base_id = mk_sym().id.clone();
+        let mut symbols = vec![mk_sym(), mk_sym(), mk_sym()];
+        let mut edges = vec![
+            cartog_core::Edge::new(
+                base_id.clone(),
+                "bar",
+                cartog_core::EdgeKind::Calls,
+                "test.py",
+                1,
+            ),
+            cartog_core::Edge::new(
+                base_id.clone(),
+                "baz",
+                cartog_core::EdgeKind::Calls,
+                "test.py",
+                2,
+            ),
+        ];
+
+        dedup_symbol_ids(&mut symbols, &mut edges);
+
+        // All three ids must now be distinct.
+        let ids: std::collections::HashSet<_> = symbols.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids.len(), 3, "3-way collision should produce 3 unique ids");
+
+        // First instance keeps the short id; 2nd and 3rd get numeric suffixes.
+        assert_eq!(symbols[0].id, base_id);
+        assert_eq!(symbols[1].id, format!("{base_id}:2"));
+        assert_eq!(symbols[2].id, format!("{base_id}:3"));
+
+        // Invariant: every edge.source_id must resolve to a surviving symbol.
+        for edge in &edges {
+            assert!(
+                ids.contains(edge.source_id.as_str()),
+                "edge source_id {:?} has no matching symbol after dedup",
+                edge.source_id
+            );
+        }
+    }
+
+    #[test]
+    fn test_dedup_no_collision_leaves_ids_unchanged() {
+        let mut symbols = vec![
+            cartog_core::Symbol::new(
+                "a",
+                cartog_core::SymbolKind::Function,
+                "f.py",
+                1,
+                2,
+                0,
+                10,
+                None,
+            ),
+            cartog_core::Symbol::new(
+                "b",
+                cartog_core::SymbolKind::Function,
+                "f.py",
+                3,
+                4,
+                11,
+                20,
+                None,
+            ),
+        ];
+        let id_a = symbols[0].id.clone();
+        let id_b = symbols[1].id.clone();
+        let mut edges: Vec<cartog_core::Edge> = vec![];
+        dedup_symbol_ids(&mut symbols, &mut edges);
+        assert_eq!(symbols[0].id, id_a);
+        assert_eq!(symbols[1].id, id_b);
     }
 
     // ── Merkle hashing tests ──

@@ -318,6 +318,64 @@ fn handle_embedding_dimension(conn: &Connection, requested_dim: usize) -> Result
     Ok(())
 }
 
+/// If the next migration will wipe existing data, copy the database to a
+/// timestamped backup file first. No-op for in-memory or empty databases.
+fn backup_before_destructive_migration(conn: &Connection, db_path: &std::path::Path) -> Result<()> {
+    let current: u32 = conn
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(1);
+    let has_hash_cols = conn
+        .prepare("SELECT content_hash FROM symbols LIMIT 0")
+        .is_ok();
+
+    // Mirrors the condition in `migrate()` for the 2→3 wipe.
+    let will_wipe = current < 3 || !has_hash_cols;
+    if !will_wipe {
+        return Ok(());
+    }
+
+    let symbol_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+        .unwrap_or(0);
+    if symbol_count == 0 {
+        return Ok(());
+    }
+
+    // Skip in-memory / URI-mode databases — nothing to back up.
+    let path_str = db_path.to_string_lossy();
+    if path_str.is_empty() || path_str == ":memory:" || path_str.starts_with("file:") {
+        return Ok(());
+    }
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut backup_os = db_path.as_os_str().to_os_string();
+    backup_os.push(format!(".pre-v{current}-{ts}.bak"));
+    let backup_path = std::path::PathBuf::from(backup_os);
+
+    // VACUUM INTO produces a consistent copy, safe alongside WAL.
+    // Escape any single-quotes in the path literal.
+    let escaped = backup_path.to_string_lossy().replace('\'', "''");
+    conn.execute(&format!("VACUUM INTO '{escaped}'"), [])
+        .with_context(|| format!("Failed to back up database to {}", backup_path.display()))?;
+
+    info!(
+        backup = %backup_path.display(),
+        old_version = current,
+        new_version = SCHEMA_VERSION,
+        symbols = symbol_count,
+        "schema migration will clear indexed data — created backup"
+    );
+
+    Ok(())
+}
+
 impl Database {
     /// Open or create the database at the given path.
     ///
@@ -326,7 +384,8 @@ impl Database {
     /// is cleared and recreated (a re-index via `cartog rag index` is needed).
     pub fn open(path: impl AsRef<std::path::Path>, embedding_dim: usize) -> Result<Self> {
         register_sqlite_vec();
-        let conn = Connection::open(path.as_ref()).context("Failed to open database")?;
+        let db_path = path.as_ref();
+        let conn = Connection::open(db_path).context("Failed to open database")?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
@@ -340,6 +399,7 @@ impl Database {
             .context("Failed to create schema")?;
         conn.execute_batch(RAG_SCHEMA)
             .context("Failed to create RAG schema")?;
+        backup_before_destructive_migration(&conn, db_path)?;
         migrate(&conn);
         handle_embedding_dimension(&conn, embedding_dim)?;
         Ok(Self { conn })
@@ -3344,5 +3404,73 @@ mod tests {
     #[test]
     fn test_default_embedding_dim_constant() {
         assert_eq!(DEFAULT_EMBEDDING_DIM, 384);
+    }
+
+    #[test]
+    fn test_destructive_migration_creates_backup() {
+        // Build a legacy v2 database file: pre-hash-columns, with indexed data.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("legacy.db");
+
+        {
+            register_sqlite_vec();
+            let conn = Connection::open(&db_path).unwrap();
+            // Minimal legacy schema that the wipe code will operate on.
+            conn.execute_batch(
+                "CREATE TABLE symbols (
+                    id TEXT PRIMARY KEY, name TEXT, kind TEXT, file_path TEXT,
+                    start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER,
+                    parent_id TEXT, signature TEXT, visibility TEXT,
+                    is_async BOOLEAN, docstring TEXT, in_degree INTEGER DEFAULT 0
+                 );
+                 CREATE TABLE edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, source_id TEXT, target_name TEXT,
+                    target_id TEXT, kind TEXT, file_path TEXT, line INTEGER
+                 );
+                 CREATE TABLE files (path TEXT PRIMARY KEY, last_modified REAL, hash TEXT,
+                                     language TEXT, num_symbols INTEGER);
+                 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT);
+                 INSERT INTO symbols (id, name, kind, file_path) VALUES ('s1', 'foo', 'function', 'a.py');
+                 INSERT INTO metadata (key, value) VALUES ('schema_version', '2');",
+            )
+            .unwrap();
+        }
+
+        // Opening via the real entry point should back up the legacy file before wiping.
+        let _db = Database::open(&db_path, DEFAULT_EMBEDDING_DIM).unwrap();
+
+        let backups: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("legacy.db.pre-v")
+            })
+            .collect();
+        assert_eq!(
+            backups.len(),
+            1,
+            "expected exactly one pre-migration backup, found {}",
+            backups.len()
+        );
+    }
+
+    #[test]
+    fn test_no_backup_for_fresh_database() {
+        // A fresh DB should never produce a backup file.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("fresh.db");
+        let _db = Database::open(&db_path, DEFAULT_EMBEDDING_DIM).unwrap();
+
+        let backups: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".pre-v"))
+            .collect();
+        assert!(
+            backups.is_empty(),
+            "fresh DB should not create a backup file"
+        );
     }
 }
