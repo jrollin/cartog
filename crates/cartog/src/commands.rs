@@ -734,11 +734,14 @@ pub fn cmd_rag_search(
 
     // Lazy reranker: the cross-encoder ONNX model is loaded only if retrieval
     // produced enough candidates for `rerank_min` to fire. For a one-shot CLI
-    // command that could return <rerank_min results, this avoids ~100-200ms of
-    // model-load latency + memory on every invocation.
-    let reranker_name = provider_config.reranker_provider.clone();
-    let reranker_factory =
-        (reranker_name != "none").then_some(move || rag::create_reranker_provider(&reranker_name));
+    // command that may return fewer than `rerank_min` hits, this avoids
+    // ~100-200ms of model-load latency + memory on every invocation.
+    let reranker_factory = if provider_config.reranker_provider == "none" {
+        None
+    } else {
+        let name = provider_config.reranker_provider.clone();
+        Some(move || rag::create_reranker_provider(&name))
+    };
     let search_result = rag::search::hybrid_search_tuned_lazy(
         &db,
         query,
