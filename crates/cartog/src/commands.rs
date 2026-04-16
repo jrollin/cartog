@@ -1,4 +1,7 @@
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -11,6 +14,62 @@ use cartog_db::{Database, MAX_SEARCH_LIMIT};
 use cartog_indexer as indexer;
 use cartog_rag as rag;
 use cartog_watch::{self as watch, WatchConfig};
+
+/// Stderr spinner for long-running CLI commands.
+///
+/// No-op in non-TTY contexts (piped output, CI logs) so logs stay clean.
+struct Spinner {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Spinner {
+    fn start(label: &'static str) -> Option<Self> {
+        if !std::io::stderr().is_terminal() {
+            return None;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+        let handle = std::thread::spawn(move || {
+            const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let mut i = 0usize;
+            let start = std::time::Instant::now();
+            while !stop_clone.load(Ordering::Relaxed) {
+                let elapsed = start.elapsed().as_secs();
+                let mut err = std::io::stderr().lock();
+                // \r + clear-to-eol + frame + label + elapsed
+                let _ = write!(err, "\r\x1b[K{} {} ({elapsed}s)", FRAMES[i], label);
+                let _ = err.flush();
+                i = (i + 1) % FRAMES.len();
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            // Clear the spinner line on exit.
+            let mut err = std::io::stderr().lock();
+            let _ = write!(err, "\r\x1b[K");
+            let _ = err.flush();
+        });
+        Some(Self {
+            stop,
+            handle: Some(handle),
+        })
+    }
+
+    fn stop(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+impl Drop for Spinner {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
 
 fn open_db(path: &Path, embedding_dim: usize) -> Result<Database> {
     Database::open(path, embedding_dim).context("Failed to open cartog database")
@@ -71,15 +130,18 @@ pub fn cmd_index(
     embedding_dim: usize,
 ) -> Result<()> {
     let root = Path::new(path);
-    if !json {
-        eprint!("Indexing {path}...");
-    }
     let db = open_db(db_path, embedding_dim)?;
 
-    let result = indexer::index_directory(&db, root, force, lsp)?;
-    if !json {
-        eprintln!(" done");
+    let spinner = if json {
+        None
+    } else {
+        Spinner::start("Indexing")
+    };
+    let result = indexer::index_directory(&db, root, force, lsp);
+    if let Some(s) = spinner {
+        s.stop();
     }
+    let result = result?;
 
     output(&result, json, None, |r| {
         let lsp_part = if r.edges_lsp_resolved > 0 {
@@ -574,10 +636,20 @@ pub fn cmd_changes(
 
 /// Download the embedding model.
 pub fn cmd_rag_setup(json: bool) -> Result<()> {
+    let spinner = if json {
+        None
+    } else {
+        Spinner::start("Downloading models")
+    };
     // Download bi-encoder (embeddings)
-    let embed_result = rag::setup::download_model()?;
+    let embed_result = rag::setup::download_model();
     // Download cross-encoder (re-ranking)
-    let rerank_result = rag::setup::download_cross_encoder()?;
+    let rerank_result = rag::setup::download_cross_encoder();
+    if let Some(s) = spinner {
+        s.stop();
+    }
+    let embed_result = embed_result?;
+    let rerank_result = rerank_result?;
 
     #[derive(serde::Serialize)]
     struct CombinedSetup {
@@ -609,9 +681,28 @@ pub fn cmd_rag_index(
     let root = Path::new(path);
     let mut provider = rag::create_embedding_provider(provider_config)?;
     let db = open_db(db_path, provider.dimension())?;
-    let _index_result = indexer::index_directory(&db, root, false, false)?;
 
-    let result = rag::indexer::index_embeddings(&db, provider.as_mut(), force)?;
+    let spinner = if json {
+        None
+    } else {
+        Spinner::start("Indexing code graph")
+    };
+    let index_res = indexer::index_directory(&db, root, false, false);
+    if let Some(s) = spinner {
+        s.stop();
+    }
+    let _index_result = index_res?;
+
+    let spinner = if json {
+        None
+    } else {
+        Spinner::start("Embedding symbols")
+    };
+    let embed_res = rag::indexer::index_embeddings(&db, provider.as_mut(), force);
+    if let Some(s) = spinner {
+        s.stop();
+    }
+    let result = embed_res?;
 
     output(&result, json, None, |r| {
         format!(

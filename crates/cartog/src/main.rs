@@ -134,5 +134,11 @@ fn main() -> Result<()> {
                 &provider_config,
             ),
         },
+        Command::Completions { shell } => {
+            use clap::CommandFactory;
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "cartog", &mut std::io::stdout());
+            Ok(())
+        }
     }
 }

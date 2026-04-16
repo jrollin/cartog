@@ -202,7 +202,7 @@ pub enum Command {
         path: String,
 
         /// Debounce window in seconds
-        #[arg(long, default_value = "2")]
+        #[arg(long, default_value = "5")]
         debounce: u64,
 
         /// Enable automatic RAG embedding after index
@@ -228,6 +228,14 @@ pub enum Command {
     /// Semantic code search (RAG pipeline)
     #[command(subcommand)]
     Rag(RagCommand),
+
+    /// Generate shell completions for bash, zsh, fish, elvish, or powershell.
+    ///
+    /// Example: `cartog completions bash > ~/.local/share/bash-completion/completions/cartog`
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Debug, Subcommand)]

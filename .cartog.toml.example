@@ -1,0 +1,37 @@
+# .cartog.toml — Cartog configuration.
+#
+# Place at the root of your project (next to the `.git` directory). All fields
+# are optional; defaults are shown commented out.
+#
+# Precedence for `--db` / `CARTOG_DB`:
+#   1. `--db <path>` CLI flag
+#   2. `CARTOG_DB` environment variable
+#   3. `[database].path` in this file
+#   4. Auto-detected `.cartog.db` at the git root
+#   5. `./.cartog.db` in the current directory
+
+[database]
+# Path to the SQLite graph file. `~` is expanded to your home directory.
+# path = "~/.cache/cartog/myproject.db"
+
+# ── Semantic search (RAG) ───────────────────────────────────────────────────
+# Two providers are supported:
+#   - "local"  (default): fastembed/ONNX, models downloaded once and cached.
+#   - "ollama":           delegates embeddings to a running Ollama server.
+[embedding]
+# provider  = "local"
+# model     = "BAAI/bge-small-en-v1.5"   # or any HuggingFace repo id
+# dimension = 384                        # required for custom HF models
+
+# Optional prefixes for models that use them (e.g. bge, e5):
+[embedding.local]
+# query_prefix    = "search_query: "
+# document_prefix = "search_document: "
+
+# Only used when provider = "ollama":
+[embedding.ollama]
+# base_url = "http://localhost:11434"
+# model    = "nomic-embed-text"
+
+[reranker]
+# provider = "local"   # or "none" to skip cross-encoder reranking

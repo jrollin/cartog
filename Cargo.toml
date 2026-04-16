@@ -43,6 +43,7 @@ notify = "8"
 notify-debouncer-mini = "0.7"
 ctrlc = "3"
 clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }

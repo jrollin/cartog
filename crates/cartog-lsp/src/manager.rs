@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -8,8 +9,54 @@ use serde_json::Value;
 use super::client::LspClient;
 use super::servers::{find_servers, is_binary_available};
 
-/// Max seconds to wait for an LSP server to finish loading its project model.
-const READY_TIMEOUT_SECS: u64 = 60;
+/// Default max seconds to wait for an LSP server to finish loading its project model.
+/// Override with `CARTOG_LSP_READY_TIMEOUT_SECS`.
+const DEFAULT_READY_TIMEOUT_SECS: u64 = 20;
+
+/// Read the ready-timeout from env, falling back to the default.
+fn ready_timeout_secs() -> u64 {
+    std::env::var("CARTOG_LSP_READY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_READY_TIMEOUT_SECS)
+}
+
+/// Open (or create, truncating) a per-server log file in the system temp dir.
+/// Returns `Stdio::null()` if we can't open the file so LSP startup is never
+/// blocked by a logging issue.
+fn open_lsp_log(binary: &str) -> Stdio {
+    let dir = std::env::temp_dir().join("cartog-lsp");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return Stdio::null();
+    }
+    // Sanitize the binary name for filename safety.
+    let safe: String = binary
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let path = dir.join(format!("{safe}.log"));
+    match OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&path)
+    {
+        Ok(f) => {
+            tracing::info!(path = %path.display(), "LSP stderr logged to file");
+            Stdio::from(f)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "LSP stderr log open failed; discarding");
+            Stdio::null()
+        }
+    }
+}
 
 /// Seconds to wait for $/progress notifications before switching to probe-based detection.
 const PROGRESS_DETECT_SECS: u64 = 5;
@@ -72,7 +119,7 @@ impl LspManager {
             .args(spec.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(open_lsp_log(spec.binary))
             .current_dir(&self.root)
             .spawn()
             .with_context(|| format!("failed to spawn {}", spec.binary))?;
@@ -228,7 +275,7 @@ impl LspManager {
     /// respond to definition requests while loading (returning null for unloaded files).
     fn wait_until_ready(&self, client: &mut LspClient) -> Result<()> {
         let start = std::time::Instant::now();
-        let deadline = start + std::time::Duration::from_secs(READY_TIMEOUT_SECS);
+        let deadline = start + std::time::Duration::from_secs(ready_timeout_secs());
 
         // Phase 1: try progress-based detection
         if let Some(elapsed) = self.wait_via_progress(client, deadline)? {

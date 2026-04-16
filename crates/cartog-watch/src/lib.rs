@@ -37,7 +37,10 @@ impl WatchConfig {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
-            debounce: Duration::from_secs(2),
+            // 5s default: long enough to collapse bursts from `git pull` /
+            // `npm install` / branch switches into a single re-index, short
+            // enough to feel live for normal save-on-type editing.
+            debounce: Duration::from_secs(5),
             rag: false,
             rag_delay: Duration::from_secs(30),
             rag_config: rag::EmbeddingProviderConfig::default(),
