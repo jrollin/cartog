@@ -108,14 +108,27 @@ jobs:
     runs-on: ubuntu-latest
     # Benchmarks on shared GitHub runners are noisy — never fail a PR on a
     # variance-driven regression, but surface results as an artifact so
-    # reviewers can spot outliers.
+    # reviewers can spot outliers. Tuned for ~1 min of actual measurement
+    # across the whole suite on top of the ~3 min compile:
+    # - `--sample-size 10` is criterion's minimum (default is 100).
+    # - `--warm-up-time 1 --measurement-time 1` trims each benchmark to
+    #   roughly 2 s of wall-clock. Statistical confidence intervals widen,
+    #   which is fine for catching order-of-magnitude regressions rather
+    #   than µs-level shifts.
+    # - `--noplot` skips SVG rendering; `estimates.json` still lands in
+    #   `target/criterion/` so the artifact stays useful.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run criterion benches
-        run: cargo bench --bench queries -- --warm-up-time 1 --measurement-time 3
+        run: >-
+          cargo bench --bench queries --
+          --sample-size 10
+          --warm-up-time 1
+          --measurement-time 1
+          --noplot
       - uses: actions/upload-artifact@v7
         with:
           name: criterion-report
