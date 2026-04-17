@@ -94,7 +94,14 @@ enum WatchEvent<'a> {
 }
 
 /// Write one NDJSON line to stdout, flushing immediately so consumers see
-/// events in real time rather than when the pipe buffers flush.
+/// events in real time rather than when the pipe buffer flushes.
+///
+/// Deliberately fire-and-forget: the only realistic failure modes are a
+/// closed stdout pipe (the consumer went away — nothing to report to) or a
+/// serde error on an entirely statically-typed struct (impossible in
+/// practice). Propagating would force every call site to decide whether to
+/// abort the watch loop over a transient stdout hiccup, which is worse
+/// behavior than missing one event line.
 fn emit_event(event: &WatchEvent<'_>) {
     if let Ok(line) = serde_json::to_string(event) {
         let mut out = std::io::stdout().lock();
@@ -424,9 +431,27 @@ fn watch_loop(
         info!("flushing pending RAG embeddings before shutdown");
         ensure_provider(&mut rag_provider);
         if let Some(ref mut provider) = rag_provider {
+            let embed_start = Instant::now();
             match rag::indexer::index_embeddings(&db, provider.as_mut(), false) {
-                Ok(r) => info!(embedded = r.symbols_embedded, "final RAG flush complete"),
-                Err(e) => warn!(error = %e, "final RAG flush failed"),
+                Ok(r) => {
+                    info!(embedded = r.symbols_embedded, "final RAG flush complete");
+                    if config.json_events {
+                        emit_event(&WatchEvent::RagEmbedded {
+                            symbols_embedded: r.symbols_embedded,
+                            symbols_skipped: r.symbols_skipped,
+                            total_content_symbols: r.total_content_symbols,
+                            duration_ms: embed_start.elapsed().as_millis(),
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "final RAG flush failed");
+                    if config.json_events {
+                        emit_event(&WatchEvent::RagFailed {
+                            error: e.to_string(),
+                        });
+                    }
+                }
             }
         }
     }
