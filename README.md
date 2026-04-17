@@ -368,6 +368,7 @@ Your code never leaves your machine.
 
 - **[Documentation site](https://jrollin.github.io/cartog/)** — quick start, CLI reference, configuration, MCP setup
 - [Usage](docs/usage.md) — full CLI reference and integration guides
+- [Editor integration](docs/editor-integration.md) — Neovim, VS Code, Emacs recipes
 - [Troubleshooting](docs/troubleshooting.md) — common issues and fixes
 - [Product Overview](docs/product.md)
 - [Technology Stack](docs/tech.md)

@@ -532,6 +532,8 @@ bash scripts/ensure_indexed.sh
 
 `cartog serve` runs cartog as an MCP server over stdio, exposing 12 tools (10 core + 2 RAG) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
 
+For editor-specific recipes (Neovim keymaps, VS Code tasks, Emacs `compile`, Telescope picker, `cartog watch --json` floating buffer), see **[Editor integration](editor-integration.md)**.
+
 ```bash
 cartog serve                  # basic MCP server
 cartog serve --watch          # auto-re-index on file changes
