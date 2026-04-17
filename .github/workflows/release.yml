@@ -24,6 +24,11 @@ jobs:
             os: ubuntu-24.04-arm
           - target: aarch64-apple-darwin
             os: macos-latest
+          # Intel Macs: `macos-latest` is Apple Silicon since GitHub moved
+          # the default runner. `macos-13` is the last Intel-hosted image
+          # and is the one to use for native x86_64 builds (no cross).
+          - target: x86_64-apple-darwin
+            os: macos-13
           - target: x86_64-pc-windows-msvc
             os: windows-latest
 
