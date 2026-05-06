@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.14.0"
+version = "0.14.1"
 edition = "2021"
 rust-version = "1.77"
 license = "MIT"
@@ -11,15 +11,15 @@ repository = "https://github.com/jrollin/cartog"
 
 [workspace.dependencies]
 # Internal crates (path + version required for publishing)
-cartog-core = { path = "crates/cartog-core", version = "0.14.0" }
-cartog-db = { path = "crates/cartog-db", version = "0.14.0" }
-cartog-languages = { path = "crates/cartog-languages", version = "0.14.0" }
-cartog-indexer = { path = "crates/cartog-indexer", version = "0.14.0" }
-cartog-rag = { path = "crates/cartog-rag", version = "0.14.0" }
-cartog-lsp = { path = "crates/cartog-lsp", version = "0.14.0" }
-cartog-watch = { path = "crates/cartog-watch", version = "0.14.0" }
-cartog-mcp = { path = "crates/cartog-mcp", version = "0.14.0" }
-cartog-process-lock = { path = "crates/cartog-process-lock", version = "0.14.0" }
+cartog-core = { path = "crates/cartog-core", version = "0.14.1" }
+cartog-db = { path = "crates/cartog-db", version = "0.14.1" }
+cartog-languages = { path = "crates/cartog-languages", version = "0.14.1" }
+cartog-indexer = { path = "crates/cartog-indexer", version = "0.14.1" }
+cartog-rag = { path = "crates/cartog-rag", version = "0.14.1" }
+cartog-lsp = { path = "crates/cartog-lsp", version = "0.14.1" }
+cartog-watch = { path = "crates/cartog-watch", version = "0.14.1" }
+cartog-mcp = { path = "crates/cartog-mcp", version = "0.14.1" }
+cartog-process-lock = { path = "crates/cartog-process-lock", version = "0.14.1" }
 
 # Shared external dependencies
 anyhow = "1"
