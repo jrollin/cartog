@@ -1,7 +1,7 @@
 {
   "name": "cartog",
   "description": "Code graph navigation and semantic search for LLM coding agents",
-  "version": "0.14.4",
+  "version": "0.14.5",
   "license": "MIT",
   "keywords": ["code-graph", "tree-sitter", "semantic-search", "code-navigation", "refactoring"],
   "author": {
