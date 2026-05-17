@@ -12,6 +12,7 @@
 #   ./benchmarks/run.sh --fixture go     # Run only Go fixtures
 #   ./benchmarks/run.sh --fixture rs     # Run only Rust fixtures
 #   ./benchmarks/run.sh --fixture rb     # Run only Ruby fixtures
+#   ./benchmarks/run.sh --fixture php    # Run only PHP fixtures
 
 set -euo pipefail
 
@@ -38,7 +39,7 @@ while [[ $# -gt 0 ]]; do
         --scenario) SCENARIO_FILTER="$2"; shift 2 ;;
         --fixture)  FIXTURE_FILTER="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb]"
+            echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb|php]"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -85,6 +86,7 @@ for fixture_dir in "$BENCH_DIR"/fixtures/*/; do
             go) [[ "$fixture_name" != *"_go"* ]] && continue ;;
             rs) [[ "$fixture_name" != *"_rs"* ]] && continue ;;
             rb) [[ "$fixture_name" != *"_rb"* ]] && continue ;;
+            php) [[ "$fixture_name" != *"_php"* ]] && continue ;;
         esac
     fi
 
