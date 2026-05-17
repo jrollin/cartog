@@ -16,7 +16,7 @@ Compares cartog graph queries vs grep/cat approaches for common code navigation 
 | Fixture | Language | Files | LOC |
 |---------|----------|-------|-----|
 | `fixtures/webapp_py/` | Python | 69 | ~4,000 |
-| `fixtures/webapp_ts/` | TypeScript | 48 | ~2,500 |
+| `fixtures/webapp_ts/` | TypeScript | 49 | ~2,500 |
 | `fixtures/webapp_go/` | Go | 45 | ~3,300 |
 | `fixtures/webapp_rs/` | Rust | 65 | ~3,200 |
 | `fixtures/webapp_rb/` | Ruby | 51 | ~2,300 |

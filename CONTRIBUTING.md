@@ -25,10 +25,16 @@ make check        # cargo fmt + clippy + test + fixture validation + skill tests
 Individual targets:
 
 ```bash
-make check-rust       # cargo fmt --check + clippy -D warnings + cargo test
-make check-fixtures   # validate all language fixture codebases (py, go, rs, rb, java)
-make check-skill      # bash unit tests for the agent skill
+make check-rust            # cargo fmt --check + clippy -D warnings + cargo test
+make check-fixtures        # validate all language fixture codebases (py, ts, go, rs, rb, java, php)
+make check-fixtures-docker # same, forcing the Docker fallback for every language
+make check-skill           # bash unit tests for the agent skill
 ```
+
+Each `check-fixtures` language target validates with the native toolchain when
+present, else a pinned official Docker image (`check-fixtures-docker` forces this
+path). No toolchain and no Docker is a hard fail. cartog's own `cargo test` needs
+no language toolchains.
 
 ## Commit style
 
@@ -88,8 +94,8 @@ the per-language wiring is shallow and the bulk of the work is the benchmark fix
    - Add a case to the `--fixture` filter in `benchmarks/run.sh` and `benchmarks/lib/common.sh`
    - Add `run_scenario "webapp_<lang>" ...` lines in every script under `benchmarks/scenarios/`
 8. Validate: `make check-fixtures`. If your language ships a syntax checker, add a
-   `check-<lang>` target to the `Makefile` (with a Docker fallback if no host tool exists,
-   mirroring `check-php`).
+   `check-<lang>` target to the `Makefile` via the `check_lang` function (native tool,
+   pinned Docker fallback, hard fail), and add it to the `check-fixtures` prerequisites.
 9. Run `make bench` and confirm the new fixture appears in the summary with non-zero
    recall on every scenario.
 

@@ -1,8 +1,30 @@
-.PHONY: check check-rust check-fixtures check-skill check-py check-ts check-go check-rs check-rb check-java check-php bench bench-criterion bench-rag eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php bench bench-criterion bench-rag eval-skill eval-agents
 
 # --- Full integrity check ---
 
 check: check-rust check-fixtures check-skill ## Run all integrity checks
+
+# --- Fixture validation helper ---
+#
+# Validates a fixture codebase with the native toolchain when present, else
+# falls back to a pinned official Docker image, else fails hard.
+# $(1)=probe tool  $(2)=docker image  $(3)=native command  $(4)=docker command
+# The Docker branch mounts benchmarks/fixtures at /fix as the working dir;
+# $(4) addresses the language subdir from there and directs any compiler
+# output to container-internal /tmp paths so runs leave no root-owned files
+# in the working tree. Set FORCE_DOCKER=1 to skip the native probe.
+define check_lang
+	@if [ -z "$(FORCE_DOCKER)" ] && command -v $(1) > /dev/null 2>&1; then \
+		$(3); \
+	elif command -v docker > /dev/null 2>&1; then \
+		echo "    $(1) not found, using Docker ($(2))"; \
+		docker run --rm --user $$(id -u):$$(id -g) \
+			-v "$(CURDIR)/benchmarks/fixtures:/fix" -w /fix $(2) sh -c '$(4)'; \
+	else \
+		echo "    ERROR: neither $(1) nor docker available"; exit 1; \
+	fi
+	@echo "    OK"
+endef
 
 # --- Rust project checks ---
 
@@ -13,48 +35,52 @@ check-rust: ## cargo fmt + clippy + test
 
 # --- Fixture syntax/build checks ---
 
-check-fixtures: check-py check-go check-rs check-rb check-java check-php ## Validate all fixture codebases
+check-fixtures: check-py check-ts check-go check-rs check-rb check-java check-php ## Validate all fixture codebases
 
-check-py: ## Validate Python fixtures (py_compile)
+check-fixtures-docker: ## Validate all fixture codebases via Docker (reproducible)
+	@$(MAKE) check-fixtures FORCE_DOCKER=1
+
+check-py: ## Validate Python fixtures (py_compile, falls back to Docker)
 	@echo "==> Checking Python fixtures..."
-	@find benchmarks/fixtures/webapp_py -name '*.py' -exec python3 -m py_compile {} +
-	@echo "    OK"
+	$(call check_lang,python3,python:3.12-slim,\
+		find benchmarks/fixtures/webapp_py -name "*.py" -exec python3 -m py_compile {} +,\
+		find webapp_py -name "*.py" -exec python3 -m py_compile {} +)
 
-check-ts: ## Validate TypeScript fixtures (tsc --noEmit)
+check-ts: ## Validate TypeScript fixtures (tsc -p, falls back to Docker)
 	@echo "==> Checking TypeScript fixtures..."
-	@cd benchmarks/fixtures/webapp_ts && npx tsc --noEmit --strict --esModuleInterop --skipLibCheck
-	@echo "    OK"
+	$(call check_lang,npx,node:22-slim,\
+		cd benchmarks/fixtures/webapp_ts && npx --yes --package typescript@5 -- tsc -p tsconfig.json,\
+		cd webapp_ts && HOME=/tmp npm_config_cache=/tmp/npm npx --yes --package typescript@5 -- tsc -p tsconfig.json)
 
-check-go: ## Validate Go fixtures (go build)
+check-go: ## Validate Go fixtures (go build, falls back to Docker)
 	@echo "==> Checking Go fixtures..."
-	@cd benchmarks/fixtures/webapp_go && go build ./...
-	@echo "    OK"
+	$(call check_lang,go,golang:1.23,\
+		cd benchmarks/fixtures/webapp_go && go build ./...,\
+		cd webapp_go && GOCACHE=/tmp/gocache GOPATH=/tmp/gopath go build ./...)
 
-check-rs: ## Validate Rust fixtures (cargo check)
+check-rs: ## Validate Rust fixtures (cargo check, falls back to Docker)
 	@echo "==> Checking Rust fixtures..."
-	@cd benchmarks/fixtures/webapp_rs && cargo check 2>/dev/null
-	@echo "    OK"
+	$(call check_lang,cargo,rust:slim,\
+		cd benchmarks/fixtures/webapp_rs && cargo check 2>/dev/null,\
+		cd webapp_rs && CARGO_TARGET_DIR=/tmp/target CARGO_HOME=/tmp/cargo cargo check 2>/dev/null)
 
-check-rb: ## Validate Ruby fixtures (ruby -c)
+check-rb: ## Validate Ruby fixtures (ruby -c, falls back to Docker)
 	@echo "==> Checking Ruby fixtures..."
-	@find benchmarks/fixtures/webapp_rb -name '*.rb' -exec ruby -c {} + > /dev/null
-	@echo "    OK"
+	$(call check_lang,ruby,ruby:3.3-slim,\
+		find benchmarks/fixtures/webapp_rb -name "*.rb" -exec ruby -c {} + > /dev/null,\
+		find webapp_rb -name "*.rb" -exec ruby -c {} + > /dev/null)
 
-check-java: ## Validate Java fixtures (javac)
+check-java: ## Validate Java fixtures (javac, falls back to Docker)
 	@echo "==> Checking Java fixtures..."
-	@mkdir -p /tmp/cartog_java_check && cd benchmarks/fixtures/webapp_java && javac -sourcepath . $$(find . -name "*.java" | sort) -d /tmp/cartog_java_check
-	@echo "    OK"
+	$(call check_lang,javac,eclipse-temurin:21-jdk,\
+		mkdir -p /tmp/cartog_java_check && cd benchmarks/fixtures/webapp_java && javac -sourcepath . $$(find . -name "*.java" | sort) -d /tmp/cartog_java_check,\
+		cd webapp_java && javac -sourcepath . $$(find . -name "*.java" | sort) -d /tmp/out)
 
 check-php: ## Validate PHP fixtures (php -l, falls back to Docker)
 	@echo "==> Checking PHP fixtures..."
-	@if command -v php > /dev/null 2>&1; then \
-		find benchmarks/fixtures/webapp_php -name '*.php' -exec php -l {} + > /dev/null; \
-	else \
-		echo "    php not found, using Docker (php:8.3-cli)"; \
-		docker run --rm -v "$$PWD/benchmarks/fixtures/webapp_php:/app" -w /app php:8.3-cli \
-			sh -c 'for f in $$(find . -name "*.php"); do php -l "$$f" > /dev/null || exit 1; done'; \
-	fi
-	@echo "    OK"
+	$(call check_lang,php,php:8.3-cli,\
+		find benchmarks/fixtures/webapp_php -name '*.php' -exec php -l {} + > /dev/null,\
+		for f in $$(find webapp_php -name "*.php"); do php -l "$$f" > /dev/null || exit 1; done)
 
 # --- Skill tests ---
 

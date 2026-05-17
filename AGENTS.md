@@ -26,17 +26,21 @@ cargo check --features provider-ollama -p cartog-rag # verify Ollama feature
 ### Integrity checks
 
 ```bash
-make check            # all checks (Rust project + fixtures + skill)
-make check-rust       # cargo fmt + clippy + test
-make check-fixtures   # validate all fixture codebases (py, go, rs, rb, java)
-make check-skill      # skill tests (ensure_indexed.sh unit tests)
-make check-ts         # TypeScript fixtures (requires npx/tsc)
-make eval-skill       # LLM-as-judge skill evaluation (requires claude CLI)
-make eval-agents      # LLM-as-judge agent evaluation (requires claude CLI)
-make bench            # shell benchmark suite (13 scenarios x 5 languages)
-make bench-criterion  # Rust criterion benchmarks (query latency)
-make bench-rag        # RAG relevancy benchmarks (in-memory + shell scenario 13)
+make check                 # all checks (Rust project + fixtures + skill)
+make check-rust            # cargo fmt + clippy + test
+make check-fixtures        # validate all fixture codebases (py, ts, go, rs, rb, java, php)
+make check-fixtures-docker # same, forcing the Docker fallback for every language
+make check-skill           # skill tests (ensure_indexed.sh unit tests)
+make eval-skill            # LLM-as-judge skill evaluation (requires claude CLI)
+make eval-agents           # LLM-as-judge agent evaluation (requires claude CLI)
+make bench                 # shell benchmark suite (13 scenarios x 5 languages)
+make bench-criterion       # Rust criterion benchmarks (query latency)
+make bench-rag             # RAG relevancy benchmarks (in-memory + shell scenario 13)
 ```
+
+Each `check-fixtures` language target uses the native toolchain when present, else
+falls back to a pinned official Docker image, else fails. `check-ts` is now part of
+`make check`.
 
 Run `make check` before committing. Run `make eval-skill` after changing skill SKILL.md or search routing. Run `make eval-agents` after changing agent definitions.
 
