@@ -386,6 +386,14 @@ Full index: [docs/README.md](docs/README.md). Highlights:
 - [Technology Stack](docs/tech.md) — architecture and RAG design
 - [Project Structure](docs/structure.md) — workspace layout
 
+## Contributors
+
+Thanks to everyone who has contributed to cartog.
+
+[![Contributors](https://contrib.rocks/image?repo=jrollin/cartog)](https://github.com/jrollin/cartog/graphs/contributors)
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, commit style, and how to add a new language extractor.
+
 ## License
 
 MIT
