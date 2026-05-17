@@ -162,6 +162,7 @@ The database is a regenerable index — crash-recovery safety is traded for thro
 | Pragma | Value | Rationale |
 |--------|-------|-----------|
 | `journal_mode` | WAL | Write-Ahead Logging enables concurrent readers. Watch thread and MCP server read while indexer writes |
+| `busy_timeout` | 5000 (5 s) | Bounded retry on a locked DB. WAL removes reader-vs-writer contention but not writer-vs-writer (one WAL writer at a time) or reader-vs-checkpoint contention. Without it, a connection hitting those locks fails immediately with `SQLITE_BUSY`. WAL and `busy_timeout` are both required: WAL for read concurrency, `busy_timeout` so the rarer write/checkpoint contention waits instead of aborting. Applied to every on-disk connection, including the WAL-checkpoint connection |
 | `foreign_keys` | ON | Enforce referential integrity |
 | `synchronous` | NORMAL | Reduced fsync frequency. Safe with WAL for a regenerable index — power failure loses at most the last transaction, recoverable via `cartog index --force` |
 | `cache_size` | -65536 (64 MB) | Large page cache for repeated queries in MCP sessions |
