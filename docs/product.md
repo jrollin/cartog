@@ -49,7 +49,7 @@ Measured across 13 scenarios, 5 languages. Best gains on call chain tracing (88%
 Pre-computed graph eliminates multi-step discovery. One `refs` call replaces grep + filter + read. Transitive analysis (`impact`) is impossible with grep.
 
 **vs language servers (LSP):**
-No startup time, no per-language server process, no config. Single binary covers 7 code languages (plus Markdown documents). Trade-off: ~90% name resolution accuracy vs LSP's full semantic analysis.
+No startup time, no per-language server process, no config. Single binary covers 8 code languages (plus Markdown documents). Trade-off: ~90% name resolution accuracy vs LSP's full semantic analysis.
 
 **vs alternatives (Serena MCP, codanna, Aider repo-map):**
 

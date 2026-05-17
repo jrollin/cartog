@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-skill check-py check-ts check-go check-rs check-rb check-java bench bench-criterion bench-rag eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-skill check-py check-ts check-go check-rs check-rb check-java check-php bench bench-criterion bench-rag eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -13,7 +13,7 @@ check-rust: ## cargo fmt + clippy + test
 
 # --- Fixture syntax/build checks ---
 
-check-fixtures: check-py check-go check-rs check-rb check-java ## Validate all fixture codebases
+check-fixtures: check-py check-go check-rs check-rb check-java check-php ## Validate all fixture codebases
 
 check-py: ## Validate Python fixtures (py_compile)
 	@echo "==> Checking Python fixtures..."
@@ -43,6 +43,17 @@ check-rb: ## Validate Ruby fixtures (ruby -c)
 check-java: ## Validate Java fixtures (javac)
 	@echo "==> Checking Java fixtures..."
 	@mkdir -p /tmp/cartog_java_check && cd benchmarks/fixtures/webapp_java && javac -sourcepath . $$(find . -name "*.java" | sort) -d /tmp/cartog_java_check
+	@echo "    OK"
+
+check-php: ## Validate PHP fixtures (php -l, falls back to Docker)
+	@echo "==> Checking PHP fixtures..."
+	@if command -v php > /dev/null 2>&1; then \
+		find benchmarks/fixtures/webapp_php -name '*.php' -exec php -l {} + > /dev/null; \
+	else \
+		echo "    php not found, using Docker (php:8.3-cli)"; \
+		docker run --rm -v "$$PWD/benchmarks/fixtures/webapp_php:/app" -w /app php:8.3-cli \
+			sh -c 'for f in $$(find . -name "*.php"); do php -l "$$f" > /dev/null || exit 1; done'; \
+	fi
 	@echo "    OK"
 
 # --- Skill tests ---

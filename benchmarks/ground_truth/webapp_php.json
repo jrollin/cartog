@@ -1,0 +1,128 @@
+{
+  "01_find_callers": {
+    "description": "Who calls validate_token?",
+    "query": "refs validate_token --kind calls",
+    "expected": [
+      { "source": "call", "file": "middleware/auth_middleware.php" },
+      { "source": "refresh_token", "file": "auth/tokens.php" },
+      { "source": "getCurrentUser", "file": "auth/service.php" },
+      { "source": "changePassword", "file": "auth/service.php" },
+      { "source": "get_current_user", "file": "auth/middleware.php" },
+      { "source": "verifyToken", "file": "services/auth_service.php" }
+    ]
+  },
+  "02_file_structure": {
+    "description": "What is the structure of auth/service.php?",
+    "query": "outline auth/service.php",
+    "expected": [
+      { "name": "BaseService", "kind": "class" },
+      { "name": "AuthService", "kind": "class" },
+      { "name": "AdminService", "kind": "class" },
+      { "name": "__construct", "kind": "method" },
+      { "name": "log", "kind": "method" },
+      { "name": "login", "kind": "method" },
+      { "name": "logout", "kind": "method" },
+      { "name": "getCurrentUser", "kind": "method" },
+      { "name": "changePassword", "kind": "method" },
+      { "name": "findUser", "kind": "method" },
+      { "name": "impersonate", "kind": "method" },
+      { "name": "listAllUsers", "kind": "method" }
+    ]
+  },
+  "03_refactor_impact": {
+    "description": "What breaks if I change AuthService?",
+    "query": "impact AuthService --depth 3",
+    "expected": []
+  },
+  "04_class_hierarchy": {
+    "description": "What is the class hierarchy around BaseService?",
+    "query": "hierarchy BaseService",
+    "expected": [
+      { "child": "AuthService", "parent": "BaseService" },
+      { "child": "AdminService", "parent": "AuthService" },
+      { "child": "AuthenticationService", "parent": "BaseService" },
+      { "child": "PaymentProcessor", "parent": "BaseService" }
+    ]
+  },
+  "05_trace_call_chain": {
+    "description": "Trace the call chain from login_route.",
+    "query": "-",
+    "expected": []
+  },
+  "06_file_deps": {
+    "description": "What does routes/auth.php depend on?",
+    "query": "deps routes/auth.php",
+    "expected": ["AuthService", "TokenError", "DatabaseConnection", "EventDispatcher", "AuthenticationService"]
+  },
+  "07_type_references": {
+    "description": "Who references TokenError (extends, throw, catch)?",
+    "query": "refs TokenError",
+    "expected": [
+      { "source": "TokenError", "file": "middleware/auth_middleware.php", "kind": "references" },
+      { "source": "TokenError", "file": "routes/auth.php", "kind": "references" },
+      { "source": "TokenError", "file": "services/auth_service.php", "kind": "references" }
+    ]
+  },
+  "08_symbol_search": {
+    "description": "Find symbols matching 'token'.",
+    "query": "search token",
+    "expected": [
+      { "name": "TokenError" },
+      { "name": "ExpiredTokenError" },
+      { "name": "extract_token" },
+      { "name": "validate_token" },
+      { "name": "generate_token" },
+      { "name": "revoke_token" },
+      { "name": "refresh_token" },
+      { "name": "findByToken" },
+      { "name": "verifyToken" }
+    ]
+  },
+  "09_ambiguous_symbol": {
+    "description": "Find all definitions named 'validate'.",
+    "query": "search validate",
+    "expected": [
+      { "name": "validate", "file": "validators/payment.php" },
+      { "name": "validate", "file": "validators/user.php" }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "Who calls get_logger?",
+    "query": "refs get_logger",
+    "expected": [
+      { "file": "app.php" },
+      { "file": "auth/service.php" },
+      { "file": "database/connection.php" },
+      { "file": "database/pool.php" },
+      { "file": "database/queries.php" },
+      { "file": "events/dispatcher.php" },
+      { "file": "middleware/auth_middleware.php" },
+      { "file": "middleware/rate_limit.php" },
+      { "file": "tasks/cleanup_task.php" },
+      { "file": "tasks/email_task.php" }
+    ]
+  },
+  "11_deep_call_chain": {
+    "description": "Trace the deep call chain from handle_login.",
+    "query": "-",
+    "expected": []
+  },
+  "12_deep_impact": {
+    "description": "What breaks if I change DatabaseConnection?",
+    "query": "impact DatabaseConnection --depth 5",
+    "expected": []
+  },
+  "13_rag_search": {
+    "description": "Semantic search: validate token.",
+    "query": "rag search \"validate token\"",
+    "expected": [
+      { "name": "validate_token" },
+      { "name": "verifyToken" },
+      { "name": "TokenError" },
+      { "name": "ExpiredTokenError" },
+      { "name": "extract_token" },
+      { "name": "generate_token" },
+      { "name": "refresh_token" }
+    ]
+  }
+}

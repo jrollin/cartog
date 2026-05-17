@@ -77,3 +77,4 @@ run_scenario "webapp_ts" "handleLogin" "authenticate" "login" "generateToken" "e
 run_scenario "webapp_go" "HandleLogin" "Authenticate" "Login" "GenerateToken" "ExecuteQuery" "GetConnection"
 run_scenario "webapp_rs" "handle_login" "authenticate" "login" "generate_token" "execute_query" "get_connection"
 run_scenario "webapp_rb" "handle_login" "authenticate" "login" "generate_token" "execute_query" "get_connection"
+run_scenario "webapp_php" "handle_login" "authenticate" "login" "generate_token" "executeQuery" "getConnection"

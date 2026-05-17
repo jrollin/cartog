@@ -36,7 +36,7 @@ Named captures (`@callee`, `@exception_type`, etc.) identify the matched nodes f
 
 ### Supported languages
 
-**Code**: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java.
+**Code**: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP.
 
 **Documents**: Markdown (`.md`) — chunked by heading for semantic search. Each heading section becomes a `Document` symbol. Large sections are sub-chunked at paragraph boundaries (~1500 bytes). Files without headings use fixed-size paragraph chunking.
 
