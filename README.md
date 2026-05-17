@@ -103,7 +103,7 @@ Works with Claude Code, Cursor, Windsurf, Zed, OpenCode — any MCP client.
 
 ### LSP precision, built in
 
-Cartog auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls) and uses them to boost edge resolution from ~25% to **up to 81%**. Enabled by default; results persist in SQLite — pay the cost once. Disable at runtime with `--no-lsp`, or omit at build time with `cargo install cartog --no-default-features`.
+Cartog auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls, intelephense) and uses them to boost edge resolution from ~25% to **up to 81%**. Enabled by default; results persist in SQLite — pay the cost once. Disable at runtime with `--no-lsp`, or omit at build time with `cargo install cartog --no-default-features`.
 
 ## Install
 
@@ -334,8 +334,9 @@ Indexing: **69 files / 4k LOC in 95ms** (incremental re-index skips unchanged fi
 | TS microservice (230 files) | TypeScript | 37% | **81%** | 13s |
 | Vue.js SPA (739 files) | Vue/TS/JS | 31% | **72%** | 25s |
 | Rust CLI (358 files) | Rust | 25% | **44%** | 72s |
+| PHP webapp fixture (25 files) | PHP | 82% | **84%** | 22s |
 
-Unresolved edges are mostly calls to external libraries outside the project boundary.
+Unresolved edges are mostly calls to external libraries outside the project boundary. The PHP row uses the self-contained `webapp_php` benchmark fixture (no `composer install`), so LSP gains are modest; real PHP projects with `vendor/` populated typically see larger lifts from `intelephense`.
 
 ## Configuration
 

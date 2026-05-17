@@ -392,7 +392,7 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 - **Auto-detected**: if language servers are on PATH, they are used automatically during `cartog index`. Use `--no-lsp` to skip.
 - **Startup latency**: language servers typically reach ready in 2-15s on cold cache. The default ready-timeout is 20s — override via `CARTOG_LSP_READY_TIMEOUT_SECS` for very large projects. Day-to-day indexing should use `--no-lsp`.
 - **CLI vs MCP**: each `cartog index .` via Bash spawns and kills LSP servers (cold start). Use `cartog serve` (MCP mode) for sessions with multiple index calls — it keeps servers warm across tool calls.
-- **Supported servers**: rust-analyzer, pyright-langserver, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls. Install hints shown when servers are missing.
+- **Supported servers**: rust-analyzer, pyright-langserver, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls, intelephense (phpactor fallback). Install hints shown when servers are missing.
 - **External crate edges stay unresolved**: LSP resolves definitions within the project. Calls to std/external crates remain unresolved regardless.
 
 ### RAG search limitations

@@ -76,6 +76,20 @@ pub const SERVERS: &[ServerSpec] = &[
         language_id: "java",
         install_hint: "https://github.com/eclipse-jdtls/eclipse.jdt.ls#installation",
     },
+    ServerSpec {
+        language: "php",
+        binary: "intelephense",
+        args: &["--stdio"],
+        language_id: "php",
+        install_hint: "npm i -g intelephense",
+    },
+    ServerSpec {
+        language: "php",
+        binary: "phpactor",
+        args: &["language-server"],
+        language_id: "php",
+        install_hint: "composer global require phpactor/phpactor",
+    },
 ];
 
 /// Find all server specs for a cartog language name, in priority order.
@@ -123,5 +137,13 @@ mod tests {
         assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].binary, "ruby-lsp");
         assert_eq!(specs[1].binary, "solargraph");
+    }
+
+    #[test]
+    fn test_find_servers_php_has_two_candidates() {
+        let specs = find_servers("php");
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].binary, "intelephense");
+        assert_eq!(specs[1].binary, "phpactor");
     }
 }
