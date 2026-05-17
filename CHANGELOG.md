@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.15.0] - 2026-05-17
+## [0.15.1] - 2026-05-17
 
 ### Bug Fixes
 
@@ -52,6 +52,7 @@
 - **skill**: Defer cartog self update to SessionEnd to avoid peer-running deadlock ([`2e68387`](https://github.com/jrollin/cartog/commit/2e68387d5700b0b2a8a043a41a1af72e25996b43))
 - **skill**: Install to ~/.local/bin when ~/.cargo/bin is not on PATH ([`62d3c1c`](https://github.com/jrollin/cartog/commit/62d3c1cd6282e875ff64a74f453ef47e5721514f))
 - **self**: Harden migrate-db edge cases ([`27bb9a5`](https://github.com/jrollin/cartog/commit/27bb9a5b2d21d257c3f319863ecc170ef1b6a3d3))
+- **db**: Add PRAGMA busy_timeout to prevent SQLITE_BUSY under concurrency ([`aeed052`](https://github.com/jrollin/cartog/commit/aeed0523ffc4269f06c86ae91e03f10f35687041))
 
 ### Documentation
 
@@ -152,6 +153,7 @@
 - **ci**: Add codecov.yml with 1% threshold tolerance ([`7d4af4a`](https://github.com/jrollin/cartog/commit/7d4af4a75f0682a66291c31066a07a692c27220c))
 - **security**: Bump rustls-webpki to 0.103.13 (RUSTSEC-2026-0104) ([`c4e0f0c`](https://github.com/jrollin/cartog/commit/c4e0f0cf448068ee8ac63dfd7a770a08861c4995))
 - PHP doc alignment + webapp_php benchmark fixture (#38) ([`d54561e`](https://github.com/jrollin/cartog/commit/d54561eec44362522624bf48e1ff366a60e4d752))
+- Add CODEOWNERS file ([`3969d6b`](https://github.com/jrollin/cartog/commit/3969d6b99e90e63efa66d97c24dc43d92090d802))
 
 ### Performance
 
