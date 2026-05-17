@@ -20,8 +20,12 @@ build cache.
 LSP is enabled by default. If you installed with `--no-default-features`, the
 `cartog-lsp` dependency was omitted — reinstall with plain `cargo install
 cartog`. Otherwise, confirm a language server is on `PATH` (e.g.
-`rust-analyzer`, `pyright`, `typescript-language-server`, `gopls`) and that
-you haven't passed `--no-lsp` at runtime.
+`rust-analyzer`, `pyright`, `typescript-language-server`, `gopls`,
+`intelephense`) and that you haven't passed `--no-lsp` at runtime.
+
+For PHP, cartog probes `intelephense` first and falls back to `phpactor`.
+Intelephense is closed-source with an optional premium tier; the free tier
+handles `textDocument/definition` used by cartog.
 
 ## First index
 

@@ -4,7 +4,7 @@ LSP-based edge resolution for the cartog code graph.
 
 ## Overview
 
-Resolves edges that the heuristic resolver in `cartog-db` left unresolved, by querying real language servers (pyright, rust-analyzer, typescript-language-server, etc.) for `textDocument/definition` responses. This is an optional precision feature, gated behind the `lsp` feature flag.
+Resolves edges that the heuristic resolver in `cartog-db` left unresolved, by querying real language servers (pyright, rust-analyzer, typescript-language-server, intelephense, etc.) for `textDocument/definition` responses. This is an optional precision feature, gated behind the `lsp` feature flag.
 
 ## How it works
 
