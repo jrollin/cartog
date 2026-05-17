@@ -203,6 +203,14 @@ pub const DB_FILENAME: &str = "db.sqlite";
 /// lookups. Never written to for new projects: use `DB_DIR`/`DB_FILENAME` instead.
 pub const LEGACY_DB_FILE: &str = ".cartog.db";
 
+/// Milliseconds a connection waits on a locked database before giving up.
+///
+/// WAL removes reader-vs-writer contention but not writer-vs-writer or
+/// reader-vs-checkpoint contention. Without a `busy_timeout` SQLite fails
+/// immediately with `SQLITE_BUSY`; this gives bounded retry instead. Applied
+/// to every on-disk connection.
+pub const BUSY_TIMEOUT_MS: u32 = 5000;
+
 /// Run `PRAGMA wal_checkpoint(TRUNCATE)` on the SQLite file at `path`.
 /// No-op for missing files. Used before moving the DB to flush the WAL.
 pub fn checkpoint_wal(path: &std::path::Path) -> anyhow::Result<()> {
@@ -212,8 +220,11 @@ pub fn checkpoint_wal(path: &std::path::Path) -> anyhow::Result<()> {
     }
     let conn = Connection::open(path)
         .with_context(|| format!("open {} for WAL checkpoint", path.display()))?;
-    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-        .with_context(|| format!("PRAGMA wal_checkpoint(TRUNCATE) on {}", path.display()))?;
+    conn.execute_batch(&format!(
+        "PRAGMA busy_timeout={BUSY_TIMEOUT_MS};
+         PRAGMA wal_checkpoint(TRUNCATE);"
+    ))
+    .with_context(|| format!("PRAGMA wal_checkpoint(TRUNCATE) on {}", path.display()))?;
     Ok(())
 }
 
@@ -494,14 +505,15 @@ impl Database {
             path: db_path.to_path_buf(),
             source,
         })?;
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "PRAGMA journal_mode=WAL;
+             PRAGMA busy_timeout={BUSY_TIMEOUT_MS};
              PRAGMA foreign_keys=ON;
              PRAGMA synchronous=NORMAL;
              PRAGMA cache_size=-65536;
              PRAGMA temp_store=MEMORY;
-             PRAGMA mmap_size=268435456;",
-        )
+             PRAGMA mmap_size=268435456;"
+        ))
         .map_err(DbError::Pragma)?;
         conn.execute_batch(SCHEMA).map_err(DbError::Schema)?;
         conn.execute_batch(RAG_SCHEMA).map_err(DbError::RagSchema)?;
@@ -3914,6 +3926,61 @@ mod tests {
             backups.is_empty(),
             "fresh DB should not create a backup file"
         );
+    }
+
+    #[test]
+    fn test_busy_timeout_pragma_is_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("timeout.db");
+        let db = Database::open(&db_path, DEFAULT_EMBEDDING_DIM).unwrap();
+
+        let timeout: i64 = db
+            .conn
+            .query_row("PRAGMA busy_timeout;", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, BUSY_TIMEOUT_MS as i64);
+    }
+
+    #[test]
+    fn test_busy_timeout_makes_second_writer_retry_instead_of_aborting() {
+        // Regression for #42. A second writer blocked by a held write lock
+        // should *wait* (bounded by busy_timeout) rather than abort instantly.
+        // Proven deterministically: against the same held lock, a connection
+        // with busy_timeout=0 fails immediately, one with a non-zero timeout
+        // only fails after waiting that long. No inter-thread timing race.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("concurrent.db");
+        let _ = Database::open(&db_path, DEFAULT_EMBEDDING_DIM).unwrap();
+
+        // Holder keeps an exclusive write lock for the whole test.
+        let holder = Database::open(&db_path, DEFAULT_EMBEDDING_DIM).unwrap();
+        holder
+            .conn
+            .execute_batch("BEGIN IMMEDIATE; INSERT INTO metadata (key, value) VALUES ('a', '1');")
+            .unwrap();
+
+        let attempt_write = |timeout_ms: u32| -> std::time::Duration {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(&format!("PRAGMA busy_timeout={timeout_ms};"))
+                .unwrap();
+            let start = std::time::Instant::now();
+            let res = conn.execute("INSERT INTO metadata (key, value) VALUES ('b', '2');", []);
+            assert!(res.is_err(), "write must fail while the lock is held");
+            start.elapsed()
+        };
+
+        // busy_timeout=0: SQLite aborts immediately, no retry.
+        assert!(
+            attempt_write(0) < std::time::Duration::from_millis(150),
+            "with busy_timeout=0 the writer must fail immediately"
+        );
+        // busy_timeout=300ms: SQLite retries for the full window before failing.
+        assert!(
+            attempt_write(300) >= std::time::Duration::from_millis(250),
+            "with a non-zero busy_timeout the writer must retry, not abort"
+        );
+
+        holder.conn.execute_batch("COMMIT;").unwrap();
     }
 
     // ── Typed error surface ──
