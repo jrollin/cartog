@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.14.5] - 2026-05-07
+## [0.15.0] - 2026-05-17
 
 ### Bug Fixes
 
@@ -51,6 +51,7 @@
 - **skill**: Auto-install/update cartog binary against plugin version ([`6c5a296`](https://github.com/jrollin/cartog/commit/6c5a296abe0c65fb971e35717644914a407e0e8a))
 - **skill**: Defer cartog self update to SessionEnd to avoid peer-running deadlock ([`2e68387`](https://github.com/jrollin/cartog/commit/2e68387d5700b0b2a8a043a41a1af72e25996b43))
 - **skill**: Install to ~/.local/bin when ~/.cargo/bin is not on PATH ([`62d3c1c`](https://github.com/jrollin/cartog/commit/62d3c1cd6282e875ff64a74f453ef47e5721514f))
+- **self**: Harden migrate-db edge cases ([`27bb9a5`](https://github.com/jrollin/cartog/commit/27bb9a5b2d21d257c3f319863ecc170ef1b6a3d3))
 
 ### Documentation
 
@@ -77,6 +78,7 @@
 - **self-update**: Add user guide for cartog self commands ([`1894b39`](https://github.com/jrollin/cartog/commit/1894b39b7e9d2de42f1665cebd846c9c56d2b59c))
 - **self-update**: Align all docs with the new feature surface ([`5dbe968`](https://github.com/jrollin/cartog/commit/5dbe96869d1a71fe4655c31e01ae97056b4d0500))
 - **site**: Add `cartog self` to landing page and CLI reference ([`2a65664`](https://github.com/jrollin/cartog/commit/2a656647064241c0d53318653893fc9873e55965))
+- **readme**: Add contributors section (#39) ([`cf1008d`](https://github.com/jrollin/cartog/commit/cf1008d7cf5577d77912e2f628d78fcdeeb5ecc1))
 
 ### Features
 
@@ -133,6 +135,9 @@
 - **self-update**: Hook auto-check into post-command epilogue ([`50ec48b`](https://github.com/jrollin/cartog/commit/50ec48b6620645bdc79f983e21ecf61fd11ad39a))
 - **release**: Emit SHA256SUMS and bake CARTOG_RELEASE_BUILD ([`44d2a8d`](https://github.com/jrollin/cartog/commit/44d2a8dde04f6fb119800fc718a0b04813400edc))
 - **plugin**: SessionStart hook delegates version check to cartog binary ([`3917ee0`](https://github.com/jrollin/cartog/commit/3917ee00a04f03194836f7270f457ba3f8a8b43e))
+- **db**: Move default database into .cartog/ directory ([`0130d65`](https://github.com/jrollin/cartog/commit/0130d650f40266bd472e923865051f3c271e1c64))
+- **languages**: Add PHP support via tree-sitter-php ([`9468aa0`](https://github.com/jrollin/cartog/commit/9468aa0094fe017153cb02bda207aba0e539ede1))
+- **lsp**: Add PHP support via Intelephense/Phpactor (#40) ([`5fe298f`](https://github.com/jrollin/cartog/commit/5fe298f7a158d5918fb81c1fa22d8fd42131b9f3))
 
 ### Miscellaneous
 
@@ -146,6 +151,7 @@
 - **github**: Add community health files ([`6c247c2`](https://github.com/jrollin/cartog/commit/6c247c282db4b2f5094580425c2fcb2032576e03))
 - **ci**: Add codecov.yml with 1% threshold tolerance ([`7d4af4a`](https://github.com/jrollin/cartog/commit/7d4af4a75f0682a66291c31066a07a692c27220c))
 - **security**: Bump rustls-webpki to 0.103.13 (RUSTSEC-2026-0104) ([`c4e0f0c`](https://github.com/jrollin/cartog/commit/c4e0f0cf448068ee8ac63dfd7a770a08861c4995))
+- PHP doc alignment + webapp_php benchmark fixture (#38) ([`d54561e`](https://github.com/jrollin/cartog/commit/d54561eec44362522624bf48e1ff366a60e4d752))
 
 ### Performance
 
