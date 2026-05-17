@@ -43,7 +43,7 @@ Every code navigation tool makes you choose: fast but shallow (grep), or precise
 | **Query speed** | depends on codebase size | seconds to start | **8-450 us** |
 | **Transitive analysis** | impossible | partial | **`impact --depth 5`** |
 | **Setup** | none | per-language config | **one binary, zero config** |
-| **Languages** | all (text) | one per server | **8 languages, one tool** |
+| **Languages** | all (text) | one per server | **9 languages, one tool** |
 | **Token cost** (LLM context) | ~1,700 tokens/query | n/a | **~280 tokens/query** |
 | **Recall** (completeness) | 78% | ~100% | **97%** [*](#benchmark-notes) |
 | **Privacy** | local | local | **100% local** |
@@ -289,13 +289,14 @@ references  process  routes/auth.py:22
 | Go | .go | functions, structs, interfaces, imports | calls, imports, type refs |
 | Ruby | .rb | functions, classes, modules, imports | calls, imports, inherits, raises, rescue types |
 | Java | .java | classes, interfaces, enums, methods, imports | calls, imports, inherits, raises, type refs, new |
+| PHP | .php | classes, interfaces, traits, methods, functions | calls, inherits, implements, references (traits, new) |
 | Markdown | .md | document sections (chunked by heading) | — |
 
 ## How It Works
 
 ```mermaid
 graph LR
-    A["Source files<br/>(py, ts, rs, go, rb, java, md)"] -->|parse| B["Symbols + Edges"]
+    A["Source files<br/>(py, ts, rs, go, rb, java, php, md)"] -->|parse| B["Symbols + Edges"]
     B -->|write| C[".cartog/db.sqlite<br/>(SQLite)"]
     C -->|query| D["search / refs / impact<br/>outline / callees / hierarchy"]
     C -->|embed locally| E["ONNX embeddings<br/>(sqlite-vec)"]

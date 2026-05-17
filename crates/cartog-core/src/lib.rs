@@ -319,6 +319,7 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
         "go" => Some("go"),
         "rb" => Some("ruby"),
         "java" => Some("java"),
+        "php" => Some("php"),
         "md" => Some("markdown"),
         _ => None,
     }
@@ -398,5 +399,6 @@ mod tests {
         assert_eq!(detect_language(Path::new("README.md")), Some("markdown"));
         assert_eq!(detect_language(Path::new("Makefile")), None);
         assert_eq!(detect_language(Path::new("Main.java")), Some("java"));
+        assert_eq!(detect_language(Path::new("Service.php")), Some("php"));
     }
 }

@@ -385,11 +385,22 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
     Ok(result)
 }
 
+/// Decides whether a walkdir entry should be excluded from indexing.
+///
+/// Only directories can be ignored — files are always accepted. Common non-code
+/// directories (hidden dirs, `node_modules`, `vendor`, …) are excluded via
+/// [`is_ignored_dirname`]. `var` and `builds` are only excluded at depth 1
+/// (project root); a nested `src/var` is valid application code.
 fn is_ignored(entry: &walkdir::DirEntry) -> bool {
     let name = entry.file_name().to_string_lossy();
 
     // Skip hidden directories and common non-code directories
     if entry.file_type().is_dir() {
+        // "var" and "builds" are only ignored at the project root (depth 1).
+        // A nested path like `src/var` is valid application code.
+        if matches!(name.as_ref(), "var" | "builds") && entry.depth() != 1 {
+            return false;
+        }
         return is_ignored_dirname(&name);
     }
 
@@ -420,6 +431,8 @@ pub fn is_ignored_dirname(name: &str) -> bool {
             | ".next"
             | ".nuxt"
             | "vendor"
+            | "var"
+            | "builds"
     ) || name.starts_with('.')
 }
 
@@ -871,6 +884,8 @@ mod tests {
             "dist",
             "build",
             ".venv",
+            "var",
+            "builds",
         ];
         let allowed_dirs = ["src", "lib", "tests", "docs"];
 
@@ -894,6 +909,38 @@ mod tests {
                 assert!(!is_ignored(entry), "{name} should NOT be ignored");
             }
         }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_var_and_builds_not_ignored_when_nested() {
+        // "var" and "builds" must only be ignored at depth 1 (project root).
+        // A nested path like `src/var` is valid application code.
+        let tmp = std::env::temp_dir().join("cartog_test_nested_var");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src/var")).unwrap();
+        std::fs::create_dir_all(tmp.join("src/builds")).unwrap();
+
+        let entries: Vec<_> = WalkDir::new(&tmp)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_dir())
+            .collect();
+
+        let nested_var = entries.iter().find(|e| e.path() == tmp.join("src/var"));
+        let nested_builds = entries.iter().find(|e| e.path() == tmp.join("src/builds"));
+
+        assert!(nested_var.is_some());
+        assert!(
+            !is_ignored(nested_var.unwrap()),
+            "src/var should NOT be ignored"
+        );
+        assert!(nested_builds.is_some());
+        assert!(
+            !is_ignored(nested_builds.unwrap()),
+            "src/builds should NOT be ignored"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

@@ -1,6 +1,6 @@
 # Supported Languages
 
-## Currently Supported
+## Currently Supported (9 languages)
 
 ### Python (.py, .pyi)
 - Functions, classes, methods
@@ -89,6 +89,21 @@
 - Nested named classes at any depth (anonymous classes skipped)
 - Javadoc (`/** ... */`) and line comment (`//`) docstrings
 - Visibility: `public`, `private`, `protected`; package-private (no modifier) → `Public`
+
+### PHP (.php)
+- Classes, interfaces, traits
+- Methods, top-level functions
+- Namespace declaration (`namespace Foo\Bar`) — used to qualify symbol names
+- Use statements (`use Foo\Bar\Baz`) — resolved to FQCN for edge targets
+- Inheritance (`extends` → `Inherits` edge)
+- Interface implementation (`implements` → `Implements` edge)
+- Trait use (`use TraitName` inside class body → `References` edge)
+- Method calls (`$obj->method()`, `Class::static()` → `Calls` edges)
+- Function calls → `Calls` edges
+- `new ClassName()` → `References` edges
+- Docblocks (`/** ... */`) and line comments (`//`) as docstrings
+- Visibility: `public`, `protected`, `private`
+- Uses `LANGUAGE_PHP_ONLY` parser (files starting with `<?php`, no inline HTML)
 
 ### Markdown (.md)
 - Document sections chunked by heading (`#`, `##`, `###`, etc.)
