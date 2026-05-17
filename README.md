@@ -168,7 +168,7 @@ npx skills add jrollin/cartog
 
 **grep/ripgrep?** Great for string literals and config values. But grep can't trace call chains, can't do transitive impact analysis, and floods your context with raw text. Cartog returns structured, ranked, deduplicated results — one `refs` call replaces 6+ discovery steps.
 
-**A language server?** LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 8 languages with one binary and answers in microseconds. When you need LSP precision, cartog can use it as an optional layer.
+**A language server?** LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 9 languages with one binary and answers in microseconds. When you need LSP precision, cartog can use it as an optional layer.
 
 **Python-based graph tools?** They solve a similar problem but require a Python runtime, pip dependencies, and virtual environments. Cartog is a single static binary — download and run. It also queries 10-100x faster thanks to compiled Rust + SQLite.
 

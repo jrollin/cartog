@@ -864,7 +864,7 @@ impl ServerHandler for CartogServer {
                  - Run cartog_index first if the index is empty.\n\
                  - cartog_refs/callees/impact need exact symbol names — use cartog_search to find them.\n\
                  - Only read files when you need actual implementation logic, not structure.\n\n\
-                 Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, Markdown (.md).",
+                 Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Markdown (.md).",
             )
     }
 }

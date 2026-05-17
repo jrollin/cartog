@@ -55,7 +55,7 @@ See [docs/structure.md](docs/structure.md) for full directory tree and module re
 crates/cartog/         (binary — CLI dispatch, config, self-update)
 ├── cartog-core        (Symbol, Edge, SymbolKind, detect_language)
 ├── cartog-db          (SQLite: core + RAG schema, edge resolution)
-├── cartog-languages   (tree-sitter extractors, 8 languages)
+├── cartog-languages   (tree-sitter extractors, 9 languages)
 ├── cartog-indexer     (walk + extract + store, Merkle hashing)
 ├── cartog-rag         (embeddings, hybrid search, reranker)
 ├── cartog-lsp         (LSP-based edge resolution — default feature)
@@ -119,7 +119,7 @@ After implementation, mark checklist items complete — the spec stays as a desi
 
 ## Current State
 
-- **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, Markdown
+- **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Markdown
 - **CLI**: 19 top-level commands (`index`, `search`, `outline`, `refs`, `callees`, `impact`, `hierarchy`, `deps`, `stats`, `map`, `changes`, `config`, `doctor`, `watch`, `serve`, `completions`, `manpage`, plus `rag` with 3 subcommands and `self` with 4 subcommands) + MCP server (12 tools)
 - **Indexing**: incremental (git-based + SHA-256 + Merkle-tree symbol diffing), `--force` re-index. Stable symbol IDs (`file:kind:qualified_name`) survive line movements. Scoped edge resolution for changed files only
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
