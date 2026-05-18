@@ -4,17 +4,25 @@
 
 ## Setup
 
-Requires Rust 1.77+ (`rustup update` if needed).
+Three install paths, pick whichever matches your environment:
 
 ```bash
-cargo install cartog           # from crates.io
+# 1. Install script (macOS / Linux, no Rust required) — detects platform,
+#    downloads + verifies the matching release binary, installs to
+#    /usr/local/bin or ~/.local/bin.
+curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
 
-# Or build from source:
-cargo build --release
-cargo install --path .
+# 2. Cargo (Rust 1.77+; gives you crate features like ollama-embedding).
+cargo install cartog
+
+# 3. Build from source.
+cargo build --release && cargo install --path .
 ```
 
-To upgrade an existing install in place, `cartog self update`. See [updates.md](updates.md) for the full `cartog self` command surface, env vars, and rollback.
+Override the install location with `CARTOG_INSTALL_DIR=...`; pin a version
+with `CARTOG_VERSION=0.15.1`. To upgrade an existing install in place,
+`cartog self update`. See [updates.md](updates.md) for the full `cartog self`
+command surface, env vars, and rollback.
 
 ## Configuration
 
@@ -598,7 +606,7 @@ bash scripts/ensure_indexed.sh
 
 ## MCP Server
 
-`cartog serve` runs cartog as an MCP server over stdio, exposing 12 tools (10 core + 2 RAG) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
+`cartog serve` runs cartog as an MCP server over stdio, exposing 13 tools (11 core + 2 RAG) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
 
 For editor-specific recipes (Neovim keymaps, VS Code tasks, Emacs `compile`, Telescope picker, `cartog watch --json` floating buffer), see **[Editor integration](editor-integration.md)**.
 

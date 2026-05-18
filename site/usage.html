@@ -385,7 +385,7 @@ cartog rag search "deployment architecture" --kind document</pre>
       <pre>/plugin install cartog@cartog-plugins</pre>
 
       <h2 id="mcp-server">MCP Server</h2>
-      <p><code>cartog serve</code> exposes 12 tools over stdio for MCP-compatible clients.</p>
+      <p><code>cartog serve</code> exposes 13 tools over stdio for MCP-compatible clients.</p>
 
       <table>
         <thead>
@@ -393,6 +393,7 @@ cartog rag search "deployment architecture" --kind document</pre>
         </thead>
         <tbody>
           <tr><td><code>cartog_index</code></td><td>Build/update the code graph</td></tr>
+          <tr><td><code>cartog_map</code></td><td>Codebase orientation: file list + top symbols (call first in a new repo)</td></tr>
           <tr><td><code>cartog_search</code></td><td>Find symbols by partial name</td></tr>
           <tr><td><code>cartog_outline</code></td><td>File structure (symbols, line ranges)</td></tr>
           <tr><td><code>cartog_refs</code></td><td>All references to a symbol</td></tr>

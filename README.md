@@ -99,7 +99,7 @@ cartog watch . --rag             # also re-embed (deferred, non-blocking)
 ### MCP server for AI agents
 
 ```bash
-cartog serve                     # 12 tools over stdio
+cartog serve                     # 13 tools over stdio
 cartog serve --watch --rag       # with live re-indexing + semantic search
 ```
 
@@ -111,7 +111,18 @@ Cartog auto-detects language servers on PATH (rust-analyzer, pyright, typescript
 
 ## Install
 
-### From crates.io
+### Install script (macOS / Linux, no Rust required)
+
+```bash
+curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
+```
+
+Detects your OS + architecture, downloads the matching binary from the latest
+GitHub Release, verifies its SHA-256, and installs to `/usr/local/bin` (or
+`~/.local/bin` if non-root). Override with `CARTOG_INSTALL_DIR`; pin a
+version with `CARTOG_VERSION=0.15.1`. Audit the script: [`scripts/install.sh`](scripts/install.sh).
+
+### From crates.io (Rust toolchain required)
 
 ```bash
 cargo install cartog                                  # default (includes LSP)
@@ -119,7 +130,7 @@ cargo install cartog --no-default-features            # minimal, no LSP
 cargo install cartog --features ollama-embedding      # + Ollama support
 ```
 
-### Pre-built binaries
+### Pre-built binaries (manual)
 
 ```bash
 # macOS (Apple Silicon)
