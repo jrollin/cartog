@@ -19,7 +19,22 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
+use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect};
+
 use crate::cli::{ClientKind, IdeScope};
+
+/// ASCII banner printed at the top of the interactive `cartog ide` flow.
+/// Figlet "Standard" font + tagline. Kept short so it doesn't dominate the
+/// terminal before the picker draws.
+const CARTOG_LOGO: &str = r"
+   ___           _
+  / __\__ _ _ __| |_ ___   __ _
+ / /  / _` | '__| __/ _ \ / _` |
+/ /__| (_| | |  | || (_) | (_| |
+\____/\__,_|_|   \__\___/ \__, |
+                          |___/
+  code graph indexer · MCP wiring
+";
 
 /// Whether a client's config file lives inside the project or in the user's home dir.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -669,7 +684,21 @@ pub fn cmd_ide(
         !yes && !dry_run && !json && client.is_none() && std::io::stdin().is_terminal();
     let cwd = std::env::current_dir()?;
     let homes = HomeDirs::detect();
-    let report = run_ide(client, scope, interactive, dry_run, no_watch, &cwd, &homes)?;
+
+    // Interactive picker: shown when the user invokes `cartog ide` with no
+    // explicit filter and a real TTY. Skipped under --yes/--dry-run/--json,
+    // when --client is set, or when stdin is piped (CI/scripts).
+    let report = if interactive {
+        let items = picker_items(&cwd, &homes);
+        match interactive_picker(&items)? {
+            PickerOutcome::Cancelled => return Ok(()),
+            PickerOutcome::Selected(chosen) => {
+                run_ide_for_clients(&chosen, dry_run, no_watch, &cwd, &homes)?
+            }
+        }
+    } else {
+        run_ide(client, scope, interactive, dry_run, no_watch, &cwd, &homes)?
+    };
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -682,6 +711,336 @@ pub fn cmd_ide(
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Per-scope detection state, attached to a `PickerItem`.
+#[derive(Debug, Clone)]
+pub struct ScopeOption {
+    pub scope: Scope,
+    pub path: PathBuf,
+    /// Parent directory of `path` exists — proxy for "client appears installed".
+    pub installed: bool,
+    /// Config file exists — distinguishes "will create" vs "will merge".
+    pub file_present: bool,
+}
+
+/// One picker row: a client and every scope it supports. The catalogue has 10
+/// entries (Claude Code is the only client with both project + user rows) but
+/// the picker shows one row per *kind* and uses a follow-up `Select` to
+/// resolve scope only when there's a real choice to make.
+#[derive(Debug, Clone)]
+pub struct PickerItem {
+    pub kind: ClientKind,
+    pub scopes: Vec<ScopeOption>,
+}
+
+impl PickerItem {
+    /// Picker default: pre-check the row if any of its scopes look installed.
+    /// For project-scoped-only clients, "installed" is always true (the repo
+    /// is the parent), so the row defaults to checked unless filtered out.
+    pub fn any_installed(&self) -> bool {
+        self.scopes.iter().any(|s| s.installed)
+    }
+
+    /// When a client supports multiple scopes, pre-select the first one that
+    /// reports `installed`. Falls back to the first scope if none qualify.
+    fn default_scope(&self) -> Scope {
+        self.scopes
+            .iter()
+            .find(|s| s.installed)
+            .map(|s| s.scope)
+            .unwrap_or(self.scopes[0].scope)
+    }
+}
+
+/// Outcome of the picker. `Selected(empty)` means "applied nothing"; this is
+/// distinct from `Cancelled` (user hit Esc / answered No to the confirm).
+pub enum PickerOutcome {
+    Selected(Vec<(ClientKind, Scope)>),
+    Cancelled,
+}
+
+/// Build the picker rows from the static catalogue. Pure: no I/O beyond
+/// `Path::exists`, so it can be unit-tested with a `TempDir`-backed
+/// `HomeDirs` and a sandbox `cwd`.
+///
+/// Returns one row per unique `ClientKind`, with one `ScopeOption` per
+/// (kind, scope) entry in the catalogue. Claude Code ends up with two scope
+/// options; every other client has one.
+pub fn picker_items(cwd: &Path, homes: &HomeDirs) -> Vec<PickerItem> {
+    let mut by_kind: Vec<PickerItem> = Vec::new();
+    for entry in CLIENT_CATALOGUE.iter() {
+        let path = match entry.scope {
+            Scope::Project => match project_path(entry.kind, cwd) {
+                Some(p) => p,
+                None => continue,
+            },
+            Scope::User => match user_path(entry.kind, homes) {
+                Some(p) => p,
+                None => continue,
+            },
+        };
+        let installed = match entry.scope {
+            // Project parents always exist (it's the repo).
+            Scope::Project => true,
+            // Missing parent dir = client not installed on this machine.
+            Scope::User => path.parent().is_some_and(Path::exists),
+        };
+        let opt = ScopeOption {
+            scope: entry.scope,
+            file_present: path.exists(),
+            installed,
+            path,
+        };
+        match by_kind.iter_mut().find(|i| i.kind == entry.kind) {
+            Some(existing) => existing.scopes.push(opt),
+            None => by_kind.push(PickerItem {
+                kind: entry.kind,
+                scopes: vec![opt],
+            }),
+        }
+    }
+    by_kind
+}
+
+/// Label for the per-client MultiSelect row. Shows how many scopes are
+/// available so users know a follow-up scope prompt will appear.
+pub fn format_picker_label(item: &PickerItem) -> String {
+    let scope_hint = if item.scopes.len() > 1 {
+        "project + user available".to_string()
+    } else {
+        match item.scopes[0].scope {
+            Scope::Project => "project".to_string(),
+            Scope::User => "user".to_string(),
+        }
+    };
+    let status = if item.scopes.len() == 1 {
+        scope_option_status(&item.scopes[0])
+    } else {
+        // Multi-scope: report the most useful state across scopes.
+        item.scopes
+            .iter()
+            .map(scope_option_status)
+            .find(|s| *s != "not installed")
+            .unwrap_or("not installed")
+    };
+    format!(
+        "{name:<16} {hint:<28}  {status}",
+        name = client_display_name(item.kind),
+        hint = scope_hint,
+        status = status,
+    )
+}
+
+/// Status string for a single scope option.
+fn scope_option_status(opt: &ScopeOption) -> &'static str {
+    match (opt.installed, opt.file_present) {
+        (false, _) => "not installed",
+        (true, true) => "present, will merge",
+        (true, false) => "will create",
+    }
+}
+
+/// Render `~` for paths under `$HOME`. Cosmetic only.
+fn home_relative(path: &Path) -> String {
+    if let Some(home) = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf()) {
+        if let Ok(rest) = path.strip_prefix(&home) {
+            return format!("~/{}", rest.display());
+        }
+    }
+    path.display().to_string()
+}
+
+/// Hybrid picker: one MultiSelect of clients, then a per-client scope prompt
+/// only for clients that support more than one scope, then a final Confirm.
+fn interactive_picker(items: &[PickerItem]) -> Result<PickerOutcome> {
+    eprintln!("{CARTOG_LOGO}");
+
+    if items.is_empty() {
+        eprintln!("No MCP-aware clients are known to cartog. Nothing to configure.");
+        return Ok(PickerOutcome::Cancelled);
+    }
+
+    let theme = ColorfulTheme::default();
+
+    // Step 1 — which clients?
+    let labels: Vec<String> = items.iter().map(format_picker_label).collect();
+    let defaults: Vec<bool> = items.iter().map(PickerItem::any_installed).collect();
+
+    let selection = MultiSelect::with_theme(&theme)
+        .with_prompt("Step 1 — Which clients to configure? (space to toggle, enter to confirm)")
+        .items(&labels)
+        .defaults(&defaults)
+        .interact_opt()
+        .context("interactive picker failed")?;
+
+    let Some(indices) = selection else {
+        return Ok(PickerOutcome::Cancelled);
+    };
+    if indices.is_empty() {
+        eprintln!("Nothing selected.");
+        return Ok(PickerOutcome::Cancelled);
+    }
+
+    // Step 2 — resolve scope per chosen client. Only prompts when there's an
+    // actual choice; single-scope clients are kept as-is.
+    let mut chosen: Vec<(ClientKind, Scope)> = Vec::with_capacity(indices.len());
+    for &i in &indices {
+        let item = &items[i];
+        let scope = if item.scopes.len() == 1 {
+            item.scopes[0].scope
+        } else {
+            prompt_scope(&theme, item)?
+        };
+        chosen.push((item.kind, scope));
+    }
+
+    // Step 3 — final confirmation showing the resolved plan.
+    eprintln!(
+        "\nStep 3 — Confirm. Will configure {} client(s):",
+        chosen.len()
+    );
+    for (kind, scope) in &chosen {
+        let item = items.iter().find(|i| i.kind == *kind).unwrap();
+        let opt = item.scopes.iter().find(|s| s.scope == *scope).unwrap();
+        eprintln!(
+            "  · {name:<16} {scope:<8} {path}",
+            name = client_display_name(*kind),
+            scope = scope_label(*scope),
+            path = home_relative(&opt.path),
+        );
+    }
+
+    let confirmed = Confirm::with_theme(&theme)
+        .with_prompt("Apply?")
+        .default(true)
+        .interact_opt()
+        .context("confirmation failed")?
+        .unwrap_or(false);
+    if !confirmed {
+        eprintln!("Aborted, no files were modified.");
+        return Ok(PickerOutcome::Cancelled);
+    }
+
+    Ok(PickerOutcome::Selected(chosen))
+}
+
+/// Run a `Select` prompt asking which scope to use for a multi-scope client.
+/// Only invoked when `item.scopes.len() > 1`.
+fn prompt_scope(theme: &ColorfulTheme, item: &PickerItem) -> Result<Scope> {
+    use dialoguer::Select;
+
+    let options: Vec<String> = item
+        .scopes
+        .iter()
+        .map(|opt| {
+            format!(
+                "{scope:<8} {path}  ({status})",
+                scope = scope_label(opt.scope),
+                path = home_relative(&opt.path),
+                status = scope_option_status(opt),
+            )
+        })
+        .collect();
+
+    let default_idx = item
+        .scopes
+        .iter()
+        .position(|s| s.scope == item.default_scope())
+        .unwrap_or(0);
+
+    let idx = Select::with_theme(theme)
+        .with_prompt(format!(
+            "Step 2 — Where should {} write its MCP entry?",
+            client_display_name(item.kind)
+        ))
+        .items(&options)
+        .default(default_idx)
+        .interact()
+        .context("scope prompt failed")?;
+
+    Ok(item.scopes[idx].scope)
+}
+
+fn scope_label(scope: Scope) -> &'static str {
+    match scope {
+        Scope::Project => "project",
+        Scope::User => "user",
+    }
+}
+
+/// Human-friendly client name for the picker. Mirrors `ClientKind`'s
+/// `clap::ValueEnum` rendering but with capitalised display labels.
+fn client_display_name(kind: ClientKind) -> &'static str {
+    match kind {
+        ClientKind::ClaudeCode => "Claude Code",
+        ClientKind::ClaudeDesktop => "Claude Desktop",
+        ClientKind::Cursor => "Cursor",
+        ClientKind::Vscode => "VS Code",
+        ClientKind::Windsurf => "Windsurf",
+        ClientKind::Opencode => "OpenCode",
+        ClientKind::Zed => "Zed",
+        ClientKind::Codex => "Codex CLI",
+        ClientKind::Gemini => "Gemini CLI",
+    }
+}
+
+/// Run `run_ide` for an explicit set of (kind, scope) pairs chosen by the
+/// picker. Bypasses the catalog filter pipeline because the picker has
+/// already nailed the exact rows to apply.
+fn run_ide_for_clients(
+    chosen: &[(ClientKind, Scope)],
+    dry_run: bool,
+    no_watch: bool,
+    cwd: &Path,
+    homes: &HomeDirs,
+) -> Result<IdeReport> {
+    let specs: Vec<ClientSpec> = chosen
+        .iter()
+        .filter_map(|&(kind, scope)| spec_for(kind, scope, no_watch, cwd, homes))
+        .collect();
+
+    let mut steps = Vec::with_capacity(specs.len());
+    let mut summary = IdeSummary::default();
+    for spec in specs {
+        // `interactive = false` here: the picker already prompted, so per-spec
+        // confirmation prompts would be redundant.
+        let step = process_spec(&spec, cwd, false, dry_run);
+        match step.status {
+            IdeStatus::Created => summary.created += 1,
+            IdeStatus::Updated => summary.updated += 1,
+            IdeStatus::Unchanged => summary.unchanged += 1,
+            IdeStatus::Skipped => summary.skipped += 1,
+            IdeStatus::Error => summary.error += 1,
+        }
+        steps.push(step);
+    }
+
+    Ok(IdeReport { steps, summary })
+}
+
+/// Build a single `ClientSpec` for an explicit kind/scope pair (picker path).
+fn spec_for(
+    kind: ClientKind,
+    scope: Scope,
+    no_watch: bool,
+    cwd: &Path,
+    homes: &HomeDirs,
+) -> Option<ClientSpec> {
+    let entry = CLIENT_CATALOGUE
+        .iter()
+        .find(|e| e.kind == kind && e.scope == scope)?;
+    let path = match entry.scope {
+        Scope::Project => project_path(entry.kind, cwd)?,
+        Scope::User => user_path(entry.kind, homes)?,
+    };
+    Some(ClientSpec {
+        kind: entry.kind,
+        scope: entry.scope,
+        path,
+        strategy: entry.strategy,
+        args: entry.args_kind.resolve(no_watch),
+    })
 }
 
 fn print_next_steps(report: &IdeReport, dry_run: bool) {
@@ -1193,5 +1552,220 @@ mod tests {
         );
         assert_eq!(with[0].args, vec!["serve", "--watch"]);
         assert_eq!(without[0].args, vec!["serve"]);
+    }
+
+    // ── Picker helpers ────────────────────────────────────────────────────
+
+    fn opt(scope: Scope, installed: bool, file_present: bool) -> ScopeOption {
+        ScopeOption {
+            scope,
+            path: PathBuf::from("/tmp/foo"),
+            installed,
+            file_present,
+        }
+    }
+
+    #[test]
+    fn scope_option_status_reports_not_installed_when_parent_missing() {
+        assert_eq!(
+            scope_option_status(&opt(Scope::User, false, false)),
+            "not installed"
+        );
+    }
+
+    #[test]
+    fn scope_option_status_reports_will_create_when_parent_exists_but_file_does_not() {
+        assert_eq!(
+            scope_option_status(&opt(Scope::Project, true, false)),
+            "will create"
+        );
+    }
+
+    #[test]
+    fn scope_option_status_reports_will_merge_when_file_exists() {
+        assert_eq!(
+            scope_option_status(&opt(Scope::User, true, true)),
+            "present, will merge"
+        );
+    }
+
+    #[test]
+    fn picker_items_groups_claude_code_into_two_scopes() {
+        // Claude Code is the only client with both Project and User catalogue
+        // entries; the hybrid picker collapses them into one PickerItem with
+        // two ScopeOptions.
+        let tmp = tempfile::tempdir().unwrap();
+        let homes = HomeDirs::default();
+        let items = picker_items(tmp.path(), &homes);
+        let cc = items
+            .iter()
+            .find(|i| i.kind == ClientKind::ClaudeCode)
+            .unwrap();
+        assert_eq!(cc.scopes.len(), 2, "Claude Code should have 2 scopes");
+        let scopes: Vec<Scope> = cc.scopes.iter().map(|s| s.scope).collect();
+        assert!(scopes.contains(&Scope::Project));
+        assert!(scopes.contains(&Scope::User));
+    }
+
+    #[test]
+    fn picker_items_other_clients_have_a_single_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let homes = HomeDirs::default();
+        let items = picker_items(tmp.path(), &homes);
+        for item in &items {
+            if item.kind != ClientKind::ClaudeCode {
+                assert_eq!(
+                    item.scopes.len(),
+                    1,
+                    "{:?} should have exactly one scope, got {}",
+                    item.kind,
+                    item.scopes.len(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn picker_items_marks_project_clients_installed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let homes = HomeDirs::default();
+        let items = picker_items(tmp.path(), &homes);
+        let cursor = items.iter().find(|i| i.kind == ClientKind::Cursor).unwrap();
+        // Project-scoped rows always read as "installed" — the repo IS the parent.
+        assert!(cursor.scopes[0].installed);
+        assert!(!cursor.scopes[0].file_present);
+    }
+
+    #[test]
+    fn picker_items_marks_user_clients_not_installed_when_parent_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let homes = HomeDirs {
+            claude_code: tmp.path().join("does/not/exist/claude.json"),
+            claude_desktop: tmp.path().join("does/not/exist/desktop.json"),
+            codex: tmp.path().join("does/not/exist/codex.toml"),
+            gemini: tmp.path().join("does/not/exist/gemini.json"),
+            windsurf: tmp.path().join("does/not/exist/windsurf.json"),
+            opencode: tmp.path().join("does/not/exist/opencode.json"),
+            zed: tmp.path().join("does/not/exist/zed.json"),
+        };
+        let items = picker_items(tmp.path(), &homes);
+        for item in &items {
+            for opt in &item.scopes {
+                if opt.scope == Scope::User {
+                    assert!(
+                        !opt.installed,
+                        "{:?} user-scope should be flagged not-installed",
+                        item.kind
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn picker_items_marks_user_client_installed_when_parent_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_dir = tmp.path().join("Library/Application Support/Claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let homes = HomeDirs {
+            claude_desktop: claude_dir.join("claude_desktop_config.json"),
+            ..HomeDirs::default()
+        };
+        let items = picker_items(tmp.path(), &homes);
+        let claude = items
+            .iter()
+            .find(|i| i.kind == ClientKind::ClaudeDesktop)
+            .unwrap();
+        assert!(claude.scopes[0].installed);
+        assert!(!claude.scopes[0].file_present);
+    }
+
+    #[test]
+    fn format_picker_label_single_scope_includes_name_and_status() {
+        let item = PickerItem {
+            kind: ClientKind::Cursor,
+            scopes: vec![opt(Scope::Project, true, false)],
+        };
+        let label = format_picker_label(&item);
+        assert!(label.contains("Cursor"), "label missing name: {label}");
+        assert!(
+            label.contains("project"),
+            "label missing scope hint: {label}"
+        );
+        assert!(
+            label.contains("will create"),
+            "label missing status: {label}"
+        );
+    }
+
+    #[test]
+    fn format_picker_label_multi_scope_hints_at_choice() {
+        let item = PickerItem {
+            kind: ClientKind::ClaudeCode,
+            scopes: vec![
+                opt(Scope::Project, true, false),
+                opt(Scope::User, true, true),
+            ],
+        };
+        let label = format_picker_label(&item);
+        assert!(label.contains("Claude Code"));
+        assert!(
+            label.contains("project + user available"),
+            "multi-scope hint missing: {label}",
+        );
+    }
+
+    #[test]
+    fn any_installed_true_when_at_least_one_scope_installed() {
+        let item = PickerItem {
+            kind: ClientKind::ClaudeCode,
+            scopes: vec![
+                opt(Scope::Project, true, false),
+                opt(Scope::User, false, false),
+            ],
+        };
+        assert!(item.any_installed());
+    }
+
+    #[test]
+    fn any_installed_false_when_no_scope_installed() {
+        let item = PickerItem {
+            kind: ClientKind::Zed,
+            scopes: vec![opt(Scope::User, false, false)],
+        };
+        assert!(!item.any_installed());
+    }
+
+    #[test]
+    fn spec_for_returns_none_for_unknown_combination() {
+        // Cursor only exists at project scope; asking for user scope should
+        // return None so the picker can't construct an impossible spec.
+        let tmp = tempfile::tempdir().unwrap();
+        let homes = HomeDirs::default();
+        assert!(spec_for(ClientKind::Cursor, Scope::User, false, tmp.path(), &homes).is_none());
+    }
+
+    #[test]
+    fn spec_for_builds_claude_code_with_or_without_watch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let homes = HomeDirs::default();
+        let with = spec_for(
+            ClientKind::ClaudeCode,
+            Scope::Project,
+            false,
+            tmp.path(),
+            &homes,
+        )
+        .unwrap();
+        let without = spec_for(
+            ClientKind::ClaudeCode,
+            Scope::Project,
+            true,
+            tmp.path(),
+            &homes,
+        )
+        .unwrap();
+        assert_eq!(with.args, vec!["serve", "--watch"]);
+        assert_eq!(without.args, vec!["serve"]);
     }
 }

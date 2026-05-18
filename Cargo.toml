@@ -51,6 +51,7 @@ clap_mangen = "0.2"
 rayon = "1.10"
 toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
 toml_edit = "0.22"
+dialoguer = "0.11"
 self_update = { version = "0.42", default-features = false, features = ["archive-tar", "archive-zip", "compression-flate2", "rustls"] }
 directories = "5"
 libc = "0.2"
