@@ -160,6 +160,15 @@ else
 fi
 cartog index .
 
+# F2b: fresh-repo hint. If there's no .cartog.toml at the git root (or cwd
+# when not in a repo), point the user at `cartog init` so they can scaffold
+# one before customizing DB path / embedding provider. Non-blocking — the
+# index already ran with defaults.
+_toml_root="${GIT_ROOT:-.}"
+if [ ! -f "${_toml_root}/.cartog.toml" ]; then
+    echo "Tip: no .cartog.toml found. Run \`cartog init\` to scaffold one if you want to customize the DB path, embedding provider, or RAG tuning."
+fi
+
 # F3: drift warning (the SessionEnd hook does the actual update).
 warn_if_drifted
 
