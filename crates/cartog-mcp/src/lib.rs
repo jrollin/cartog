@@ -561,7 +561,7 @@ impl CartogServer {
 
     /// Show inheritance hierarchy for a class.
     #[tool(
-        description = "Show class inheritance tree. Use when asked 'show the class hierarchy', 'what extends X?', 'what does X inherit from?'. Not for: trait/interface implementations (use cartog_refs with kind=implements). Returns: array of {child: Symbol, parent: Symbol} ordered top-down."
+        description = "Show class inheritance tree. Use when asked 'show the class hierarchy', 'what extends X?', 'what does X inherit from?'. Not for: trait/interface implementations (use cartog_refs with kind=implements). Returns: array of {child: string, parent: string} (symbol names) ordered top-down."
     )]
     async fn cartog_hierarchy(
         &self,

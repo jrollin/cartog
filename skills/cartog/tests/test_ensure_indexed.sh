@@ -744,11 +744,14 @@ run_ensure_indexed_print_db() {
         cd "$workdir"
         # Patch: insert echo just before phase 1. The real line is
         # `cartog index . || index_rc=$?`; legacy form was `cartog index .`.
-        # Use two POSIX sed substitutions so this helper works on BSD/macOS too.
-        # Delimiter is `#` so the `||` operator in the pattern can appear unescaped.
+        # The replacement needs a literal newline — `\n` in a sed RHS is a
+        # GNU extension and is taken literally by BSD/macOS sed. Use a
+        # backslash-continued newline inside the -e argument, which is POSIX.
         sed \
-            -e 's#^cartog index \. || index_rc=\$?$#echo "DB_FILE=$DB_FILE"\nexit 0#' \
-            -e 's#^cartog index \.$#echo "DB_FILE=$DB_FILE"\nexit 0#' \
+            -e 's#^cartog index \. || index_rc=\$?$#echo "DB_FILE=$DB_FILE"\
+exit 0#' \
+            -e 's#^cartog index \.$#echo "DB_FILE=$DB_FILE"\
+exit 0#' \
             "$ENSURE_SCRIPT" | bash 2>&1
     )
 }
@@ -1040,9 +1043,6 @@ test_readonly_cache_dir_fallback() {
     echo "TEST: unwritable XDG_CACHE_HOME falls back to /tmp for session log"
     setup
     create_mock_cartog "0.14.1"
-    # Point the cache at a known-unwritable location so mkdir -p fails.
-    # /dev/null/cartog is reliably unwritable on Unix (parent is a char device).
-    local bad_cache="/dev/null/cartog"
     local tmp_log="/tmp/session.log"
     rm -f "$tmp_log" "/tmp/last-error"
 

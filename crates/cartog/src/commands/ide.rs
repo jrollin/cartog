@@ -154,10 +154,15 @@ pub struct IdeReport {
 }
 
 impl IdeReport {
+    /// Returns `true` when at least one client step ended in `IdeStatus::Error`.
+    /// Used by `cmd_ide` to decide the process exit code.
     pub fn has_errors(&self) -> bool {
         self.summary.error > 0
     }
 
+    /// Render the report as a human-readable string: one line per client step
+    /// (status icon, client, scope, path, message), an optional before/after
+    /// diff block per step, and a trailing summary line of the counts.
     pub fn render_human(&self) -> String {
         let mut out = String::new();
         for step in &self.steps {
@@ -1006,6 +1011,7 @@ fn run_ide_for_clients(
         // `interactive = false` here: the picker already prompted, so per-spec
         // confirmation prompts would be redundant.
         let step = process_spec(&spec, cwd, false, dry_run);
+        summary.total += 1;
         match step.status {
             IdeStatus::Created => summary.created += 1,
             IdeStatus::Updated => summary.updated += 1,

@@ -53,6 +53,14 @@ enum TomlStatus {
     Skipped,
 }
 
+/// Scaffold a `.cartog.toml` template in the current directory and print the
+/// recommended next steps (`cartog ide`, `cartog index`).
+///
+/// `dry_run`: report what would be written without touching the filesystem.
+/// `json`: emit the structured `InitReport` instead of human-readable text.
+///
+/// Returns `Err` only on an unexpected I/O failure; a refused scaffold (e.g.
+/// `.cartog.toml` already present) is reported in the result, not as an error.
 pub fn cmd_init(dry_run: bool, json: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let toml = scaffold_toml(&cwd, dry_run)?;

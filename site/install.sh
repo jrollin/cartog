@@ -142,7 +142,17 @@ main() {
     [ -f "$tmp/$BIN" ] || die "extracted archive does not contain $BIN"
 
     install_dir=$(resolve_install_dir)
+    # Try an unprivileged mkdir first. If that fails and the directory is still
+    # absent, fall back to sudo (sudo install does NOT create parent dirs).
     mkdir -p "$install_dir" 2>/dev/null || true
+    if [ ! -d "$install_dir" ]; then
+        if have sudo; then
+            sudo mkdir -p "$install_dir" \
+                || die "could not create $install_dir even with sudo."
+        else
+            die "cannot create $install_dir and sudo is not available. Set CARTOG_INSTALL_DIR to a writable directory."
+        fi
+    fi
 
     if [ -w "$install_dir" ]; then
         install -m 755 "$tmp/$BIN" "$install_dir/$BIN"

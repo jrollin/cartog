@@ -171,7 +171,7 @@ Each crate has a `README.md` with detailed technical documentation. Summary:
 - **[cartog-lsp](../crates/cartog-lsp/README.md)**: LSP-based edge resolution (default feature). Spawns language servers, sends `textDocument/definition`, maps responses to cartog symbol IDs. Omitted when built with `--no-default-features`.
 - **[cartog-watch](../crates/cartog-watch/README.md)**: Debounced file watcher (`notify-debouncer-mini`), incremental re-index on changes, deferred RAG embedding with configurable timer. See [spec-watch.md](spec-watch.md) for design details.
 - **[cartog-mcp](../crates/cartog-mcp/README.md)**: MCP server over stdio (`rmcp`). 13 tool handlers with JSON Schema params, path validation (canonicalization), `Arc<Mutex<Database>>` for shared state. Writes a `serve.pid` file consumed by `cartog self update`.
-- **cartog-process-lock**: Cross-platform PID-file locks (`<state_dir>/{slot}.pid`) for long-lived commands. `is_alive(pid)` via `kill(pid, 0)` on unix and `OpenProcess` on windows. Consulted by `cartog self update` so an upgrade refuses to clobber a running peer.
+- **cartog-process-lock**: Cross-platform PID-file locks (`<state_dir>/{slot}.pid`) for long-lived commands. `is_alive(pid)` via `kill(pid, 0)` on Unix and `OpenProcess` on Windows. Consulted by `cartog self update` so an upgrade refuses to clobber a running peer.
 - **[cartog](../crates/cartog/README.md)**: Binary crate (21 top-level CLI commands via clap, including `cartog self` with `update`/`version`/`rollback`/`migrate-db`) + lib.rs facade re-exporting all crates as `cartog::db`, `cartog::types`, etc. Config resolution, logging setup, tokio runtime for MCP serve, daily background update probe.
 
 ## Conventions
