@@ -49,7 +49,7 @@ Measured across 13 scenarios, 5 languages. Best gains on call chain tracing (88%
 Pre-computed graph eliminates multi-step discovery. One `refs` call replaces grep + filter + read. Transitive analysis (`impact`) is impossible with grep.
 
 **vs language servers (LSP):**
-No startup time, no per-language server process, no config. Single binary covers 8 code languages (plus Markdown documents). Trade-off: ~90% name resolution accuracy vs LSP's full semantic analysis.
+No startup time, no per-language server process, no config. Single binary covers 9 languages (8 code languages plus Markdown documents). Trade-off: ~90% name resolution accuracy vs LSP's full semantic analysis.
 
 **vs alternatives (Serena MCP, codanna, Aider repo-map):**
 
@@ -65,9 +65,9 @@ Structural/heuristic name resolution, not full semantic. 90% accuracy — enough
 
 ## Distribution
 
-- **Primary**: Claude Code skill (SKILL.md + bash scripts)
-- **Secondary**: MCP server (`cartog serve` over stdio) for Claude Code, Cursor, and other MCP clients
-- **Tertiary**: `cargo install cartog` / pre-built binaries for direct CLI use
+- **Primary**: CLI binary — `cargo install cartog` or `curl -fsSL https://jrollin.github.io/cartog/install.sh | sh`. Bootstrap with `cartog init` + `cartog index`.
+- **Secondary**: MCP server (`cartog serve` over stdio), wired into editors via `cartog ide`. Supports Claude Code, Claude Desktop, Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed.
+- **Tertiary**: Claude Code plugin (`/plugin install cartog@cartog-plugins`) and agent skill (`npx skills add jrollin/cartog`) for users who want the bundled install + skill + MCP setup in one step.
 
 ## Further Reading
 

@@ -24,6 +24,31 @@ with `CARTOG_VERSION=0.15.1`. To upgrade an existing install in place,
 `cartog self update`. See [updates.md](updates.md) for the full `cartog self`
 command surface, env vars, and rollback.
 
+## Bootstrap
+
+From the repo root, two commands to start. The third is optional.
+
+```bash
+cargo install cartog          # one-time, global
+cartog init                   # 1. scaffold .cartog.toml (config only)
+cartog index                  # 2. build the code graph
+
+cartog ide                    # optional — wire MCP into installed editors
+```
+
+| Verb | When you need it | Files |
+|---|---|---|
+| `cartog init` | Always (once per project) | `.cartog.toml` only |
+| `cartog index` | Always (after every code change) | `.cartog/db.sqlite` |
+| `cartog ide` | Only if you want MCP in your editor | `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, user-scope configs |
+
+Edit `.cartog.toml` between steps 1 and 2 to change the DB path or embedding
+provider before any heavy work runs. CLI-only users stop after step 2.
+
+All three commands are idempotent. `cartog init` never overwrites an existing
+`.cartog.toml`; `cartog ide` merges entries instead of clobbering (other MCP
+servers in the file are preserved); `cartog index` is incremental.
+
 ## Configuration
 
 cartog resolves the database path using the following priority (highest wins):
@@ -640,31 +665,6 @@ cartog serve                  # basic MCP server
 cartog serve --watch          # auto-re-index on file changes
 cartog serve --watch --rag    # auto-re-index + auto-embed
 ```
-
-### Project bootstrap
-
-From the repo root, two commands to start. The third is optional.
-
-```bash
-cargo install cartog          # one-time, global
-cartog init                   # 1. scaffold .cartog.toml (config only)
-cartog index                  # 2. build the code graph
-
-cartog ide                    # optional — wire MCP into installed editors
-```
-
-| Verb | When you need it | Files |
-|---|---|---|
-| `cartog init` | Always (once per project) | `.cartog.toml` only |
-| `cartog index` | Always (after every code change) | `.cartog/db.sqlite` |
-| `cartog ide` | Only if you want MCP in your editor | `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, user-scope configs |
-
-Edit `.cartog.toml` between steps 1 and 2 to change the DB path or embedding
-provider before any heavy work runs. CLI-only users stop after step 2.
-
-All three commands are idempotent. `cartog init` never overwrites an existing
-`.cartog.toml`; `cartog ide` merges entries instead of clobbering (other MCP
-servers in the file are preserved); `cartog index` is incremental.
 
 ### Per-editor wiring: `cartog ide`
 

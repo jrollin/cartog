@@ -168,6 +168,16 @@ cartog self rollback         # restore the previous binary
 
 Cargo-installed binaries upgrade with `cargo install cartog --force`. See [docs/updates.md](docs/updates.md) for env vars, exit codes, and the state file location.
 
+### Agent integration: which path?
+
+Three setup paths for agents and editors. Pick the one that matches your stack — they are alternatives, not steps.
+
+| Path | Use it when | What you get |
+|---|---|---|
+| `cartog ide` | You want MCP wired into one or more editors (Cursor, VS Code, Codex CLI, Gemini CLI, Claude Desktop, OpenCode, Windsurf, Zed). | MCP entries written to the right files; interactive picker if you run it without flags. |
+| Claude Code plugin | You are on Claude Code and want install + skill + MCP wired in one step. | Bundled: binary install, behavioural skill, MCP server, all preconfigured. |
+| Agent skill | You use an agent that follows the skills protocol (Cursor, Copilot, others) and only need the behavioural rules, not MCP. | Skill files installed into the agent's skill directory; works alongside any install method. |
+
 ### Claude Code plugin
 
 Run these two commands **one at a time** in Claude Code:
