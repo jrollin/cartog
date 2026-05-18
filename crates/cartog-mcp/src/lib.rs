@@ -123,6 +123,14 @@ pub struct RagSearchParams {
     pub limit: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MapParams {
+    /// Maximum top-ranked symbols to include in the map (default 50).
+    /// Symbols are ranked by in-degree centrality so the most-referenced
+    /// definitions surface first.
+    pub limit: Option<u32>,
+}
+
 // ── Response wrappers for JSON serialization ──
 
 #[derive(Debug, Serialize)]
@@ -209,7 +217,8 @@ fn mcp_err(msg: impl std::fmt::Display) -> McpError {
 /// Static routing hints per tool — guides the agent to the next logical step.
 fn suggestions_for(tool: &str) -> Option<&'static str> {
     match tool {
-        "cartog_index" => Some("Next: use cartog_rag_search to find code, or cartog_search to look up a symbol name."),
+        "cartog_index" => Some("Next: use cartog_map to orient yourself, cartog_rag_search to find code, or cartog_search to look up a symbol name."),
+        "cartog_map" => Some("Next: use cartog_outline on an interesting file, cartog_rag_search for a concept, or cartog_search for a specific name."),
         "cartog_search" => Some("Next: use cartog_refs to find usages, cartog_callees to trace calls, or cartog_impact to assess blast radius."),
         "cartog_rag_search" => Some("Next: use cartog_outline to see file structure, or cartog_refs to find all usages of a symbol."),
         "cartog_outline" => Some("Next: use Read with offset/limit to see specific lines, or cartog_refs to find usages of a symbol."),
@@ -219,6 +228,8 @@ fn suggestions_for(tool: &str) -> Option<&'static str> {
         "cartog_hierarchy" => Some("Next: use cartog_refs to find usages, or cartog_impact to assess blast radius."),
         "cartog_deps" => Some("Next: use cartog_outline to see file structure, or cartog_refs to find usages of a symbol."),
         "cartog_changes" => Some("Next: use cartog_refs or cartog_impact on changed symbols to understand downstream effects."),
+        "cartog_stats" => Some("Next: run cartog_index if empty, or cartog_map to orient yourself in the codebase."),
+        "cartog_rag_index" => Some("Next: use cartog_rag_search to query the new embedding index."),
         _ => None,
     }
 }
@@ -345,7 +356,7 @@ impl CartogServer {
 
     /// Build or rebuild the code graph index for a directory.
     #[tool(
-        description = "Build or rebuild the code graph index. Run this first before any other cartog tool, or after making code changes to keep the graph current. Incremental by default — only re-indexes changed files. Use force=true if results seem stale."
+        description = "Build or rebuild the code graph index. Run this first before any other cartog tool, or after making code changes to keep the graph current. Incremental by default — only re-indexes changed files. Use force=true if results seem stale. Not for: routine queries (call once per session, not before every read). Returns: {files_indexed, files_skipped, symbols_added, edges_added, edges_resolved, edges_lsp_resolved}."
     )]
     async fn cartog_index(
         &self,
@@ -414,7 +425,7 @@ impl CartogServer {
 
     /// Show symbols and structure of a file without reading its content.
     #[tool(
-        description = "Show file structure: functions, classes, methods, imports with signatures and line ranges. Use this INSTEAD of reading a file when you need to understand what's in it. Then use Read with offset/limit for specific lines you need."
+        description = "Show file structure: functions, classes, methods, imports with signatures and line ranges. Use this INSTEAD of reading a file when you need to understand what's in it — then Read only the specific lines you need. Not for: reading the actual function body (use Read with offset/limit), or finding usages (use cartog_refs). Returns: Symbol[] with {name, kind, signature, line_start, line_end, parent_id, is_async, is_exported}."
     )]
     async fn cartog_outline(
         &self,
@@ -442,7 +453,7 @@ impl CartogServer {
 
     /// Find all references to a symbol (calls, imports, inherits, type references, raises).
     #[tool(
-        description = "Find all usages of a symbol across the codebase. Use when asked 'where is X used?', 'who calls X?', 'who imports X?'. Filter by kind: calls, imports, inherits, references, raises. Requires an exact symbol name — use cartog_search first if unsure of the name."
+        description = "Find all usages of a symbol across the codebase. Use when asked 'where is X used?', 'who calls X?', 'who imports X?'. Filter by kind: calls, imports, inherits, references, raises. Requires an exact symbol name — use cartog_search first if unsure of the name. Not for: discovering what a function calls (use cartog_callees), or transitive impact (use cartog_impact). Returns: array of {edge: {kind, target_name, line}, source: Symbol | null}."
     )]
     async fn cartog_refs(
         &self,
@@ -488,7 +499,7 @@ impl CartogServer {
 
     /// Find what a symbol calls.
     #[tool(
-        description = "Trace what a function calls. Use when asked 'what does X call?', 'show me the call graph of X', or to understand execution flow. Requires an exact symbol name."
+        description = "Trace what a function calls. Use when asked 'what does X call?', 'show me the call graph of X', or to understand execution flow. Requires an exact symbol name. Not for: finding who calls a function (use cartog_refs with kind=calls). Returns: Edge[] of {kind, target_name, line, file}."
     )]
     async fn cartog_callees(
         &self,
@@ -516,7 +527,7 @@ impl CartogServer {
 
     /// Transitive impact analysis — what breaks if this symbol changes?
     #[tool(
-        description = "Assess blast radius before refactoring. Shows everything that transitively depends on a symbol up to N hops. Use when asked 'what breaks if I change X?', 'is it safe to rename/delete X?', or before any rename/extract/move/delete refactoring."
+        description = "Assess blast radius before refactoring. Shows everything that transitively depends on a symbol up to N hops. Use when asked 'what breaks if I change X?', 'is it safe to rename/delete X?', or before any rename/extract/move/delete refactoring. Not for: direct callers only (use cartog_refs), or what the symbol calls (use cartog_callees). Returns: array of {edge, depth} where depth=1 is direct, depth=2 is one hop away, etc."
     )]
     async fn cartog_impact(
         &self,
@@ -550,7 +561,7 @@ impl CartogServer {
 
     /// Show inheritance hierarchy for a class.
     #[tool(
-        description = "Show class inheritance tree. Use when asked 'show the class hierarchy', 'what extends X?', 'what does X inherit from?'. Returns parent-child relationships."
+        description = "Show class inheritance tree. Use when asked 'show the class hierarchy', 'what extends X?', 'what does X inherit from?'. Not for: trait/interface implementations (use cartog_refs with kind=implements). Returns: array of {child: Symbol, parent: Symbol} ordered top-down."
     )]
     async fn cartog_hierarchy(
         &self,
@@ -583,7 +594,7 @@ impl CartogServer {
 
     /// File-level import dependencies.
     #[tool(
-        description = "Show what a file imports. Use when asked 'what does this file depend on?', 'show imports for X'. Returns file-level import edges."
+        description = "Show what a file imports. Use when asked 'what does this file depend on?', 'show imports for X'. Not for: reverse dependencies (use cartog_refs with kind=imports on the imported module). Returns: Edge[] of {target_name, line} per import statement."
     )]
     async fn cartog_deps(
         &self,
@@ -611,7 +622,7 @@ impl CartogServer {
 
     /// Search for symbols by name — use this to discover exact names before calling refs/callees/impact.
     #[tool(
-        description = "Find symbols by exact or partial name. Use ONLY to get a precise symbol name before calling cartog_refs, cartog_callees, or cartog_impact. For general code discovery, use cartog_rag_search instead. Supports prefix and substring matching, case-insensitive."
+        description = "Find symbols by exact or partial name. Use ONLY to get a precise symbol name before calling cartog_refs, cartog_callees, or cartog_impact. Not for: general code discovery (use cartog_rag_search instead — better recall for natural-language queries). Supports prefix and substring matching, case-insensitive. Returns: Symbol[] ranked by centrality (most-referenced first)."
     )]
     async fn cartog_search(
         &self,
@@ -665,7 +676,7 @@ impl CartogServer {
 
     /// Index statistics summary.
     #[tool(
-        description = "Show index health: file count, symbol count, edge count, resolution rate. Use to verify the index is built and check coverage."
+        description = "Show index health: file count, symbol count, edge count, resolution rate. Use to verify the index is built and check coverage. Not for: finding code (use cartog_search or cartog_rag_search). Returns: {num_files, num_symbols, num_edges, resolution_rate_percent}."
     )]
     async fn cartog_stats(&self) -> Result<CallToolResult, McpError> {
         let db = Arc::clone(&self.db);
@@ -687,9 +698,47 @@ impl CartogServer {
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
     }
 
+    /// Codebase orientation: file list + top symbols by centrality.
+    #[tool(
+        description = "Orient yourself in an unfamiliar codebase. Returns the full file list plus the top N symbols ranked by reference count (most-used definitions first). Use as the FIRST call when dropped into a new repo, before search or refs. Not for: locating a specific symbol (use cartog_search), or fetching one file's structure (use cartog_outline). Returns: {files: string[], top_symbols: Symbol[]}."
+    )]
+    async fn cartog_map(
+        &self,
+        Parameters(params): Parameters<MapParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = params.limit.unwrap_or(50);
+        let db = Arc::clone(&self.db);
+
+        tokio::task::spawn_blocking(move || {
+            debug!(limit, "map");
+            let db = db.lock().map_err(|_| {
+                mcp_err("internal error: database lock poisoned (server restart required)")
+            })?;
+            let files = db
+                .all_files()
+                .map_err(|e| mcp_err(format!("files query failed: {e}")))?;
+            let top_symbols = db
+                .top_symbols(limit)
+                .map_err(|e| mcp_err(format!("top_symbols query failed: {e}")))?;
+
+            #[derive(Serialize)]
+            struct MapResult {
+                files: Vec<String>,
+                top_symbols: Vec<cartog_core::Symbol>,
+            }
+            let result = MapResult { files, top_symbols };
+
+            let json = serde_json::to_string_pretty(&result)
+                .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            tool_response(&db, json, "cartog_map")
+        })
+        .await
+        .map_err(|e| mcp_err(format!("task join failed: {e}")))?
+    }
+
     /// Show symbols affected by recent git changes.
     #[tool(
-        description = "Show what changed recently. Returns symbols affected by the last N git commits plus working tree changes. Use when asked 'what changed?', 'what did I modify?', or to understand recent code activity before a review."
+        description = "Show what changed recently. Symbols affected by the last N git commits plus working-tree changes. Use when asked 'what changed?', 'what did I modify?', or to understand recent code activity before a review. Not for: arbitrary git diffs (use Bash with `git diff`). Returns: {changed_files: string[], symbols: Symbol[]}."
     )]
     async fn cartog_changes(
         &self,
@@ -739,7 +788,7 @@ impl CartogServer {
 
     /// Build embedding index for semantic code search.
     #[tool(
-        description = "Build the embedding index for semantic search. Run after cartog_index to enable vector similarity search. Requires the embedding model (run 'cartog rag setup' from CLI first). Usually not needed — cartog_rag_search works with keyword-only search even without embeddings."
+        description = "Build the embedding index for semantic search. Optional — cartog_rag_search ALREADY works at FTS5 (BM25) quality without embeddings; only run this when you want vector recall on top. Requires `cartog rag setup` from the CLI first to download the model. Not for: first-time setup of cartog (cartog_index is what you want). Returns: {embedded, skipped, failed, dim}."
     )]
     async fn cartog_rag_index(
         &self,
@@ -781,7 +830,7 @@ impl CartogServer {
 
     /// Semantic search over code symbols using hybrid FTS5 + vector search.
     #[tool(
-        description = "Search code by concept, keyword, or natural language — the DEFAULT entry point for finding code. Use when asked 'find code related to...', 'how does X work?', 'show me the authentication logic'. Returns code by default; use kind='document' for docs, kind='all' for both. Works even without embeddings (keyword matching). Prefer this over Grep for code discovery."
+        description = "Search code by concept, keyword, or natural language — the DEFAULT entry point for finding code. Use when asked 'find code related to...', 'how does X work?', 'show me the authentication logic'. Works even without embeddings (keyword matching alone is already strong). Prefer this over Grep for code discovery. Not for: looking up a known symbol name (use cartog_search instead — more precise). Filter with kind='document' for docs, kind='all' for both. Returns: Symbol[] ranked by relevance with snippet excerpts."
     )]
     async fn cartog_rag_search(
         &self,
@@ -846,25 +895,12 @@ impl ServerHandler for CartogServer {
             .with_server_info(Implementation::new("cartog", env!("CARGO_PKG_VERSION")))
             .with_protocol_version(ProtocolVersion::LATEST)
             .with_instructions(
-                "cartog is a code graph indexer with semantic search. \
-                 ALWAYS prefer cartog tools over Grep, Glob, and Read for code navigation and search.\n\n\
-                 Default entry point: cartog_rag_search — use for ANY code discovery query (keywords, natural language, concepts). \
-                 Only fall back to Grep for string literals, config values, or when cartog returns no results.\n\n\
-                 Quick reference:\n\
-                 - Find code → cartog_rag_search (default)\n\
-                 - Get exact symbol name → cartog_search (then feed into refs/callees/impact)\n\
-                 - File structure → cartog_outline (instead of reading the file)\n\
-                 - Who uses X? → cartog_refs\n\
-                 - What does X call? → cartog_callees\n\
-                 - Safe to change X? → cartog_impact\n\
-                 - Class hierarchy → cartog_hierarchy\n\
-                 - File imports → cartog_deps\n\
-                 - Recent changes → cartog_changes\n\n\
-                 Rules:\n\
-                 - Run cartog_index first if the index is empty.\n\
-                 - cartog_refs/callees/impact need exact symbol names — use cartog_search to find them.\n\
-                 - Only read files when you need actual implementation logic, not structure.\n\n\
-                 Supports: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Markdown (.md).",
+                "cartog is a code graph indexer with hybrid keyword + semantic search. \
+                 Prefer cartog tools over Grep/Glob/Read for code navigation — each \
+                 tool's description tells you when to use it and what it returns. \
+                 Default entry points: cartog_map (orient in a new repo), \
+                 cartog_rag_search (find code by concept), cartog_search (look up an exact symbol name). \
+                 Languages: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Markdown.",
             )
     }
 }

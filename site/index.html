@@ -439,9 +439,10 @@
       <div class="install-card">
         <h3>From crates.io</h3>
         <pre>cargo install cartog                              <span class="comment"># default (includes LSP)</span>
+cd your-project && cartog init                    <span class="comment"># index + wire MCP for editors</span>
 cargo install cartog --no-default-features        <span class="comment"># minimal, no LSP</span>
 cargo install cartog --features ollama-embedding  <span class="comment"># + Ollama support</span></pre>
-        <p>LSP auto-detects language servers on PATH and is enabled by default. Disable at runtime with <code>--no-lsp</code>, or omit at build time with <code>--no-default-features</code>. The <code>ollama-embedding</code> feature enables Ollama as an embedding provider.</p>
+        <p>After <code>cargo install</code>, run <code>cartog init</code> in your repo to index it and wire Claude Code / Cursor via project-scoped MCP configs. LSP auto-detects language servers on PATH and is enabled by default. Disable at runtime with <code>--no-lsp</code>, or omit at build time with <code>--no-default-features</code>. The <code>ollama-embedding</code> feature enables Ollama as an embedding provider.</p>
       </div>
       <div class="install-card">
         <h3>Pre-built binaries</h3>

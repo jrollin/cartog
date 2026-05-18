@@ -196,6 +196,27 @@ fn main() -> Result<()> {
             provider_config,
             cli.json,
         ),
+        Command::Init {
+            yes,
+            dry_run,
+            no_index,
+            no_watch,
+        } => commands::init::cmd_init(
+            &db_path,
+            yes,
+            dry_run,
+            no_index,
+            no_watch,
+            cli.json,
+            embedding_dim,
+        ),
+        Command::Ide {
+            client,
+            scope,
+            yes,
+            dry_run,
+            no_watch,
+        } => commands::ide::cmd_ide(client, scope, yes, dry_run, no_watch, cli.json),
         Command::Serve { watch, rag } => {
             let runtime = tokio::runtime::Runtime::new()?;
             let opts = mcp::ServerOptions {

@@ -22,10 +22,14 @@ Cartog pre-computes a code graph — symbols, calls, imports, inheritance — an
 ```bash
 cargo install cartog          # or download a binary from GitHub Releases
 cd your-project
-cartog index .                # build the graph (~95ms for 4k LOC)
+cartog init                   # index + wire MCP for installed editors
 ```
 
-That's it. Now query:
+`cartog init` runs the initial index, scaffolds a `.cartog.toml` template,
+and registers `cartog serve` in your project's MCP configs (Claude Code,
+Cursor). It is idempotent: re-running merges instead of clobbering.
+
+Now query:
 
 ```bash
 cartog search validate        # find symbols by name         (sub-ms)
@@ -174,25 +178,21 @@ npx skills add jrollin/cartog
 
 ## MCP Server Setup
 
+One step, from your repo root:
+
 ```bash
-# Claude Code
-claude mcp add cartog -- cartog serve --watch --rag
+cartog init                                 # project bootstrap (recommended)
+cartog ide                                  # editor wiring only (re-run any time)
+cartog ide --client cursor --dry-run        # preview a single client
 ```
 
-For other clients, add to your MCP config:
+`cartog init` writes project-scoped MCP entries for Claude Code (`.mcp.json`),
+Cursor (`.cursor/mcp.json`), and VS Code (`.vscode/mcp.json`). `cartog ide`
+extends to any installed user-scope client — Claude Code user settings,
+Claude Desktop, Codex CLI (TOML), Gemini CLI, OpenCode, Windsurf, Zed.
 
-```json
-{
-  "mcpServers": {
-    "cartog": {
-      "command": "cartog",
-      "args": ["serve", "--watch", "--rag"]
-    }
-  }
-}
-```
-
-See [Usage — MCP Server](docs/usage.md#mcp-server) for per-client details (Cursor, Windsurf, Zed, OpenCode).
+See [docs/usage.md](docs/usage.md#mcp-server) for flags, the JSON / TOML
+shape per client, and the manual-setup fallback.
 
 ## Commands
 

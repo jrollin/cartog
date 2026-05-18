@@ -24,7 +24,7 @@ cartog-process-lock = { path = "crates/cartog-process-lock", version = "0.15.1" 
 # Shared external dependencies
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 thiserror = "2"
@@ -50,6 +50,7 @@ clap_complete = "4"
 clap_mangen = "0.2"
 rayon = "1.10"
 toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
+toml_edit = "0.22"
 self_update = { version = "0.42", default-features = false, features = ["archive-tar", "archive-zip", "compression-flate2", "rustls"] }
 directories = "5"
 libc = "0.2"

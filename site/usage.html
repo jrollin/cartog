@@ -77,7 +77,9 @@
           <div class="sidebar-label">Integration</div>
           <a href="#agent-skill">Agent Skill</a>
           <a href="#mcp-server">MCP Server</a>
-          <a href="#mcp-clients">Per-Client Setup</a>
+          <a href="#mcp-quickstart">Quick start: cartog init</a>
+          <a href="#mcp-ide">Per-editor wiring: cartog ide</a>
+          <a href="#mcp-clients">Manual setup</a>
         </div>
         <div class="sidebar-group">
           <div class="sidebar-label">Reference</div>
@@ -405,7 +407,23 @@ cartog rag search "deployment architecture" --kind document</pre>
         </tbody>
       </table>
 
-      <h2 id="mcp-clients">Per-Client Setup</h2>
+      <h3 id="mcp-quickstart">Quick start: <code>cartog init</code></h3>
+      <p>From your repo root, after <code>cargo install cartog</code>:</p>
+      <pre>cartog init</pre>
+      <p><code>cartog init</code> runs <code>cartog index .</code>, scaffolds a commented <code>.cartog.toml</code> if absent, and writes project-scoped MCP entries — <code>.mcp.json</code> (Claude Code) and <code>.cursor/mcp.json</code> (Cursor). It is interactive in a TTY and idempotent: re-runs merge rather than clobber, and existing entries for other MCP servers are preserved.</p>
+      <p>Flags: <code>-y</code>/<code>--yes</code> (non-interactive), <code>--dry-run</code> (preview), <code>--no-index</code>, <code>--no-watch</code>.</p>
+
+      <h3 id="mcp-ide">Per-editor wiring: <code>cartog ide</code></h3>
+      <p>Lower-level command that handles only the MCP-config side. Useful for re-wiring after installing a new editor or for user-scope clients that <code>cartog init</code> skips by design.</p>
+      <pre>cartog ide                          <span class="comment"># configure all installed clients</span>
+cartog ide --scope project          <span class="comment"># only project-scoped files</span>
+cartog ide --client cursor          <span class="comment"># one client</span>
+cartog ide --dry-run                <span class="comment"># preview without writing</span></pre>
+      <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. User-scope clients whose config directory is missing are skipped (treated as "not installed"). Codex stores all servers in one global <code>~/.codex/config.toml</code>, so cartog writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section.</p>
+      <p><strong>Known limitation:</strong> configs containing JSON-with-comments (JSONC) are left untouched and reported as skipped. Configure those clients manually using the snippets below.</p>
+
+      <h2 id="mcp-clients">Manual setup (per client)</h2>
+      <p>If you prefer to edit MCP configs by hand, here are the canonical paths and JSON shapes <code>cartog ide</code> writes.</p>
 
       <h3>Claude Code</h3>
       <pre>claude mcp add cartog -- cartog serve --watch</pre>
@@ -453,13 +471,13 @@ cartog rag search "deployment architecture" --kind document</pre>
 }</pre>
 
       <h3>OpenCode</h3>
-      <p>Edit <code>.opencode.json</code>:</p>
+      <p>Edit <code>~/.config/opencode/opencode.json</code>:</p>
       <pre>{
   "mcp": {
     "cartog": {
-      "type": "stdio",
-      "command": "cartog",
-      "args": ["serve"]
+      "type": "local",
+      "command": ["cartog", "serve"],
+      "enabled": true
     }
   }
 }</pre>
@@ -469,10 +487,37 @@ cartog rag search "deployment architecture" --kind document</pre>
       <pre>{
   "context_servers": {
     "cartog": {
-      "command": {
-        "path": "cartog",
-        "args": ["serve"]
-      }
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}</pre>
+
+      <h3>Codex CLI</h3>
+      <p>Edit <code>~/.codex/config.toml</code>. Codex stores all MCP servers in this one user-global file (no per-project config), so <code>cartog ide</code> writes a per-project <code>[mcp_servers.cartog-&lt;dir&gt;-&lt;hash&gt;]</code> section.</p>
+      <pre>[mcp_servers.cartog]
+command = "cartog"
+args = ["serve"]</pre>
+
+      <h3>Gemini CLI</h3>
+      <p>Edit <code>~/.gemini/settings.json</code>:</p>
+      <pre>{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}</pre>
+
+      <h3>VS Code (Copilot)</h3>
+      <p>Edit <code>.vscode/mcp.json</code> (note: top-level key is <code>servers</code>, not <code>mcpServers</code>):</p>
+      <pre>{
+  "servers": {
+    "cartog": {
+      "type": "stdio",
+      "command": "cartog",
+      "args": ["serve"]
     }
   }
 }</pre>

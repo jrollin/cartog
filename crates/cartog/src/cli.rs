@@ -103,6 +103,31 @@ impl From<EdgeKindFilter> for EdgeKind {
     }
 }
 
+/// MCP client targeted by `cartog ide`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClientKind {
+    ClaudeCode,
+    ClaudeDesktop,
+    Codex,
+    Cursor,
+    Gemini,
+    Opencode,
+    Vscode,
+    Windsurf,
+    Zed,
+}
+
+/// Scope filter for `cartog ide`: project-scoped configs, user-scoped configs, or both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum IdeScope {
+    Project,
+    User,
+    #[default]
+    All,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Build or rebuild the code graph index
@@ -226,6 +251,55 @@ pub enum Command {
         /// Delay in seconds before batch embedding after last index
         #[arg(long, default_value = "30")]
         rag_delay: u64,
+    },
+
+    /// Bootstrap cartog in the current project: index, scaffold .cartog.toml, wire project-scoped MCP.
+    ///
+    /// One-step onboarding. Equivalent to `cartog index` + `.cartog.toml` template
+    /// (if absent) + `cartog ide --scope project`.
+    Init {
+        /// Accept all prompts (non-interactive). Implied by --dry-run, --json, or a non-TTY stdin.
+        #[arg(long, short = 'y')]
+        yes: bool,
+
+        /// Print planned changes without writing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip the initial `cartog index` step.
+        #[arg(long)]
+        no_index: bool,
+
+        /// Omit `--watch` from Claude Code's serve args.
+        #[arg(long)]
+        no_watch: bool,
+    },
+
+    /// Wire `cartog serve` into one or all MCP-compatible editors.
+    ///
+    /// Supports Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode, Zed. User-scope
+    /// clients whose config directory does not exist are skipped (not installed).
+    Ide {
+        /// Target a single client. Default: configure all clients in scope.
+        #[arg(long, value_enum)]
+        client: Option<ClientKind>,
+
+        /// Filter by scope. `project` writes only .mcp.json / .cursor/mcp.json; `user`
+        /// writes only user-scope configs; `all` writes both.
+        #[arg(long, value_enum, default_value_t = IdeScope::All)]
+        scope: IdeScope,
+
+        /// Accept all prompts (non-interactive). Implied by --dry-run, --json, --client, or a non-TTY stdin.
+        #[arg(long, short = 'y')]
+        yes: bool,
+
+        /// Print planned changes without writing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Omit `--watch` from Claude Code's serve args.
+        #[arg(long)]
+        no_watch: bool,
     },
 
     /// Start MCP server over stdio (for Claude Code, Cursor, and other MCP clients)

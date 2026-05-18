@@ -608,7 +608,85 @@ cartog serve --watch          # auto-re-index on file changes
 cartog serve --watch --rag    # auto-re-index + auto-embed
 ```
 
-### Installation per Client
+### Quick start: `cartog init`
+
+The fastest way to wire cartog into a new project. From the repo root:
+
+```bash
+cargo install cartog          # one-time, global
+cartog init                   # one-time, per project
+```
+
+`cartog init`:
+
+1. Runs `cartog index .` to build the code graph.
+2. Scaffolds `.cartog.toml` (commented template) if absent.
+3. Writes project-scoped MCP entries: `.mcp.json` (Claude Code) and
+   `.cursor/mcp.json` (Cursor).
+
+The command is interactive in a TTY and idempotent — re-running it merges
+rather than clobbers. Existing entries for other MCP servers are preserved.
+
+Flags:
+
+| Flag | Effect |
+|---|---|
+| `-y`, `--yes` | Skip interactive prompts (non-interactive mode). Also implied by `--dry-run`, `--json`, or a non-TTY stdin. |
+| `--dry-run` | Print the planned changes (with before/after diffs) without writing. |
+| `--no-index` | Skip the `cartog index` step. |
+| `--no-watch` | Omit `--watch` from Claude Code's `serve` args. |
+
+### Per-editor wiring: `cartog ide`
+
+`cartog ide` is the lower-level command that handles only the MCP-config side.
+Useful for re-wiring after installing a new IDE on the same machine, or for
+configuring user-scope clients that `cartog init` skips by design.
+
+```bash
+cartog ide                          # configure all installed clients
+cartog ide --scope project          # only .mcp.json + .cursor/mcp.json
+cartog ide --scope user             # only user-scope clients
+cartog ide --client cursor          # one client
+cartog ide --dry-run                # preview without writing
+```
+
+Supported clients (matches the per-client list below): `claude-code` (project
++ user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`,
+`windsurf`, `zed`. User-scope clients whose config directory does not exist
+are skipped (treated as "not installed").
+
+Codex stores all MCP servers in a single user-global `~/.codex/config.toml`,
+so cartog writes one per-project section named `cartog-<slug>-<hash8>` (slug
+is your project directory name, hash8 is the first 4 bytes of SHA-256 of the
+absolute path) to keep multiple projects coexisting. The TOML editor preserves
+comments and ordering in the rest of the file.
+
+#### Flag reference
+
+| Flag | Effect |
+|---|---|
+| `--client <name>` | Target a single client (one of the names above). Default: all matching the scope. |
+| `--scope project\|user\|all` | Limit to project-scoped files, user-scoped files, or both (default `all`). |
+| `-y`, `--yes` | Skip interactive prompts. Also implied by `--dry-run`, `--client`, `--json`, or a non-TTY stdin. |
+| `--dry-run` | Print the planned changes (before/after diff per file) without writing. Implies non-interactive. |
+| `--no-watch` | Drop `--watch` from Claude Code's serve args. Other clients register plain `["serve"]` regardless. |
+| `--json` (global) | Emit a structured `IdeReport` on stdout instead of human text. |
+
+#### Troubleshooting
+
+| Symptom | Meaning | Action |
+|---|---|---|
+| `not modified (config file is not valid JSON); …` | The existing file is JSONC (JSON with comments) or malformed. Cartog refuses to clobber it. | Open the file, fix the JSON manually using the snippets below. |
+| `top-level <key> is a <kind> (expected object); refusing to overwrite` | The user file has the right path but the wrong shape at the container key. | Delete the offending key (or the whole file) and re-run. |
+| `config directory not found (client likely not installed)` | The user-scope config parent dir doesn't exist on this machine. | Install the editor (or skip with `--client X` targeting only what you have). |
+| `0 clients configured` | None of the targeted clients matched. | Check `--client` / `--scope` are compatible (e.g. `cursor` is project-only). |
+
+For deeper diagnostics on the index, embeddings, and language servers, run `cartog doctor`.
+
+### Manual setup (per client)
+
+The sections below document the same file paths cartog writes, in case you
+prefer to edit them by hand.
 
 All clients need `cartog` on your `PATH` first:
 
@@ -619,11 +697,10 @@ cargo install cartog@0.12.2      # specific version
 
 #### Claude Code
 
-```bash
-claude mcp add cartog -- cartog serve --watch
-```
+Claude Code reads MCP servers from two places. `cartog init` writes to the
+**project** file; `cartog ide --client claude-code` writes both.
 
-Or manually edit `~/.claude/settings.json`:
+Project-scoped — committable, recommended (`<repo>/.mcp.json`):
 
 ```json
 {
@@ -636,7 +713,27 @@ Or manually edit `~/.claude/settings.json`:
 }
 ```
 
-For project-scoped config, add to `.claude/settings.local.json` in your repo root. Add `"--rag"` to args if you want automatic embedding updates.
+User-scoped — applies to every repo on your machine (`~/.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve", "--watch"]
+    }
+  }
+}
+```
+
+Or use the Claude CLI directly:
+
+```bash
+claude mcp add cartog -- cartog serve --watch              # user scope
+claude mcp add --scope project cartog -- cartog serve --watch
+```
+
+Add `"--rag"` to `args` if you want automatic embedding updates on file change.
 
 #### Claude Desktop
 
@@ -693,15 +790,15 @@ Edit `~/.codeium/windsurf/mcp_config.json`:
 
 #### OpenCode
 
-Edit `~/.config/opencode/config.json` or your project `.opencode.json`:
+Edit `~/.config/opencode/opencode.json` (or your project's `opencode.json`):
 
 ```json
 {
   "mcp": {
     "cartog": {
-      "type": "stdio",
-      "command": "cartog",
-      "args": ["serve"]
+      "type": "local",
+      "command": ["cartog", "serve"],
+      "enabled": true
     }
   }
 }
@@ -715,10 +812,57 @@ Edit `~/.config/zed/settings.json`:
 {
   "context_servers": {
     "cartog": {
-      "command": {
-        "path": "cartog",
-        "args": ["serve"]
-      }
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+#### Codex CLI
+
+Edit `~/.codex/config.toml` (Codex reads MCP servers only from this user-global
+file — there is no per-project Codex config):
+
+```toml
+[mcp_servers.cartog]
+command = "cartog"
+args = ["serve"]
+```
+
+If you use Codex on multiple cartog projects, name each section uniquely
+(e.g. `[mcp_servers.cartog-myproj-1a2b3c4d]`) so they coexist. `cartog ide`
+does this automatically: section name is `cartog-<slug>-<hash8>`, where
+`<slug>` is the project directory name (lowercased, non-alphanumerics → `-`)
+and `<hash8>` is the first 4 bytes of SHA-256 of the absolute project path.
+
+#### Gemini CLI
+
+Edit `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+#### VS Code (GitHub Copilot)
+
+Edit `.vscode/mcp.json` in your project root (per-workspace) — note that
+VS Code's top-level key is `servers` (no `Mcp` prefix):
+
+```json
+{
+  "servers": {
+    "cartog": {
+      "type": "stdio",
+      "command": "cartog",
+      "args": ["serve"]
     }
   }
 }
