@@ -390,6 +390,31 @@ cartog serve --watch --rag    # MCP server + watcher + auto RAG embedding
 
 When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
 
+### `cartog init [--dry-run]`
+
+Scaffold a `.cartog.toml` template in the current project. That's all it does. The next-steps hint points at `cartog ide` (MCP wiring) and `cartog index` (build the graph).
+
+```bash
+cartog init                  # scaffold .cartog.toml
+cartog init --dry-run        # preview without writing
+```
+
+`cartog init` never overwrites an existing `.cartog.toml`. Re-running is a no-op (still prints the next-steps hint, useful when you've forgotten the next verb).
+
+### `cartog ide [--client <name>] [--scope project|user|all] [-y] [--dry-run] [--no-watch]`
+
+Wire `cartog serve` into one or all MCP-compatible editors. This is the only verb that touches editor configs.
+
+```bash
+cartog ide                          # all installed clients, all scopes
+cartog ide --client cursor          # one client
+cartog ide --scope project          # only project-scoped (.mcp.json, .cursor/, .vscode/)
+cartog ide --scope user             # only user-scope clients
+cartog ide --dry-run                # preview with before/after diff
+```
+
+Supported clients: `claude-code` (project + user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`. User-scope clients whose config dir is missing are skipped. See [Per-editor wiring: `cartog ide`](#per-editor-wiring-cartog-ide) for the flag and troubleshooting tables.
+
 ### `cartog config`
 
 Print the resolved configuration (merged defaults, `.cartog.toml`, and env overrides).
@@ -616,39 +641,35 @@ cartog serve --watch          # auto-re-index on file changes
 cartog serve --watch --rag    # auto-re-index + auto-embed
 ```
 
-### Quick start: `cartog init`
+### Project bootstrap
 
-The fastest way to wire cartog into a new project. From the repo root:
+From the repo root, two commands to start. The third is optional.
 
 ```bash
 cargo install cartog          # one-time, global
-cartog init                   # one-time, per project
+cartog init                   # 1. scaffold .cartog.toml (config only)
+cartog index                  # 2. build the code graph
+
+cartog ide                    # optional — wire MCP into installed editors
 ```
 
-`cartog init`:
+| Verb | When you need it | Files |
+|---|---|---|
+| `cartog init` | Always (once per project) | `.cartog.toml` only |
+| `cartog index` | Always (after every code change) | `.cartog/db.sqlite` |
+| `cartog ide` | Only if you want MCP in your editor | `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, user-scope configs |
 
-1. Runs `cartog index .` to build the code graph.
-2. Scaffolds `.cartog.toml` (commented template) if absent.
-3. Writes project-scoped MCP entries: `.mcp.json` (Claude Code) and
-   `.cursor/mcp.json` (Cursor).
+Edit `.cartog.toml` between steps 1 and 2 to change the DB path or embedding
+provider before any heavy work runs. CLI-only users stop after step 2.
 
-The command is interactive in a TTY and idempotent — re-running it merges
-rather than clobbers. Existing entries for other MCP servers are preserved.
-
-Flags:
-
-| Flag | Effect |
-|---|---|
-| `-y`, `--yes` | Skip interactive prompts (non-interactive mode). Also implied by `--dry-run`, `--json`, or a non-TTY stdin. |
-| `--dry-run` | Print the planned changes (with before/after diffs) without writing. |
-| `--no-index` | Skip the `cartog index` step. |
-| `--no-watch` | Omit `--watch` from Claude Code's `serve` args. |
+All three commands are idempotent. `cartog init` never overwrites an existing
+`.cartog.toml`; `cartog ide` merges entries instead of clobbering (other MCP
+servers in the file are preserved); `cartog index` is incremental.
 
 ### Per-editor wiring: `cartog ide`
 
-`cartog ide` is the lower-level command that handles only the MCP-config side.
-Useful for re-wiring after installing a new IDE on the same machine, or for
-configuring user-scope clients that `cartog init` skips by design.
+The verb that actually writes MCP configs. Run it once per machine, plus any
+time you install a new editor.
 
 ```bash
 cartog ide                          # configure all installed clients
@@ -897,6 +918,7 @@ The config pattern is always the same — point the client at `cartog serve` ove
 | `cartog_hierarchy` | `name` | Inheritance tree |
 | `cartog_deps` | `file` | File-level imports |
 | `cartog_stats` | — | Index summary |
+| `cartog_map` | `tokens?` | Token-budget-aware codebase summary (file tree + top symbols by centrality) |
 | `cartog_changes` | `commits?`, `kind?` | Symbols affected by recent git changes |
 | `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search |
 | `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |

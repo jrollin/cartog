@@ -22,12 +22,19 @@ Cartog pre-computes a code graph — symbols, calls, imports, inheritance — an
 ```bash
 cargo install cartog          # or download a binary from GitHub Releases
 cd your-project
-cartog init                   # index + wire MCP for installed editors
+cartog init                   # 1. scaffold .cartog.toml
+cartog index                  # 2. build the code graph
 ```
 
-`cartog init` runs the initial index, scaffolds a `.cartog.toml` template,
-and registers `cartog serve` in your project's MCP configs (Claude Code,
-Cursor). It is idempotent: re-running merges instead of clobbering.
+That's it for CLI use. Two commands.
+
+If you want MCP wired into your editor (Cursor, VS Code, Claude Desktop, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed), add one more:
+
+```bash
+cartog ide                    # optional — only if you want editor integration
+```
+
+All three commands are idempotent.
 
 Now query:
 
@@ -189,18 +196,20 @@ npx skills add jrollin/cartog
 
 ## MCP Server Setup
 
-One step, from your repo root:
+`cartog ide` wires `cartog serve` into MCP-aware editors:
 
 ```bash
-cartog init                                 # project bootstrap (recommended)
-cartog ide                                  # editor wiring only (re-run any time)
-cartog ide --client cursor --dry-run        # preview a single client
+cartog ide                                  # all installed clients, all scopes
+cartog ide --client cursor                  # one client
+cartog ide --scope project                  # only project-scoped (.mcp.json, .cursor/, .vscode/)
+cartog ide --scope user                     # only user-scope clients
+cartog ide --client claude-desktop --dry-run  # preview without writing
 ```
 
-`cartog init` writes project-scoped MCP entries for Claude Code (`.mcp.json`),
-Cursor (`.cursor/mcp.json`), and VS Code (`.vscode/mcp.json`). `cartog ide`
-extends to any installed user-scope client — Claude Code user settings,
+Project-scoped writes: Claude Code (`.mcp.json`), Cursor (`.cursor/mcp.json`),
+VS Code (`.vscode/mcp.json`). User-scope: Claude Code user settings,
 Claude Desktop, Codex CLI (TOML), Gemini CLI, OpenCode, Windsurf, Zed.
+Idempotent: existing servers in each file are preserved.
 
 See [docs/usage.md](docs/usage.md#mcp-server) for flags, the JSON / TOML
 shape per client, and the manual-setup fallback.

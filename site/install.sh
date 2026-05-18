@@ -168,7 +168,8 @@ main() {
 
     # Post-install handshake: print version and the recommended next step.
     "$install_dir/$BIN" --version || true
-    printf '\nNext: cd into a repo and run `cartog init` to index it and wire MCP into your editors.\n'
+    printf '\nNext: cd into a repo, then run `cartog init` and `cartog index`.\n'
+    printf '      Optional — `cartog ide` wires MCP into your editor.\n'
 }
 
 main "$@"
