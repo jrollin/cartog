@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cartog — Stop grepping blind. Query your code graph.</title>
   <meta name="description" content="Code graph navigator. Pre-computed symbols, calls, imports and inheritance — queried in microseconds. Single binary, 100% local, 9 languages.">
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 
@@ -51,11 +51,11 @@
       <div class="container" style="padding: 0;">
         <div class="stat-item">
           <div class="stat-value">⚡ 8μs</div>
-          <div class="stat-label">query latency</div>
+          <div class="stat-label">query latency<sup><a href="#benchmark-notes" style="color: inherit; text-decoration: none;">*</a></sup></div>
         </div>
         <div class="stat-item">
           <div class="stat-value">🎯 97%</div>
-          <div class="stat-label">symbol recall</div>
+          <div class="stat-label">symbol recall<sup><a href="#benchmark-notes" style="color: inherit; text-decoration: none;">*</a></sup></div>
         </div>
         <div class="stat-item">
           <div class="stat-value">🌐 9</div>
@@ -67,6 +67,9 @@
         </div>
       </div>
     </div>
+    <p id="benchmark-notes" style="margin-top: 8px; font-size: 12px; color: var(--text-tertiary); text-align: center;">
+      <sup>*</sup> Measured across 13 scenarios, 5 languages. Latency is the outline-query median on the Python fixture; 97% recall requires a matching language server on PATH (heuristic-only resolution lands around 25–37%). <a href="https://github.com/jrollin/cartog/tree/main/crates/cartog/benches" style="color: var(--text-tertiary);">Benchmark suite →</a>
+    </p>
 
     <!-- Demo: show what cartog does before asking users to install it -->
     <div class="terminal" style="margin-top: 32px; margin-bottom: 40px;">
@@ -76,7 +79,7 @@
         <div class="terminal-dot green"></div>
         <span class="terminal-title">Cartog demo</span>
       </div>
-      <img src="demo.gif?v=2" alt="Cartog demo — init, index, map, search, refs, impact" class="terminal-gif">
+      <img src="demo.gif?v=2" alt="Animated demo: cartog init, index, map, search, refs, impact in a terminal" class="terminal-gif" width="900" height="560" loading="lazy" decoding="async">
     </div>
 
     <div class="hero-installs">
@@ -390,13 +393,17 @@
   <div class="container">
     <div class="section-label">LLM Agents</div>
     <h2 class="section-heading">Supercharge your AI coding agent</h2>
-    <p class="section-subtitle">83% fewer tokens per query, 97% recall. Your agent queries the graph instead of grepping blind.</p>
+    <p class="section-subtitle">83% fewer tokens per query, 97% recall<sup><a href="#benchmark-notes" style="color: inherit; text-decoration: none;">*</a></sup>. Your agent queries the graph instead of grepping blind.</p>
 
     <!-- Editor compatibility — wired by `cartog ide` -->
     <div style="margin-top: 40px;">
       <p style="font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-tertiary); margin-bottom: 16px; text-align: center;">Wires into your editor with <code>cartog ide</code></p>
 
       <div class="lang-grid">
+        <span class="lang-tag" title="Claude Code — project-scoped (.mcp.json) + user-scope (~/.claude/settings.json)">
+          <img class="editor-mark" src="assets/claude.svg?v=2" alt="">
+          Claude Code
+        </span>
         <span class="lang-tag" title="Cursor — project-scoped (.cursor/mcp.json)">
           <img class="editor-mark" src="assets/cursor.svg?v=2" alt="">
           Cursor
@@ -405,11 +412,11 @@
           <img class="editor-mark" src="assets/visualstudiocode.svg?v=2" alt="">
           VS Code
         </span>
-        <span class="lang-tag" title="Claude Desktop — user-scope">
+        <span class="lang-tag" title="Claude Desktop — user-scope (~/Library/Application Support/Claude/...)">
           <img class="editor-mark" src="assets/claude.svg?v=2" alt="">
           Claude Desktop
         </span>
-        <span class="lang-tag" title="Codex CLI (OpenAI) — user-scope">
+        <span class="lang-tag" title="Codex CLI (OpenAI) — user-scope (~/.codex/config.toml)">
           <img class="editor-mark" src="assets/openai.svg?v=2" alt="">
           Codex CLI
         </span>
@@ -417,21 +424,21 @@
           <img class="editor-mark" src="assets/googlegemini.svg?v=2" alt="">
           Gemini CLI
         </span>
-        <span class="lang-tag" title="OpenCode — user-scope">
+        <span class="lang-tag" title="OpenCode — user-scope (~/.config/opencode/opencode.json)">
           OpenCode
         </span>
-        <span class="lang-tag" title="Windsurf — user-scope">
+        <span class="lang-tag" title="Windsurf — user-scope (~/.codeium/windsurf/mcp_config.json)">
           <img class="editor-mark" src="assets/windsurf.svg?v=2" alt="">
           Windsurf
         </span>
-        <span class="lang-tag" title="Zed — user-scope">
+        <span class="lang-tag" title="Zed — user-scope (~/.config/zed/settings.json)">
           <img class="editor-mark" src="assets/zedindustries.svg?v=2" alt="">
           Zed
         </span>
       </div>
 
       <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 16px; text-align: center;">
-        Cursor and VS Code get project-scoped MCP files in your repo; the rest get user-scope configs in your home directory. Only editors actually installed are touched.
+        Claude Code, Cursor, and VS Code get project-scoped MCP files in your repo; the rest get user-scope configs in your home directory. Only editors actually installed are touched.
       </p>
     </div>
 

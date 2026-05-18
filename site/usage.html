@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cartog — Documentation</title>
   <meta name="description" content="CLI reference, agent skill setup, MCP server configuration, and semantic search for Cartog.">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 
@@ -364,10 +364,10 @@ cartog init --dry-run        <span class="comment"># preview without writing</sp
       <pre>cartog ide                          <span class="comment"># all installed clients, all scopes</span>
 cartog ide --client cursor          <span class="comment"># one client</span>
 cartog ide --scope user             <span class="comment"># only user-scope clients</span>
-cartog ide --scope project          <span class="comment"># only project-scoped files</span>
+cartog ide --scope project          <span class="comment"># only project-scoped clients (.mcp.json, .cursor/, .vscode/)</span>
 cartog ide --dry-run                <span class="comment"># preview with before/after diff</span>
 cartog ide --no-watch               <span class="comment"># drop --watch from Claude Code args</span></pre>
-      <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. See <a href="#mcp-ide">Per-editor wiring</a> for the flag and troubleshooting tables.</p>
+      <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. See the <a href="#mcp-ide">Bootstrap sequence</a> for the recommended verb order.</p>
 
       <h2 id="cmd-self"><code>cartog self &lt;update|version|rollback|migrate-db&gt;</code></h2>
       <p>Manage the installed cartog binary in place: upgrade, inspect, or roll back. <code>cargo install cartog</code> users get an exit-3 refusal pointing at <code>cargo install cartog --force</code>; release-tarball installs swap atomically with SHA256 verification and a <code>&lt;bin&gt;.old</code> rollback slot.</p>
