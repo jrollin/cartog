@@ -140,6 +140,27 @@ Every match should mention the new language/server.
 | `lsp` | on | LSP-based edge resolution. Disable at build time with `--no-default-features` (runtime equivalent: `--no-lsp`) |
 | `ollama-embedding` | off | Enables Ollama as an embedding provider for RAG |
 
+## Regenerating the demo gif
+
+The animated demo on the README and the landing page is produced by
+[VHS](https://github.com/charmbracelet/vhs) from `docs/demo.tape`.
+
+```bash
+brew install vhs            # or: go install github.com/charmbracelet/vhs@latest
+cargo build --release       # so `cartog` resolves to the current build
+PATH="$PWD/target/release:$PATH" vhs docs/demo.tape
+cp docs/demo.gif site/demo.gif   # keep the site mirror in sync
+```
+
+Bump the `?v=N` query string on `<img src="demo.gif?v=N">` in
+`site/index.html` whenever the gif changes so browsers pick up the new
+asset.
+
+## Code of Conduct
+
+This project follows the [Contributor Covenant 2.1](CODE_OF_CONDUCT.md).
+Please read it before opening an issue or pull request.
+
 ## Single maintainer
 
 This is a solo-maintained project. PRs and issues are reviewed on a best-effort basis.
@@ -149,3 +170,4 @@ This is a solo-maintained project. PRs and issues are reviewed on a best-effort 
 - Architecture and tech decisions: [docs/tech.md](docs/tech.md)
 - Product context and goals: [docs/product.md](docs/product.md)
 - CLI, MCP, and skill setup: [docs/usage.md](docs/usage.md)
+- Code of Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)

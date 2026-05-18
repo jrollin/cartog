@@ -127,7 +127,7 @@ curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
 Detects your OS + architecture, downloads the matching binary from the latest
 GitHub Release, verifies its SHA-256, and installs to `/usr/local/bin` (or
 `~/.local/bin` if non-root). Override with `CARTOG_INSTALL_DIR`; pin a
-version with `CARTOG_VERSION=0.15.1`. Audit the script: [`scripts/install.sh`](scripts/install.sh).
+version with `CARTOG_VERSION=<version>` (e.g. the tag from [Releases](https://github.com/jrollin/cartog/releases)). Audit the script: [`scripts/install.sh`](scripts/install.sh).
 
 ### From crates.io (Rust toolchain required)
 

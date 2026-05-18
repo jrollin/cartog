@@ -20,7 +20,7 @@ cargo build --release && cargo install --path .
 ```
 
 Override the install location with `CARTOG_INSTALL_DIR=...`; pin a version
-with `CARTOG_VERSION=0.15.1`. To upgrade an existing install in place,
+with `CARTOG_VERSION=<version>` (e.g. the tag from [Releases](https://github.com/jrollin/cartog/releases)). To upgrade an existing install in place,
 `cartog self update`. See [updates.md](updates.md) for the full `cartog self`
 command surface, env vars, and rollback.
 
@@ -721,7 +721,7 @@ All clients need `cartog` on your `PATH` first:
 
 ```bash
 cargo install cartog             # latest version
-cargo install cartog@0.12.2      # specific version
+cargo install cartog@<version>   # specific version (see Releases)
 ```
 
 #### Claude Code
