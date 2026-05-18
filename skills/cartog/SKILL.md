@@ -20,9 +20,21 @@ description: >-
 
 ## Quick Start
 
-1. **Ensure indexed** — run the setup script (see [Setup](#setup) below). This is required before any command works.
-2. **Explore an unfamiliar codebase** — `cartog map` gives a file tree + top symbols ranked by centrality. Start here when onboarding or orienting.
-3. **Search for anything** — `cartog rag search "your query"` is the default entry point. It handles keywords, natural language, and concept queries in a single call.
+Three states a repo can be in. Detect which one the user is in, then act.
+
+| State | Signal | What the user should run |
+|---|---|---|
+| Fresh repo, no cartog yet | No `.cartog.toml`, no `.cartog/db.sqlite` | `cartog init` then `cartog index` |
+| Indexed but no editor MCP | `.cartog/db.sqlite` exists, no `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` | `cartog index` (refresh) — only suggest `cartog ide` if the user mentions Claude Code / Cursor / VS Code / Codex / Gemini / Windsurf / Zed / Claude Desktop / OpenCode |
+| Fully wired | `.cartog/db.sqlite` + editor MCP files present | Just query: `cartog map`, `cartog rag search`, etc. |
+
+For the skill's own bootstrap, the setup script (see [Setup](#setup) below) handles the index-and-keep-fresh part. The `cartog init` / `cartog ide` verbs are user-facing — surface them when the agent detects the repo state above, do NOT run them automatically as part of an MCP session.
+
+After the index is ready:
+
+1. **Explore an unfamiliar codebase** — `cartog map` gives a file tree + top symbols ranked by centrality. Start here when onboarding or orienting.
+2. **Search for anything** — `cartog rag search "your query"` is the default entry point. It handles keywords, natural language, and concept queries in a single call.
+3. **Recent commits broke something?** — `cartog changes` first, then `cartog impact <symbol>` on the touched symbols.
 
 ## When to Use
 
@@ -37,6 +49,7 @@ Use cartog **before** reaching for grep, cat, or file reads when you need to:
 - Understand class hierarchies → `cartog hierarchy <class>`
 - See file dependencies → `cartog deps <file>`
 - See what changed recently → `cartog changes [--commits N]`
+- **Triage a regression** ("which of my recent commits broke this?") → `cartog changes` then `cartog impact <symbol>` on the symbols listed
 
 ## How to Run
 
@@ -61,6 +74,7 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | CLI command | MCP tool | Parameters |
 |---|---|---|
 | `cartog index .` | `cartog_index` | `path`, `force` |
+| `cartog map` | `cartog_map` | `tokens?` |
 | `cartog search <name>` | `cartog_search` | `query`, `kind?`, `file?`, `limit?` |
 | `cartog rag search "<query>"` | `cartog_rag_search` | `query`, `kind?`, `limit?` |
 | `cartog rag index .` | `cartog_rag_index` | `path`, `force` |
@@ -73,6 +87,9 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
 | `cartog stats` | `cartog_stats` | — |
 | `cartog doctor` | — (CLI only) | — |
+| `cartog init` | — (CLI only) | — |
+| `cartog ide` | — (CLI only) | — |
+| `cartog config` | — (CLI only) | — |
 
 ## Setup
 
@@ -324,6 +341,39 @@ cartog self migrate-db --dry-run  # preview the planned moves
 
 User-facing maintenance commands. If the agent observes a "new cartog version available" hint or a stale binary, it can suggest the user run `cartog self update`. `cargo install cartog` users get an exit-3 refusal pointing at `cargo install cartog --force` instead. If the agent sees a one-shot deprecation warning about a legacy `.cartog.db`, suggest `cartog self migrate-db`.
 
+### Init (scaffold project config — user-facing)
+```bash
+cartog init                     # scaffold .cartog.toml in the current project
+cartog init --dry-run           # preview without writing
+```
+
+`cartog init` is config-only: it writes a commented `.cartog.toml` template if absent and prints next-steps hints. It does NOT index, does NOT wire MCP, and never overwrites an existing `.cartog.toml`.
+
+**When to suggest it**: the user is starting cartog on a fresh repo (no `.cartog.toml` at the git root). The agent should mention it once, then continue with `cartog index` to build the graph. CLI-only users stop there; users on Claude Code / Cursor / VS Code / etc. can then run `cartog ide`.
+
+### Ide (wire cartog into editors — user-facing, interactive)
+```bash
+cartog ide --yes                              # configure all detected clients, non-interactive
+cartog ide --client cursor --yes              # one specific client
+cartog ide --scope project --yes              # only .mcp.json / .cursor/ / .vscode/
+cartog ide --scope user --yes                 # only user-scope clients
+cartog ide --dry-run                          # preview without writing
+```
+
+**Agent gotcha**: `cartog ide` runs an interactive multi-select picker by default. **An agent calling it via Bash MUST pass `--yes` (or `--client X` / `--dry-run`), otherwise the command will block waiting for user input.** Non-TTY stdin is also treated as non-interactive.
+
+Supported clients: `claude-code`, `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`. User-scope clients whose config dir is missing are reported as "not installed" and skipped. Existing MCP entries for other servers are preserved (idempotent merge).
+
+**When to suggest it**: the user explicitly asks to wire cartog into an editor, or mentions one of the supported clients. Do not run it speculatively; the answer "yes" should come from the user before the agent invokes this command.
+
+### Config (print resolved configuration)
+```bash
+cartog config                   # human-readable resolved config
+cartog config --json            # JSON for parsing
+```
+
+Prints the merged config (defaults + `.cartog.toml` + env overrides). Useful for the agent to verify which database path, embedding provider, or reranker is active before diagnosing a search-quality issue. Read-only — does not modify anything.
+
 ## Token Budget
 
 Use `--tokens N` to limit output to approximately N tokens (human-readable only, ignored with `--json`):
@@ -346,12 +396,13 @@ cartog --json rag search "authentication"
 
 Before changing any symbol (rename, extract, move, delete):
 
-1. `cartog search <name>` — confirm exact symbol name and file
-2. `cartog refs <name>` — find every usage
-3. `cartog impact <name> --depth 3` — transitive blast radius
-4. `cartog hierarchy <name>` — if it's a class, check subclasses too
-5. Apply changes, then `cartog index . --no-lsp` to update the graph
-6. Re-run `cartog refs <name>` to confirm no stale references remain
+1. `cartog changes` — quick check: was this symbol touched in recent commits? Pair with `cartog impact <symbol>` on anything listed to triage regressions before refactoring.
+2. `cartog search <name>` — confirm exact symbol name and file
+3. `cartog refs <name>` — find every usage
+4. `cartog impact <name> --depth 3` — transitive blast radius
+5. `cartog hierarchy <name>` — if it's a class, check subclasses too
+6. Apply changes, then `cartog index . --no-lsp` to update the graph
+7. Re-run `cartog refs <name>` to confirm no stale references remain
 
 For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `references/query_cookbook.md` → "Assess refactoring scope".
 
@@ -374,6 +425,10 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 | Improve graph precision for a refactoring | `cartog index .` (with LSP auto-detected) |
 | Fast re-index after code changes | `cartog index . --no-lsp` |
 | Diagnose why something is broken | `cartog doctor` |
+| Inspect resolved config (DB path, provider, etc.) | `cartog config` |
+| Triage which recent commit broke something | `cartog changes` then `cartog impact <symbol>` |
+| Set up cartog in a fresh repo (no `.cartog.toml` yet) | Suggest `cartog init` to the user, then `cartog index` |
+| Wire cartog into an editor (user asked) | Suggest `cartog ide --yes` (or `--client <name> --yes`) — never bare |
 | Read actual implementation logic | `cat <file>` (cartog indexes structure, not content) |
 | Search for string literals / config | `grep` (cartog doesn't index these) |
 | Nothing from search or rag | Fall back to `grep` |

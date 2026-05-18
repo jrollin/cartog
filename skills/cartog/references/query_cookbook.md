@@ -75,6 +75,19 @@ cartog callees validate_token          # What it depends on
 cartog impact validate_token           # Who depends on it
 ```
 
+### "What did my recent commits break?" (regression triage)
+
+When the user reports something broken after recent changes, pair `cartog changes` with `cartog impact` to surface candidate culprits without re-reading every diff:
+
+```bash
+cartog changes --commits 3                # symbols touched in the last 3 commits
+# For each high-suspicion symbol from that output:
+cartog impact <symbol> --depth 3          # what transitively depends on it
+cartog refs <symbol> --kind calls         # direct callers
+```
+
+Read the `cartog changes` output first, pick the 1–3 symbols most relevant to the user's bug description, and run `impact` on each. This narrows the search space before reading any source. For "the failure started today", add `--commits 1`; for "this regressed last week", use `--commits 20` or higher.
+
 ### Trace a call chain
 ```bash
 cartog callees handle_request          # What does it call?
