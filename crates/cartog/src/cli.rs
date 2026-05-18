@@ -253,26 +253,15 @@ pub enum Command {
         rag_delay: u64,
     },
 
-    /// Bootstrap cartog in the current project: index, scaffold .cartog.toml, wire project-scoped MCP.
+    /// Bootstrap cartog config in the current project: scaffold a `.cartog.toml` template.
     ///
-    /// One-step onboarding. Equivalent to `cartog index` + `.cartog.toml` template
-    /// (if absent) + `cartog ide --scope project`.
+    /// Run `cartog ide` afterwards to wire editor MCP entries, and `cartog index`
+    /// to build the code graph. Each verb does one job: edit the toml between
+    /// steps to change DB path or embedding provider before any heavy work runs.
     Init {
-        /// Accept all prompts (non-interactive). Implied by --dry-run, --json, or a non-TTY stdin.
-        #[arg(long, short = 'y')]
-        yes: bool,
-
         /// Print planned changes without writing.
         #[arg(long)]
         dry_run: bool,
-
-        /// Skip the initial `cartog index` step.
-        #[arg(long)]
-        no_index: bool,
-
-        /// Omit `--watch` from Claude Code's serve args.
-        #[arg(long)]
-        no_watch: bool,
     },
 
     /// Wire `cartog serve` into one or all MCP-compatible editors.

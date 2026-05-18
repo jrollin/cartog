@@ -1,22 +1,15 @@
-//! `cartog init` — one-step project bootstrap.
+//! `cartog init` — project configuration bootstrap.
 //!
-//! Runs `cartog index` on the current directory, scaffolds a `.cartog.toml`
-//! template if absent, and wires project-scoped MCP entries (Claude Code's
-//! `.mcp.json` and Cursor's `.cursor/mcp.json`) by delegating to
-//! [`super::ide::run_ide`] with `scope = Project`.
+//! Scaffolds `.cartog.toml` (if absent) and prints the recommended next steps:
+//! run `cartog ide` to wire editor MCP entries, run `cartog index` to build the
+//! graph. Keeping the three verbs separate lets users edit `.cartog.toml`
+//! before any heavy work and skip MCP entirely if they're CLI-only.
 
 use std::fs;
-use std::io::IsTerminal;
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use cartog_db::Database;
-use cartog_indexer::{self as indexer, IndexResult};
+use anyhow::Result;
 use serde::Serialize;
-
-use crate::cli::IdeScope;
-
-use super::ide;
 
 const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration for cartog
 #
@@ -41,30 +34,8 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 
 #[derive(Debug, Serialize)]
 struct InitReport {
-    index: IndexStep,
     toml: TomlStep,
-    ide: ide::IdeReport,
-    summary: InitSummary,
-}
-
-#[derive(Debug, Serialize)]
-struct IndexStep {
-    status: IndexStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<IndexResult>,
-    /// True when `--dry-run` was set: the message describes what *would*
-    /// happen rather than what did. Mirrors the convention used by `TomlStatus`
-    /// and `IdeStatus`, where `Created` + `dry_run` means "would create".
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
     dry_run: bool,
-    message: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-enum IndexStatus {
-    Indexed,
-    Skipped,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,47 +53,10 @@ enum TomlStatus {
     Skipped,
 }
 
-#[derive(Debug, Serialize, Default)]
-struct InitSummary {
-    errors: usize,
-}
-
-pub fn cmd_init(
-    db_path: &Path,
-    yes: bool,
-    dry_run: bool,
-    no_index: bool,
-    no_watch: bool,
-    json: bool,
-    embedding_dim: usize,
-) -> Result<()> {
-    let interactive = !yes && !dry_run && !json && std::io::stdin().is_terminal();
+pub fn cmd_init(dry_run: bool, json: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
-
-    let index = run_index_step(db_path, no_index, dry_run, embedding_dim)?;
     let toml = scaffold_toml(&cwd, dry_run)?;
-
-    let homes = ide::HomeDirs::detect();
-    let ide_report = ide::run_ide(
-        None,
-        IdeScope::Project,
-        interactive,
-        dry_run,
-        no_watch,
-        &cwd,
-        &homes,
-    )?;
-
-    let summary = InitSummary {
-        errors: ide_report.summary.error,
-    };
-
-    let report = InitReport {
-        index,
-        toml,
-        ide: ide_report,
-        summary,
-    };
+    let report = InitReport { toml, dry_run };
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -131,113 +65,42 @@ pub fn cmd_init(
         print_next_steps(&report);
     }
 
-    if report.summary.errors > 0 {
+    if matches!(report.toml.status, TomlStatus::Skipped) {
         std::process::exit(1);
     }
     Ok(())
 }
 
-fn run_index_step(
-    db_path: &Path,
-    no_index: bool,
-    dry_run: bool,
-    embedding_dim: usize,
-) -> Result<IndexStep> {
-    if no_index {
-        return Ok(IndexStep {
-            status: IndexStatus::Skipped,
-            result: None,
-            dry_run: false,
-            message: "skipped via --no-index".into(),
-        });
-    }
-    if dry_run {
-        return Ok(IndexStep {
-            status: IndexStatus::Indexed,
-            result: None,
-            dry_run: true,
-            message: "would run `cartog index .`".into(),
-        });
-    }
-    let db = Database::open(db_path, embedding_dim).context("Failed to open cartog database")?;
-    let result = indexer::index_directory(&db, Path::new("."), false, true)?;
-    let message = format!(
-        "{} files indexed ({} unchanged), {} symbols, {} edges",
-        result.files_indexed,
-        result.files_skipped,
-        result.symbols_added + result.symbols_modified + result.symbols_unchanged,
-        result.edges_added,
-    );
-    Ok(IndexStep {
-        status: IndexStatus::Indexed,
-        result: Some(result),
-        dry_run: false,
-        message,
-    })
-}
-
 fn render_human(report: &InitReport) -> String {
-    let mut out = String::new();
-    let idx = &report.index;
-    let icon = match idx.status {
-        IndexStatus::Indexed => "+",
-        IndexStatus::Skipped => "!",
-    };
-    out.push_str(&format!("{icon} index: {}\n", idx.message));
-    let toml_icon = match report.toml.status {
+    let icon = match report.toml.status {
         TomlStatus::Created | TomlStatus::Unchanged => "+",
         TomlStatus::Skipped => "!",
     };
-    out.push_str(&format!(
+    format!(
         "{} .cartog.toml ({}): {}\n",
-        toml_icon, report.toml.path, report.toml.message
-    ));
-    out.push_str(&report.ide.render_human());
-    out
+        icon, report.toml.path, report.toml.message
+    )
 }
 
-/// Markdown block users can paste into `AGENTS.md`, `CLAUDE.md`, or any
-/// agent-instruction file to prime LLM clients on cartog's tools. Kept short
-/// (under 30 lines) so it doesn't drown the user's own prose. Cartog never
-/// writes this file itself — the user pastes it, owning their AGENTS.md.
-const AGENTS_SNIPPET: &str = "\
-## Code navigation (cartog)
-
-This project is indexed by cartog. Prefer cartog's MCP tools over grep/find for
-code navigation — they return structured results with ~10× lower token cost.
-
-- `cartog_map` — orient yourself in the codebase (file list + top symbols)
-- `cartog_outline <file>` — file structure before reading
-- `cartog_search <name>` — find a symbol by name
-- `cartog_rag_search <query>` — concept/keyword search across code
-- `cartog_refs <name>` — every usage of a symbol
-- `cartog_callees <name>` — what a function calls
-- `cartog_impact <name>` — what breaks if you change it
-- `cartog_changes` — symbols touched by recent commits
-
-Run `cartog_index` once at session start if results are empty or stale.
-";
-
-/// Print a one-or-two-line follow-up to help users know what to do next.
+/// Print the three-step bootstrap reminder. `init` only handles config; the
+/// reminder makes the rest of the flow discoverable without users having to
+/// search the docs.
 fn print_next_steps(report: &InitReport) {
-    let s = &report.ide.summary;
-    if report.index.dry_run {
+    if report.dry_run {
         println!("\nDry run only. Re-run without --dry-run to apply.");
         return;
     }
-    if s.created + s.updated > 0 {
-        println!("\nNext: open your editor and try a cartog tool (e.g. `search`, `refs`).");
-        println!("\nOptional — paste this into AGENTS.md / CLAUDE.md so agents know cartog is available:");
-        println!();
-        for line in AGENTS_SNIPPET.lines() {
-            println!("  {line}");
-        }
-        println!("\nRe-run `cartog ide` after installing more editors.");
-    } else if s.skipped > 0 && s.created + s.updated + s.unchanged == 0 {
+
+    println!("\nNext steps:");
+    if matches!(report.toml.status, TomlStatus::Created) {
         println!(
-            "\nNo MCP clients were configured. Install an MCP-aware editor \
-             (Claude Code, Cursor, Windsurf, Zed) and re-run `cartog ide`."
+            "  1. Edit .cartog.toml if you want to change defaults (DB path, embedding provider)."
         );
+        println!("  2. Run `cartog ide` to wire cartog into your editor(s).");
+        println!("  3. Run `cartog index` to build the code graph.");
+    } else {
+        println!("  1. Run `cartog ide` to wire (or re-wire) cartog into your editor(s).");
+        println!("  2. Run `cartog index` to build (or refresh) the code graph.");
     }
 }
 

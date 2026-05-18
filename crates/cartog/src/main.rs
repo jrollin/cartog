@@ -196,20 +196,7 @@ fn main() -> Result<()> {
             provider_config,
             cli.json,
         ),
-        Command::Init {
-            yes,
-            dry_run,
-            no_index,
-            no_watch,
-        } => commands::init::cmd_init(
-            &db_path,
-            yes,
-            dry_run,
-            no_index,
-            no_watch,
-            cli.json,
-            embedding_dim,
-        ),
+        Command::Init { dry_run } => commands::init::cmd_init(dry_run, cli.json),
         Command::Ide {
             client,
             scope,
