@@ -176,12 +176,23 @@ fi
 
 # F2b: Code graph index — kept foreground because cartog MCP queries depend on it
 # and it's typically <1s for incremental updates.
+#
+# Failure handling: we deliberately do NOT abort the script on a non-zero exit.
+# The background pipeline (B1/B2) is independent of F2b — reranker download and
+# embedding still help even if the symbol graph is stale — so we record the
+# failure for surfacing next session and keep going. `set -e` would otherwise
+# kill the script before run_background_pipeline could be spawned.
 if [ ! -f "$DB_FILE" ]; then
     echo "No cartog index found. Building..."
 else
     echo "Updating cartog index..."
 fi
-cartog index .
+index_rc=0
+cartog index . || index_rc=$?
+if [ "$index_rc" -ne 0 ]; then
+    echo "cartog index failed (exit $index_rc) — continuing to background pipeline." >&2
+    printf 'cartog index . failed (exit %d). See terminal output above.\n' "$index_rc" > "$LAST_ERROR_FILE"
+fi
 
 # F3: drift warning (the SessionEnd hook does the actual update).
 warn_if_drifted

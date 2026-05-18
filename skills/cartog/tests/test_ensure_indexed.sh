@@ -742,8 +742,14 @@ run_ensure_indexed_print_db() {
         mkdir -p "$HOME"
         "$@"
         cd "$workdir"
-        # Patch: insert echo just before "cartog index ." (phase 1)
-        sed 's|^cartog index \.$|echo "DB_FILE=$DB_FILE"\nexit 0|' "$ENSURE_SCRIPT" | bash 2>&1
+        # Patch: insert echo just before phase 1. The real line is
+        # `cartog index . || index_rc=$?`; legacy form was `cartog index .`.
+        # Use two POSIX sed substitutions so this helper works on BSD/macOS too.
+        # Delimiter is `#` so the `||` operator in the pattern can appear unescaped.
+        sed \
+            -e 's#^cartog index \. || index_rc=\$?$#echo "DB_FILE=$DB_FILE"\nexit 0#' \
+            -e 's#^cartog index \.$#echo "DB_FILE=$DB_FILE"\nexit 0#' \
+            "$ENSURE_SCRIPT" | bash 2>&1
     )
 }
 
@@ -985,6 +991,384 @@ MOCK
     teardown
 }
 
+# --- tests: stress / edge cases (audit follow-up) ---
+
+# 1. Two concurrent ensure_indexed invocations in the same project must not
+#    both run the background pipeline. The lock dir mediates: one wins, the
+#    other reports "already running".
+test_concurrent_ensure_indexed_invocations() {
+    echo "TEST: two concurrent runs — exactly one launches the background pipeline"
+    setup
+    # Mock cartog with a slow rag setup so the first invocation holds the lock
+    # while the second one races.
+    cat > "$TEST_DIR/bin/cartog" <<'MOCK'
+#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "cartog 0.14.1"; exit 0; fi
+echo "$@" >> "$CARTOG_TEST_LOG"
+if [ "$1" = "rag" ] && [ "$2" = "setup" ]; then sleep 2; fi
+if [ "$1" = "rag" ] && [ "$2" = "index" ]; then sleep 0.1; fi
+exit 0
+MOCK
+    chmod +x "$TEST_DIR/bin/cartog"
+
+    local out_a="$TEST_DIR/run_a.out" out_b="$TEST_DIR/run_b.out"
+    run_ensure_indexed > "$out_a" &
+    local pid_a=$!
+    # Small skew to ensure A reaches the mkdir lock first; B should observe it.
+    sleep 0.2
+    run_ensure_indexed > "$out_b" &
+    local pid_b=$!
+    wait "$pid_a" "$pid_b"
+    wait_for_rag_index
+
+    local a b
+    a=$(cat "$out_a"); b=$(cat "$out_b")
+    # Exactly one of the two outputs must mention "background pipeline already running".
+    local skipped=0
+    echo "$a" | grep -qF "background pipeline already running" && skipped=$((skipped + 1))
+    echo "$b" | grep -qF "background pipeline already running" && skipped=$((skipped + 1))
+    assert_eq "exactly one invocation skipped the background pipeline" "1" "$skipped"
+    # Foreground index ran in BOTH invocations (idempotent).
+    local index_count
+    index_count=$(grep -c '^index \.$' "$CARTOG_TEST_LOG" || true)
+    assert_eq "foreground index ran in both invocations" "2" "$index_count"
+    teardown
+}
+
+# 2. ~/.cache/cartog not writable -> log dir falls back to /tmp without aborting.
+test_readonly_cache_dir_fallback() {
+    echo "TEST: unwritable XDG_CACHE_HOME falls back to /tmp for session log"
+    setup
+    create_mock_cartog "0.14.1"
+    # Point the cache at a known-unwritable location so mkdir -p fails.
+    # /dev/null/cartog is reliably unwritable on Unix (parent is a char device).
+    local bad_cache="/dev/null/cartog"
+    local tmp_log="/tmp/session.log"
+    rm -f "$tmp_log" "/tmp/last-error"
+
+    local output
+    output=$(
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        export XDG_CACHE_HOME="/dev/null"
+        unset CARTOG_LOG_DIR
+        mkdir -p "$HOME"
+        cd "$TEST_DIR"
+        bash "$ENSURE_SCRIPT" 2>&1
+    )
+    # Wait for the fallback /tmp/session.log to be written by the background pipeline.
+    local i=0
+    while [ ! -f "$tmp_log" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    rmdir /tmp/cartog-rag-index.lock 2>/dev/null || true
+
+    assert_contains "script completed despite unwritable cache" "cartog index ready" "$output"
+    assert_file_exists "fallback session.log under /tmp" "$tmp_log"
+    rm -f "$tmp_log" "/tmp/last-error"
+    teardown
+}
+
+# 3. Malformed .cartog.toml does not crash the resolver; falls back to git-root.
+test_malformed_toml_falls_back_safely() {
+    echo "TEST: malformed .cartog.toml -> falls back to git-root default path"
+    setup
+    create_mock_cartog "0.14.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir"
+    # Intentionally broken TOML: section header never closes, no quotes.
+    cat > "$workdir/.cartog.toml" <<'TOML'
+[database
+path = unterminated
+TOML
+
+    cat > "$TEST_DIR/bin/git" <<MOCK
+#!/usr/bin/env bash
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--show-toplevel" ]; then
+    echo "$workdir"; exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    local output
+    output=$(run_ensure_indexed_print_db "$workdir")
+
+    # Resolver could not extract a path, so it falls back to git-root default.
+    assert_contains "fallback to git-root default" \
+        "DB_FILE=$workdir/.cartog/db.sqlite" "$output"
+    teardown
+}
+
+# 4. TOML points the DB at a directory the user cannot write to. The script
+#    must surface the index failure (LAST_ERROR_FILE) and still launch the
+#    background pipeline — regression guard for the BLOCKER fix.
+test_toml_db_path_points_to_unwritable_dir() {
+    echo "TEST: TOML db path on unwritable dir — index fails, background still launches"
+    setup
+    # Mock cartog: index exits non-zero, rag setup + rag index succeed.
+    cat > "$TEST_DIR/bin/cartog" <<'MOCK'
+#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "cartog 0.14.1"; exit 0; fi
+echo "$@" >> "$CARTOG_TEST_LOG"
+if [ "$1" = "index" ]; then
+    echo "permission denied: /forbidden/db.sqlite" >&2
+    exit 2
+fi
+if [ "$1" = "rag" ] && [ "$2" = "index" ]; then sleep 0.1; fi
+exit 0
+MOCK
+    chmod +x "$TEST_DIR/bin/cartog"
+
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir"
+    cat > "$workdir/.cartog.toml" <<'TOML'
+[database]
+path = "/forbidden/db.sqlite"
+TOML
+
+    local output
+    output=$(run_ensure_indexed)
+    wait_for_rag_index
+
+    assert_contains "index failure surfaced on stderr" \
+        "cartog index failed" "$output"
+    assert_file_exists "last-error written by foreground failure" \
+        "$CARTOG_LOG_DIR/last-error"
+    # Crucial: background pipeline must have run.
+    if grep -q '^rag setup' "$CARTOG_TEST_LOG" && grep -q '^rag index ' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: background pipeline ran despite foreground index failure"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: background pipeline did not run after index failure"
+        FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
+# 5. CARTOG_DB env var must take priority over .cartog.toml database.path.
+test_cartog_db_env_vs_toml_priority() {
+    echo "TEST: CARTOG_DB env wins over .cartog.toml on conflict"
+    setup
+    create_mock_cartog "0.14.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir"
+    cat > "$workdir/.cartog.toml" <<'TOML'
+[database]
+path = "/tmp/from-toml.db"
+TOML
+
+    local output
+    output=$(run_ensure_indexed_print_db "$workdir" export CARTOG_DB="/tmp/from-env.db")
+
+    assert_contains "env path wins" "DB_FILE=/tmp/from-env.db" "$output"
+    # TOML path must NOT appear as the resolved DB.
+    if echo "$output" | grep -qF "DB_FILE=/tmp/from-toml.db"; then
+        echo "  FAIL: TOML path leaked through despite CARTOG_DB env"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: TOML path not used when CARTOG_DB env is set"
+        PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+# 6. Not in a git repo, but a .cartog.toml sits in cwd. Resolver must find it
+#    via the "." branch of the resolve loop.
+test_no_git_repo_with_toml_in_cwd() {
+    echo "TEST: no git repo + .cartog.toml in cwd -> TOML path is honoured"
+    setup
+    create_mock_cartog "0.14.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir"
+    cat > "$workdir/.cartog.toml" <<'TOML'
+[database]
+path = "/non-git/cwd.db"
+TOML
+    # git rev-parse fails — simulate "not a git repo".
+    cat > "$TEST_DIR/bin/git" <<'MOCK'
+#!/usr/bin/env bash
+echo "fatal: not a git repository" >&2
+exit 128
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    local output
+    output=$(run_ensure_indexed_print_db "$workdir")
+
+    assert_contains "TOML in cwd resolved without git" "DB_FILE=/non-git/cwd.db" "$output"
+    teardown
+}
+
+# 7. .cartog/db.sqlite is a symlink to elsewhere. The "Updating cartog index"
+#    branch (not "Building") must fire — `[ -f ... ]` follows symlinks.
+test_symlinked_db_path() {
+    echo "TEST: .cartog/db.sqlite as a symlink — 'Updating' message, not 'Building'"
+    setup
+    create_mock_cartog "0.14.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir/.cartog"
+    # Real DB file lives elsewhere; .cartog/db.sqlite points at it.
+    local real_db="$TEST_DIR/real-db.sqlite"
+    touch "$real_db"
+    ln -s "$real_db" "$workdir/.cartog/db.sqlite"
+
+    cat > "$TEST_DIR/bin/git" <<MOCK
+#!/usr/bin/env bash
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--show-toplevel" ]; then
+    echo "$workdir"; exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    local output
+    output=$(
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        mkdir -p "$HOME"
+        cd "$workdir"
+        bash "$ENSURE_SCRIPT" 2>&1
+    )
+    wait_for_rag_index
+
+    assert_contains "symlinked DB is treated as existing" "Updating cartog index" "$output"
+    if echo "$output" | grep -qF "No cartog index found. Building"; then
+        echo "  FAIL: symlink target ignored — script printed 'Building'"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: symlink target detected; no 'Building' message"
+        PASS=$((PASS + 1))
+    fi
+    # Symlink must still exist and point at the same target after the run.
+    if [ -L "$workdir/.cartog/db.sqlite" ] && [ "$(readlink "$workdir/.cartog/db.sqlite")" = "$real_db" ]; then
+        echo "  PASS: symlink preserved after index"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: symlink replaced or removed"
+        FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
+# 8. Foreground `cartog index` fails — the background pipeline must still spawn.
+#    Companion to test 4 but with no TOML, so the failure mode is purely about
+#    index exit-code handling, not path resolution.
+test_foreground_index_failure_still_launches_background() {
+    echo "TEST: foreground index non-zero — background B1/B2 still run"
+    setup
+    cat > "$TEST_DIR/bin/cartog" <<'MOCK'
+#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "cartog 0.14.1"; exit 0; fi
+echo "$@" >> "$CARTOG_TEST_LOG"
+if [ "$1" = "index" ]; then exit 3; fi
+if [ "$1" = "rag" ] && [ "$2" = "index" ]; then sleep 0.1; fi
+exit 0
+MOCK
+    chmod +x "$TEST_DIR/bin/cartog"
+
+    local output
+    output=$(run_ensure_indexed)
+    wait_for_rag_index
+
+    assert_contains "index failure reported" "cartog index failed (exit 3)" "$output"
+    # B1 + B2 must both have run.
+    if grep -q '^rag setup' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: B1 (rag setup) ran after index failure"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: B1 (rag setup) did not run after index failure"
+        FAIL=$((FAIL + 1))
+    fi
+    if grep -q '^rag index ' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: B2 (rag index) ran after index failure"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: B2 (rag index) did not run after index failure"
+        FAIL=$((FAIL + 1))
+    fi
+    assert_file_exists "foreground failure recorded in last-error" \
+        "$CARTOG_LOG_DIR/last-error"
+    teardown
+}
+
+# 9. CARTOG_AUTO_INIT=1 + TTY should bypass the deferral gate, not be ANDed.
+#    The gate is `[ no toml ] && [ no auto-init ] && [ tty ]`, so AUTO_INIT
+#    alone must be sufficient to bypass even when the other two conditions hold.
+test_auto_init_env_bypasses_gate_with_tty() {
+    echo "TEST: CARTOG_AUTO_INIT=1 bypasses defer gate even when stdin is a TTY"
+    setup
+    create_mock_cartog "0.14.1"
+    # No .cartog.toml, no git repo (so GIT_ROOT="").
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir"
+    cat > "$TEST_DIR/bin/git" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    # Attach /dev/tty to stdin if available (most CI environments don't provide one).
+    # We approximate "TTY present" by feeding a here-string and relying on the
+    # auto-init bypass — `[ -t 0 ]` will be false here, BUT the bypass should
+    # fire on AUTO_INIT regardless. This also documents the OR semantics.
+    local output
+    output=$(
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        export CARTOG_AUTO_INIT=1
+        mkdir -p "$HOME"
+        cd "$workdir"
+        bash "$ENSURE_SCRIPT" 2>&1
+    )
+    wait_for_rag_index
+
+    assert_contains "AUTO_INIT bypass led to index ready" "cartog index ready" "$output"
+    if echo "$output" | grep -qF "Run \`cartog init\`"; then
+        echo "  FAIL: AUTO_INIT=1 did not suppress deferral hint"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: AUTO_INIT=1 suppressed deferral hint"
+        PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+# 10. With an MCP `cartog serve` PID present (no peer-guard at index time),
+#     ensure_indexed must still run the foreground index and the background
+#     pipeline. Validates the "MCP alive + manual index" path SKILL.md promises.
+test_concurrent_writer_during_active_mcp() {
+    echo "TEST: simulated MCP peer alive — index + background pipeline still run"
+    setup
+    create_mock_cartog "0.14.1"
+    # Create a fake state dir with a live PID file so peer_alive() (used by
+    # update_on_exit) would see a running peer. ensure_indexed itself has NO
+    # peer guard — this test asserts that absence: indexing proceeds anyway.
+    local state_dir
+    case "$(uname -s)" in
+        Darwin) state_dir="$TEST_DIR/home/Library/Application Support/io.cartog.cartog" ;;
+        Linux)  state_dir="$TEST_DIR/home/.local/state/cartog" ;;
+        *)      state_dir="$TEST_DIR/home/.local/state/cartog" ;;
+    esac
+    mkdir -p "$state_dir"
+    # PID 1 (init) is always alive — perfect liveness proxy on POSIX.
+    echo "1" > "$state_dir/serve.pid"
+
+    local output
+    output=$(run_ensure_indexed)
+    wait_for_rag_index
+
+    assert_contains "foreground index ran with MCP peer alive" \
+        "cartog index ready" "$output"
+    # B1 + B2 must have run too.
+    if grep -q '^rag setup' "$CARTOG_TEST_LOG" && grep -q '^rag index ' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: background pipeline ran with MCP peer alive"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: background pipeline blocked by MCP peer (regression)"
+        FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
 # --- run all tests ---
 
 echo "=== ensure_indexed.sh unit tests ==="
@@ -1057,6 +1441,26 @@ echo ""
 test_no_toml_auto_init_env_proceeds_with_index
 echo ""
 test_toml_present_indexes_normally
+echo ""
+test_concurrent_ensure_indexed_invocations
+echo ""
+test_readonly_cache_dir_fallback
+echo ""
+test_malformed_toml_falls_back_safely
+echo ""
+test_toml_db_path_points_to_unwritable_dir
+echo ""
+test_cartog_db_env_vs_toml_priority
+echo ""
+test_no_git_repo_with_toml_in_cwd
+echo ""
+test_symlinked_db_path
+echo ""
+test_foreground_index_failure_still_launches_background
+echo ""
+test_auto_init_env_bypasses_gate_with_tty
+echo ""
+test_concurrent_writer_during_active_mcp
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

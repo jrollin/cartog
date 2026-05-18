@@ -24,7 +24,7 @@ Three states a repo can be in. Detect which one the user is in, then act.
 
 | State | Signal | What the user should run |
 |---|---|---|
-| Fresh repo, no cartog yet | No `.cartog.toml` at the git root | `cartog init` then `cartog index` |
+| Fresh repo, no cartog yet | No `.cartog.toml` at the git root | Ask the user first, then `cartog init` then `cartog index` (see "Fresh-repo handling" below) |
 | Indexed but no editor MCP | `.cartog.toml` exists, no `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` | `cartog index` (refresh) — only suggest `cartog ide` if the user mentions Claude Code / Cursor / VS Code / Codex / Gemini / Windsurf / Zed / Claude Desktop / OpenCode |
 | Fully wired | `.cartog.toml` + editor MCP files present | Just query: `cartog map`, `cartog rag search`, etc. |
 
@@ -42,9 +42,9 @@ If `cartog init` returns non-zero (rare — usually a filesystem permission issu
 
 ### Running cartog commands while MCP is alive
 
-Both `cartog init` and `cartog index` are safe to run via Bash during an active MCP session:
-- `cartog init` only writes `.cartog.toml`, never touches the database.
-- `cartog index .` writes to the same SQLite file the MCP server has open. WAL mode + the `PRAGMA busy_timeout` we configure serialise writers — no `SQLITE_BUSY` errors.
+Both `cartog init` and `cartog index` are safe to run via Bash during an active MCP session, but for different reasons:
+- `cartog init` is config-only — it writes `.cartog.toml`, never touches the database. No writer contention possible.
+- `cartog index .` does write to the same SQLite file the MCP server has open. WAL mode + the `PRAGMA busy_timeout` we configure serialise writers — no `SQLITE_BUSY` errors.
 - After indexing, MCP tools pick up the new symbols on the next call (no server restart needed).
 
 If MCP runs with `--watch`, the watcher will also re-index on file changes. A manual `cartog index .` is still safe; it just shares the write-queue.
@@ -114,7 +114,7 @@ All examples below use CLI syntax. MCP tool names and parameters:
 
 Before first use, ensure cartog is installed and indexed.
 
-If the project uses Ollama (check `.cartog.toml` for `[embedding] provider = "ollama"`), skip `rag setup` — models are managed by the Ollama server.
+If the project uses Ollama (check `.cartog.toml` for `[embedding] provider = "ollama"`), Ollama manages the **embedding** model itself — but `cartog rag setup` still downloads the cross-encoder **reranker** (~100MB, provider-agnostic). Skip `rag setup` only if you also disable the reranker; otherwise run it once.
 
 The `scripts/` directory is located next to this SKILL.md file. **Before running any setup command**, look at the absolute path from which this SKILL.md was loaded (visible in your tool call history), take its parent directory, and use that as the scripts root in the bash commands below.
 
@@ -149,6 +149,8 @@ so Claude is responsive immediately. `cartog rag search` works at FTS5-only qual
 the moment the index is ready, and upgrades transparently to tier 2 then tier 3 as
 the background pipeline completes.
 
+**How to tell which tier you're on**: inspect the result tags in `cartog rag search` output. `[fts5+vector]` means tier 3, `[fts5]` means tier 1 or 2, `rerank=...` scores appear from tier 2 onward. See `references/query_cookbook.md` → "Interpreting results" for the full decoder.
+
 > **First run**: tier 2 downloads ~1.2GB of ONNX models (cached in `~/.cache/cartog/models/`)
 > in the background. Search keeps working at tier 1 in the meantime; logs go to
 > `~/.cache/cartog/session.log`. Subsequent runs are instant.
@@ -160,11 +162,13 @@ The index is stored in a SQLite database. cartog resolves the path automatically
 | Priority | Source |
 |----------|--------|
 | 1 | `--db <path>` flag or `CARTOG_DB` env var |
-| 2 | `.cartog.toml` → `[database] path = "..."` at git root |
+| 2 | `.cartog.toml` → `[database] path = "..."` (looked up in cwd then at git root; `~/...` is expanded against `$HOME`) |
 | 3 | Auto git-root: prefers `<root>/.cartog/db.sqlite`, falls back to legacy `<root>/.cartog.db` if only it exists |
-| 4 | `.cartog/db.sqlite` in the current directory (fallback) |
+| 4 | `.cartog/db.sqlite` in the current directory (fallback — used when not in a git repo) |
 
 For most projects, no configuration is needed — running `cartog index .` from any subdirectory will place the DB at the git root automatically.
+
+**Non-git projects work too.** When `git rev-parse` finds no repo, cartog falls through to the cwd-based path (priority 4), or honours an explicit `--db` / `CARTOG_DB` / `.cartog.toml [database] path` if set. There's no requirement to be inside a git working tree.
 
 ```bash
 # Override examples
@@ -215,7 +219,7 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 6. **Only fall back to grep/read** when cartog doesn't have what you need (e.g., reading actual implementation logic, string literals, config values).
 
-7. **After making code changes**, run `cartog index . --no-lsp` to quickly update the graph.
+7. **After making code changes**, run `cartog index . --no-lsp` to quickly update the graph. If MCP is running with `--watch`, the re-index already happened automatically — skip this step. Only run a manual index in CLI-only sessions, or to force LSP edges in a watched session.
 
 ## Do / Don't
 
@@ -254,7 +258,7 @@ cartog search parse --limit 10               # cap results
 ```
 Returns symbols ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
 
-Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`, `document`.
+Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`, `document`, plus `all` (code + docs).
 
 ### RAG Search (hybrid keyword + semantic)
 ```bash
@@ -374,7 +378,8 @@ cartog init --dry-run           # preview without writing
 ```bash
 cartog ide --yes                              # configure all detected clients, non-interactive
 cartog ide --client cursor --yes              # one specific client
-cartog ide --scope project --yes              # only .mcp.json / .cursor/ / .vscode/
+cartog ide --scope project --yes              # only .mcp.json / .cursor/mcp.json / .vscode/mcp.json
+cartog ide --client claude-code --no-watch --yes  # wire Claude Code without --watch
 cartog ide --scope user --yes                 # only user-scope clients
 cartog ide --dry-run                          # preview without writing
 ```
@@ -392,6 +397,10 @@ cartog config --json            # JSON for parsing
 ```
 
 Prints the merged config (defaults + `.cartog.toml` + env overrides). Useful for the agent to verify which database path, embedding provider, or reranker is active before diagnosing a search-quality issue. Read-only — does not modify anything.
+
+### Dev-only utilities
+
+Cartog also ships `cartog completions <shell>` (shell completion script generator for bash/zsh/fish/powershell/elvish) and `cartog manpage` (emits a troff-formatted man page on stdout). Agents don't normally need these; surface them only if the user explicitly asks for shell completions or installation of a man page. See `docs/usage.md` for details.
 
 ## Token Budget
 
@@ -420,7 +429,7 @@ Before changing any symbol (rename, extract, move, delete):
 3. `cartog refs <name>` — find every usage
 4. `cartog impact <name> --depth 3` — transitive blast radius
 5. `cartog hierarchy <name>` — if it's a class, check subclasses too
-6. Apply changes, then `cartog index . --no-lsp` to update the graph
+6. Apply changes, then `cartog index . --no-lsp` to update the graph. **Skip this step if MCP is running with `--watch`** — the watcher has already re-indexed; only run it in CLI-only sessions or to force LSP edges on demand.
 7. Re-run `cartog refs <name>` to confirm no stale references remain
 
 For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `references/query_cookbook.md` → "Assess refactoring scope".
