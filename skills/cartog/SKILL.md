@@ -24,11 +24,30 @@ Three states a repo can be in. Detect which one the user is in, then act.
 
 | State | Signal | What the user should run |
 |---|---|---|
-| Fresh repo, no cartog yet | No `.cartog.toml`, no `.cartog/db.sqlite` | `cartog init` then `cartog index` |
-| Indexed but no editor MCP | `.cartog/db.sqlite` exists, no `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` | `cartog index` (refresh) — only suggest `cartog ide` if the user mentions Claude Code / Cursor / VS Code / Codex / Gemini / Windsurf / Zed / Claude Desktop / OpenCode |
-| Fully wired | `.cartog/db.sqlite` + editor MCP files present | Just query: `cartog map`, `cartog rag search`, etc. |
+| Fresh repo, no cartog yet | No `.cartog.toml` at the git root | `cartog init` then `cartog index` |
+| Indexed but no editor MCP | `.cartog.toml` exists, no `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` | `cartog index` (refresh) — only suggest `cartog ide` if the user mentions Claude Code / Cursor / VS Code / Codex / Gemini / Windsurf / Zed / Claude Desktop / OpenCode |
+| Fully wired | `.cartog.toml` + editor MCP files present | Just query: `cartog map`, `cartog rag search`, etc. |
 
-For the skill's own bootstrap, the setup script (see [Setup](#setup) below) handles the index-and-keep-fresh part. The `cartog init` / `cartog ide` verbs are user-facing — surface them when the agent detects the repo state above, do NOT run them automatically as part of an MCP session.
+### Fresh-repo handling (the most common pitfall)
+
+When `.cartog.toml` is missing, the bootstrap script (`ensure_indexed.sh`) **defers indexing** on interactive sessions and prints a hint pointing at `cartog init`. The agent must then:
+
+1. **ASK the user** before running `cartog init`. Do not run it automatically — it writes a `.cartog.toml` file in the user's repo.
+2. On user **YES**: run `cartog init` via Bash, check the exit code, then run `cartog index .`. Both commands are safe to chain in a single session.
+3. On user **NO** (or "skip"): run `cartog index .` directly. Cartog will use default config and the index lands at `<git-root>/.cartog/db.sqlite`. The user can run `cartog init` later if they want a customized config.
+
+If `cartog init` returns non-zero (rare — usually a filesystem permission issue), surface the error to the user and **do not proceed** to `cartog index`.
+
+**Non-interactive sessions** (CI, piped, `CARTOG_AUTO_INIT=1`): the bootstrap script skips the deferral and indexes with defaults. No prompt fires.
+
+### Running cartog commands while MCP is alive
+
+Both `cartog init` and `cartog index` are safe to run via Bash during an active MCP session:
+- `cartog init` only writes `.cartog.toml`, never touches the database.
+- `cartog index .` writes to the same SQLite file the MCP server has open. WAL mode + the `PRAGMA busy_timeout` we configure serialise writers — no `SQLITE_BUSY` errors.
+- After indexing, MCP tools pick up the new symbols on the next call (no server restart needed).
+
+If MCP runs with `--watch`, the watcher will also re-index on file changes. A manual `cartog index .` is still safe; it just shares the write-queue.
 
 After the index is ready:
 
