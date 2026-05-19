@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.16.2] - 2026-05-19
+## [0.17.0] - 2026-05-19
 
 ### Bug Fixes
 
@@ -58,6 +58,8 @@
 - **skill**: Document init, ide, map, and the changes->impact workflow ([`19bdd3a`](https://github.com/jrollin/cartog/commit/19bdd3afe2e7c0b6c2f14d92944cf4371479ce26))
 - **skill**: Correctness pass + stress tests for ensure_indexed.sh ([`4f39fd5`](https://github.com/jrollin/cartog/commit/4f39fd5656157af3048138dae64e674d3e36f71f))
 - Address CodeRabbit review findings ([`2f8c54c`](https://github.com/jrollin/cartog/commit/2f8c54cd90ae02558a8ca0cc87047f4aeb6cce1b))
+- **indexer**: Skip LSP edge resolution on no-op reindex ([`1d445bf`](https://github.com/jrollin/cartog/commit/1d445bf29eaae3e5135e84a38160e3c643ec07a5))
+- **db**: Keep target_id and resolution_state in sync across all UPDATE sites ([`264033b`](https://github.com/jrollin/cartog/commit/264033b8e72cc46322718910348d72f8ef29e2b1))
 
 ### Documentation
 
@@ -86,6 +88,7 @@
 - **site**: Add `cartog self` to landing page and CLI reference ([`2a65664`](https://github.com/jrollin/cartog/commit/2a656647064241c0d53318653893fc9873e55965))
 - **readme**: Add contributors section (#39) ([`cf1008d`](https://github.com/jrollin/cartog/commit/cf1008d7cf5577d77912e2f628d78fcdeeb5ecc1))
 - Sync README + usage to two-step bootstrap flow ([`bb12d61`](https://github.com/jrollin/cartog/commit/bb12d61ecef46cf54fd3dfc023730e2ef04ecc66))
+- **lsp**: Clarify two-mode coverage in no-servers regression test ([`a0533f6`](https://github.com/jrollin/cartog/commit/a0533f64f87a3b55d12b9ec1c660c20f88c8f840))
 
 ### Features
 
@@ -151,6 +154,7 @@
 - **site**: Landing redesign, brand SVGs, fresh demo ([`e3b79ab`](https://github.com/jrollin/cartog/commit/e3b79abc26f9238d8cd046a7e93eca94915f162a))
 - **skill**: Ensure_indexed.sh hints at cartog init on fresh repos ([`7f81194`](https://github.com/jrollin/cartog/commit/7f811947d4b5a1e0e1b08f2e5b54a780ddd1de29))
 - **skill**: Defer index when .cartog.toml is missing on TTY sessions ([`4702206`](https://github.com/jrollin/cartog/commit/470220602123f5a7d558870b968deea7f7d5620f))
+- **db**: Persist edge resolution_state, skip unresolvable in LSP pass ([`ccbbea3`](https://github.com/jrollin/cartog/commit/ccbbea34b6cb93ac8bb8b5c9e701e4dcbf7f08a9))
 
 ### Miscellaneous
 
