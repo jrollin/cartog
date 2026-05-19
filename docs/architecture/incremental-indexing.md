@@ -95,9 +95,7 @@ Tables involved in the incremental pipeline:
 | `symbols` | 3 | `id PK`, `content_hash`, `subtree_hash` |
 | `edges` | 3 | `source_id`, `target_id`, `kind`, `resolution_state` |
 
-`edges.resolution_state` adds a fourth-tier pruning step for the LSP pass: edges marked `2=unresolvable` (LSP definitively could not link them — stdlib targets, dyn dispatch, macros) are skipped on every future LSP run until [`Database::reset_unresolvable_for_names`] reopens them after a new matching symbol is indexed. This keeps the language-server query set small on dirty reindexes.
-
-Column-level schema and additional tables (RAG vectors, FTS5) live in [tech.md](../tech.md).
+Column-level schema, the `resolution_state` lifecycle, and additional tables (RAG vectors, FTS5) live in [tech.md](../tech.md).
 
 ## 8. Failure modes & invariants
 

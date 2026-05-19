@@ -861,9 +861,11 @@ impl Database {
         let mut del_out = self
             .conn
             .prepare_cached("DELETE FROM edges WHERE source_id = ?1")?;
-        let mut null_in = self
-            .conn
-            .prepare_cached("UPDATE edges SET target_id = NULL WHERE target_id = ?1")?;
+        // Reset state alongside target_id so the orphaned edge re-enters
+        // unresolved_edges() instead of becoming a (NULL, state=1) zombie.
+        let mut null_in = self.conn.prepare_cached(
+            "UPDATE edges SET target_id = NULL, resolution_state = 0 WHERE target_id = ?1",
+        )?;
         let mut del_vec = self.conn.prepare_cached(
             "DELETE FROM symbol_vec WHERE rowid IN \
              (SELECT id FROM symbol_embedding_map WHERE symbol_id = ?1)",
@@ -894,7 +896,7 @@ impl Database {
         self.conn
             .execute("DELETE FROM edges WHERE source_id = ?1", params![id])?;
         self.conn.execute(
-            "UPDATE edges SET target_id = NULL WHERE target_id = ?1",
+            "UPDATE edges SET target_id = NULL, resolution_state = 0 WHERE target_id = ?1",
             params![id],
         )?;
         let _ = self.conn.execute(
@@ -1048,9 +1050,12 @@ impl Database {
             .conn
             .prepare("SELECT id, kind FROM symbols WHERE name = ?1 AND kind != 'import' LIMIT 3")?;
 
+        // Heuristic resolve must flip state=1 alongside target_id; otherwise
+        // unresolved_edges() (state=0 filter) would still surface the edge to
+        // the next LSP pass, wasting a server roundtrip on already-known answers.
         let mut update_stmt = self
             .conn
-            .prepare("UPDATE edges SET target_id = ?1 WHERE id = ?2")?;
+            .prepare("UPDATE edges SET target_id = ?1, resolution_state = 1 WHERE id = ?2")?;
 
         for (edge_id, target_name, edge_file, source_id) in unresolved {
             let simple_name = target_name.rsplit('.').next().unwrap_or(target_name);
@@ -4435,6 +4440,90 @@ mod tests {
             )
             .unwrap();
         assert!(row.is_none(), "target_id must be NULL after invalidation");
+    }
+
+    #[test]
+    fn test_delete_symbol_resets_state_on_dangling_incoming_edges() {
+        // Regression for the "(target_id=NULL, state=1) zombie" bug: when a
+        // resolved target symbol is deleted, every edge pointing to it must
+        // drop back to state=0 — otherwise the edge becomes invisible to both
+        // unresolved_edges() (state=1 filter) and graph traversal (NULL target).
+        let db = Database::open_memory().unwrap();
+        let src = test_symbol("caller", SymbolKind::Function, "a.py", 1);
+        let target = test_symbol("ghost", SymbolKind::Function, "b.py", 1);
+        db.insert_symbols(&[src.clone(), target.clone()]).unwrap();
+        let edge = Edge::new(&src.id, "ghost", EdgeKind::Calls, "a.py", 1);
+        db.insert_edge(&edge).unwrap();
+        let eid = db.conn.last_insert_rowid();
+        db.update_edge_target(eid, &target.id).unwrap();
+
+        db.delete_symbol(&target.id).unwrap();
+
+        assert_eq!(resolution_state_of(&db, eid), 0);
+        let visible = db
+            .unresolved_edges()
+            .unwrap()
+            .iter()
+            .any(|e| e.edge_id == eid);
+        assert!(
+            visible,
+            "orphaned edge must resurface in unresolved_edges()"
+        );
+    }
+
+    #[test]
+    fn test_delete_symbols_in_tx_resets_state_on_dangling_incoming_edges() {
+        // Same invariant as test_delete_symbol_..., for the batched path used
+        // by the indexer's Merkle-diff `removed` set.
+        let db = Database::open_memory().unwrap();
+        let src = test_symbol("caller", SymbolKind::Function, "a.py", 1);
+        let t1 = test_symbol("ghost1", SymbolKind::Function, "b.py", 1);
+        let t2 = test_symbol("ghost2", SymbolKind::Function, "c.py", 1);
+        db.insert_symbols(&[src.clone(), t1.clone(), t2.clone()])
+            .unwrap();
+        let e1 = Edge::new(&src.id, "ghost1", EdgeKind::Calls, "a.py", 1);
+        db.insert_edge(&e1).unwrap();
+        let eid1 = db.conn.last_insert_rowid();
+        db.update_edge_target(eid1, &t1.id).unwrap();
+        let e2 = Edge::new(&src.id, "ghost2", EdgeKind::Calls, "a.py", 2);
+        db.insert_edge(&e2).unwrap();
+        let eid2 = db.conn.last_insert_rowid();
+        db.update_edge_target(eid2, &t2.id).unwrap();
+
+        db.delete_symbols(&[t1.id.clone(), t2.id.clone()]).unwrap();
+
+        assert_eq!(resolution_state_of(&db, eid1), 0);
+        assert_eq!(resolution_state_of(&db, eid2), 0);
+    }
+
+    #[test]
+    fn test_heuristic_resolve_flips_state_to_one() {
+        // Regression: resolve_edge_batch's UPDATE must set state=1 alongside
+        // target_id. Otherwise heuristically-resolved edges stay state=0 and
+        // get re-queried by LSP on the next pass — pure waste.
+        let db = Database::open_memory().unwrap();
+        let src = test_symbol("caller", SymbolKind::Function, "a.py", 1);
+        let target = test_symbol("foo", SymbolKind::Function, "a.py", 10);
+        db.insert_symbols(&[src.clone(), target.clone()]).unwrap();
+        let edge = Edge::new(&src.id, "foo", EdgeKind::Calls, "a.py", 2);
+        db.insert_edge(&edge).unwrap();
+        let eid = db.conn.last_insert_rowid();
+        assert_eq!(resolution_state_of(&db, eid), 0);
+
+        db.resolve_edges().unwrap();
+
+        assert_eq!(
+            resolution_state_of(&db, eid),
+            1,
+            "heuristic resolve must set state=1 so LSP doesn't re-attack the edge"
+        );
+        assert!(
+            db.unresolved_edges()
+                .unwrap()
+                .iter()
+                .all(|e| e.edge_id != eid),
+            "resolved edge must drop out of unresolved_edges()"
+        );
     }
 
     #[test]

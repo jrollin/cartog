@@ -325,24 +325,22 @@ mod tests {
 
     #[test]
     fn test_lsp_resolve_edges_no_servers_leaves_edges_unmarked() {
-        // When no language servers are available (LSP manager has no clients
-        // for the requested language, or PATH is empty), lsp_resolve_edges
-        // must not burn edges. Regression guard for the per-language gate:
-        // zero successes => zero state=2 markers.
+        // Exercises ONLY the "manager.start() failed" branch: the test runs
+        // wherever pyright is not on PATH (typical CI). The buffered-negative
+        // path (per-language success gate with Ok(None) responses) is not
+        // covered here — it would need an LSP test double and is out of scope
+        // for this regression guard. What this DOES guarantee: when no server
+        // can start, lsp_resolve_edges returns zeros and never burns an edge.
         use cartog_core::{Edge, EdgeKind, Symbol, SymbolKind};
         use cartog_db::Database;
 
         let db = Database::open_memory().unwrap();
-        // Seed a Python edge with no resolution target — heuristic + LSP would
-        // both have to handle this, but here LSP can't even start a server.
         let src = Symbol::new("caller", SymbolKind::Function, "a.py", 1, 5, 0, 100, None);
         db.insert_symbols(std::slice::from_ref(&src)).unwrap();
         let edge = Edge::new(&src.id, "find_user", EdgeKind::Calls, "a.py", 2);
         db.insert_edge(&edge).unwrap();
         let edge_id = db.unresolved_edges().unwrap()[0].edge_id;
 
-        // Drive lsp_resolve_edges with a tempdir as the project root. No PATH
-        // setup → no servers available → all edges should pass through unmarked.
         let tmp = tempfile::tempdir().unwrap();
         let stats = lsp_resolve_edges(&db, tmp.path(), None).unwrap();
         assert_eq!(stats.resolved, 0, "no servers must mean zero resolutions");
