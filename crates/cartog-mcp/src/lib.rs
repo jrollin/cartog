@@ -214,6 +214,66 @@ fn mcp_err(msg: impl std::fmt::Display) -> McpError {
     McpError::internal_error(msg.to_string(), None)
 }
 
+/// Run `index_directory` followed by an optional LSP resolution pass.
+///
+/// Exposed as a free function (rather than inlined in the `cartog_index`
+/// tool handler) so integration tests can exercise the LSP gate without
+/// constructing a full `CartogServer` (which loads ONNX models).
+///
+/// LSP pass is skipped on no-op runs (`dirty_files == 0`) — see
+/// `cartog-indexer` for the gate rationale.
+#[cfg(feature = "lsp")]
+fn index_with_optional_lsp(
+    db: &Arc<Mutex<Database>>,
+    lsp_manager: &Arc<Mutex<cartog_lsp::manager::LspManager>>,
+    root: &Path,
+    force: bool,
+) -> Result<indexer::IndexResult, McpError> {
+    let mut result = {
+        let db = db.lock().map_err(|_| {
+            mcp_err("internal error: database lock poisoned (server restart required)")
+        })?;
+        indexer::index_directory(&db, root, force, false)
+            .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
+    };
+
+    if result.dirty_files > 0 {
+        let mut mgr = lsp_manager.lock().map_err(|_| {
+            mcp_err("internal error: LSP manager lock poisoned (server restart required)")
+        })?;
+        let db = db.lock().map_err(|_| {
+            mcp_err("internal error: database lock poisoned (server restart required)")
+        })?;
+        match cartog_lsp::lsp_resolve_edges(&db, root, Some(&mut mgr)) {
+            Ok(n) => {
+                result.edges_lsp_resolved = n;
+                if n > 0 {
+                    let _ = db.compute_in_degrees();
+                }
+            }
+            Err(e) => {
+                tracing::warn!("LSP resolution failed: {e:#}");
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+#[cfg(not(feature = "lsp"))]
+fn index_with_optional_lsp(
+    db: &Arc<Mutex<Database>>,
+    _lsp_manager: &(),
+    root: &Path,
+    force: bool,
+) -> Result<indexer::IndexResult, McpError> {
+    let db = db
+        .lock()
+        .map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
+    indexer::index_directory(&db, root, force, false)
+        .map_err(|e| mcp_err(format!("indexing failed: {e}")))
+}
+
 /// Static routing hints per tool — guides the agent to the next logical step.
 fn suggestions_for(tool: &str) -> Option<&'static str> {
     match tool {
@@ -368,47 +428,13 @@ impl CartogServer {
         let cwd = Arc::clone(&self.cwd);
         #[cfg(feature = "lsp")]
         let lsp_manager = Arc::clone(&self.lsp_manager);
+        #[cfg(not(feature = "lsp"))]
+        let lsp_manager: () = ();
 
         tokio::task::spawn_blocking(move || {
             let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
             debug!(path = %validated.display(), force, "indexing directory");
-
-            // Phase 1: heuristic indexing (hold DB lock briefly)
-            #[allow(unused_mut)]
-            let mut result = {
-                let db = db.lock().map_err(|_| {
-                    mcp_err("internal error: database lock poisoned (server restart required)")
-                })?;
-                indexer::index_directory(&db, &validated, force, false)
-                    .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
-                // db lock released here
-            };
-
-            // Phase 2: LSP resolution (holds both locks during LSP IO).
-            // This blocks other tool calls for the duration of LSP resolution.
-            // Acceptable because MCP serves a single agent session with sequential tool calls.
-            // Future optimization: collect LSP results without DB lock, batch-write after.
-            #[cfg(feature = "lsp")]
-            {
-                let mut mgr = lsp_manager.lock().map_err(|_| {
-                    mcp_err("internal error: LSP manager lock poisoned (server restart required)")
-                })?;
-                let db = db.lock().map_err(|_| {
-                    mcp_err("internal error: database lock poisoned (server restart required)")
-                })?;
-                match cartog_lsp::lsp_resolve_edges(&db, &validated, Some(&mut mgr)) {
-                    Ok(n) => {
-                        result.edges_lsp_resolved = n;
-                        if n > 0 {
-                            let _ = db.compute_in_degrees();
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("LSP resolution failed: {e:#}");
-                    }
-                }
-                // db + mgr locks released here
-            }
+            let result = index_with_optional_lsp(&db, &lsp_manager, &validated, force)?;
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
@@ -1228,6 +1254,55 @@ mod tests {
             lock.is_none(),
             "no lock dir → no PID file, no guard returned"
         );
+    }
+
+    // ── Index + LSP gate tests ──
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn index_with_optional_lsp_skips_lsp_on_noop_reindex() {
+        // Regression guard for the MCP-side gate: when no file changed since
+        // the previous index, the LSP pass MUST be skipped — otherwise we
+        // re-spawn rust-analyzer / pyright on every cartog_index call.
+        //
+        // Copies the auth fixture to a tempdir so a real source edit can be
+        // applied between calls without touching the repo.
+        use cartog_db::Database;
+        use cartog_lsp::manager::LspManager;
+
+        let fixtures_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/auth");
+        if !fixtures_src.exists() {
+            return;
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let fixtures = tmp.path().join("auth");
+        std::fs::create_dir_all(&fixtures).unwrap();
+        for entry in std::fs::read_dir(&fixtures_src).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), fixtures.join(entry.file_name())).unwrap();
+        }
+
+        let db = Arc::new(Mutex::new(Database::open_memory().unwrap()));
+        let lsp_mgr = Arc::new(Mutex::new(LspManager::new(&fixtures)));
+
+        // First call primes the index. dirty_files > 0 → LSP is allowed (it may
+        // resolve nothing if pyright isn't on PATH, but the gate must let it run).
+        let r1 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false).unwrap();
+        assert!(
+            r1.dirty_files > 0,
+            "first index must report dirty files (got {})",
+            r1.dirty_files
+        );
+
+        // Second call without changes must be a no-op AND must skip LSP.
+        let r2 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false).unwrap();
+        assert_eq!(r2.dirty_files, 0);
+        assert_eq!(
+            r2.edges_lsp_resolved, 0,
+            "no-op reindex must skip LSP (MCP-side gate broken)"
+        );
+        assert_eq!(r2.files_indexed, 0);
     }
 
     #[test]

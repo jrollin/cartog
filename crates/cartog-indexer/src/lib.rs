@@ -123,6 +123,9 @@ pub struct IndexResult {
     pub edges_resolved: u32,
     #[serde(skip_serializing_if = "is_zero")]
     pub edges_lsp_resolved: u32,
+    /// Files added, modified, or removed this run. Callers gate post-index passes (e.g. LSP) on this.
+    #[serde(skip)]
+    pub dirty_files: u32,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -369,8 +372,11 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
     // The LSP-side helpers (`unresolved_edges`, `find_symbol_at_location`,
     // `update_edge_target`) all use single-statement execs that participate in
     // the outer transaction — no extra plumbing needed.
+    //
+    // Skipped on no-op runs: unresolved set is identical to last run, so
+    // re-querying the LSP repeats work. Use `--force` to retry.
     #[cfg(feature = "lsp")]
-    if lsp {
+    if lsp && !dirty_files.is_empty() {
         result.edges_lsp_resolved = cartog_lsp::lsp_resolve_edges(db, &root, None)?;
     }
     #[cfg(not(feature = "lsp"))]
@@ -381,6 +387,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         db.set_metadata("last_commit", &commit)?;
     }
 
+    result.dirty_files = dirty_files.len() as u32;
     tx.commit()?;
     Ok(result)
 }
@@ -985,17 +992,48 @@ mod tests {
             // First index
             let r1 = index_directory(&db, &fixtures, false, false).unwrap();
             assert!(r1.files_indexed > 0);
+            assert!(r1.dirty_files > 0);
 
-            // Second index without force — should skip all files
+            // Second index without force — should skip all files (no-op)
             let r2 = index_directory(&db, &fixtures, false, false).unwrap();
             assert_eq!(r2.files_indexed, 0);
             assert!(r2.files_skipped > 0);
+            assert_eq!(
+                r2.dirty_files, 0,
+                "no-op reindex must report zero dirty files — gates the LSP pass"
+            );
+            assert_eq!(
+                r2.edges_lsp_resolved, 0,
+                "no-op reindex must not run LSP resolution"
+            );
 
-            // Force re-index — should re-index all files
+            // Force re-index — dirty_files matches files_indexed
             let r3 = index_directory(&db, &fixtures, true, false).unwrap();
             assert_eq!(r3.files_indexed, r1.files_indexed);
             assert_eq!(r3.files_skipped, 0);
+            assert_eq!(r3.dirty_files, r3.files_indexed);
         }
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn test_noop_reindex_does_not_run_lsp() {
+        // Regression guard: no dirty files → no LSP pass.
+        use cartog_db::Database;
+
+        let db = Database::open_memory().unwrap();
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/auth");
+        if !fixtures.exists() {
+            return;
+        }
+
+        // Prime, then re-run. Don't assert LSP found anything (depends on
+        // whether pyright is on PATH in CI) — only that the second pass skips it.
+        let _ = index_directory(&db, &fixtures, false, true).unwrap();
+
+        let r2 = index_directory(&db, &fixtures, false, true).unwrap();
+        assert_eq!(r2.dirty_files, 0);
+        assert_eq!(r2.edges_lsp_resolved, 0);
     }
 
     #[test]
