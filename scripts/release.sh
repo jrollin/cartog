@@ -53,6 +53,8 @@ next_version() {
 
 # sanity checks
 [[ -f "$CARGO_TOML" ]] || die "cannot find $CARGO_TOML — run from repo root"
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+[[ "$BRANCH" == "main" ]] || die "release must be cut from main (currently on '$BRANCH')"
 git diff --quiet && git diff --cached --quiet || die "working tree is dirty — commit or stash first"
 
 CURRENT=$(current_version)
