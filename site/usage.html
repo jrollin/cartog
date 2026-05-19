@@ -5,7 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cartog — Documentation</title>
   <meta name="description" content="CLI reference, agent skill setup, MCP server configuration, and semantic search for Cartog.">
-  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230a1620'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-family='monospace' font-size='38' font-weight='700' fill='%2300e599'%3Ec%3C/text%3E%3C/svg%3E">
+  <meta property="og:title" content="Cartog — Documentation">
+  <meta property="og:description" content="CLI reference, MCP server configuration, and semantic search for Cartog.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://jrollin.github.io/cartog/usage.html">
+  <meta property="og:image" content="https://jrollin.github.io/cartog/demo.gif">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Cartog — Documentation">
+  <meta name="twitter:description" content="CLI reference, MCP server configuration, and semantic search for Cartog.">
+  <meta name="twitter:image" content="https://jrollin.github.io/cartog/demo.gif">
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 
@@ -46,21 +56,26 @@
         </div>
         <div class="sidebar-group">
           <div class="sidebar-label">CLI Reference</div>
+          <a href="#cmd-callees">cartog callees</a>
+          <a href="#cmd-changes">cartog changes</a>
+          <a href="#cmd-completions">cartog completions</a>
+          <a href="#cmd-config">cartog config</a>
+          <a href="#cmd-deps">cartog deps</a>
+          <a href="#cmd-doctor">cartog doctor</a>
+          <a href="#cmd-hierarchy">cartog hierarchy</a>
+          <a href="#cmd-ide">cartog ide</a>
+          <a href="#cmd-impact">cartog impact</a>
           <a href="#cmd-index">cartog index</a>
-          <a href="#cmd-search">cartog search</a>
+          <a href="#cmd-init">cartog init</a>
+          <a href="#cmd-manpage">cartog manpage</a>
+          <a href="#cmd-map">cartog map</a>
           <a href="#cmd-outline">cartog outline</a>
           <a href="#cmd-refs">cartog refs</a>
-          <a href="#cmd-callees">cartog callees</a>
-          <a href="#cmd-impact">cartog impact</a>
-          <a href="#cmd-hierarchy">cartog hierarchy</a>
-          <a href="#cmd-deps">cartog deps</a>
-          <a href="#cmd-stats">cartog stats</a>
-          <a href="#cmd-doctor">cartog doctor</a>
-          <a href="#cmd-map">cartog map</a>
-          <a href="#cmd-changes">cartog changes</a>
-          <a href="#cmd-watch">cartog watch</a>
-          <a href="#cmd-serve">cartog serve</a>
+          <a href="#cmd-search">cartog search</a>
           <a href="#cmd-self">cartog self</a>
+          <a href="#cmd-serve">cartog serve</a>
+          <a href="#cmd-stats">cartog stats</a>
+          <a href="#cmd-watch">cartog watch</a>
         </div>
         <div class="sidebar-group">
           <div class="sidebar-label">Configuration</div>
@@ -77,7 +92,9 @@
           <div class="sidebar-label">Integration</div>
           <a href="#agent-skill">Agent Skill</a>
           <a href="#mcp-server">MCP Server</a>
-          <a href="#mcp-clients">Per-Client Setup</a>
+          <a href="#mcp-quickstart">Wiring editors: cartog ide</a>
+          <a href="#mcp-ide">Bootstrap sequence</a>
+          <a href="#mcp-clients">Manual setup</a>
         </div>
         <div class="sidebar-group">
           <div class="sidebar-label">Reference</div>
@@ -93,17 +110,23 @@
     <main class="docs-content">
 
       <p style="margin-bottom: 24px;">
-        <span class="badge">v0.15.1</span>
-        <a href="https://github.com/jrollin/cartog/releases/latest" style="margin-left: 8px; font-size: 13px;">View changelog →</a>
+        <a href="https://github.com/jrollin/cartog/releases/latest" class="badge" style="text-decoration: none;">Latest release</a>
+        <a href="https://github.com/jrollin/cartog/releases" style="margin-left: 8px; font-size: 13px;">View changelog →</a>
       </p>
 
       <h2 id="quick-start">Quick Start</h2>
       <pre>cargo install cartog
 cd your-project
-cartog index .               <span class="comment"># build the graph (~95ms for 4k LOC)</span>
+cartog init                  <span class="comment"># 1. scaffold .cartog.toml</span>
+cartog index                 <span class="comment"># 2. build the graph (~95ms for 4k LOC)</span>
+
 cartog search validate       <span class="comment"># find symbols by name (sub-ms)</span>
 cartog refs validate_token   <span class="comment"># who calls/imports/references this?</span>
-cartog impact validate_token <span class="comment"># what breaks if I change this?</span></pre>
+cartog impact validate_token <span class="comment"># what breaks if I change this?</span>
+
+<span class="comment"># Optional — wire cartog into your editor for AI agents</span>
+cartog ide                   <span class="comment"># Cursor, VS Code, Claude Desktop, Codex CLI, ...</span></pre>
+      <p>Two commands to start: <code>init</code> writes <code>.cartog.toml</code>, <code>index</code> builds the graph. Add <code>cartog ide</code> only if you want MCP wired into an editor — CLI users can skip it.</p>
 
       <h3>Add semantic search (optional, still fully local)</h3>
       <pre>cartog rag setup             <span class="comment"># download models (~1.2GB, one-time)</span>
@@ -320,13 +343,19 @@ cartog map --tokens 8000      <span class="comment"># detailed</span></pre>
 cartog changes --commits 10       <span class="comment"># last 10 commits</span>
 cartog changes --kind function    <span class="comment"># only functions</span></pre>
 
+      <h2 id="cmd-config"><code>cartog config</code></h2>
+      <p>Print the resolved configuration (merged defaults, <code>.cartog.toml</code>, and env overrides). Useful for verifying <code>[rag]</code> tuning, watch debounce, and provider selection.</p>
+      <pre>cartog config              <span class="comment"># human-readable</span>
+cartog config --json       <span class="comment"># JSON for scripts</span></pre>
+
       <h2 id="cmd-watch"><code>cartog watch</code></h2>
       <p>Watch for file changes and auto-re-index. Keeps the graph fresh during development.</p>
-      <pre>cartog watch                      <span class="comment"># watch CWD</span>
-cartog watch src/                 <span class="comment"># watch subdirectory</span>
-cartog watch --rag                <span class="comment"># also auto-embed</span>
-cartog watch --rag --rag-delay 60 <span class="comment"># embed after 60s idle</span>
-cartog watch --debounce 5         <span class="comment"># 5s debounce window</span></pre>
+      <pre>cartog watch                       <span class="comment"># watch CWD</span>
+cartog watch src/                  <span class="comment"># watch subdirectory</span>
+cartog watch --rag                 <span class="comment"># also auto-embed</span>
+cartog watch --rag --rag-delay 60  <span class="comment"># embed after 60s idle</span>
+cartog watch --debounce 10         <span class="comment"># 10s debounce window</span>
+cartog watch --json                <span class="comment"># NDJSON event stream</span></pre>
 
       <h2 id="cmd-serve"><code>cartog serve</code></h2>
       <p>Start cartog as an MCP server over stdio.</p>
@@ -334,13 +363,42 @@ cartog watch --debounce 5         <span class="comment"># 5s debounce window</sp
 cartog serve --watch          <span class="comment"># + background file watcher</span>
 cartog serve --watch --rag    <span class="comment"># + watcher + auto RAG</span></pre>
 
-      <h2 id="cmd-self"><code>cartog self &lt;update|version|rollback&gt;</code></h2>
+      <h2 id="cmd-init"><code>cartog init</code></h2>
+      <p>Scaffold a <code>.cartog.toml</code> template in the current project. That's all it does — config only, no editor wiring, no indexing. The next-steps hint points at <code>cartog ide</code> and <code>cartog index</code>.</p>
+      <pre>cartog init                  <span class="comment"># scaffold .cartog.toml</span>
+cartog init --dry-run        <span class="comment"># preview without writing</span></pre>
+      <p>Never overwrites an existing <code>.cartog.toml</code>. Re-running is a no-op (still prints the next-steps hint).</p>
+
+      <h2 id="cmd-ide"><code>cartog ide</code></h2>
+      <p>Wire <code>cartog serve</code> into one or all MCP-compatible editors. The only verb that writes editor configs.</p>
+      <pre>cartog ide                          <span class="comment"># all installed clients, all scopes</span>
+cartog ide --client cursor          <span class="comment"># one client</span>
+cartog ide --scope user             <span class="comment"># only user-scope clients</span>
+cartog ide --scope project          <span class="comment"># only project-scoped clients (.mcp.json, .cursor/, .vscode/)</span>
+cartog ide --dry-run                <span class="comment"># preview with before/after diff</span>
+cartog ide --no-watch               <span class="comment"># drop --watch from Claude Code args</span></pre>
+      <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. See the <a href="#mcp-ide">Bootstrap sequence</a> for the recommended verb order.</p>
+
+      <h2 id="cmd-self"><code>cartog self &lt;update|version|rollback|migrate-db&gt;</code></h2>
       <p>Manage the installed cartog binary in place: upgrade, inspect, or roll back. <code>cargo install cartog</code> users get an exit-3 refusal pointing at <code>cargo install cartog --force</code>; release-tarball installs swap atomically with SHA256 verification and a <code>&lt;bin&gt;.old</code> rollback slot.</p>
-      <pre>cartog self update             <span class="comment"># upgrade to the latest stable</span>
-cartog self update --check     <span class="comment"># exit 1 if outdated, 0 if current</span>
-cartog self version            <span class="comment"># target + install source + last check</span>
-cartog self rollback           <span class="comment"># restore the previous binary</span></pre>
-      <p>Auto-check runs at most once per 24h on interactive sessions; suppressed under <code>CARTOG_NO_UPDATE_CHECK=1</code>, non-TTY stdout, and inside <code>cartog serve</code>/<code>watch</code>. See <a href="https://github.com/jrollin/cartog/blob/main/docs/updates.md">docs/updates.md</a> for the full exit-code matrix and state file location.</p>
+      <pre>cartog self update              <span class="comment"># upgrade to the latest stable</span>
+cartog self update --check      <span class="comment"># exit 1 if outdated, 0 if current</span>
+cartog self version             <span class="comment"># target + install source + last check</span>
+cartog self rollback            <span class="comment"># restore the previous binary</span>
+cartog self migrate-db          <span class="comment"># move legacy .cartog.db into .cartog/db.sqlite</span>
+cartog self migrate-db --dry-run <span class="comment"># preview the move without touching disk</span></pre>
+      <p>Auto-check runs at most once per 24h on interactive sessions; suppressed under <code>CARTOG_NO_UPDATE_CHECK=1</code>, non-TTY stdout, and inside <code>cartog serve</code>/<code>watch</code>. <code>migrate-db</code> refuses to overwrite an existing <code>.cartog/db.sqlite</code>, refuses to run while a peer process holds the DB lock, and refuses symlinked sources. See <a href="https://github.com/jrollin/cartog/blob/main/docs/updates.md">docs/updates.md</a> for the full exit-code matrix and state file location.</p>
+
+      <h2 id="cmd-completions"><code>cartog completions &lt;shell&gt;</code></h2>
+      <p>Generate shell completion scripts for <code>bash</code>, <code>zsh</code>, <code>fish</code>, <code>powershell</code>, or <code>elvish</code>.</p>
+      <pre>cartog completions zsh   &gt; ~/.zfunc/_cartog
+cartog completions bash  &gt; /usr/local/etc/bash_completion.d/cartog
+cartog completions fish  &gt; ~/.config/fish/completions/cartog.fish</pre>
+
+      <h2 id="cmd-manpage"><code>cartog manpage</code></h2>
+      <p>Emit a <code>roff</code>-formatted man page on stdout. Intended for packagers and distro maintainers.</p>
+      <pre>cartog manpage &gt; /usr/local/share/man/man1/cartog.1
+man cartog</pre>
 
       <!-- ── Semantic Search ───────────────────── -->
 
@@ -383,7 +441,7 @@ cartog rag search "deployment architecture" --kind document</pre>
       <pre>/plugin install cartog@cartog-plugins</pre>
 
       <h2 id="mcp-server">MCP Server</h2>
-      <p><code>cartog serve</code> exposes 12 tools over stdio for MCP-compatible clients.</p>
+      <p><code>cartog serve</code> exposes 13 tools over stdio for MCP-compatible clients.</p>
 
       <table>
         <thead>
@@ -391,6 +449,7 @@ cartog rag search "deployment architecture" --kind document</pre>
         </thead>
         <tbody>
           <tr><td><code>cartog_index</code></td><td>Build/update the code graph</td></tr>
+          <tr><td><code>cartog_map</code></td><td>Codebase orientation: file list + top symbols (call first in a new repo)</td></tr>
           <tr><td><code>cartog_search</code></td><td>Find symbols by partial name</td></tr>
           <tr><td><code>cartog_outline</code></td><td>File structure (symbols, line ranges)</td></tr>
           <tr><td><code>cartog_refs</code></td><td>All references to a symbol</td></tr>
@@ -405,7 +464,26 @@ cartog rag search "deployment architecture" --kind document</pre>
         </tbody>
       </table>
 
-      <h2 id="mcp-clients">Per-Client Setup</h2>
+      <h3 id="mcp-quickstart">Wiring cartog into editors: <code>cartog ide</code></h3>
+      <p><code>cartog ide</code> is the only verb that writes MCP configs. Run it once per machine, plus any time you install a new editor.</p>
+      <pre>cartog ide                          <span class="comment"># all installed clients, all scopes</span>
+cartog ide --scope project          <span class="comment"># .mcp.json, .cursor/, .vscode/</span>
+cartog ide --scope user             <span class="comment"># user-scope clients only</span>
+cartog ide --client cursor          <span class="comment"># one client</span>
+cartog ide --dry-run                <span class="comment"># preview with before/after diff</span></pre>
+      <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. User-scope clients whose config directory is missing are skipped (treated as "not installed"). Codex stores all servers in one global <code>~/.codex/config.toml</code>, so cartog writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section. Idempotent: existing servers in each file are preserved.</p>
+      <p><strong>Known limitation:</strong> configs containing JSON-with-comments (JSONC) are left untouched and reported as skipped. Configure those clients manually using the snippets below.</p>
+
+      <h3 id="mcp-ide">Bootstrap sequence</h3>
+      <p>Two commands to start; the third is optional.</p>
+      <pre>cartog init                  <span class="comment"># 1. scaffold .cartog.toml (config only)</span>
+cartog index                 <span class="comment"># 2. build the code graph</span>
+
+cartog ide                   <span class="comment"># optional — wire MCP into installed editors</span></pre>
+      <p>Edit <code>.cartog.toml</code> between steps 1 and 2 to change DB path or embedding provider before any heavy work runs. CLI-only users stop after step 2; run <code>cartog ide</code> only if you want cartog wired into MCP-aware editors.</p>
+
+      <h2 id="mcp-clients">Manual setup (per client)</h2>
+      <p>If you prefer to edit MCP configs by hand, here are the canonical paths and JSON shapes <code>cartog ide</code> writes.</p>
 
       <h3>Claude Code</h3>
       <pre>claude mcp add cartog -- cartog serve --watch</pre>
@@ -453,13 +531,13 @@ cartog rag search "deployment architecture" --kind document</pre>
 }</pre>
 
       <h3>OpenCode</h3>
-      <p>Edit <code>.opencode.json</code>:</p>
+      <p>Edit <code>~/.config/opencode/opencode.json</code>:</p>
       <pre>{
   "mcp": {
     "cartog": {
-      "type": "stdio",
-      "command": "cartog",
-      "args": ["serve"]
+      "type": "local",
+      "command": ["cartog", "serve"],
+      "enabled": true
     }
   }
 }</pre>
@@ -469,10 +547,37 @@ cartog rag search "deployment architecture" --kind document</pre>
       <pre>{
   "context_servers": {
     "cartog": {
-      "command": {
-        "path": "cartog",
-        "args": ["serve"]
-      }
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}</pre>
+
+      <h3>Codex CLI</h3>
+      <p>Edit <code>~/.codex/config.toml</code>. Codex stores all MCP servers in this one user-global file (no per-project config), so <code>cartog ide</code> writes a per-project <code>[mcp_servers.cartog-&lt;dir&gt;-&lt;hash&gt;]</code> section.</p>
+      <pre>[mcp_servers.cartog]
+command = "cartog"
+args = ["serve"]</pre>
+
+      <h3>Gemini CLI</h3>
+      <p>Edit <code>~/.gemini/settings.json</code>:</p>
+      <pre>{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}</pre>
+
+      <h3>VS Code (Copilot)</h3>
+      <p>Edit <code>.vscode/mcp.json</code> (note: top-level key is <code>servers</code>, not <code>mcpServers</code>):</p>
+      <pre>{
+  "servers": {
+    "cartog": {
+      "type": "stdio",
+      "command": "cartog",
+      "args": ["serve"]
     }
   }
 }</pre>
@@ -551,10 +656,11 @@ cartog --tokens 200 outline src/db.rs</pre>
 <footer class="footer">
   <div class="container">
     <div class="footer-inner">
-      <span>Cartog · MIT License · v0.15.1</span>
+      <span>Cartog · <a href="https://github.com/jrollin/cartog/blob/main/LICENSE">MIT License</a> · <a href="https://github.com/jrollin/cartog/releases">Latest release</a></span>
       <ul class="footer-links">
         <li><a href="https://github.com/jrollin/cartog">GitHub</a></li>
         <li><a href="https://crates.io/crates/cartog">crates.io</a></li>
+        <li><a href="https://github.com/jrollin/cartog/blob/main/site/usage.html">Edit this page</a></li>
         <li><a href="index.html">Home</a></li>
       </ul>
     </div>

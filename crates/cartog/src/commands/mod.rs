@@ -15,6 +15,9 @@ use cartog_indexer as indexer;
 use cartog_rag as rag;
 use cartog_watch::{self as watch, WatchConfig};
 
+pub mod ide;
+pub mod init;
+
 /// Stderr spinner for long-running CLI commands.
 ///
 /// No-op in non-TTY contexts (piped output, CI logs) so logs stay clean.

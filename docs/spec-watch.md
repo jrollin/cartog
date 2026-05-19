@@ -39,7 +39,7 @@ Debounce filter (5s default) ──> code graph index (incremental, ~1-3s)
 ## Functional Requirements
 
 ### FR-001: File Change Detection
-When a supported source file (Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, Markdown) is created, modified, or deleted within the watched directory, the system shall queue a re-index after the debounce window expires.
+When a supported source file (Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Markdown) is created, modified, or deleted within the watched directory, the system shall queue a re-index after the debounce window expires.
 
 ### FR-002: Debounce Window
 While file change events are arriving within the debounce window (default 5s, configurable via `--debounce`), the system shall reset the timer and not trigger re-indexing until the window elapses without new events.
@@ -101,7 +101,7 @@ Options:
 
 ### AC-001: Basic file change triggers re-index
 Given `cartog watch` is running on a directory
-When I save a Python/TS/Rust/Go/Ruby/Java file
+When I save a Python/TS/Rust/Go/Ruby/Java/PHP/Markdown file
 Then the code graph is re-indexed within debounce window + index time
 And the log shows files indexed count > 0
 

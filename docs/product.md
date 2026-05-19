@@ -38,7 +38,7 @@ Measured across 13 scenarios, 5 languages. Best gains on call chain tracing (88%
 - **Instant queries**: Pre-computed graph — 8us for outline, 100us for search, 450us for refs.
 - **Incremental indexing**: Layered change detection — git diff, file SHA-256, symbol Merkle. Only re-indexes modified files, and within those files, only updates changed symbols. See [architecture/incremental-indexing.md](architecture/incremental-indexing.md).
 - **Live index**: `cartog watch` auto re-indexes on file changes. Agent always queries fresh data.
-- **MCP server**: `cartog serve` exposes 12 tools over stdio. Plug into any MCP-compatible client.
+- **MCP server**: `cartog serve` exposes 13 tools over stdio. Plug into any MCP-compatible client.
 - **100% local**: tree-sitter parsing, SQLite storage, ONNX embeddings. No API keys, no telemetry. Code never leaves your machine.
 - **Dual search**: keyword search (sub-ms, symbol names) + semantic search (natural language, ~300ms). Run both when unsure.
 - **Document indexing**: Markdown files (`.md`) are indexed alongside code. Use `--kind document` for docs or `--kind all` for both code and docs.
@@ -49,7 +49,7 @@ Measured across 13 scenarios, 5 languages. Best gains on call chain tracing (88%
 Pre-computed graph eliminates multi-step discovery. One `refs` call replaces grep + filter + read. Transitive analysis (`impact`) is impossible with grep.
 
 **vs language servers (LSP):**
-No startup time, no per-language server process, no config. Single binary covers 8 code languages (plus Markdown documents). Trade-off: ~90% name resolution accuracy vs LSP's full semantic analysis.
+No startup time, no per-language server process, no config. Single binary covers 9 languages (8 code languages plus Markdown documents). Trade-off: ~90% name resolution accuracy vs LSP's full semantic analysis.
 
 **vs alternatives (Serena MCP, codanna, Aider repo-map):**
 
@@ -65,9 +65,9 @@ Structural/heuristic name resolution, not full semantic. 90% accuracy — enough
 
 ## Distribution
 
-- **Primary**: Claude Code skill (SKILL.md + bash scripts)
-- **Secondary**: MCP server (`cartog serve` over stdio) for Claude Code, Cursor, and other MCP clients
-- **Tertiary**: `cargo install cartog` / pre-built binaries for direct CLI use
+- **Primary**: CLI binary — `cargo install cartog` or `curl -fsSL https://jrollin.github.io/cartog/install.sh | sh`. Bootstrap with `cartog init` + `cartog index`.
+- **Secondary**: MCP server (`cartog serve` over stdio), wired into editors via `cartog ide`. Supports Claude Code, Claude Desktop, Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed.
+- **Tertiary**: Claude Code plugin (`/plugin install cartog@cartog-plugins`) and agent skill (`npx skills add jrollin/cartog`) for users who want the bundled install + skill + MCP setup in one step.
 
 ## Further Reading
 

@@ -151,14 +151,48 @@ run_background_pipeline() {
 
 ensure_cartog_installed
 
-# F2: Code graph index — kept foreground because cartog MCP queries depend on it
+# F2a: config gate. The new bootstrap flow is `cartog init` (writes
+# .cartog.toml) BEFORE `cartog index` so the index lands at the configured
+# location. On interactive TTY sessions, defer the index when no
+# .cartog.toml is present so the agent can ask the user before proceeding.
+#
+# Bypass cases (proceed with default-config index, no prompt):
+#   - non-TTY stdin (CI / piped scripts / unattended setups)
+#   - CARTOG_AUTO_INIT=1 (explicit opt-in for users who want defaults)
+#
+# Note: in MCP sessions, `cartog serve` may have already auto-created an
+# empty `.cartog/db.sqlite` at startup. That's harmless — queries against
+# an empty index return zero results until the user runs init+index.
+_toml_root="${GIT_ROOT:-.}"
+if [ ! -f "${_toml_root}/.cartog.toml" ] \
+   && [ -z "${CARTOG_AUTO_INIT:-}" ] \
+   && [ -t 0 ]; then
+    echo "No .cartog.toml found at ${_toml_root}."
+    echo "Run \`cartog init\` to scaffold one (writes a commented template, never"
+    echo "overwrites). Then \`cartog index\` will build the graph at the configured"
+    echo "location. Set CARTOG_AUTO_INIT=1 to skip this check and index with defaults."
+    exit 0
+fi
+
+# F2b: Code graph index — kept foreground because cartog MCP queries depend on it
 # and it's typically <1s for incremental updates.
+#
+# Failure handling: we deliberately do NOT abort the script on a non-zero exit.
+# The background pipeline (B1/B2) is independent of F2b — reranker download and
+# embedding still help even if the symbol graph is stale — so we record the
+# failure for surfacing next session and keep going. `set -e` would otherwise
+# kill the script before run_background_pipeline could be spawned.
 if [ ! -f "$DB_FILE" ]; then
     echo "No cartog index found. Building..."
 else
     echo "Updating cartog index..."
 fi
-cartog index .
+index_rc=0
+cartog index . || index_rc=$?
+if [ "$index_rc" -ne 0 ]; then
+    echo "cartog index failed (exit $index_rc) — continuing to background pipeline." >&2
+    printf 'cartog index . failed (exit %d). See terminal output above.\n' "$index_rc" > "$LAST_ERROR_FILE"
+fi
 
 # F3: drift warning (the SessionEnd hook does the actual update).
 warn_if_drifted

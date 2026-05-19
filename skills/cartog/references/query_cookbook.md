@@ -75,6 +75,19 @@ cartog callees validate_token          # What it depends on
 cartog impact validate_token           # Who depends on it
 ```
 
+### "What did my recent commits break?" (regression triage)
+
+When the user reports something broken after recent changes, pair `cartog changes` with `cartog impact` to surface candidate culprits without re-reading every diff:
+
+```bash
+cartog changes --commits 3                # symbols touched in the last 3 commits
+# For each high-suspicion symbol from that output:
+cartog impact <symbol> --depth 3          # what transitively depends on it
+cartog refs <symbol> --kind calls         # direct callers
+```
+
+Read the `cartog changes` output first, pick the 1–3 symbols most relevant to the user's bug description, and run `impact` on each. This narrows the search space before reading any source. For "the failure started today", add `--commits 1`; for "this regressed last week", use `--commits 20` or higher.
+
 ### Trace a call chain
 ```bash
 cartog callees handle_request          # What does it call?
@@ -140,16 +153,18 @@ cartog rag index .        # embed all symbols + documents
 If the project uses Ollama for embeddings (configured in `.cartog.toml`):
 
 ```bash
-# No rag setup needed — models are managed by Ollama
-ollama pull nomic-embed-text        # ensure model is available
+cartog rag setup                    # still needed: downloads the cross-encoder reranker
+ollama pull nomic-embed-text        # ensure the embedding model is available
 cartog rag index .                  # embed with Ollama
 cartog rag search "error handling"  # search works the same
 ```
 
+Ollama manages only the embedding model. The reranker (~100MB cross-encoder) is provider-agnostic and still comes from HuggingFace via `cartog rag setup`. Skip `rag setup` only if you intentionally disable the reranker.
+
 #### Troubleshooting
 
 - **"Unknown or disabled embedding provider: 'ollama'"** — Install with `cargo install cartog --features ollama-embedding`.
-- **"Failed to connect to Ollama server"** — Ensure Ollama is running (`ollama serve`).
+- **"Failed to connect to Ollama server"** — Ensure Ollama is running (`ollama serve`). For non-default hosts, set `OLLAMA_HOST=host:port` before launching cartog.
 - **"Embedding dimension changed"** — Provider switch detected. Run `cartog rag index` to re-embed.
 
 ### "Find code related to a concept"
@@ -185,7 +200,7 @@ After upgrading cartog, `rag index` auto-detects embedding format changes and re
 | `"config"` | Good | Single keyword works — FTS5 matches token in names and content |
 | `"validate_token"` | Good | FTS5 matches the full token; use `cartog search` only if you need substring matching |
 | `"parse"` | OK | Short queries return broad results; add context if too many hits |
-| `"auth*"` | Bad | FTS5 wraps queries in quotes, disabling wildcards |
+| `"auth*"` | Bad | FTS5 wraps queries in quotes, disabling wildcards. Use `cartog search auth` for prefix matching instead — it walks the symbol table with substring semantics. |
 
 ### Interpreting results
 

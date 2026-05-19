@@ -64,7 +64,7 @@ crates/cartog/         (binary — CLI dispatch, config, self-update)
 ├── cartog-rag         (embeddings, hybrid search, reranker)
 ├── cartog-lsp         (LSP-based edge resolution — default feature)
 ├── cartog-watch       (debounced re-index + deferred RAG)
-├── cartog-mcp         (MCP server over stdio, 12 tools)
+├── cartog-mcp         (MCP server over stdio, 13 tools)
 └── cartog-process-lock (PID-file locks for serve/watch peers)
 ```
 
@@ -124,7 +124,7 @@ After implementation, mark checklist items complete — the spec stays as a desi
 ## Current State
 
 - **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Markdown
-- **CLI**: 19 top-level commands (`index`, `search`, `outline`, `refs`, `callees`, `impact`, `hierarchy`, `deps`, `stats`, `map`, `changes`, `config`, `doctor`, `watch`, `serve`, `completions`, `manpage`, plus `rag` with 3 subcommands and `self` with 4 subcommands) + MCP server (12 tools)
+- **CLI**: 21 top-level commands (`init`, `ide`, `index`, `search`, `outline`, `refs`, `callees`, `impact`, `hierarchy`, `deps`, `stats`, `map`, `changes`, `config`, `doctor`, `watch`, `serve`, `completions`, `manpage`, plus `rag` with 3 subcommands and `self` with 4 subcommands) + MCP server (13 tools)
 - **Indexing**: incremental (git-based + SHA-256 + Merkle-tree symbol diffing), `--force` re-index. Stable symbol IDs (`file:kind:qualified_name`) survive line movements. Scoped edge resolution for changed files only
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
 - **Watch**: `cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding

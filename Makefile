@@ -1,8 +1,25 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php bench bench-criterion bench-rag eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-install-script sync-install-script bench bench-criterion bench-rag eval-skill eval-agents
 
 # --- Full integrity check ---
 
-check: check-rust check-fixtures check-skill ## Run all integrity checks
+check: check-rust check-fixtures check-skill check-install-script ## Run all integrity checks
+
+# --- Install script sync ---
+#
+# scripts/install.sh is the canonical copy. site/install.sh must be a
+# byte-identical mirror because that's what GitHub Pages serves at
+# https://jrollin.github.io/cartog/install.sh. We can't symlink because
+# Pages does not reliably resolve symlinks outside the published dir.
+
+check-install-script: ## Verify site/install.sh matches scripts/install.sh
+	@echo "==> Checking install.sh mirror..."
+	@diff -q scripts/install.sh site/install.sh > /dev/null || \
+		( echo "    site/install.sh is out of date — run 'make sync-install-script'"; exit 1 )
+	@sh -n scripts/install.sh
+	@echo "    OK"
+
+sync-install-script: ## Copy scripts/install.sh into site/install.sh (run after editing the script)
+	cp scripts/install.sh site/install.sh
 
 # --- Fixture validation helper ---
 #

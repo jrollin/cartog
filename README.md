@@ -22,10 +22,21 @@ Cartog pre-computes a code graph — symbols, calls, imports, inheritance — an
 ```bash
 cargo install cartog          # or download a binary from GitHub Releases
 cd your-project
-cartog index .                # build the graph (~95ms for 4k LOC)
+cartog init                   # 1. scaffold .cartog.toml
+cartog index                  # 2. build the code graph
 ```
 
-That's it. Now query:
+That's it for CLI use. Two commands.
+
+If you want MCP wired into your editor (Cursor, VS Code, Claude Desktop, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed), add one more:
+
+```bash
+cartog ide                    # optional — only if you want editor integration
+```
+
+All three commands are idempotent.
+
+Now query:
 
 ```bash
 cartog search validate        # find symbols by name         (sub-ms)
@@ -95,7 +106,7 @@ cartog watch . --rag             # also re-embed (deferred, non-blocking)
 ### MCP server for AI agents
 
 ```bash
-cartog serve                     # 12 tools over stdio
+cartog serve                     # 13 tools over stdio
 cartog serve --watch --rag       # with live re-indexing + semantic search
 ```
 
@@ -107,7 +118,18 @@ Cartog auto-detects language servers on PATH (rust-analyzer, pyright, typescript
 
 ## Install
 
-### From crates.io
+### Install script (macOS / Linux, no Rust required)
+
+```bash
+curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
+```
+
+Detects your OS + architecture, downloads the matching binary from the latest
+GitHub Release, verifies its SHA-256, and installs to `/usr/local/bin` (or
+`~/.local/bin` if non-root). Override with `CARTOG_INSTALL_DIR`; pin a
+version with `CARTOG_VERSION=<version>` (e.g. the tag from [Releases](https://github.com/jrollin/cartog/releases)). Audit the script: [`scripts/install.sh`](scripts/install.sh).
+
+### From crates.io (Rust toolchain required)
 
 ```bash
 cargo install cartog                                  # default (includes LSP)
@@ -115,7 +137,7 @@ cargo install cartog --no-default-features            # minimal, no LSP
 cargo install cartog --features ollama-embedding      # + Ollama support
 ```
 
-### Pre-built binaries
+### Pre-built binaries (manual)
 
 ```bash
 # macOS (Apple Silicon)
@@ -146,6 +168,16 @@ cartog self rollback         # restore the previous binary
 
 Cargo-installed binaries upgrade with `cargo install cartog --force`. See [docs/updates.md](docs/updates.md) for env vars, exit codes, and the state file location.
 
+### Agent integration: which path?
+
+Three setup paths for agents and editors. Pick the one that matches your stack — they are alternatives, not steps.
+
+| Path | Use it when | What you get |
+|---|---|---|
+| `cartog ide` | You want MCP wired into one or more editors (Cursor, VS Code, Codex CLI, Gemini CLI, Claude Desktop, OpenCode, Windsurf, Zed). | MCP entries written to the right files; interactive picker if you run it without flags. |
+| Claude Code plugin | You are on Claude Code and want install + skill + MCP wired in one step. | Bundled: binary install, behavioural skill, MCP server, all preconfigured. |
+| Agent skill | You use an agent that follows the skills protocol (Cursor, Copilot, others) and only need the behavioural rules, not MCP. | Skill files installed into the agent's skill directory; works alongside any install method. |
+
 ### Claude Code plugin
 
 Run these two commands **one at a time** in Claude Code:
@@ -174,25 +206,23 @@ npx skills add jrollin/cartog
 
 ## MCP Server Setup
 
+`cartog ide` wires `cartog serve` into MCP-aware editors:
+
 ```bash
-# Claude Code
-claude mcp add cartog -- cartog serve --watch --rag
+cartog ide                                  # all installed clients, all scopes
+cartog ide --client cursor                  # one client
+cartog ide --scope project                  # only project-scoped (.mcp.json, .cursor/, .vscode/)
+cartog ide --scope user                     # only user-scope clients
+cartog ide --client claude-desktop --dry-run  # preview without writing
 ```
 
-For other clients, add to your MCP config:
+Project-scoped writes: Claude Code (`.mcp.json`), Cursor (`.cursor/mcp.json`),
+VS Code (`.vscode/mcp.json`). User-scope: Claude Code user settings,
+Claude Desktop, Codex CLI (TOML), Gemini CLI, OpenCode, Windsurf, Zed.
+Idempotent: existing servers in each file are preserved.
 
-```json
-{
-  "mcpServers": {
-    "cartog": {
-      "command": "cartog",
-      "args": ["serve", "--watch", "--rag"]
-    }
-  }
-}
-```
-
-See [Usage — MCP Server](docs/usage.md#mcp-server) for per-client details (Cursor, Windsurf, Zed, OpenCode).
+See [docs/usage.md](docs/usage.md#mcp-server) for flags, the JSON / TOML
+shape per client, and the manual-setup fallback.
 
 ## Commands
 

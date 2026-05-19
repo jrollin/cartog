@@ -5,7 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cartog — Stop grepping blind. Query your code graph.</title>
   <meta name="description" content="Code graph navigator. Pre-computed symbols, calls, imports and inheritance — queried in microseconds. Single binary, 100% local, 9 languages.">
-  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230a1620'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-family='monospace' font-size='38' font-weight='700' fill='%2300e599'%3Ec%3C/text%3E%3C/svg%3E">
+  <meta property="og:title" content="Cartog — code graph navigator">
+  <meta property="og:description" content="Pre-computed code graph. Microsecond queries. Single binary, 100% local, 9 languages.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://jrollin.github.io/cartog/">
+  <meta property="og:image" content="https://jrollin.github.io/cartog/demo.gif">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Cartog — code graph navigator">
+  <meta name="twitter:description" content="Pre-computed code graph. Microsecond queries. Single binary, 100% local, 9 languages.">
+  <meta name="twitter:image" content="https://jrollin.github.io/cartog/demo.gif">
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 
@@ -42,116 +52,152 @@
     </h1>
 
     <p class="subtitle">
-      Pre-computed symbols, calls, imports and inheritance — queried in microseconds.<br>
-      Single binary. No Python, no Docker, no config.
+      Pre-computed symbols, calls, imports queried in microseconds.<br>
+      Single binary. No Python, No Docker.
     </p>
 
-    <div class="hero-installs">
-      <div class="install-group-label">Quick Install</div>
-      <div class="install-widget">
-        <span class="install-label">Claude Code ①</span>
-        <code>/plugin marketplace add jrollin/cartog</code>
-        <button class="copy-btn" onclick="copyCmd(this, '/plugin marketplace add jrollin/cartog')" aria-label="Copy to clipboard">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>
-        </button>
+    <!-- Stats bar: anchor the value claim before showing the demo -->
+    <div class="stats-bar" style="margin-top: 32px; border-radius: 12px; padding: 20px;">
+      <div class="container" style="padding: 0;">
+        <div class="stat-item">
+          <div class="stat-value">⚡ 8μs</div>
+          <div class="stat-label">query latency<sup><a href="#benchmark-notes" style="color: inherit; text-decoration: none;">*</a></sup></div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">🎯 97%</div>
+          <div class="stat-label">symbol recall<sup><a href="#benchmark-notes" style="color: inherit; text-decoration: none;">*</a></sup></div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">🌐 9</div>
+          <div class="stat-label">languages supported</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value">🔒 100%</div>
+          <div class="stat-label">local — your code stays private</div>
+        </div>
       </div>
-      <div class="install-widget">
-        <span class="install-label">Claude Code ②</span>
-        <code>/plugin install cartog@cartog-plugins</code>
-        <button class="copy-btn" onclick="copyCmd(this, '/plugin install cartog@cartog-plugins')" aria-label="Copy to clipboard">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>
-        </button>
-      </div>
-      <div class="install-widget">
-        <span class="install-label">CLI</span>
-        <code>cargo install cartog</code>
-        <button class="copy-btn" onclick="copyCmd(this, 'cargo install cartog')" aria-label="Copy to clipboard">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>
-        </button>
-      </div>
-      <a href="#install" style="font-size: 13px; color: var(--text-tertiary); margin-top: 4px;">More install options ↓</a>
     </div>
+    <p id="benchmark-notes" style="margin-top: 8px; font-size: 12px; color: var(--text-tertiary); text-align: center;">
+      <sup>*</sup> Measured across 13 scenarios, 5 languages. Latency is the outline-query median on the Python fixture; 97% recall requires a matching language server on PATH (heuristic-only resolution lands around 25–37%). <a href="https://github.com/jrollin/cartog/tree/main/crates/cartog/benches" style="color: var(--text-tertiary);">Benchmark suite →</a>
+    </p>
 
-    <div class="hero-ctas" style="margin-top: 32px;">
-      <a href="#why" class="btn-secondary">Why Cartog ↓</a>
-      <a href="#install" class="btn-secondary">Get Started ↓</a>
-    </div>
-
-    <div class="hero-meta">
-      <span>MIT License · 100% local · 9 languages · Single binary</span>
-    </div>
-
-    <!-- Terminal demo -->
-    <div class="terminal" style="margin-top: 48px;">
+    <!-- Demo: show what cartog does before asking users to install it -->
+    <div class="terminal" style="margin-top: 32px; margin-bottom: 40px;">
       <div class="terminal-header">
         <div class="terminal-dot red"></div>
         <div class="terminal-dot yellow"></div>
         <div class="terminal-dot green"></div>
         <span class="terminal-title">Cartog demo</span>
       </div>
-      <img src="demo.gif" alt="Cartog demo — index, search, refs, impact" class="terminal-gif">
+      <img src="demo.gif?v=2" alt="Animated demo: cartog init, index, map, search, refs, impact in a terminal" class="terminal-gif" width="900" height="560" loading="lazy" decoding="async">
     </div>
-  </div>
-</section>
 
-<!-- ── Stats bar ───────────────────────────────── -->
-<div class="stats-bar">
-  <div class="container">
-    <div class="stat-item">
-      <div class="stat-value">⚡ 8μs</div>
-      <div class="stat-label">query latency</div>
+    <div class="hero-installs">
+      <div class="install-group-label">Quick Install</div>
+      <div class="install-widget">
+        <span class="install-label">macOS / Linux</span>
+        <code>curl -fsSL https://jrollin.github.io/cartog/install.sh | sh</code>
+        <button class="copy-btn" onclick="copyCmd(this, 'curl -fsSL https://jrollin.github.io/cartog/install.sh | sh')" aria-label="Copy to clipboard">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>
+        </button>
+      </div>
+      <div class="install-widget">
+        <span class="install-label">Claude Code plugin</span>
+        <code>/plugin marketplace add jrollin/cartog</code>
+        <button class="copy-btn" onclick="copyCmd(this, '/plugin marketplace add jrollin/cartog')" aria-label="Copy to clipboard">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>
+        </button>
+      </div>
+      <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px; margin-bottom: 0;">
+         <a href="#install" style="color: var(--text-tertiary);">More install options ↓</a>
+      </p>
     </div>
-    <div class="stat-item">
-      <div class="stat-value">🎯 97%</div>
-      <div class="stat-label">symbol recall</div>
+
+    <div class="hero-ctas" style="margin-top: 32px;">
+      <a href="#why" class="btn-secondary">Why Cartog ↓</a>
+      <a href="#agents" class="btn-secondary">Agents ↓</a>
     </div>
-    <div class="stat-item">
-      <div class="stat-value">🌐 9</div>
-      <div class="stat-label">languages supported</div>
-    </div>
-    <div class="stat-item">
-      <div class="stat-value">🔒 100%</div>
-      <div class="stat-label">local — your code stays private</div>
-    </div>
-  </div>
-</div>
+
+     </div>
+</section>
 
 <!-- ── How It Works ─────────────────────────────── -->
 <section class="how-it-works">
   <div class="container">
     <div class="section-label">How it works</div>
-    <h2 class="section-heading">One command, then get out of the way.</h2>
+    <h2 class="section-heading">Two commands to get started.</h2>
+    <p class="section-subtitle" style="margin: 0 auto;"><code>cartog init</code> scaffolds <code>.cartog.toml</code>. <code>cartog index</code> builds the graph. Want MCP in your editor? Add <code>cartog ide</code>. Idempotent, skippable.</p>
 
-    <div class="how-steps">
-      <div class="how-step">
-        <div class="how-step-number">1</div>
-        <div class="how-step-title">Index</div>
-        <code>cartog index .</code>
-        <p>Walks your repo, extracts symbols, calls, imports, inheritance. Stores everything in a local SQLite file.</p>
+    <div class="terminal">
+      <div class="terminal-header">
+        <div class="terminal-dot red"></div>
+        <div class="terminal-dot yellow"></div>
+        <div class="terminal-dot green"></div>
+        <span class="terminal-title">your-repo</span>
       </div>
+      <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">cartog init</span>
+<span class="highlight">+</span> <span class="output">.cartog.toml: created from template</span>
 
-      <div class="how-arrow" aria-hidden="true">→</div>
+<span class="comment">Next steps:</span>
+<span class="comment">  1. Edit .cartog.toml if you want to change defaults (DB path, embedding provider).</span>
+<span class="comment">  2. Run `cartog index` to build the code graph.</span>
 
-      <div class="how-step">
-        <div class="how-step-number">2</div>
-        <div class="how-step-title">Watch</div>
-        <code>cartog watch</code>
-        <p>Keeps the graph fresh as you edit. Debounced, incremental — stays out of your way.</p>
+<span class="prompt">$</span> <span class="cmd">cartog index</span>
+<span class="output">Indexed 142 files (0 unchanged), 3891 symbols, 8217 edges in 95ms</span>
+
+<span class="comment"># Optional — wire cartog into your editor for AI agents</span>
+<span class="prompt">$</span> <span class="cmd">cartog ide --scope project</span>
+<span class="highlight">+</span> <span class="output">cursor (project, .cursor/mcp.json): created</span>
+<span class="highlight">+</span> <span class="output">vscode (project, .vscode/mcp.json): created</span></div>
+    </div>
+
+    <div class="features-grid" style="margin-top: 56px;">
+      <div class="feature-card">
+        <h3><span class="feature-icon">⚙️</span> <code>cartog init</code></h3>
+        <p>Drops a commented <code>.cartog.toml</code> template. Config only — re-runs are a no-op, your toml is never overwritten.</p>
       </div>
-
-      <div class="how-arrow" aria-hidden="true">→</div>
-
-      <div class="how-step">
-        <div class="how-step-number">3</div>
-        <div class="how-step-title">Query</div>
-        <code>cartog refs AuthService</code>
-        <p>Precise answers in microseconds. References, callers, impact analysis, semantic search.</p>
+      <div class="feature-card">
+        <h3><span class="feature-icon">📚</span> <code>cartog index</code></h3>
+        <p>tree-sitter parses 9 languages into a local SQLite file. Incremental on re-runs; only changed files re-parse. Pair with <code>cartog watch</code> for auto-refresh.</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="feature-icon">🛠️</span> <code>cartog ide</code> <span style="font-size: 11px; color: var(--text-tertiary); font-weight: 500;">(optional)</span></h3>
+        <p>Skip this if you only use the CLI. Need MCP in Claude Code, Cursor, VS Code, Codex CLI, Gemini CLI, Windsurf, Zed, or Claude Desktop? Run it once per machine.</p>
       </div>
     </div>
 
-    <p style="margin-top: 32px; text-align: center; font-size: 14px; color: var(--text-secondary);">
-      19 commands for search, navigation, analysis, and self-update. <a href="usage.html">See full documentation →</a>
+    <p style="margin-top: 40px; text-align: center; font-size: 14px; color: var(--text-tertiary);">
+      CLI-only users stop at step 2. The third verb is purely for plugging cartog into MCP-aware editors.
     </p>
+
+    <!-- Diagnostic callout: doctor is not a setup verb, it's the verb you run
+         when something feels off. Framed separately from init/index/ide so
+         users don't add it to the bootstrap checklist by mistake. -->
+    <div style="margin: 48px auto 0; max-width: 760px; text-align: left;">
+      <h3 style="font-size: 16px; margin: 0 0 6px 0;">
+        🩺 <code>cartog doctor</code>
+        <span style="font-size: 12px; color: var(--text-tertiary); font-weight: 500; margin-left: 4px;">— health check</span>
+      </h3>
+      <p style="font-size: 14px; color: var(--text-secondary); margin: 0 0 12px 0;">
+        Run it after install or when something looks off. Reports git, config, database, and model status.
+      </p>
+      <div class="terminal">
+        <div class="terminal-header">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <span class="terminal-title">cartog doctor</span>
+        </div>
+        <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">cartog doctor</span>
+<span class="highlight">[+]</span> <span class="output">git: git repository at /your/repo</span>
+<span class="highlight">[+]</span> <span class="output">config: loaded from .cartog.toml</span>
+<span class="highlight">[+]</span> <span class="output">database: 142 files, 3891 symbols</span>
+<span class="highlight">[+]</span> <span class="output">embedding: local model cached</span>
+<span class="highlight">[+]</span> <span class="output">reranker: local model cached</span>
+
+<span class="comment">All 5 checks passed</span></div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -196,7 +242,7 @@
   <div class="container">
     <div class="section-label">Languages</div>
     <h2 class="section-heading">9 languages supported <span style="font-size: 14px; font-weight: 500; color: var(--text-tertiary);">— more coming</span></h2>
-    <div class="lang-grid">
+    <div class="lang-grid-fixed">
       <span class="lang-tag">
         <svg width="20" height="20" viewBox="0 0 256 255"><defs><linearGradient id="py-a" x1="12.96%" x2="79.68%" y1="12.04%" y2="93.06%"><stop offset="0%" stop-color="#387EB8"/><stop offset="100%" stop-color="#366994"/></linearGradient><linearGradient id="py-b" x1="19.13%" x2="90.43%" y1="20.58%" y2="88.72%"><stop offset="0%" stop-color="#FFC331"/><stop offset="100%" stop-color="#F5A623"/></linearGradient></defs><path fill="url(#py-a)" d="M126.916.072c-64.832 0-60.784 28.115-60.784 28.115l.072 29.128h61.868v8.745H41.631S.145 61.355.145 126.77c0 65.417 36.21 63.097 36.21 63.097h21.61v-30.356s-1.165-36.21 35.632-36.21h61.362s34.475.557 34.475-33.319V33.97S194.67.072 126.916.072zM92.802 19.66a11.12 11.12 0 110 22.24 11.12 11.12 0 010-22.24z"/><path fill="url(#py-b)" d="M128.757 254.126c64.832 0 60.784-28.115 60.784-28.115l-.072-29.127H127.6v-8.745h86.441s41.486 4.705 41.486-60.712c0-65.416-36.21-63.096-36.21-63.096h-21.61v30.355s1.165 36.21-35.632 36.21h-61.362s-34.475-.557-34.475 33.32v56.013s-5.235 33.897 62.518 33.897zm34.114-19.586a11.12 11.12 0 110-22.24 11.12 11.12 0 010 22.24z"/></svg>
         Python
@@ -334,17 +380,17 @@
 
     <div class="why-grid">
       <div class="why-card">
-        <div class="why-number">?</div>
+        <div class="why-number">01</div>
         <h3>grep / ripgrep</h3>
         <p>Great for string literals and config values. But grep can't trace call chains, can't do transitive impact analysis, and floods your context with raw text. Cartog returns structured, ranked, deduplicated results — one <code>refs</code> call replaces 6+ discovery steps.</p>
       </div>
       <div class="why-card">
-        <div class="why-number">?</div>
+        <div class="why-number">02</div>
         <h3>A language server</h3>
         <p>LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 9 languages with one binary and answers in microseconds. When you need LSP precision, cartog uses it as an optional layer.</p>
       </div>
       <div class="why-card">
-        <div class="why-number">?</div>
+        <div class="why-number">03</div>
         <h3>Python-based graph tools</h3>
         <p>They solve a similar problem but require a Python runtime, pip dependencies, and virtual environments. Cartog is a single static binary — download and run. It also queries 10-100x faster thanks to compiled Rust + SQLite.</p>
       </div>
@@ -357,23 +403,70 @@
   <div class="container">
     <div class="section-label">LLM Agents</div>
     <h2 class="section-heading">Supercharge your AI coding agent</h2>
-    <p class="section-subtitle">83% fewer tokens per query, 97% recall. Your agent queries the graph instead of grepping blind.</p>
+    <p class="section-subtitle">83% fewer tokens per query, 97% recall<sup><a href="#benchmark-notes" style="color: inherit; text-decoration: none;">*</a></sup>. Your agent queries the graph instead of grepping blind.</p>
 
-    <div class="why-grid" style="margin-top: 40px;">
+    <!-- Editor compatibility — wired by `cartog ide` -->
+    <div style="margin-top: 40px;">
+      <p style="font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-tertiary); margin-bottom: 16px; text-align: center;">Wires into your editor with <code>cartog ide</code></p>
+
+      <div class="lang-grid">
+        <span class="lang-tag" title="Claude Code — project-scoped (.mcp.json) + user-scope (~/.claude/settings.json)">
+          <img class="editor-mark" src="assets/claude.svg?v=2" alt="">
+          Claude Code
+        </span>
+        <span class="lang-tag" title="Cursor — project-scoped (.cursor/mcp.json)">
+          <img class="editor-mark" src="assets/cursor.svg?v=2" alt="">
+          Cursor
+        </span>
+        <span class="lang-tag" title="VS Code — project-scoped (.vscode/mcp.json)">
+          <img class="editor-mark" src="assets/visualstudiocode.svg?v=2" alt="">
+          VS Code
+        </span>
+        <span class="lang-tag" title="Claude Desktop — user-scope (~/Library/Application Support/Claude/...)">
+          <img class="editor-mark" src="assets/claude.svg?v=2" alt="">
+          Claude Desktop
+        </span>
+        <span class="lang-tag" title="Codex CLI (OpenAI) — user-scope (~/.codex/config.toml)">
+          <img class="editor-mark" src="assets/openai.svg?v=2" alt="">
+          Codex CLI
+        </span>
+        <span class="lang-tag" title="Gemini CLI — user-scope">
+          <img class="editor-mark" src="assets/googlegemini.svg?v=2" alt="">
+          Gemini CLI
+        </span>
+        <span class="lang-tag" title="OpenCode — user-scope (~/.config/opencode/opencode.json)">
+          OpenCode
+        </span>
+        <span class="lang-tag" title="Windsurf — user-scope (~/.codeium/windsurf/mcp_config.json)">
+          <img class="editor-mark" src="assets/windsurf.svg?v=2" alt="">
+          Windsurf
+        </span>
+        <span class="lang-tag" title="Zed — user-scope (~/.config/zed/settings.json)">
+          <img class="editor-mark" src="assets/zedindustries.svg?v=2" alt="">
+          Zed
+        </span>
+      </div>
+
+      <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 16px; text-align: center;">
+        Claude Code, Cursor, and VS Code get project-scoped MCP files in your repo; the rest get user-scope configs in your home directory. Only editors actually installed are touched.
+      </p>
+    </div>
+
+    <div class="why-grid" style="margin-top: 56px;">
       <div class="why-card">
         <div class="why-number">01</div>
-        <h3>MCP Server</h3>
-        <p><code>cartog serve</code> exposes 12 tools over stdio. Plug into Claude Code, Cursor, Windsurf, Zed, or any MCP-compatible agent.</p>
+        <h3>One command to wire it in</h3>
+        <p><code>cartog ide</code> writes <code>cartog serve</code> into installed editors (Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, Claude Desktop). Idempotent merge — existing MCP servers are preserved. Skip it if you only use the CLI.</p>
       </div>
       <div class="why-card">
         <div class="why-number">02</div>
-        <h3>Agent Skill</h3>
-        <p>The bundled skill teaches your agent <em>when</em> and <em>how</em> to use Cartog — search routing, refactoring workflows, fallback heuristics.</p>
+        <h3>13 MCP tools</h3>
+        <p><code>cartog serve</code> exposes <code>cartog_map</code>, <code>cartog_search</code>, <code>cartog_refs</code>, <code>cartog_impact</code>, <code>cartog_rag_search</code>, and 8 more. Each tool description tells the agent when (and when not) to use it.</p>
       </div>
       <div class="why-card">
         <div class="why-number">03</div>
-        <h3>Token efficient</h3>
-        <p>One <code>refs</code> call replaces 6+ grep/cat cycles. Pre-computed graph means structured results — not raw file dumps that burn context window.</p>
+        <h3>Agent skill</h3>
+        <p>The bundled skill teaches your agent <em>when</em> and <em>how</em> to use cartog — search routing, refactoring workflows, fallback heuristics — so it picks the right tool first.</p>
       </div>
     </div>
 
@@ -388,14 +481,24 @@
         </thead>
         <tbody>
           <tr>
+            <td>CLI bootstrap</td>
+            <td><code>cartog init</code> + <code>cartog index</code></td>
+            <td>Scaffold <code>.cartog.toml</code>, then build the graph. CLI-only flow.</td>
+          </tr>
+          <tr>
+            <td>Editor MCP wiring (optional)</td>
+            <td><code>cartog ide [--client X]</code></td>
+            <td>9 clients across 5 config shapes (incl. Codex TOML); idempotent, dry-run-able</td>
+          </tr>
+          <tr>
             <td>Claude Code plugin</td>
             <td><code>/plugin marketplace add jrollin/cartog</code><br><code>/plugin install cartog@cartog-plugins</code></td>
             <td>Skill + MCP + auto-setup, all-in-one</td>
           </tr>
           <tr>
-            <td>MCP server</td>
+            <td>MCP server (manual)</td>
             <td><code>cartog serve --watch --rag</code></td>
-            <td>12 tools over stdio, live index + semantic search</td>
+            <td>13 tools over stdio, live index + semantic search</td>
           </tr>
           <tr>
             <td>Agent skill</td>
@@ -412,7 +515,7 @@
     </div>
 
     <p style="margin-top: 16px; font-size: 14px; color: var(--text-secondary);">
-      See <a href="usage.html#mcp-server">MCP Server docs</a> and <a href="usage.html#agent-skill">Agent Skill docs</a> for per-client setup (Claude Desktop, Cursor, Windsurf, Zed, OpenCode).
+      See <a href="usage.html#mcp-server">MCP Server docs</a> and <a href="usage.html#agent-skill">Agent Skill docs</a> for per-client setup. Supported clients: Claude Code (project + user), Claude Desktop, Codex CLI, Cursor, Gemini CLI, OpenCode, VS Code, Windsurf, Zed.
     </p>
   </div>
 </section>
@@ -422,29 +525,23 @@
   <div class="container">
     <div class="section-label">Install</div>
     <h2 class="section-heading">Get started in seconds</h2>
+    <p class="section-subtitle">Pick <strong>one</strong> install method below — these are alternatives, not steps. Once <code>cartog</code> is on your <code>PATH</code>, run <code>cartog init</code> + <code>cartog index</code> in any repo.</p>
 
     <div class="install-options" style="grid-template-columns: 1fr;">
       <div class="install-card">
-        <h3>Claude Code (recommended)</h3>
-        <p>Run each command separately:</p>
-        <pre>/plugin marketplace add jrollin/cartog</pre>
-        <pre>/plugin install cartog@cartog-plugins</pre>
-        <p>Installs the agent skill, setup scripts, and MCP server config.</p>
+        <h3>① Install script <span style="font-size: 12px; color: var(--text-tertiary); font-weight: 500;">— macOS / Linux, no Rust required</span></h3>
+        <pre>curl -fsSL https://jrollin.github.io/cartog/install.sh | sh</pre>
+        <p>Detects your OS + architecture, downloads the matching binary from the latest GitHub Release, verifies its SHA-256, and installs to <code>/usr/local/bin</code> (or <code>~/.local/bin</code> if non-root). Override the target with <code>CARTOG_INSTALL_DIR</code>, pin a version with <code>CARTOG_VERSION</code>. Audit the script: <a href="https://github.com/jrollin/cartog/blob/main/scripts/install.sh">scripts/install.sh</a>.</p>
       </div>
       <div class="install-card">
-        <h3>Agent Skill</h3>
-        <pre>npx skills add jrollin/cartog</pre>
-        <p>Works with any agent runtime that supports the skills protocol.</p>
-      </div>
-      <div class="install-card">
-        <h3>From crates.io</h3>
+        <h3>② From crates.io <span style="font-size: 12px; color: var(--text-tertiary); font-weight: 500;">— Rust toolchain required</span></h3>
         <pre>cargo install cartog                              <span class="comment"># default (includes LSP)</span>
 cargo install cartog --no-default-features        <span class="comment"># minimal, no LSP</span>
 cargo install cartog --features ollama-embedding  <span class="comment"># + Ollama support</span></pre>
         <p>LSP auto-detects language servers on PATH and is enabled by default. Disable at runtime with <code>--no-lsp</code>, or omit at build time with <code>--no-default-features</code>. The <code>ollama-embedding</code> feature enables Ollama as an embedding provider.</p>
       </div>
       <div class="install-card">
-        <h3>Pre-built binaries</h3>
+        <h3>③ Pre-built binaries <span style="font-size: 12px; color: var(--text-tertiary); font-weight: 500;">— manual download</span></h3>
         <pre><span class="comment"># macOS (Apple Silicon)</span>
 curl -L https://github.com/jrollin/cartog/releases/latest/download/cartog-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv cartog /usr/local/bin/
@@ -452,9 +549,13 @@ sudo mv cartog /usr/local/bin/
 <span class="comment"># Linux (x86_64)</span>
 curl -L https://github.com/jrollin/cartog/releases/latest/download/cartog-x86_64-unknown-linux-gnu.tar.gz | tar xz
 sudo mv cartog /usr/local/bin/</pre>
-        <p>All platforms on <a href="https://github.com/jrollin/cartog/releases/latest">GitHub Releases</a>.</p>
+        <p>All four targets + SHA256SUMS on <a href="https://github.com/jrollin/cartog/releases/latest">GitHub Releases</a> (macOS arm64, Linux arm64/x86_64, Windows x86_64).</p>
       </div>
     </div>
+
+    <p style="margin-top: 32px; font-size: 13px; color: var(--text-tertiary); text-align: center;">
+      Already in Claude Code? <code>/plugin marketplace add jrollin/cartog</code> bundles install + skill + MCP. Use any agent? <code>npx skills add jrollin/cartog</code> adds the behavioural skill alongside any install method above.
+    </p>
 
   </div>
 </section>
@@ -463,14 +564,14 @@ sudo mv cartog /usr/local/bin/</pre>
 <section class="cta">
   <div class="container">
     <h2>Start mapping your codebase</h2>
-    <p>Open source, free forever. One command to install.</p>
+    <p>Open source, free forever. One command to install, one to wire it up.</p>
     <div class="install-widget">
-      <code>cargo install cartog</code>
-      <button class="copy-btn" onclick="copyCmd(this, 'cargo install cartog')" aria-label="Copy to clipboard">
+      <code>curl -fsSL https://jrollin.github.io/cartog/install.sh | sh</code>
+      <button class="copy-btn" onclick="copyCmd(this, 'curl -fsSL https://jrollin.github.io/cartog/install.sh | sh')" aria-label="Copy to clipboard">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25zM5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25z"/></svg>
       </button>
     </div>
-    <p style="margin-top: 32px; font-size: 14px;"><a href="usage.html">Read the documentation →</a></p>
+    <p style="margin-top: 12px; font-size: 13px; color: var(--text-tertiary);">Then <code>cartog init</code> + <code>cartog index</code> in your repo. <a href="usage.html">Read the documentation →</a></p>
   </div>
 </section>
 
@@ -478,7 +579,7 @@ sudo mv cartog /usr/local/bin/</pre>
 <footer class="footer">
   <div class="container">
     <div class="footer-inner">
-      <span>Cartog · MIT License · v0.15.1</span>
+      <span>Cartog · <a href="https://github.com/jrollin/cartog/blob/main/LICENSE">MIT License</a> · <a href="https://github.com/jrollin/cartog/releases">Latest release</a></span>
       <ul class="footer-links">
         <li><a href="https://github.com/jrollin/cartog">GitHub</a></li>
         <li><a href="https://crates.io/crates/cartog">crates.io</a></li>

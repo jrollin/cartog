@@ -20,9 +20,40 @@ description: >-
 
 ## Quick Start
 
-1. **Ensure indexed** — run the setup script (see [Setup](#setup) below). This is required before any command works.
-2. **Explore an unfamiliar codebase** — `cartog map` gives a file tree + top symbols ranked by centrality. Start here when onboarding or orienting.
-3. **Search for anything** — `cartog rag search "your query"` is the default entry point. It handles keywords, natural language, and concept queries in a single call.
+Three states a repo can be in. Detect which one the user is in, then act.
+
+| State | Signal | What the user should run |
+|---|---|---|
+| Fresh repo, no cartog yet | No `.cartog.toml` at the git root | Ask the user first, then `cartog init` then `cartog index` (see "Fresh-repo handling" below) |
+| Indexed but no editor MCP | `.cartog.toml` exists, no `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` | `cartog index` (refresh) — only suggest `cartog ide` if the user mentions Claude Code / Cursor / VS Code / Codex / Gemini / Windsurf / Zed / Claude Desktop / OpenCode |
+| Fully wired | `.cartog.toml` + editor MCP files present | Just query: `cartog map`, `cartog rag search`, etc. |
+
+### Fresh-repo handling (the most common pitfall)
+
+When `.cartog.toml` is missing, the bootstrap script (`ensure_indexed.sh`) **defers indexing** on interactive sessions and prints a hint pointing at `cartog init`. The agent must then:
+
+1. **ASK the user** before running `cartog init`. Do not run it automatically — it writes a `.cartog.toml` file in the user's repo.
+2. On user **YES**: run `cartog init` via Bash, check the exit code, then run `cartog index .`. Both commands are safe to chain in a single session.
+3. On user **NO** (or "skip"): run `cartog index .` directly. Cartog will use default config and the index lands at `<git-root>/.cartog/db.sqlite`. The user can run `cartog init` later if they want a customized config.
+
+If `cartog init` returns non-zero (rare — usually a filesystem permission issue), surface the error to the user and **do not proceed** to `cartog index`.
+
+**Non-interactive sessions** (CI, piped, `CARTOG_AUTO_INIT=1`): the bootstrap script skips the deferral and indexes with defaults. No prompt fires.
+
+### Running cartog commands while MCP is alive
+
+Both `cartog init` and `cartog index` are safe to run via Bash during an active MCP session, but for different reasons:
+- `cartog init` is config-only — it writes `.cartog.toml`, never touches the database. No writer contention possible.
+- `cartog index .` does write to the same SQLite file the MCP server has open. WAL mode + the `PRAGMA busy_timeout` we configure serialise writers — no `SQLITE_BUSY` errors.
+- After indexing, MCP tools pick up the new symbols on the next call (no server restart needed).
+
+If MCP runs with `--watch`, the watcher will also re-index on file changes. A manual `cartog index .` is still safe; it just shares the write-queue.
+
+After the index is ready:
+
+1. **Explore an unfamiliar codebase** — `cartog map` gives a file tree + top symbols ranked by centrality. Start here when onboarding or orienting.
+2. **Search for anything** — `cartog rag search "your query"` is the default entry point. It handles keywords, natural language, and concept queries in a single call.
+3. **Recent commits broke something?** — `cartog changes` first, then `cartog impact <symbol>` on the touched symbols.
 
 ## When to Use
 
@@ -37,6 +68,7 @@ Use cartog **before** reaching for grep, cat, or file reads when you need to:
 - Understand class hierarchies → `cartog hierarchy <class>`
 - See file dependencies → `cartog deps <file>`
 - See what changed recently → `cartog changes [--commits N]`
+- **Triage a regression** ("which of my recent commits broke this?") → `cartog changes` then `cartog impact <symbol>` on the symbols listed
 
 ## How to Run
 
@@ -61,6 +93,7 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | CLI command | MCP tool | Parameters |
 |---|---|---|
 | `cartog index .` | `cartog_index` | `path`, `force` |
+| `cartog map` | `cartog_map` | `tokens?` |
 | `cartog search <name>` | `cartog_search` | `query`, `kind?`, `file?`, `limit?` |
 | `cartog rag search "<query>"` | `cartog_rag_search` | `query`, `kind?`, `limit?` |
 | `cartog rag index .` | `cartog_rag_index` | `path`, `force` |
@@ -73,12 +106,15 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
 | `cartog stats` | `cartog_stats` | — |
 | `cartog doctor` | — (CLI only) | — |
+| `cartog init` | — (CLI only) | — |
+| `cartog ide` | — (CLI only) | — |
+| `cartog config` | — (CLI only) | — |
 
 ## Setup
 
 Before first use, ensure cartog is installed and indexed.
 
-If the project uses Ollama (check `.cartog.toml` for `[embedding] provider = "ollama"`), skip `rag setup` — models are managed by the Ollama server.
+If the project uses Ollama (check `.cartog.toml` for `[embedding] provider = "ollama"`), Ollama manages the **embedding** model itself — but `cartog rag setup` still downloads the cross-encoder **reranker** (~100MB, provider-agnostic). Skip `rag setup` only if you also disable the reranker; otherwise run it once.
 
 The `scripts/` directory is located next to this SKILL.md file. **Before running any setup command**, look at the absolute path from which this SKILL.md was loaded (visible in your tool call history), take its parent directory, and use that as the scripts root in the bash commands below.
 
@@ -113,6 +149,8 @@ so Claude is responsive immediately. `cartog rag search` works at FTS5-only qual
 the moment the index is ready, and upgrades transparently to tier 2 then tier 3 as
 the background pipeline completes.
 
+**How to tell which tier you're on**: inspect the result tags in `cartog rag search` output. `[fts5+vector]` means tier 3, `[fts5]` means tier 1 or 2, `rerank=...` scores appear from tier 2 onward. See `references/query_cookbook.md` → "Interpreting results" for the full decoder.
+
 > **First run**: tier 2 downloads ~1.2GB of ONNX models (cached in `~/.cache/cartog/models/`)
 > in the background. Search keeps working at tier 1 in the meantime; logs go to
 > `~/.cache/cartog/session.log`. Subsequent runs are instant.
@@ -124,11 +162,13 @@ The index is stored in a SQLite database. cartog resolves the path automatically
 | Priority | Source |
 |----------|--------|
 | 1 | `--db <path>` flag or `CARTOG_DB` env var |
-| 2 | `.cartog.toml` → `[database] path = "..."` at git root |
+| 2 | `.cartog.toml` → `[database] path = "..."` (looked up in cwd then at git root; `~/...` is expanded against `$HOME`) |
 | 3 | Auto git-root: prefers `<root>/.cartog/db.sqlite`, falls back to legacy `<root>/.cartog.db` if only it exists |
-| 4 | `.cartog/db.sqlite` in the current directory (fallback) |
+| 4 | `.cartog/db.sqlite` in the current directory (fallback — used when not in a git repo) |
 
 For most projects, no configuration is needed — running `cartog index .` from any subdirectory will place the DB at the git root automatically.
+
+**Non-git projects work too.** When `git rev-parse` finds no repo, cartog falls through to the cwd-based path (priority 4), or honours an explicit `--db` / `CARTOG_DB` / `.cartog.toml [database] path` if set. There's no requirement to be inside a git working tree.
 
 ```bash
 # Override examples
@@ -179,7 +219,7 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 6. **Only fall back to grep/read** when cartog doesn't have what you need (e.g., reading actual implementation logic, string literals, config values).
 
-7. **After making code changes**, run `cartog index . --no-lsp` to quickly update the graph.
+7. **After making code changes**, run `cartog index . --no-lsp` to quickly update the graph. If MCP is running with `--watch`, the re-index already happened automatically — skip this step. Only run a manual index in CLI-only sessions, or to force LSP edges in a watched session.
 
 ## Do / Don't
 
@@ -218,7 +258,7 @@ cartog search parse --limit 10               # cap results
 ```
 Returns symbols ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
 
-Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`, `document`.
+Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`, `document`, plus `all` (code + docs).
 
 ### RAG Search (hybrid keyword + semantic)
 ```bash
@@ -324,6 +364,44 @@ cartog self migrate-db --dry-run  # preview the planned moves
 
 User-facing maintenance commands. If the agent observes a "new cartog version available" hint or a stale binary, it can suggest the user run `cartog self update`. `cargo install cartog` users get an exit-3 refusal pointing at `cargo install cartog --force` instead. If the agent sees a one-shot deprecation warning about a legacy `.cartog.db`, suggest `cartog self migrate-db`.
 
+### Init (scaffold project config — user-facing)
+```bash
+cartog init                     # scaffold .cartog.toml in the current project
+cartog init --dry-run           # preview without writing
+```
+
+`cartog init` is config-only: it writes a commented `.cartog.toml` template if absent and prints next-steps hints. It does NOT index, does NOT wire MCP, and never overwrites an existing `.cartog.toml`.
+
+**When to suggest it**: the user is starting cartog on a fresh repo (no `.cartog.toml` at the git root). The agent should mention it once, then continue with `cartog index` to build the graph. CLI-only users stop there; users on Claude Code / Cursor / VS Code / etc. can then run `cartog ide`.
+
+### Ide (wire cartog into editors — user-facing, interactive)
+```bash
+cartog ide --yes                              # configure all detected clients, non-interactive
+cartog ide --client cursor --yes              # one specific client
+cartog ide --scope project --yes              # only .mcp.json / .cursor/mcp.json / .vscode/mcp.json
+cartog ide --client claude-code --no-watch --yes  # wire Claude Code without --watch
+cartog ide --scope user --yes                 # only user-scope clients
+cartog ide --dry-run                          # preview without writing
+```
+
+**Agent gotcha**: `cartog ide` runs an interactive multi-select picker by default. **An agent calling it via Bash MUST pass `--yes` (or `--client X` / `--dry-run`), otherwise the command will block waiting for user input.** Non-TTY stdin is also treated as non-interactive.
+
+Supported clients: `claude-code`, `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`. User-scope clients whose config dir is missing are reported as "not installed" and skipped. Existing MCP entries for other servers are preserved (idempotent merge).
+
+**When to suggest it**: the user explicitly asks to wire cartog into an editor, or mentions one of the supported clients. Do not run it speculatively; the answer "yes" should come from the user before the agent invokes this command.
+
+### Config (print resolved configuration)
+```bash
+cartog config                   # human-readable resolved config
+cartog config --json            # JSON for parsing
+```
+
+Prints the merged config (defaults + `.cartog.toml` + env overrides). Useful for the agent to verify which database path, embedding provider, or reranker is active before diagnosing a search-quality issue. Read-only — does not modify anything.
+
+### Dev-only utilities
+
+Cartog also ships `cartog completions <shell>` (shell completion script generator for bash/zsh/fish/powershell/elvish) and `cartog manpage` (emits a troff-formatted man page on stdout). Agents don't normally need these; surface them only if the user explicitly asks for shell completions or installation of a man page. See `docs/usage.md` for details.
+
 ## Token Budget
 
 Use `--tokens N` to limit output to approximately N tokens (human-readable only, ignored with `--json`):
@@ -346,12 +424,13 @@ cartog --json rag search "authentication"
 
 Before changing any symbol (rename, extract, move, delete):
 
-1. `cartog search <name>` — confirm exact symbol name and file
-2. `cartog refs <name>` — find every usage
-3. `cartog impact <name> --depth 3` — transitive blast radius
-4. `cartog hierarchy <name>` — if it's a class, check subclasses too
-5. Apply changes, then `cartog index . --no-lsp` to update the graph
-6. Re-run `cartog refs <name>` to confirm no stale references remain
+1. `cartog changes` — quick check: was this symbol touched in recent commits? Pair with `cartog impact <symbol>` on anything listed to triage regressions before refactoring.
+2. `cartog search <name>` — confirm exact symbol name and file
+3. `cartog refs <name>` — find every usage
+4. `cartog impact <name> --depth 3` — transitive blast radius
+5. `cartog hierarchy <name>` — if it's a class, check subclasses too
+6. Apply changes, then `cartog index . --no-lsp` to update the graph. **Skip this step if MCP is running with `--watch`** — the watcher has already re-indexed; only run it in CLI-only sessions or to force LSP edges on demand.
+7. Re-run `cartog refs <name>` to confirm no stale references remain
 
 For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `references/query_cookbook.md` → "Assess refactoring scope".
 
@@ -374,6 +453,10 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 | Improve graph precision for a refactoring | `cartog index .` (with LSP auto-detected) |
 | Fast re-index after code changes | `cartog index . --no-lsp` |
 | Diagnose why something is broken | `cartog doctor` |
+| Inspect resolved config (DB path, provider, etc.) | `cartog config` |
+| Triage which recent commit broke something | `cartog changes` then `cartog impact <symbol>` |
+| Set up cartog in a fresh repo (no `.cartog.toml` yet) | Suggest `cartog init` to the user, then `cartog index` |
+| Wire cartog into an editor (user asked) | Suggest `cartog ide --yes` (or `--client <name> --yes`) — never bare |
 | Read actual implementation logic | `cat <file>` (cartog indexes structure, not content) |
 | Search for string literals / config | `grep` (cartog doesn't index these) |
 | Nothing from search or rag | Fall back to `grep` |

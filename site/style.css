@@ -744,9 +744,30 @@ td .badge {
 .lang-grid {
   display: flex;
   flex-wrap: wrap;
-  justify-content: space-between;
+  justify-content: center;
   gap: 12px;
   margin-top: 24px;
+}
+
+/* Languages section: 9 tags in a 5+4 grid so every tile is exactly
+   the same size, instead of flex-growing to fill leftover space. */
+.lang-grid-fixed {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+
+@media (max-width: 720px) {
+  .lang-grid-fixed {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .lang-grid-fixed {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .lang-tag {
@@ -761,9 +782,16 @@ td .badge {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  flex: 1;
-  min-width: 110px;
+  /* Fixed-width tile so a row with fewer tags doesn't stretch them.
+     Languages grid overrides with full-width via .lang-grid-fixed. */
+  flex: 0 0 140px;
+  white-space: nowrap;
   transition: border-color 0.2s, box-shadow 0.2s, color 0.2s;
+}
+
+.lang-grid-fixed .lang-tag {
+  flex: unset;
+  width: 100%;
 }
 
 .lang-tag:hover {
@@ -772,8 +800,16 @@ td .badge {
   color: var(--text);
 }
 
-.lang-tag svg {
+.lang-tag svg,
+.lang-tag img {
   flex-shrink: 0;
+}
+
+/* Brand-colored SVGs ship in site/assets/. They sit directly on the dark
+   pill — no wrapper. Each SVG was recolored to its native brand tint. */
+.lang-tag img.editor-mark {
+  width: 20px;
+  height: 20px;
 }
 
 /* ── CTA ─────────────────────────────────────────── */
