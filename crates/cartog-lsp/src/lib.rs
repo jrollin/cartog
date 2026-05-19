@@ -325,12 +325,15 @@ mod tests {
 
     #[test]
     fn test_lsp_resolve_edges_no_servers_leaves_edges_unmarked() {
-        // Exercises ONLY the "manager.start() failed" branch: the test runs
-        // wherever pyright is not on PATH (typical CI). The buffered-negative
-        // path (per-language success gate with Ok(None) responses) is not
-        // covered here — it would need an LSP test double and is out of scope
-        // for this regression guard. What this DOES guarantee: when no server
-        // can start, lsp_resolve_edges returns zeros and never burns an edge.
+        // Two-mode coverage:
+        // - No pyright on PATH (typical CI): exercises the manager.start()
+        //   Err branch — server never starts, no marks possible.
+        // - pyright present: exercises the buffered-negative + per-language
+        //   gate. find_user is undefined, so LSP returns Ok(None) for the
+        //   only candidate; lang_resolved stays 0, so the gate suppresses
+        //   the mark. Same end-state: edge stays unmarked.
+        // Note: writing a.py under tmp would only help in the second mode;
+        // the first mode (CI) exits before the file is ever read.
         use cartog_core::{Edge, EdgeKind, Symbol, SymbolKind};
         use cartog_db::Database;
 
