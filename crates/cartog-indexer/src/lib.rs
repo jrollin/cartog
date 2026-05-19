@@ -123,6 +123,10 @@ pub struct IndexResult {
     pub edges_resolved: u32,
     #[serde(skip_serializing_if = "is_zero")]
     pub edges_lsp_resolved: u32,
+    /// Edges LSP marked `resolution_state = 2` (definitively unresolvable) this run.
+    /// They are skipped by future LSP queries until a matching symbol is added.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub edges_marked_unresolvable: u32,
     /// Files added, modified, or removed this run. Callers gate post-index passes (e.g. LSP) on this.
     #[serde(skip)]
     pub dirty_files: u32,
@@ -236,6 +240,12 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
     // Inside the transaction, we use the `*_in_tx` variants of the batch
     // helpers — the regular versions issue their own `BEGIN` and would fail
     // here.
+    // Names of symbols added this run. Used after the per-file loop to reset
+    // resolution_state=2 markers on edges that newly have a matching target —
+    // closes the "added b.ts after a.ts's import was marked unresolvable" gap.
+    let mut added_symbol_names: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+
     let tx = db.begin_indexing_tx()?;
     for item in parsed {
         let (rel_path, lang, source, hash, modified, symbols, edges) = match item {
@@ -265,6 +275,12 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
             let diff = merkle_diff(&symbols, &old_hashes);
 
             dirty_files.insert(rel_path.clone());
+
+            // Newly-added symbol names — used post-loop to retry edges that
+            // were previously marked unresolvable but now have a matching target.
+            for &i in &diff.added {
+                added_symbol_names.insert(symbols[i].name.clone());
+            }
 
             db.delete_symbols_in_tx(&diff.removed)?;
             result.symbols_removed += diff.removed.len() as u32;
@@ -307,6 +323,10 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         } else {
             // No stored hashes (first index or post-migration): full insert
             dirty_files.insert(rel_path.clone());
+            // Every symbol in a freshly-inserted file is "new" wrt the marker.
+            for sym in &symbols {
+                added_symbol_names.insert(sym.name.clone());
+            }
             db.clear_file_data_in_tx(&rel_path)?;
 
             db.insert_symbols_in_tx(&symbols)?;
@@ -355,6 +375,19 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
         }
     }
 
+    // Force-reindex must retry edges previously marked unresolvable —
+    // otherwise --force would silently honor a stale state=2 marker.
+    if force {
+        db.reset_all_unresolvable()?;
+    }
+
+    // Reopen state=2 markers whose target_name was just added. Runs BEFORE
+    // the heuristic + LSP passes so reopened edges flow through both.
+    if !added_symbol_names.is_empty() {
+        let names: Vec<String> = added_symbol_names.iter().cloned().collect();
+        db.reset_unresolvable_for_names(&names)?;
+    }
+
     // Resolve edges — scoped to dirty files for incremental, global for force/first-index
     if force || dirty_files.len() == current_files.len() {
         result.edges_resolved = db.resolve_edges_in_tx()?;
@@ -377,7 +410,9 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
     // re-querying the LSP repeats work. Use `--force` to retry.
     #[cfg(feature = "lsp")]
     if lsp && !dirty_files.is_empty() {
-        result.edges_lsp_resolved = cartog_lsp::lsp_resolve_edges(db, &root, None)?;
+        let stats = cartog_lsp::lsp_resolve_edges(db, &root, None)?;
+        result.edges_lsp_resolved = stats.resolved;
+        result.edges_marked_unresolvable = stats.marked_unresolvable;
     }
     #[cfg(not(feature = "lsp"))]
     let _ = lsp; // suppress unused warning when feature is off
@@ -1034,6 +1069,119 @@ mod tests {
         let r2 = index_directory(&db, &fixtures, false, true).unwrap();
         assert_eq!(r2.dirty_files, 0);
         assert_eq!(r2.edges_lsp_resolved, 0);
+    }
+
+    #[test]
+    fn test_added_symbol_reopens_unresolvable_edges() {
+        // Name-keyed reset: a new symbol whose name matches a state=2 edge
+        // returns the edge to state=0 (or state=1 if the heuristic resolves it).
+        use cartog_db::Database;
+
+        let tmp = tempfile::tempdir().unwrap();
+        // Rust's tempfile creates `.tmpXXXX` directories on macOS — the leading
+        // dot makes is_ignored() reject the walk root. Nest a non-dotted child.
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("a.py"), "def caller():\n    find_user('x')\n").unwrap();
+
+        let db = Database::open_memory().unwrap();
+        let r1 = index_directory(&db, &root, false, false).unwrap();
+        assert!(
+            r1.files_indexed >= 1,
+            "expected a.py to index, got {:?}",
+            r1
+        );
+
+        let before = db.unresolved_edges().unwrap();
+        let find_user = before
+            .iter()
+            .find(|e| e.target_name == "find_user")
+            .expect("find_user edge should exist as unresolved after first index");
+        let edge_id = find_user.edge_id;
+        db.mark_edge_unresolvable(edge_id).unwrap();
+        assert!(db.is_edge_unresolvable(edge_id).unwrap());
+
+        // Adding b.py with find_user definition should reopen the marker.
+        std::fs::write(root.join("b.py"), "def find_user(name):\n    return None\n").unwrap();
+        index_directory(&db, &root, false, false).unwrap();
+
+        assert!(
+            !db.is_edge_unresolvable(edge_id).unwrap(),
+            "edge must not stay state=2 after a matching target appears"
+        );
+    }
+
+    #[test]
+    fn test_force_reindex_resets_unresolvable_markers() {
+        // --force is the documented escape hatch for "retry everything".
+        // A state=2 marker must not survive a forced reindex; otherwise the
+        // user has no way to un-burn an edge after a transient false positive
+        // would have escaped the per-language gate.
+        //
+        // After --force, edges are re-inserted with new auto-increment IDs and
+        // default state=0. We assert: no edge with target_name="find_x" stays
+        // at state=2 (use the marker filter on unresolved_edges).
+        use cartog_db::Database;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("a.py"), "def caller():\n    find_x()\n").unwrap();
+
+        let db = Database::open_memory().unwrap();
+        index_directory(&db, &root, false, false).unwrap();
+
+        let pre = db.unresolved_edges().unwrap();
+        let find_x_id = pre
+            .iter()
+            .find(|e| e.target_name == "find_x")
+            .expect("find_x edge should exist")
+            .edge_id;
+        db.mark_edge_unresolvable(find_x_id).unwrap();
+
+        // --force = true: rebuilds edges with fresh IDs, must NOT inherit state=2.
+        index_directory(&db, &root, true, false).unwrap();
+        let post = db.unresolved_edges().unwrap();
+        let has_find_x_unresolved = post.iter().any(|e| e.target_name == "find_x");
+        assert!(
+            has_find_x_unresolved,
+            "after --force, find_x must be back in unresolved_edges (state=0)"
+        );
+    }
+
+    #[test]
+    fn test_noop_reindex_preserves_unresolvable_markers() {
+        // Defensive: a no-op reindex must not touch state=2 markers — no
+        // spurious resets (would burn the gate), no spurious re-marks.
+        use cartog_db::Database;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(
+            root.join("a.py"),
+            "def caller():\n    find_x()\n    find_y()\n",
+        )
+        .unwrap();
+
+        let db = Database::open_memory().unwrap();
+        index_directory(&db, &root, false, false).unwrap();
+
+        let unresolved = db.unresolved_edges().unwrap();
+        let target = unresolved
+            .iter()
+            .find(|e| e.target_name == "find_x")
+            .expect("find_x edge should exist");
+        db.mark_edge_unresolvable(target.edge_id).unwrap();
+
+        // No file changes → reindex is a no-op → marker survives.
+        let r = index_directory(&db, &root, false, false).unwrap();
+        assert_eq!(r.dirty_files, 0);
+
+        assert!(
+            db.is_edge_unresolvable(target.edge_id).unwrap(),
+            "no-op reindex must not reset state=2"
+        );
     }
 
     #[test]

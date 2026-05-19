@@ -245,9 +245,10 @@ fn index_with_optional_lsp(
             mcp_err("internal error: database lock poisoned (server restart required)")
         })?;
         match cartog_lsp::lsp_resolve_edges(&db, root, Some(&mut mgr)) {
-            Ok(n) => {
-                result.edges_lsp_resolved = n;
-                if n > 0 {
+            Ok(stats) => {
+                result.edges_lsp_resolved = stats.resolved;
+                result.edges_marked_unresolvable = stats.marked_unresolvable;
+                if stats.resolved > 0 {
                     let _ = db.compute_in_degrees();
                 }
             }
@@ -416,7 +417,7 @@ impl CartogServer {
 
     /// Build or rebuild the code graph index for a directory.
     #[tool(
-        description = "Build or rebuild the code graph index. Run this first before any other cartog tool, or after making code changes to keep the graph current. Incremental by default — only re-indexes changed files. Use force=true if results seem stale. Not for: routine queries (call once per session, not before every read). Returns: {files_indexed, files_skipped, symbols_added, edges_added, edges_resolved, edges_lsp_resolved}."
+        description = "Build or rebuild the code graph index. Run this first before any other cartog tool, or after making code changes to keep the graph current. Incremental by default — only re-indexes changed files. Use force=true if results seem stale. Not for: routine queries (call once per session, not before every read). Returns: {files_indexed, files_skipped, symbols_added, edges_added, edges_resolved, edges_lsp_resolved, edges_marked_unresolvable}."
     )]
     async fn cartog_index(
         &self,

@@ -93,9 +93,9 @@ Tables involved in the incremental pipeline:
 | `metadata` | 1 | `last_commit`, `schema_version` |
 | `files` | 2 | `path PK`, `last_modified`, `hash`, `language` |
 | `symbols` | 3 | `id PK`, `content_hash`, `subtree_hash` |
-| `edges` | 3 | `source_id`, `target_id`, `kind` |
+| `edges` | 3 | `source_id`, `target_id`, `kind`, `resolution_state` |
 
-Column-level schema and additional tables (RAG vectors, FTS5) live in [tech.md](../tech.md).
+Column-level schema, the `resolution_state` lifecycle, and additional tables (RAG vectors, FTS5) live in [tech.md](../tech.md).
 
 ## 8. Failure modes & invariants
 
