@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.15.1] - 2026-05-17
+## [0.16.0] - 2026-05-19
 
 ### Bug Fixes
 
@@ -53,6 +53,11 @@
 - **skill**: Install to ~/.local/bin when ~/.cargo/bin is not on PATH ([`62d3c1c`](https://github.com/jrollin/cartog/commit/62d3c1cd6282e875ff64a74f453ef47e5721514f))
 - **self**: Harden migrate-db edge cases ([`27bb9a5`](https://github.com/jrollin/cartog/commit/27bb9a5b2d21d257c3f319863ecc170ef1b6a3d3))
 - **db**: Add PRAGMA busy_timeout to prevent SQLITE_BUSY under concurrency ([`aeed052`](https://github.com/jrollin/cartog/commit/aeed0523ffc4269f06c86ae91e03f10f35687041))
+- **docs**: Correct factual counts to match the codebase ([`f6936d8`](https://github.com/jrollin/cartog/commit/f6936d8836d26f673e05e0f0b66cf2303e66e69f))
+- **site**: Correctness gaps in editor row, scope filter wording, and stats footnoting ([`1ddecad`](https://github.com/jrollin/cartog/commit/1ddecaddc17fb1586e9d50e5fe145d5a0311305c))
+- **skill**: Document init, ide, map, and the changes->impact workflow ([`19bdd3a`](https://github.com/jrollin/cartog/commit/19bdd3afe2e7c0b6c2f14d92944cf4371479ce26))
+- **skill**: Correctness pass + stress tests for ensure_indexed.sh ([`4f39fd5`](https://github.com/jrollin/cartog/commit/4f39fd5656157af3048138dae64e674d3e36f71f))
+- Address CodeRabbit review findings ([`2f8c54c`](https://github.com/jrollin/cartog/commit/2f8c54cd90ae02558a8ca0cc87047f4aeb6cce1b))
 
 ### Documentation
 
@@ -80,6 +85,7 @@
 - **self-update**: Align all docs with the new feature surface ([`5dbe968`](https://github.com/jrollin/cartog/commit/5dbe96869d1a71fe4655c31e01ae97056b4d0500))
 - **site**: Add `cartog self` to landing page and CLI reference ([`2a65664`](https://github.com/jrollin/cartog/commit/2a656647064241c0d53318653893fc9873e55965))
 - **readme**: Add contributors section (#39) ([`cf1008d`](https://github.com/jrollin/cartog/commit/cf1008d7cf5577d77912e2f628d78fcdeeb5ecc1))
+- Sync README + usage to two-step bootstrap flow ([`bb12d61`](https://github.com/jrollin/cartog/commit/bb12d61ecef46cf54fd3dfc023730e2ef04ecc66))
 
 ### Features
 
@@ -139,6 +145,12 @@
 - **db**: Move default database into .cartog/ directory ([`0130d65`](https://github.com/jrollin/cartog/commit/0130d650f40266bd472e923865051f3c271e1c64))
 - **languages**: Add PHP support via tree-sitter-php ([`9468aa0`](https://github.com/jrollin/cartog/commit/9468aa0094fe017153cb02bda207aba0e539ede1))
 - **lsp**: Add PHP support via Intelephense/Phpactor (#40) ([`5fe298f`](https://github.com/jrollin/cartog/commit/5fe298f7a158d5918fb81c1fa22d8fd42131b9f3))
+- **cli**: Add init and ide for one-step MCP setup ([`c2ff8cd`](https://github.com/jrollin/cartog/commit/c2ff8cd1919be68bb14308451f72fa2cc9373f04))
+- **site**: Install script + landing polish for non-Rust onboarding ([`eb13235`](https://github.com/jrollin/cartog/commit/eb1323538e118666014838775a1c6cc3a394d4ec))
+- **ide**: Interactive picker with dialoguer ([`d21e9e6`](https://github.com/jrollin/cartog/commit/d21e9e6bed5dd2e3620788c3440e2f68f3c0168f))
+- **site**: Landing redesign, brand SVGs, fresh demo ([`e3b79ab`](https://github.com/jrollin/cartog/commit/e3b79abc26f9238d8cd046a7e93eca94915f162a))
+- **skill**: Ensure_indexed.sh hints at cartog init on fresh repos ([`7f81194`](https://github.com/jrollin/cartog/commit/7f811947d4b5a1e0e1b08f2e5b54a780ddd1de29))
+- **skill**: Defer index when .cartog.toml is missing on TTY sessions ([`4702206`](https://github.com/jrollin/cartog/commit/470220602123f5a7d558870b968deea7f7d5620f))
 
 ### Miscellaneous
 
@@ -154,6 +166,7 @@
 - **security**: Bump rustls-webpki to 0.103.13 (RUSTSEC-2026-0104) ([`c4e0f0c`](https://github.com/jrollin/cartog/commit/c4e0f0cf448068ee8ac63dfd7a770a08861c4995))
 - PHP doc alignment + webapp_php benchmark fixture (#38) ([`d54561e`](https://github.com/jrollin/cartog/commit/d54561eec44362522624bf48e1ff366a60e4d752))
 - Add CODEOWNERS file ([`3969d6b`](https://github.com/jrollin/cartog/commit/3969d6b99e90e63efa66d97c24dc43d92090d802))
+- De-pin versions, add Code of Conduct + site hygiene ([`603f401`](https://github.com/jrollin/cartog/commit/603f401e1459a9e8f5815908adb458e40e7a5503))
 
 ### Performance
 
@@ -171,6 +184,8 @@
 - **self-update**: Apply audit medium/low fixes ([`6dfe440`](https://github.com/jrollin/cartog/commit/6dfe4407a6404321b7056e6ad8b1ecf38f139147))
 - **test**: Tighten wait_for_exec_ready review fixes ([`cb8c01e`](https://github.com/jrollin/cartog/commit/cb8c01eda83858905ca1fb75b99b453b67978acd))
 - **self-update**: Apply CodeRabbit findings (valid subset) ([`f33910b`](https://github.com/jrollin/cartog/commit/f33910b2df5124d2abbd170477415fed55231aec))
+- **cli**: Cartog init is now config-only ([`3a1c15d`](https://github.com/jrollin/cartog/commit/3a1c15d4fea6ae774e297fabc4f22a2e18fb7e2a))
+- **docs**: Hoist bootstrap, fix language count rule, add decision matrix ([`169a91f`](https://github.com/jrollin/cartog/commit/169a91f104004cddbd1f29054425f619ce5bbb04))
 
 ### Testing
 

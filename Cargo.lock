@@ -202,7 +202,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cartog"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-core"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-db"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -259,7 +259,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-indexer"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-languages"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-lsp"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-mcp"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-process-lock"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "libc",
  "tempfile",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-rag"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-watch"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -2015,9 +2015,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6673768db2d862beb9b39a78fdcb1a69439615d5794a1be50caa9bc92c81967"
+checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
 
 [[package]]
 name = "num-integer"
@@ -2617,9 +2617,9 @@ checksum = "323c417e1d9665a65b263ec744ba09030cfb277e9daa0b018a4ab62e57bc8189"
 
 [[package]]
 name = "rsqlite-vfs"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8a1f2315036ef6b1fbacd1972e8ee7688030b0a2121edfc2a6550febd41574d"
+checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
 dependencies = [
  "hashbrown 0.16.1",
  "thiserror 2.0.18",
@@ -3040,9 +3040,9 @@ dependencies = [
 
 [[package]]
 name = "sqlite-wasm-rs"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b2c760607300407ddeaee518acf28c795661b7108c75421303dbefb237d3a36"
+checksum = "cdd578e94101503d97e2b286bbf8db2135035ca24b2ce4cbf3f9e2fb2bbf1eee"
 dependencies = [
  "cc",
  "js-sys",
@@ -3113,9 +3113,9 @@ dependencies = [
 
 [[package]]
 name = "tar"
-version = "0.4.45"
+version = "0.4.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
 dependencies = [
  "filetime",
  "libc",
@@ -3390,9 +3390,9 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.6.10"
+version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68d6fdd9f81c2819c9a8b0e0cd91660e7746a8e6ea2ba7c6b2b057985f6bcb51"
+checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
  "bitflags",
  "bytes",
