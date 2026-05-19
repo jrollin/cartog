@@ -10,7 +10,7 @@ Resolves edges that the heuristic resolver in `cartog-db` left unresolved, by qu
 
 ### Resolution flow
 
-1. Fetch all unresolved edges (`target_id IS NULL`) from the database
+1. Fetch all unresolved edges (`resolution_state = 0`) from the database
 2. Group edges by language (detected from file extension)
 3. Start an LSP server for each language found on `PATH`
 4. For each file with unresolved edges:
@@ -18,7 +18,9 @@ Resolves edges that the heuristic resolver in `cartog-db` left unresolved, by qu
    - For each edge, find the target name's **column** in the source line
    - Send `textDocument/definition` request at that position
    - If the server returns a location, look up the symbol in the DB at that file+line
-   - Update the edge's `target_id`
+   - Update the edge's `target_id` (sets `resolution_state = 1`)
+   - On a definitive `Ok(None)`, buffer the edge to be marked `resolution_state = 2` *only if* the language proved healthy by resolving at least one edge this run (per-language success gate — protects against half-loaded LSP servers)
+   - Transient errors (`Err(_)`) never mark — the marker is sticky across runs
    - Send `textDocument/didClose`
 
 ### Column finding

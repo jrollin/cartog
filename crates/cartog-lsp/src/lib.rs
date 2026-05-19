@@ -18,21 +18,30 @@ use cartog_db::{Database, UnresolvedEdge};
 
 use manager::LspManager;
 
+/// Summary of an LSP resolution pass.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LspResolveStats {
+    /// Edges flipped from `resolution_state = 0` to `1` (target_id set).
+    pub resolved: u32,
+    /// Edges flipped from `resolution_state = 0` to `2` (LSP definitively gave up).
+    pub marked_unresolvable: u32,
+}
+
 /// Resolve edges that heuristic resolution left unresolved, using LSP servers.
 ///
 /// If `shared_manager` is provided, reuses existing LSP servers (warm start).
 /// Otherwise creates a temporary manager that is dropped after resolution.
 ///
-/// Returns the number of edges resolved by LSP.
+/// Returns counts for both `resolved` and `marked_unresolvable`.
 pub fn lsp_resolve_edges(
     db: &Database,
     root: &Path,
     shared_manager: Option<&mut LspManager>,
-) -> Result<u32> {
+) -> Result<LspResolveStats> {
     let unresolved = db.unresolved_edges()?;
 
     if unresolved.is_empty() {
-        return Ok(0);
+        return Ok(LspResolveStats::default());
     }
 
     // Group by language (derived from file extension)
@@ -45,7 +54,7 @@ pub fn lsp_resolve_edges(
     }
 
     if by_language.is_empty() {
-        return Ok(0);
+        return Ok(LspResolveStats::default());
     }
 
     // Use shared manager if provided, otherwise create a temporary one
@@ -62,6 +71,7 @@ pub fn lsp_resolve_edges(
     };
 
     let mut resolved = 0u32;
+    let mut marked_unresolvable = 0u32;
     let mut any_server_started = false;
 
     for (language, edges) in &by_language {
@@ -87,6 +97,15 @@ pub fn lsp_resolve_edges(
             by_file.len()
         );
 
+        // Buffer "definitive Ok(None)" marks here and only commit them at the
+        // end of the language loop *if* the language proved healthy by resolving
+        // at least one edge. Catches half-loaded rust-analyzer cases where the
+        // server returns Ok(None) before its index is ready — without this gate
+        // we would burn good edges with a sticky state=2 marker.
+        let mut pending_marks: Vec<i64> = Vec::new();
+        let mut lang_resolved: u32 = 0;
+        let mut server_died = false;
+
         for (file_path, file_edges) in by_file {
             let abs_path = root.join(file_path);
             let content = match std::fs::read_to_string(&abs_path) {
@@ -101,6 +120,7 @@ pub fn lsp_resolve_edges(
                 tracing::debug!("didOpen failed for {file_path}: {e:#}");
                 if !manager.is_alive(language) {
                     tracing::warn!("{language} server died during didOpen");
+                    server_died = true;
                     break;
                 }
                 continue;
@@ -121,7 +141,10 @@ pub fn lsp_resolve_edges(
                         match db.find_symbol_at_location(&loc.file_path, loc.line) {
                             Ok(Some(symbol_id)) => {
                                 match db.update_edge_target(edge.edge_id, &symbol_id) {
-                                    Ok(()) => resolved += 1,
+                                    Ok(()) => {
+                                        resolved += 1;
+                                        lang_resolved += 1;
+                                    }
                                     Err(e) => tracing::debug!(
                                         "failed to update edge {}: {e:#}",
                                         edge.edge_id
@@ -129,17 +152,28 @@ pub fn lsp_resolve_edges(
                                 }
                             }
                             Ok(None) => {
+                                // LSP pointed outside the indexed root (stdlib, third-party).
+                                // Definitive negative: buffer for marking.
                                 tracing::debug!(
                                     "no cartog symbol at {}:{}",
                                     loc.file_path,
                                     loc.line
                                 );
+                                pending_marks.push(edge.edge_id);
                             }
                             Err(e) => return Err(e), // DB errors propagate
                         }
                     }
-                    Ok(None) => {} // LSP couldn't resolve either
+                    Ok(None) => {
+                        // LSP definitively answered "no definition". Buffer it
+                        // until we know the language server resolved at least
+                        // one edge this run (per-language success gate).
+                        pending_marks.push(edge.edge_id);
+                    }
                     Err(e) => {
+                        // Transient: server crash, didOpen race, IO. NEVER mark
+                        // — the marker is sticky and a transient failure must
+                        // not burn this edge for future runs.
                         tracing::debug!(
                             "definition failed for {} at {file_path}:{}: {e:#}",
                             edge.target_name,
@@ -147,6 +181,7 @@ pub fn lsp_resolve_edges(
                         );
                         if !manager.is_alive(language) {
                             tracing::warn!("{language} server died, skipping remaining edges");
+                            server_died = true;
                             break;
                         }
                     }
@@ -155,19 +190,46 @@ pub fn lsp_resolve_edges(
 
             // Close the file to free server memory
             let _ = manager.close_file(language, file_path);
+
+            if server_died {
+                break;
+            }
+        }
+
+        // Per-language success gate: only commit unresolvable markers if the
+        // server resolved at least one edge AND didn't crash mid-run.
+        if !server_died && lang_resolved > 0 {
+            for edge_id in &pending_marks {
+                if let Err(e) = db.mark_edge_unresolvable(*edge_id) {
+                    tracing::debug!("failed to mark edge {edge_id} unresolvable: {e:#}");
+                    continue;
+                }
+                marked_unresolvable += 1;
+            }
+        } else if !pending_marks.is_empty() {
+            tracing::info!(
+                "LSP: {language} produced {} negative answers but no successes — \
+                 not marking unresolvable (server may be half-loaded or unhealthy)",
+                pending_marks.len()
+            );
         }
     }
 
     if !any_server_started {
         tracing::debug!("LSP: no servers found on PATH, skipping");
-    } else if resolved > 0 {
-        tracing::info!("LSP: resolved {resolved} additional edges");
+    } else if resolved > 0 || marked_unresolvable > 0 {
+        tracing::info!(
+            "LSP: resolved {resolved} additional edges, marked {marked_unresolvable} unresolvable"
+        );
     } else {
         tracing::info!("LSP: no additional edges resolved");
     }
 
     // manager.shutdown_all() called via Drop
-    Ok(resolved)
+    Ok(LspResolveStats {
+        resolved,
+        marked_unresolvable,
+    })
 }
 
 /// Find the column (0-based UTF-16 offset) of `target_name` in the given source line.
@@ -257,5 +319,40 @@ mod tests {
         // "id" only appears inside "valid" — no word-boundary match
         let lines = vec!["valid()"];
         assert_eq!(find_column_in_line(&lines, 1, "id"), None);
+    }
+
+    // ── Per-language success gate ──
+
+    #[test]
+    fn test_lsp_resolve_edges_no_servers_leaves_edges_unmarked() {
+        // When no language servers are available (LSP manager has no clients
+        // for the requested language, or PATH is empty), lsp_resolve_edges
+        // must not burn edges. Regression guard for the per-language gate:
+        // zero successes => zero state=2 markers.
+        use cartog_core::{Edge, EdgeKind, Symbol, SymbolKind};
+        use cartog_db::Database;
+
+        let db = Database::open_memory().unwrap();
+        // Seed a Python edge with no resolution target — heuristic + LSP would
+        // both have to handle this, but here LSP can't even start a server.
+        let src = Symbol::new("caller", SymbolKind::Function, "a.py", 1, 5, 0, 100, None);
+        db.insert_symbols(std::slice::from_ref(&src)).unwrap();
+        let edge = Edge::new(&src.id, "find_user", EdgeKind::Calls, "a.py", 2);
+        db.insert_edge(&edge).unwrap();
+        let edge_id = db.unresolved_edges().unwrap()[0].edge_id;
+
+        // Drive lsp_resolve_edges with a tempdir as the project root. No PATH
+        // setup → no servers available → all edges should pass through unmarked.
+        let tmp = tempfile::tempdir().unwrap();
+        let stats = lsp_resolve_edges(&db, tmp.path(), None).unwrap();
+        assert_eq!(stats.resolved, 0, "no servers must mean zero resolutions");
+        assert_eq!(
+            stats.marked_unresolvable, 0,
+            "no servers must mean zero marks"
+        );
+        assert!(
+            !db.is_edge_unresolvable(edge_id).unwrap(),
+            "edge must not be marked unresolvable when no LSP ran"
+        );
     }
 }

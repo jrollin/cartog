@@ -147,11 +147,19 @@ pub fn cmd_index(
     let result = result?;
 
     output(&result, json, None, |r| {
-        let lsp_part = if r.edges_lsp_resolved > 0 {
-            format!(
-                " ({} heuristic + {} LSP)",
+        let lsp_part = if r.edges_lsp_resolved > 0 || r.edges_marked_unresolvable > 0 {
+            let mut s = format!(
+                " ({} heuristic + {} LSP",
                 r.edges_resolved, r.edges_lsp_resolved
-            )
+            );
+            if r.edges_marked_unresolvable > 0 {
+                s.push_str(&format!(
+                    ", {} marked unresolvable",
+                    r.edges_marked_unresolvable
+                ));
+            }
+            s.push(')');
+            s
         } else {
             String::new()
         };

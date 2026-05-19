@@ -13,7 +13,7 @@ Stores symbols, edges, files, and embeddings in a single SQLite database. Provid
 Four core tables plus four RAG-specific tables:
 
 - **`symbols`** — primary key on stable ID, indexed by `name` and `file_path`
-- **`edges`** — stores `source_id` → `target_name`, with `target_id` resolved later
+- **`edges`** — `source_id` → `target_name`, with `target_id` resolved later. A `resolution_state` column tracks lifecycle: `0=unresolved`, `1=resolved`, `2=unresolvable` (LSP definitively gave up — skipped on future passes until [`Database::reset_unresolvable_for_names`] reopens them)
 - **`files`** — tracks file hash, language, symbol count, last modified timestamp
 - **`metadata`** — key-value store (e.g., `last_commit` for git-based change detection)
 - **`symbol_content`** — raw source code per symbol (for FTS and embedding)

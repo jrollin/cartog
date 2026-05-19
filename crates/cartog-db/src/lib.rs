@@ -114,6 +114,9 @@ CREATE TABLE IF NOT EXISTS edges (
     kind TEXT NOT NULL,
     file_path TEXT NOT NULL,
     line INTEGER,
+    -- 0 = unresolved (heuristic + LSP not yet definitive), 1 = resolved,
+    -- 2 = unresolvable (LSP definitively returned no in-graph definition).
+    resolution_state INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (source_id) REFERENCES symbols(id)
 );
 
@@ -141,6 +144,9 @@ CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_name);
 CREATE INDEX IF NOT EXISTS idx_edges_target_id ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
+-- idx_edges_unresolved (partial index on resolution_state=0) is created
+-- post-migration in Database::open so pre-v4 DBs without the column don't
+-- blow up at SCHEMA-load time.
 "#;
 
 /// Schema for RAG semantic search tables.
@@ -312,7 +318,7 @@ pub fn register_sqlite_vec() {
 }
 
 /// Current schema version. Increment when adding migrations.
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 
 /// Run schema migrations for existing databases.
 ///
@@ -333,8 +339,13 @@ fn migrate(conn: &Connection) {
     let has_hash_cols = conn
         .prepare("SELECT content_hash FROM symbols LIMIT 0")
         .is_ok();
+    // Same idea for v4: ensure the resolution_state column exists even if
+    // schema_version was already bumped (e.g. partial migration crash).
+    let has_resolution_state = conn
+        .prepare("SELECT resolution_state FROM edges LIMIT 0")
+        .is_ok();
 
-    if current >= SCHEMA_VERSION && has_hash_cols {
+    if current >= SCHEMA_VERSION && has_hash_cols && has_resolution_state {
         return;
     }
 
@@ -360,6 +371,23 @@ fn migrate(conn: &Connection) {
         let _ = conn.execute("DELETE FROM symbol_embedding_map", []);
         // Clear last_commit so incremental indexing doesn't skip anything
         let _ = conn.execute("DELETE FROM metadata WHERE key = 'last_commit'", []);
+    }
+
+    // Migration 3 → 4: edge resolution_state for the LSP "unresolvable" marker.
+    // Non-destructive: column is additive, existing nulls become state=0
+    // (will be re-attempted by LSP), existing target_ids become state=1.
+    // The matching partial index is created in `Database::open` after this
+    // function returns — keeps the SCHEMA bootstrap pre-migration safe.
+    if current < 4 || !has_resolution_state {
+        info!("schema v4: adding edges.resolution_state column");
+        let _ = conn.execute(
+            "ALTER TABLE edges ADD COLUMN resolution_state INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE edges SET resolution_state = 1 WHERE target_id IS NOT NULL",
+            [],
+        );
     }
 
     // Store the new schema version
@@ -519,6 +547,13 @@ impl Database {
         conn.execute_batch(RAG_SCHEMA).map_err(DbError::RagSchema)?;
         backup_before_destructive_migration(&conn, db_path)?;
         migrate(&conn);
+        // Partial index requires resolution_state (added in migration 3→4),
+        // so create it after migrate() rather than from SCHEMA.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_edges_unresolved
+                 ON edges(file_path) WHERE resolution_state = 0",
+        )
+        .map_err(DbError::Schema)?;
         handle_embedding_dimension(&conn, embedding_dim).map_err(DbError::EmbeddingDimension)?;
         Ok(Self { conn })
     }
@@ -535,6 +570,11 @@ impl Database {
         conn.execute_batch(&rag_vec_schema(DEFAULT_EMBEDDING_DIM))
             .map_err(DbError::RagSchema)?;
         migrate(&conn);
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_edges_unresolved
+                 ON edges(file_path) WHERE resolution_state = 0",
+        )
+        .map_err(DbError::Schema)?;
         Ok(Self { conn })
     }
 
@@ -953,9 +993,13 @@ impl Database {
     }
 
     fn resolve_edges_pass(&self) -> Result<u32> {
+        // Skip state=2 (unresolvable) edges: the heuristic can't resolve what
+        // LSP definitively gave up on, and re-walking them every dirty reindex
+        // burns measurable time on large repos. They re-enter via
+        // `reset_unresolvable_for_names` when a matching symbol appears.
         let mut unresolved_stmt = self.conn.prepare(
             "SELECT e.id, e.target_name, e.file_path, e.source_id
-             FROM edges e WHERE e.target_id IS NULL",
+             FROM edges e WHERE e.target_id IS NULL AND e.resolution_state = 0",
         )?;
 
         let unresolved: Vec<(i64, String, String, String)> = unresolved_stmt
@@ -1135,9 +1179,12 @@ impl Database {
         }
         // After file re-indexing, edges from unchanged files may point to
         // symbol IDs that no longer exist (removed or renamed symbols).
-        // Set these dangling references to NULL so they can be re-resolved.
+        // Set these dangling references to NULL AND reset resolution_state so
+        // the heuristic + LSP passes get another shot. Without the state reset
+        // the edge would stay at state=1 (resolved) but with target_id NULL —
+        // permanently invisible to `unresolved_edges()`.
         let n = self.conn.execute(
-            "UPDATE edges SET target_id = NULL
+            "UPDATE edges SET target_id = NULL, resolution_state = 0
              WHERE target_id IS NOT NULL
                AND NOT EXISTS (SELECT 1 FROM symbols WHERE symbols.id = edges.target_id)",
             [],
@@ -2061,14 +2108,19 @@ impl Database {
     // the Phase 3 atomicity bug at runtime ("cannot start a transaction
     // within a transaction").
 
-    /// Return all edges with `target_id IS NULL` (unresolved after heuristic pass).
+    /// Return edges still waiting for resolution (`resolution_state = 0`).
+    ///
+    /// Edges marked `state = 2` (LSP definitively gave up) are excluded so a
+    /// dirty reindex doesn't re-query the language server for known-unresolvable
+    /// targets. They re-enter the unresolved set via
+    /// [`Self::reset_unresolvable_for_names`] when a matching symbol is added.
     ///
     /// tx-safe: read-only single statement — see note above the section header.
     pub fn unresolved_edges(&self) -> Result<Vec<UnresolvedEdge>> {
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.target_name, e.file_path, e.line
              FROM edges e
-             WHERE e.target_id IS NULL",
+             WHERE e.resolution_state = 0",
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -2102,7 +2154,7 @@ impl Database {
         Ok(id)
     }
 
-    /// Update a single edge's target_id.
+    /// Update a single edge's target_id and flip it to `resolution_state = 1`.
     ///
     /// tx-safe: single statement — see the LSP-section header note. If you
     /// ever batch this internally with `unchecked_transaction()`, also update
@@ -2110,10 +2162,87 @@ impl Database {
     /// outer transaction.
     pub fn update_edge_target(&self, edge_id: i64, target_id: &str) -> Result<()> {
         self.conn.execute(
-            "UPDATE edges SET target_id = ?1 WHERE id = ?2",
+            "UPDATE edges SET target_id = ?1, resolution_state = 1 WHERE id = ?2",
             params![target_id, edge_id],
         )?;
         Ok(())
+    }
+
+    /// Test-only inspector: returns true when the edge is at `resolution_state = 2`.
+    ///
+    /// Exposed because the column is otherwise crate-private, and downstream
+    /// integration tests (cartog-indexer) need a read-only way to assert the
+    /// marker state without snapshotting raw SQL.
+    pub fn is_edge_unresolvable(&self, edge_id: i64) -> Result<bool> {
+        let state: i64 = self.conn.query_row(
+            "SELECT resolution_state FROM edges WHERE id = ?1",
+            params![edge_id],
+            |row| row.get(0),
+        )?;
+        Ok(state == 2)
+    }
+
+    /// Reset every `resolution_state = 2` edge back to `0`. Used by
+    /// `cartog index --force` to honor the "retry everything" contract:
+    /// without this, the heuristic + LSP would still skip permanently-marked
+    /// edges even on a forced re-index.
+    ///
+    /// tx-safe: single statement — see the LSP-section header note.
+    pub fn reset_all_unresolvable(&self) -> Result<u32> {
+        let n = self.conn.execute(
+            "UPDATE edges SET resolution_state = 0 WHERE resolution_state = 2",
+            [],
+        )?;
+        Ok(n as u32)
+    }
+
+    /// Mark a single edge as `resolution_state = 2` (LSP gave up).
+    ///
+    /// Callers MUST only invoke this after a definitive negative answer from
+    /// the language server. Never call from a transient-error branch (server
+    /// crash, didOpen failure, half-loaded warmup) — the marker is sticky
+    /// across runs until [`Self::reset_unresolvable_for_names`] or
+    /// [`Self::invalidate_edges_targeting`] reopens it.
+    ///
+    /// tx-safe: single statement — see the LSP-section header note.
+    pub fn mark_edge_unresolvable(&self, edge_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE edges SET resolution_state = 2 WHERE id = ?1",
+            params![edge_id],
+        )?;
+        Ok(())
+    }
+
+    /// Reset `resolution_state` from 2 → 0 for edges whose target_name is in `names`.
+    ///
+    /// Called from the indexer when new symbols are added: an edge that was
+    /// previously "unresolvable" (no symbol with this name existed) may now be
+    /// resolvable against the freshly-added target. Returns the number of edges
+    /// reopened. No-op when `names` is empty.
+    ///
+    /// tx-safe: single statement. Names are batched to honor SQLite's default
+    /// 999-parameter limit; only resolution_state = 2 rows are touched so the
+    /// write set stays tiny even on a large rename.
+    pub fn reset_unresolvable_for_names(&self, names: &[String]) -> Result<u32> {
+        if names.is_empty() {
+            return Ok(0);
+        }
+        const CHUNK: usize = 500;
+        let mut total: u32 = 0;
+        for chunk in names.chunks(CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!(
+                "UPDATE edges
+                 SET resolution_state = 0
+                 WHERE resolution_state = 2
+                   AND target_name IN ({placeholders})"
+            );
+            let params: Vec<&dyn rusqlite::ToSql> =
+                chunk.iter().map(|n| n as &dyn rusqlite::ToSql).collect();
+            let n = self.conn.execute(&sql, params.as_slice())?;
+            total += n as u32;
+        }
+        Ok(total)
     }
 }
 
@@ -4169,5 +4298,249 @@ mod tests {
             count, 1,
             "without an outer transaction, an early write persists despite a later error"
         );
+    }
+
+    // ── resolution_state (edge marker) tests ──
+
+    fn resolution_state_of(db: &Database, edge_id: i64) -> i64 {
+        db.conn
+            .query_row(
+                "SELECT resolution_state FROM edges WHERE id = ?1",
+                params![edge_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn insert_test_edge(db: &Database, target_name: &str) -> i64 {
+        let sym = test_symbol("src", SymbolKind::Function, "a.py", 1);
+        db.insert_symbols(std::slice::from_ref(&sym)).unwrap();
+        let edge = Edge::new(&sym.id, target_name, EdgeKind::Calls, "a.py", 1);
+        db.insert_edge(&edge).unwrap();
+        db.conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn test_new_edge_has_default_state_zero() {
+        let db = Database::open_memory().unwrap();
+        let id = insert_test_edge(&db, "missing_target");
+        assert_eq!(resolution_state_of(&db, id), 0);
+    }
+
+    #[test]
+    fn test_update_edge_target_flips_state_to_one() {
+        let db = Database::open_memory().unwrap();
+        let id = insert_test_edge(&db, "anything");
+        db.update_edge_target(id, "some:symbol:id").unwrap();
+        assert_eq!(resolution_state_of(&db, id), 1);
+    }
+
+    #[test]
+    fn test_mark_edge_unresolvable_sets_state_to_two() {
+        let db = Database::open_memory().unwrap();
+        let id = insert_test_edge(&db, "anything");
+        db.mark_edge_unresolvable(id).unwrap();
+        assert_eq!(resolution_state_of(&db, id), 2);
+    }
+
+    #[test]
+    fn test_unresolved_edges_excludes_state_two() {
+        let db = Database::open_memory().unwrap();
+        let _unresolved = insert_test_edge(&db, "still_unresolved");
+        let burned = insert_test_edge(&db, "burned");
+        db.mark_edge_unresolvable(burned).unwrap();
+
+        let edges = db.unresolved_edges().unwrap();
+        let names: Vec<&str> = edges.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(names.contains(&"still_unresolved"));
+        assert!(!names.contains(&"burned"));
+    }
+
+    #[test]
+    fn test_reset_unresolvable_for_names_targets_only_matching() {
+        let db = Database::open_memory().unwrap();
+        let burned_foo = insert_test_edge(&db, "foo");
+        let burned_bar = insert_test_edge(&db, "bar");
+        db.mark_edge_unresolvable(burned_foo).unwrap();
+        db.mark_edge_unresolvable(burned_bar).unwrap();
+
+        let reopened = db
+            .reset_unresolvable_for_names(&["foo".to_string()])
+            .unwrap();
+        assert_eq!(reopened, 1);
+        assert_eq!(resolution_state_of(&db, burned_foo), 0);
+        assert_eq!(resolution_state_of(&db, burned_bar), 2);
+    }
+
+    #[test]
+    fn test_reset_unresolvable_for_names_empty_is_noop() {
+        let db = Database::open_memory().unwrap();
+        let n = db.reset_unresolvable_for_names(&[]).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn test_reset_unresolvable_for_names_does_not_touch_state_zero_or_one() {
+        // The reset is purely state=2 → state=0. Resolved (state=1) and
+        // already-open (state=0) edges with matching names must be left alone.
+        let db = Database::open_memory().unwrap();
+        let still_open = insert_test_edge(&db, "foo"); // state=0
+        let already_resolved = insert_test_edge(&db, "foo");
+        db.update_edge_target(already_resolved, "some:id").unwrap(); // state=1
+
+        db.reset_unresolvable_for_names(&["foo".to_string()])
+            .unwrap();
+        assert_eq!(resolution_state_of(&db, still_open), 0);
+        assert_eq!(resolution_state_of(&db, already_resolved), 1);
+    }
+
+    #[test]
+    fn test_invalidate_edges_targeting_resets_state_when_target_disappears() {
+        // When a symbol referenced by a resolved edge is removed, the edge
+        // must drop back to (target_id NULL, state=0) so it re-enters the
+        // unresolved set on the next pass.
+        let db = Database::open_memory().unwrap();
+
+        // Set up: source edge points to symbol "ghost" via update_edge_target,
+        // then drop the symbol so the edge becomes dangling.
+        let src = test_symbol("src", SymbolKind::Function, "a.py", 1);
+        let target = test_symbol("ghost", SymbolKind::Function, "b.py", 1);
+        db.insert_symbols(&[src.clone(), target.clone()]).unwrap();
+        let edge = Edge::new(&src.id, "ghost", EdgeKind::Calls, "a.py", 1);
+        db.insert_edge(&edge).unwrap();
+        let eid = db.conn.last_insert_rowid();
+        db.update_edge_target(eid, &target.id).unwrap();
+        assert_eq!(resolution_state_of(&db, eid), 1);
+
+        // Remove the target symbol — leaves edge.target_id pointing at nothing.
+        db.conn
+            .execute("DELETE FROM symbols WHERE id = ?1", params![target.id])
+            .unwrap();
+
+        let mut dirty = std::collections::HashSet::new();
+        dirty.insert("b.py".to_string());
+        db.invalidate_edges_targeting(&dirty).unwrap();
+
+        assert_eq!(
+            resolution_state_of(&db, eid),
+            0,
+            "dangling edge must return to state=0 so unresolved_edges() can see it"
+        );
+        let row: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT target_id FROM edges WHERE id = ?1",
+                params![eid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(row.is_none(), "target_id must be NULL after invalidation");
+    }
+
+    #[test]
+    fn test_partial_unresolved_index_exists() {
+        // The partial index speeds up the unresolved_edges() query on large
+        // repos. Verify it actually got created by inspecting sqlite_master.
+        let db = Database::open_memory().unwrap();
+        let n: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type='index' AND name='idx_edges_unresolved'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn test_resolution_state_default_via_insert_edges_batch() {
+        // The batched insert path is the production hot path. Make sure
+        // it honors the DEFAULT 0 just like single-row inserts do.
+        let db = Database::open_memory().unwrap();
+        let src = test_symbol("src", SymbolKind::Function, "a.py", 1);
+        db.insert_symbols(std::slice::from_ref(&src)).unwrap();
+        let edges = vec![
+            Edge::new(&src.id, "x", EdgeKind::Calls, "a.py", 1),
+            Edge::new(&src.id, "y", EdgeKind::Calls, "a.py", 2),
+        ];
+        db.insert_edges(&edges).unwrap();
+        let states: Vec<i64> = db
+            .conn
+            .prepare("SELECT resolution_state FROM edges ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(states, vec![0, 0]);
+    }
+
+    #[test]
+    fn test_migration_v3_to_v4_backfills_resolved_to_state_one() {
+        // Simulate a pre-v4 database: open with v3-equivalent schema (no
+        // resolution_state column, schema_version=3), insert edges with
+        // and without target_ids, then re-open to trigger the migration.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("v3.sqlite");
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            // Bootstrap a v3-shaped edges table by hand.
+            conn.execute_batch(
+                "CREATE TABLE symbols (
+                    id TEXT PRIMARY KEY, name TEXT, kind TEXT, file_path TEXT,
+                    start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER,
+                    parent_id TEXT, signature TEXT, visibility TEXT, is_async BOOLEAN,
+                    docstring TEXT, in_degree INTEGER DEFAULT 0,
+                    content_hash TEXT, subtree_hash TEXT);
+                 CREATE TABLE edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id TEXT NOT NULL, target_name TEXT NOT NULL, target_id TEXT,
+                    kind TEXT NOT NULL, file_path TEXT NOT NULL, line INTEGER);
+                 CREATE TABLE files (path TEXT PRIMARY KEY);
+                 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT);
+                 INSERT INTO metadata (key, value) VALUES ('schema_version', '3');
+                 INSERT INTO symbols (id, name, kind, file_path) VALUES ('s:1', 'foo', 'function', 'a.py');
+                 INSERT INTO edges (source_id, target_name, target_id, kind, file_path, line)
+                   VALUES ('s:1', 'foo', 's:1', 'calls', 'a.py', 1);
+                 INSERT INTO edges (source_id, target_name, target_id, kind, file_path, line)
+                   VALUES ('s:1', 'missing', NULL, 'calls', 'a.py', 2);",
+            )
+            .unwrap();
+        }
+
+        // Re-open through the production path so migrate() runs.
+        let db = Database::open(&path, DEFAULT_EMBEDDING_DIM).unwrap();
+
+        let resolved_state: i64 = db
+            .conn
+            .query_row(
+                "SELECT resolution_state FROM edges WHERE target_id IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let unresolved_state: i64 = db
+            .conn
+            .query_row(
+                "SELECT resolution_state FROM edges WHERE target_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(resolved_state, 1, "existing target_id NOT NULL → state=1");
+        assert_eq!(unresolved_state, 0, "existing target_id NULL → state=0");
+
+        let bumped: String = db
+            .conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(bumped, "4");
     }
 }
