@@ -4760,6 +4760,46 @@ mod tests {
     }
 
     #[test]
+    fn test_database_open_alone_does_not_change_fingerprint() {
+        // Regression for the cartog rag search path: opening the DB (which
+        // every CLI command does) must not touch the embedding fingerprint
+        // unless reconcile_embedding_fingerprint is explicitly called.
+        // Pre-fix, cmd_rag_search called reconcile on every invocation,
+        // which could race a primary serve's writes if the user changed
+        // provider in .cartog.toml since last index. After the fix,
+        // cmd_rag_search opens RW but does NOT reconcile.
+        //
+        // This test asserts the invariant at the layer below: Database::open
+        // does not, by itself, alter provider/model metadata. Combined with
+        // the production code change (no reconcile call in cmd_rag_search),
+        // a CLI search invocation cannot wipe symbol_vec.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let original_fp = fp("local", "BGE-small-en-v1.5", 384);
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.reconcile_embedding_fingerprint(&original_fp).unwrap();
+            seed_embedding(&db, 384, "guard");
+        }
+        // Re-open as cmd_rag_search would (RW, no reconcile). Same dim,
+        // so handle_embedding_dimension early-returns; nothing rewrites.
+        {
+            let _db = Database::open(&db_path, 384).unwrap();
+        }
+        // Fingerprint and embeddings intact.
+        let db = Database::open(&db_path, 384).unwrap();
+        assert_eq!(
+            db.get_metadata("embedding_provider").unwrap().as_deref(),
+            Some("local")
+        );
+        assert_eq!(
+            db.get_metadata("embedding_model").unwrap().as_deref(),
+            Some("BGE-small-en-v1.5")
+        );
+        assert_eq!(db.embedding_count().unwrap(), 1);
+    }
+
+    #[test]
     fn test_open_readonly_missing_schema_version_is_schema_drift() {
         // Regression: pre-fix, a metadata table without a schema_version
         // row surfaced as DbError::Sqlite(QueryReturnedNoRows) instead of
