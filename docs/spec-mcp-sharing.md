@@ -149,8 +149,10 @@ While `cartog watch` starts and another live cartog process holds the watch slot
 
 ## Implementation Checklist
 
-All items completed across commits `a75dec0`, `c1a4112`, `2904177`,
-`c882021`, `56d220c`, `82c6f24`, `5d8fe84`, `24c5c70`.
+All items completed across the initial 8 implementation commits
+(`a75dec0` … `24c5c70`) plus 5 follow-up review-fix commits
+(`949ac43`, `1a563f7`, `f66b796`, `9e59f5b`, `4d876b1`) — see the
+"Review fixes" section at the end for the per-issue mapping.
 
 ### Phase 6a: migration busy-retry (`crates/cartog-db/src/lib.rs`)
 - [x] `MIGRATION_RETRY_BACKOFF_MS` schedule constant
@@ -164,7 +166,7 @@ All items completed across commits `a75dec0`, `c1a4112`, `2904177`,
 - [x] `EmbeddingFingerprint { provider, model, dimension }` type
 - [x] `Database::reconcile_embedding_fingerprint(&fp)` wipes on mismatch, backfills on legacy DBs
 - [x] `rag::fingerprint_of(&dyn EmbeddingProvider)` builder
-- [x] 4 call sites reconcile post-open (watcher, `cartog rag index`, `cartog rag search`, MCP `CartogServer::new`)
+- [x] 3 call sites reconcile post-open (watcher, `cartog rag index`, MCP `CartogServer::new`). `cartog rag search` deliberately does NOT reconcile: it's a read path; a fingerprint mismatch yields lower-quality results but never wipes data. See commit `f66b796`.
 - [x] 5 unit tests (match no-op, provider swap, model swap, backfill, dim change)
 
 ### Phase 1: lifecycle + start_time + log levels
@@ -219,7 +221,30 @@ All items completed across commits `a75dec0`, `c1a4112`, `2904177`,
 ### Cross-cutting
 - [x] All 6 phases land as separate commits on the feature branch
 - [x] `make check` (fmt + clippy + tests + fixtures) passes after each phase
-- [x] Total test count: 795 (was 760 at branch creation; +35 new tests)
+- [x] Total test count: 812 (was 760 at branch creation; +52 new tests after fixes)
+
+### Review fixes (post-spec, second adversarial review)
+
+Five follow-up commits address issues found by a multi-agent review of
+the initial implementation. Each commit ships with at least one
+regression test.
+
+- [x] `949ac43 fix(serve,rag)`:
+  - C1: `LocalEmbeddingProvider::model_id` now returns `model_info.model_code` (stable HF path, e.g. `Qdrant/bge-small-en-v1.5-onnx-Q`) instead of fastembed's `Display` impl (Debug repr of the enum variant).
+  - C2: `find_active_locks` re-reads the PID file via `unlink_if_unchanged` before removal; closes a TOCTOU window where a concurrent acquire could be clobbered by `cartog self update`'s peer scan.
+  - C3: `ProcessLock::acquire` uses `write_tmp` + `hard_link` instead of `OpenOptions::create_new(true)` + `write_all`; the target is never observed in an empty state. Per-(PID, thread, counter) tmp filenames prevent intra-process clobbering.
+- [x] `1a563f7 fix(db)`:
+  - C4: `handle_embedding_dimension` and `reconcile_embedding_fingerprint` wrap their multi-statement writes in `unchecked_transaction`; mid-sequence failures roll back atomically.
+  - M-schema: `open_readonly` and `open_existing_rw` route through a `read_schema_version` helper that treats a missing row as `stored=0` → `DbError::SchemaDrift`, not raw `Sqlite(QueryReturnedNoRows)`.
+- [x] `f66b796 fix(rag)`: `cmd_rag_search` no longer calls `reconcile_embedding_fingerprint`. Search is read-only by nature; a fingerprint change yields poorer results but never wipes data or races a primary serve.
+- [x] `9e59f5b fix(mcp)`: Five promoter improvements:
+  - (a) Role flips to Primary right after the DB swap, before spawning the watcher.
+  - (b) Transient `open_existing_rw` failures drop the lock and continue the loop (was: return forever).
+  - (c) Re-validate pinned state AFTER acquiring the lock (was: only before, leaving a TOCTOU window).
+  - (d) Promoter `JoinHandle` is aborted in `run_server`'s shutdown path (was: dropped, which does not cancel).
+  - (e) Watcher post-promotion reuses the server's captured `cwd` (was: `std::env::current_dir()`).
+  - `poll_interval` becomes a `PromoterArgs` field so tests can shrink it from 10s to milliseconds.
+- [x] `4d876b1 docs`: removed unsafe "manually delete `watch.pid`" advice; clarified log-level autodetect; documented per-OS `<state_dir>` paths.
 
 ## Out of Scope
 
