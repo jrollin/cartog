@@ -388,6 +388,28 @@ pub struct CartogServer {
     /// Persistent LSP manager for warm server reuse across index calls.
     #[cfg(feature = "lsp")]
     lsp_manager: Arc<Mutex<cartog_lsp::manager::LspManager>>,
+    /// Single-writer election role. `Primary` holds the `serve` PID lock
+    /// and owns the RW DB connection. `ReadOnly` attached via
+    /// [`Database::open_readonly`] because another cartog process owns
+    /// the slot — the 2 write tools are gated, the 11 read tools work
+    /// unchanged.
+    role: Role,
+}
+
+/// Role of this MCP server instance under single-writer election.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Primary,
+    ReadOnly,
+}
+
+impl Role {
+    fn as_str(self) -> &'static str {
+        match self {
+            Role::Primary => "primary",
+            Role::ReadOnly => "read-only",
+        }
+    }
 }
 
 #[tool_router]
@@ -398,9 +420,7 @@ impl CartogServer {
     ) -> anyhow::Result<Self> {
         let db = Database::open(db_path, rag_config.resolved_dimension())
             .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
-        let cwd = std::env::current_dir()
-            .and_then(|p| p.canonicalize())
-            .map_err(|e| anyhow::anyhow!("cannot determine CWD: {e}"))?;
+        let cwd = Self::cwd()?;
         let provider = rag::create_embedding_provider(&rag_config)
             .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
         db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
@@ -414,7 +434,64 @@ impl CartogServer {
             #[cfg(feature = "lsp")]
             lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
             cwd: Arc::from(cwd),
+            role: Role::Primary,
         })
+    }
+
+    /// Construct a secondary MCP server that attached read-only because
+    /// another cartog process owns the `serve` PID lock. Skips schema
+    /// migrations and the embedding-fingerprint reconcile (the primary
+    /// owns both); the 2 write tools return a clear error at dispatch
+    /// time. The 11 read tools work normally.
+    pub fn new_read_only(
+        db_path: &std::path::Path,
+        rag_config: rag::EmbeddingProviderConfig,
+    ) -> anyhow::Result<Self> {
+        let db = Database::open_readonly(db_path)
+            .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?;
+        let cwd = Self::cwd()?;
+        let provider = rag::create_embedding_provider(&rag_config)
+            .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
+        let reranker = rag::create_reranker_provider(&rag_config.reranker_provider);
+        Ok(Self {
+            tool_router: Self::tool_router(),
+            db: Arc::new(Mutex::new(db)),
+            embedding_provider: Arc::new(Mutex::new(provider)),
+            reranker_provider: Arc::new(Mutex::new(reranker)),
+            #[cfg(feature = "lsp")]
+            lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
+            cwd: Arc::from(cwd),
+            role: Role::ReadOnly,
+        })
+    }
+
+    fn cwd() -> anyhow::Result<std::path::PathBuf> {
+        std::env::current_dir()
+            .and_then(|p| p.canonicalize())
+            .map_err(|e| anyhow::anyhow!("cannot determine CWD: {e}"))
+    }
+
+    /// Role this server is running under: `Primary` owns the lock and the
+    /// RW DB; `ReadOnly` attached behind a primary.
+    pub fn role(&self) -> Role {
+        self.role
+    }
+
+    /// If we're a read-only secondary, return an `McpError` explaining why
+    /// the requested write tool isn't available. `None` when this is the
+    /// primary and the call should proceed.
+    fn refuse_if_read_only(&self, tool: &str) -> Option<McpError> {
+        if self.role == Role::ReadOnly {
+            Some(mcp_err(format!(
+                "This cartog instance is read-only because another cartog process is the \
+                 primary writer for this project. Its file watcher picks up your changes \
+                 automatically within ~5s, so `{tool}` is not needed here. \
+                 To force a manual reindex, run `cartog rag index` from your terminal \
+                 (or stop the primary and restart this MCP server)."
+            )))
+        } else {
+            None
+        }
     }
 
     /// Build or rebuild the code graph index for a directory.
@@ -425,6 +502,9 @@ impl CartogServer {
         &self,
         Parameters(params): Parameters<IndexParams>,
     ) -> Result<CallToolResult, McpError> {
+        if let Some(err) = self.refuse_if_read_only("cartog_index") {
+            return Err(err);
+        }
         let path = params.path;
         let force = params.force;
         let db = Arc::clone(&self.db);
@@ -709,6 +789,7 @@ impl CartogServer {
     )]
     async fn cartog_stats(&self) -> Result<CallToolResult, McpError> {
         let db = Arc::clone(&self.db);
+        let role = self.role;
 
         tokio::task::spawn_blocking(move || {
             debug!("stats");
@@ -719,7 +800,16 @@ impl CartogServer {
                 .stats()
                 .map_err(|e| mcp_err(format!("stats query failed: {e}")))?;
 
-            let json = serde_json::to_string_pretty(&stats)
+            // Serialize the base stats then splice the role in alongside.
+            let mut value = serde_json::to_value(&stats)
+                .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(
+                    "role".to_string(),
+                    serde_json::Value::String(role.as_str().to_string()),
+                );
+            }
+            let json = serde_json::to_string_pretty(&value)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         })
@@ -823,6 +913,9 @@ impl CartogServer {
         &self,
         Parameters(params): Parameters<RagIndexParams>,
     ) -> Result<CallToolResult, McpError> {
+        if let Some(err) = self.refuse_if_read_only("cartog_rag_index") {
+            return Err(err);
+        }
         let path = params.path;
         let force = params.force;
         let db = Arc::clone(&self.db);
@@ -1015,27 +1108,28 @@ pub async fn run_server(
 ) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
 
-    // Acquire first so an election loss aborts before opening DB / watcher.
-    // Phase 4 will turn `Held` into a read-only attach; until then we exit
-    // cleanly with a clear message so the user knows which process owns
-    // the slot.
-    let _lock = match acquire_serve_lock(&opts)? {
-        ServeLockOutcome::Primary(lock) => Some(lock),
-        ServeLockOutcome::Untracked => None,
+    // Acquire first so an election loss is resolved before opening DB or
+    // spawning the watcher.
+    let (role, _lock) = match acquire_serve_lock(&opts)? {
+        ServeLockOutcome::Primary(lock) => (Role::Primary, Some(lock)),
+        ServeLockOutcome::Untracked => (Role::Primary, None),
         ServeLockOutcome::Held(held) => {
             info!(
-                slot = %held.slot,
                 primary_pid = held.pid,
-                "another cartog process owns the serve lock for this DB; exiting (read-only attach lands in a later phase). \
-                 Stop the running cartog or set CARTOG_SINGLE_WRITER=0 to opt out of single-writer election."
+                "another cartog process is the primary writer for this DB \
+                 (PID {}); attaching read-only. \
+                 Indexing tools will return a read-only error; queries work normally.",
+                held.pid
             );
-            return Ok(());
+            (Role::ReadOnly, None)
         }
     };
 
-    // Optionally spawn a background file watcher
+    // Only the primary owns the watcher: starting one as a secondary would
+    // give us two indexers fighting over the DB. Read-only clients ride
+    // along on the primary's index updates via WAL.
     let db_path_str = db_path.to_string_lossy().into_owned();
-    let _watch_handle: Option<WatchHandle> = if watch {
+    let _watch_handle: Option<WatchHandle> = if watch && role == Role::Primary {
         let cwd = std::env::current_dir()?;
         let mut config = WatchConfig::new(cwd);
         config.rag = rag;
@@ -1051,10 +1145,16 @@ pub async fn run_server(
             }
         }
     } else {
+        if watch && role == Role::ReadOnly {
+            info!("watcher skipped: this is a read-only secondary; the primary owns indexing");
+        }
         None
     };
 
-    let server = CartogServer::new(db_path, rag_config)?;
+    let server = match role {
+        Role::Primary => CartogServer::new(db_path, rag_config)?,
+        Role::ReadOnly => CartogServer::new_read_only(db_path, rag_config)?,
+    };
     let service = server.serve(stdio()).await?;
 
     // Wait for any of: rmcp's normal shutdown (stdin EOF when the parent
@@ -1449,6 +1549,74 @@ mod tests {
             ServeLockOutcome::Primary(_) => {} // expected
             other => panic!("expected Primary with kill switch, got {other:?}"),
         }
+    }
+
+    // ── Role / read-only attach tests (Phase 4) ──
+
+    fn test_rag_config() -> rag::EmbeddingProviderConfig {
+        rag::EmbeddingProviderConfig::default()
+    }
+
+    #[test]
+    fn primary_server_reports_primary_role() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let server =
+            CartogServer::new(&db_path, test_rag_config()).expect("primary server constructs");
+        assert_eq!(server.role(), Role::Primary);
+    }
+
+    #[test]
+    fn read_only_server_reports_read_only_role() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        // First open writable to materialize the file with current schema.
+        {
+            let _primary =
+                CartogServer::new(&db_path, test_rag_config()).expect("primary server constructs");
+        }
+        let reader = CartogServer::new_read_only(&db_path, test_rag_config())
+            .expect("read-only server constructs");
+        assert_eq!(reader.role(), Role::ReadOnly);
+    }
+
+    #[test]
+    fn read_only_server_refuses_write_tools() {
+        // refuse_if_read_only is the helper gating cartog_index and
+        // cartog_rag_index. Verify both call sites get an error in
+        // ReadOnly mode and pass through silently in Primary mode.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let _primary =
+                CartogServer::new(&db_path, test_rag_config()).expect("primary server constructs");
+        }
+        let reader = CartogServer::new_read_only(&db_path, test_rag_config())
+            .expect("read-only server constructs");
+
+        let err = reader
+            .refuse_if_read_only("cartog_index")
+            .expect("read-only must refuse");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("read-only") && msg.contains("cartog_index"),
+            "error must name the gate and the tool, got: {msg}"
+        );
+
+        let err = reader
+            .refuse_if_read_only("cartog_rag_index")
+            .expect("read-only must refuse");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("read-only") && msg.contains("cartog_rag_index"),
+            "error must name the gate and the tool, got: {msg}"
+        );
+
+        let primary = CartogServer::new(&db_path, test_rag_config()).expect("primary reconstructs");
+        assert!(
+            primary.refuse_if_read_only("cartog_index").is_none(),
+            "primary must NOT refuse"
+        );
     }
 
     // ── Index + LSP gate tests ──
