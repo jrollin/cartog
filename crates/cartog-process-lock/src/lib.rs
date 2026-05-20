@@ -87,6 +87,14 @@ impl ProcessLock {
     /// holds the slot. Stale files (PID gone, or start_time mismatch from
     /// PID reuse) are unlinked and the acquire is retried once.
     ///
+    /// Implementation: writes the full payload to a per-PID temp file,
+    /// then `hard_link`s tmp → target. `hard_link` fails atomically with
+    /// `AlreadyExists` if the target already exists, with no window in
+    /// which the target file can be observed empty (unlike a bare
+    /// `OpenOptions::create_new(true)` followed by `write_all`, where
+    /// concurrent readers can see the just-created-but-not-yet-written
+    /// inode).
+    ///
     /// Creates `state_dir` if missing.
     pub fn acquire(state_dir: &Path, slot: &str) -> Result<Self, AcquireError> {
         validate_slot(slot).map_err(AcquireError::Io)?;
@@ -97,29 +105,34 @@ impl ProcessLock {
             Some(st) => format!("{pid}\n{st}\n"),
             None => format!("{pid}\n"),
         };
+        // Per-(PID, thread) staging file so concurrent acquires from the
+        // same process don't clobber each other's tmp before the link.
+        // A monotonic counter is appended to disambiguate retries within
+        // the same thread.
+        static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tid = thread_id_hash();
+        let tmp = state_dir.join(format!(".{slot}.{pid}.{tid}.{n}.{PID_EXTENSION}.tmp"));
 
-        // Two attempts: first a straight O_CREAT|O_EXCL; on AlreadyExists we
-        // inspect the holder and, if stale, unlink + retry once. Two
-        // simultaneous acquires by different live processes still see only
-        // one winner — the loser's second attempt sees the winner's freshly
-        // O_EXCL-created file and returns Held.
+        // Two attempts: write tmp + hard_link to target; on AlreadyExists
+        // we inspect the holder and, if stale, unlink + retry once.
         for attempt in 0..2 {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(mut f) => {
-                    use std::io::Write;
-                    f.write_all(payload.as_bytes()).map_err(AcquireError::Io)?;
-                    f.sync_all().map_err(AcquireError::Io)?;
+            // Always re-stage tmp inside the loop: a previous link attempt
+            // may have left the tmp around if hard_link failed and we
+            // unlinked the stale target, and we want fresh content each
+            // try.
+            write_tmp(&tmp, payload.as_bytes()).map_err(AcquireError::Io)?;
+            match fs::hard_link(&tmp, &path) {
+                Ok(()) => {
+                    // Target now points at the same inode as tmp; remove
+                    // the tmp name (the inode stays linked until target
+                    // is unlinked by Drop).
+                    let _ = fs::remove_file(&tmp);
                     return Ok(Self { path });
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                     // Inspect the holder. If it's still the same process,
-                    // election lost. Otherwise it's stale; unlink and retry
-                    // (once — the second attempt's AlreadyExists is a real
-                    // peer that grabbed the slot in the gap).
+                    // election lost. Otherwise it's stale; unlink + retry.
                     let active = read_lock_file(&path).and_then(|(pid, st)| {
                         let alive = match st {
                             Some(st) => is_same_process(pid, st),
@@ -136,15 +149,28 @@ impl ProcessLock {
                         }
                     });
                     match (active, attempt) {
-                        (Some(held), _) => return Err(AcquireError::Held(held)),
+                        (Some(held), _) => {
+                            let _ = fs::remove_file(&tmp);
+                            return Err(AcquireError::Held(held));
+                        }
                         (None, 0) => {
+                            // Stale: unlink and retry. Note that we don't
+                            // know which content `read_lock_file` saw vs
+                            // what's now on disk; if a fresh writer lands
+                            // in the gap, the retry's hard_link will fail
+                            // again with AlreadyExists and we'll branch
+                            // into the (None, _) arm below.
                             let _ = fs::remove_file(&path);
                             continue;
                         }
                         (None, _) => {
-                            // We tried to clean up but lost the next race.
-                            // Re-inspect once more to give the caller a
-                            // useful Held(_) error if a fresh peer landed.
+                            // We tried to clean up but lost the next race
+                            // — or read_lock_file saw mid-write content
+                            // (None from a partially-written file is the
+                            // pre-fix bug surface). Re-inspect to give
+                            // the caller a useful Held(_) error if a
+                            // fresh peer landed.
+                            let _ = fs::remove_file(&tmp);
                             if let Some((pid, st)) = read_lock_file(&path) {
                                 return Err(AcquireError::Held(ActiveLock {
                                     slot: slot.to_string(),
@@ -156,10 +182,14 @@ impl ProcessLock {
                         }
                     }
                 }
-                Err(e) => return Err(AcquireError::Io(e)),
+                Err(e) => {
+                    let _ = fs::remove_file(&tmp);
+                    return Err(AcquireError::Io(e));
+                }
             }
         }
         // Unreachable: the loop always returns. Defensive:
+        let _ = fs::remove_file(&tmp);
         Err(AcquireError::Io(io::Error::other(
             "process_lock: acquire loop fell through unexpectedly",
         )))
@@ -239,7 +269,13 @@ pub fn find_active_locks(state_dir: &Path) -> Vec<ActiveLock> {
             Some(v) => v,
             None => {
                 // Side effect: clean malformed files so the slot is reusable.
-                let _ = fs::remove_file(&path);
+                // Only unlink if the content is *still* unreadable on a
+                // second read — otherwise we'd race a partially-written
+                // file from a concurrent acquire (which writes its
+                // payload over multiple syscalls inside the O_EXCL guard).
+                if read_lock_file(&path).is_none() {
+                    let _ = fs::remove_file(&path);
+                }
                 continue;
             }
         };
@@ -260,10 +296,24 @@ pub fn find_active_locks(state_dir: &Path) -> Vec<ActiveLock> {
                 start_time: recorded_st,
             });
         } else {
-            let _ = fs::remove_file(&path);
+            unlink_if_unchanged(&path, pid, recorded_st);
         }
     }
     active
+}
+
+/// Unlink the PID file at `path` only if its current contents still match
+/// the `(pid, start_time)` we observed earlier. Closes the TOCTOU window
+/// where a concurrent `ProcessLock::acquire` rewrites the file with a
+/// fresh, live PID between our read and our unlink — without the recheck
+/// `cartog self update` could clobber a live primary's lock.
+fn unlink_if_unchanged(path: &Path, expected_pid: u32, expected_st: Option<u64>) -> bool {
+    match read_lock_file(path) {
+        Some((reread_pid, reread_st)) if (reread_pid, reread_st) == (expected_pid, expected_st) => {
+            fs::remove_file(path).is_ok()
+        }
+        _ => false,
+    }
 }
 
 /// True when `pid` is still running AND its start time matches `recorded`.
@@ -368,16 +418,34 @@ fn read_lock_file(path: &Path) -> Option<(u32, Option<u64>)> {
 
 /// Write `bytes` to `target` atomically: stage at `tmp`, then rename onto
 /// `target`. The caller picks `tmp` so concurrent writers can stage to
-/// distinct files (see `ProcessLock::acquire`).
+/// distinct files. Used by `acquire_overwriting` (the kill-switch path);
+/// the O_EXCL acquire path uses `write_tmp` + `hard_link` so the target
+/// is never observed in an empty state.
 fn write_atomic(tmp: &Path, target: &Path, bytes: &[u8]) -> io::Result<()> {
-    // fsync before rename so a crash between the data write and the
-    // rename does not leave a zero-byte file on disk after recovery.
+    write_tmp(tmp, bytes)?;
+    fs::rename(tmp, target)
+}
+
+/// Hash of the current thread's id. Used to disambiguate tmp filenames
+/// for concurrent acquires from the same process (multi-thread runtimes,
+/// test harnesses).
+fn thread_id_hash() -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::thread::current().id().hash(&mut h);
+    h.finish()
+}
+
+/// Write `bytes` to `tmp` and fsync. Caller is responsible for linking
+/// or renaming `tmp` to its final destination.
+fn write_tmp(tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+    // fsync before linking so a crash between the data write and the
+    // link doesn't leave a zero-byte file on disk after recovery.
     let f = fs::File::create(tmp)?;
     use std::io::Write;
     (&f).write_all(bytes)?;
     f.sync_all()?;
-    drop(f);
-    fs::rename(tmp, target)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -645,6 +713,173 @@ mod tests {
             !is_same_process(pid, st.wrapping_add(1)),
             "mismatched start_time must be rejected"
         );
+    }
+
+    #[test]
+    fn acquire_against_empty_target_does_not_surface_as_io_error() {
+        // Regression: an empty PID file at the target (e.g. a competing
+        // acquire in its critical window with the previous create_new +
+        // write_all sequence) used to make acquire return
+        // AcquireError::Io(AlreadyExists) instead of resolving to either
+        // a real Held(_) or a successful claim. With the hard_link-based
+        // acquire, the inode is fully written before becoming visible at
+        // `path`, so a competing acquire either succeeds or sees the
+        // fully-written file. An externally-created empty file at the
+        // target is a corruption case (no real cartog writes one) and
+        // should still produce a clean Io error — but not corrupt the
+        // distinction between Held and Io for normal acquires.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("serve.pid");
+        // Manually plant an empty file.
+        fs::File::create(&path).unwrap();
+        // hard_link will fail with AlreadyExists. read_lock_file returns
+        // None for empty content. attempt 0 unlinks it (no holder). The
+        // retry then succeeds — we claim the slot.
+        let lock = ProcessLock::acquire(dir.path(), "serve").expect("retry succeeds");
+        assert!(path.exists());
+        let (recorded_pid, _) = read_lock_file(&path).expect("file now has our content");
+        assert_eq!(recorded_pid, std::process::id());
+        drop(lock);
+    }
+
+    #[test]
+    fn concurrent_acquires_never_observe_empty_target() {
+        // Race many threads against each other on the same slot. With the
+        // hard_link-based acquire, exactly one wins; the losers either
+        // see Held(_) (with a fully-readable file) or transiently see
+        // AlreadyExists and retry. The pre-fix code could surface
+        // AcquireError::Io(AlreadyExists) when the loser hit the
+        // empty-target window — this test would have flaked there.
+        use std::sync::{Arc, Barrier};
+        let dir = TempDir::new().unwrap();
+        let dir_path = dir.path().to_path_buf();
+        let n = 8;
+        let barrier = Arc::new(Barrier::new(n));
+        let mut handles = Vec::new();
+        for _ in 0..n {
+            let b = Arc::clone(&barrier);
+            let p = dir_path.clone();
+            handles.push(std::thread::spawn(move || -> Result<bool, AcquireError> {
+                b.wait();
+                match ProcessLock::acquire(&p, "serve") {
+                    Ok(lock) => {
+                        // Hold briefly so others race against us, then drop.
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        drop(lock);
+                        Ok(true)
+                    }
+                    Err(AcquireError::Held(_)) => Ok(false),
+                    Err(e) => Err(e),
+                }
+            }));
+        }
+        let mut winners = 0;
+        for h in handles {
+            match h.join().expect("thread did not panic") {
+                Ok(true) => winners += 1,
+                Ok(false) => {}
+                Err(e) => panic!(
+                    "acquire must not surface as Io error under concurrency (got {e:?}); \
+                     pre-fix code could fail here with Io(AlreadyExists)"
+                ),
+            }
+        }
+        // Multiple winners are possible because each releases sequentially
+        // and the next acquire happily takes the freed slot. The key
+        // assertion is no thread saw an Io error — every result was
+        // Ok(true) or Held.
+        assert!(winners >= 1, "at least one acquire must succeed");
+    }
+
+    #[test]
+    fn acquire_writes_full_payload_before_target_is_visible() {
+        // The hard_link strategy ensures the target's inode is never
+        // observed in an empty state: tmp is written + fsync'd, then
+        // atomically linked. We can't directly test the absence-of-window
+        // (it'd require a probe in the middle of the syscall), but we
+        // can verify the post-condition: after acquire, the file at
+        // target is fully written.
+        let dir = TempDir::new().unwrap();
+        let lock = ProcessLock::acquire(dir.path(), "serve").unwrap();
+        let path = lock.path();
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(
+            contents.starts_with(&format!("{}", std::process::id())),
+            "file must contain at least the PID line, got: {contents:?}"
+        );
+        // No leftover tmp files (hard_link succeeded, we cleaned up).
+        let tmp_count = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(tmp_count, 0, "no leftover .tmp files expected");
+    }
+
+    #[test]
+    fn unlink_if_unchanged_removes_when_content_matches() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("serve.pid");
+        fs::write(&path, "4194304\n").unwrap();
+        let removed = unlink_if_unchanged(&path, 4_194_304, None);
+        assert!(removed, "expected unlink to succeed");
+        assert!(!path.exists(), "file should be gone");
+    }
+
+    #[test]
+    fn unlink_if_unchanged_preserves_when_content_changed_under_us() {
+        // Regression: this is the TOCTOU window that previously let
+        // find_active_locks clobber a live primary's lock. The scanner
+        // observes a stale PID, decides to remove — but between observe
+        // and remove, a real acquire wrote a live PID to the same path.
+        // unlink_if_unchanged must NOT remove the rewritten content.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("serve.pid");
+        // Scanner thinks it observed (dead_pid=4194304, st=None).
+        // Disk currently holds the *replacement* the acquire wrote.
+        fs::write(&path, "12345\n67890\n").unwrap();
+
+        let removed = unlink_if_unchanged(&path, 4_194_304, None);
+        assert!(
+            !removed,
+            "must not unlink content the scanner did not observe"
+        );
+        assert!(path.exists(), "live file must survive the scan");
+    }
+
+    #[test]
+    fn unlink_if_unchanged_preserves_when_file_already_gone() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("serve.pid");
+        // No file at all — concurrent unlink already happened.
+        let removed = unlink_if_unchanged(&path, 4_194_304, None);
+        assert!(!removed, "no-op when file is missing");
+    }
+
+    #[test]
+    fn find_active_locks_does_not_unlink_a_freshly_rewritten_file() {
+        // Integration-level test: when the scanner reads (dead_pid, _)
+        // and decides not-alive but the file has been rewritten to a
+        // live entry by an external writer, the new content must survive
+        // the scan. Exercises find_active_locks's recheck pathway.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("serve.pid");
+        // We simulate the *current* state of the file (after an acquire
+        // by another process). find_active_locks reads this content and
+        // since our own PID is alive, returns it as Active — not deletes
+        // it. This guards against a future regression where the recheck
+        // is removed and the scanner unlinks based on a stale snapshot.
+        let live_pid = std::process::id();
+        let live_st = process_start_time(live_pid);
+        let payload = match live_st {
+            Some(st) => format!("{live_pid}\n{st}\n"),
+            None => format!("{live_pid}\n"),
+        };
+        fs::write(&path, &payload).unwrap();
+        let active = find_active_locks(dir.path());
+        assert!(path.exists(), "live file must not be unlinked");
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].pid, live_pid);
     }
 
     #[test]

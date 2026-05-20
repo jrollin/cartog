@@ -35,6 +35,14 @@ impl LocalEmbeddingProvider {
 
         let model_info = TextEmbedding::get_model_info(&embedding_model)?;
         let dim = model_info.dim;
+        // model_info.model_code is the stable HuggingFace path (e.g.
+        // "Qdrant/bge-small-en-v1.5-onnx-Q"). The previous implementation
+        // used `embedding_model.to_string()` which is fastembed's `Display`
+        // impl — itself just the Debug repr of the enum variant
+        // ("BGESmallENV15Q"). A fastembed variant rename would have wiped
+        // every default-config user's `symbol_vec` on next open; the HF
+        // path is wire-stable across fastembed releases.
+        let model_code = model_info.model_code.clone();
 
         let is_cached = crate::is_embedding_model_cached();
         if is_cached {
@@ -42,8 +50,6 @@ impl LocalEmbeddingProvider {
         } else {
             info!("Downloading embedding model (first time only)...");
         }
-
-        let model_code = embedding_model.to_string();
 
         let model = TextEmbedding::try_new(
             TextInitOptions::new(embedding_model)
@@ -173,5 +179,46 @@ impl RerankerProvider for LocalRerankerProvider {
         }
 
         Ok(scores)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The fingerprint stored in `metadata` on every DB open must be a
+    /// wire-stable identifier, not fastembed's Debug repr (a Rust enum
+    /// variant name). A regression here wipes every default-config user's
+    /// `symbol_vec` on next open when fastembed renames the variant.
+    ///
+    /// We test the contract without instantiating the heavy
+    /// `LocalEmbeddingProvider` (which downloads ONNX weights): the
+    /// constructor reads `model_info.model_code` and stores it on the
+    /// provider, so asserting `get_model_info` returns the stable
+    /// HuggingFace path is equivalent.
+    #[test]
+    fn default_model_code_is_stable_hf_path() {
+        let info = TextEmbedding::get_model_info(&EmbeddingModel::BGESmallENV15Q)
+            .expect("default model metadata");
+        assert_eq!(
+            info.model_code, "Qdrant/bge-small-en-v1.5-onnx-Q",
+            "BGESmallENV15Q's HF path must not change without an explicit migration; \
+             if fastembed bumped the path, also bump cartog's migration so existing \
+             DBs don't wipe their vector index on next open"
+        );
+    }
+
+    #[test]
+    fn default_model_code_differs_from_variant_debug_repr() {
+        // Belt-and-suspenders: ensure we're not accidentally storing the
+        // Debug name. If fastembed ever changes Display impl to NOT be
+        // Debug, this assertion still passes (model_code is HF path, not
+        // a Rust ident).
+        let info = TextEmbedding::get_model_info(&EmbeddingModel::BGESmallENV15Q).unwrap();
+        let debug_repr = format!("{:?}", EmbeddingModel::BGESmallENV15Q);
+        assert_ne!(
+            info.model_code, debug_repr,
+            "model_code must be the HF path, not the Rust variant name"
+        );
     }
 }
