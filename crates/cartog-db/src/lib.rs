@@ -399,11 +399,61 @@ fn migrate(conn: &Connection) {
     }
 }
 
+/// Retry backoff schedule for writes that race with another writer on the
+/// embedding-dimension migration. Multiple cartog processes can each call
+/// `Database::open` and contend on the same DB; `PRAGMA busy_timeout` only
+/// covers single statements, not the full sequence here. Exhausting the
+/// schedule (~2s total) returns the underlying error unchanged.
+const MIGRATION_RETRY_BACKOFF_MS: &[u64] = &[50, 100, 250, 500, 1000];
+
+/// Run a fallible rusqlite operation, retrying on `SQLITE_BUSY` /
+/// `SQLITE_LOCKED` with the [`MIGRATION_RETRY_BACKOFF_MS`] schedule.
+fn retry_busy<T, F>(mut op: F) -> std::result::Result<T, rusqlite::Error>
+where
+    F: FnMut() -> std::result::Result<T, rusqlite::Error>,
+{
+    let mut attempt = 0usize;
+    loop {
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                let busy = matches!(
+                    e,
+                    rusqlite::Error::SqliteFailure(
+                        rusqlite::ffi::Error {
+                            code: rusqlite::ErrorCode::DatabaseBusy
+                                | rusqlite::ErrorCode::DatabaseLocked,
+                            ..
+                        },
+                        _
+                    )
+                );
+                if !busy || attempt >= MIGRATION_RETRY_BACKOFF_MS.len() {
+                    return Err(e);
+                }
+                let delay_ms = MIGRATION_RETRY_BACKOFF_MS[attempt];
+                tracing::debug!(
+                    attempt = attempt + 1,
+                    delay_ms,
+                    "retrying embedding-dimension write after SQLITE_BUSY"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                attempt += 1;
+            }
+        }
+    }
+}
+
 /// Check stored embedding dimension against requested dimension.
 /// If they differ, drop the vector table and clear the embedding map.
 ///
 /// Returns rusqlite's `Result` so the caller (`Database::open`) can wrap
 /// any failure into `DbError::EmbeddingDimension` with precise context.
+///
+/// Writes are wrapped in [`retry_busy`] so a concurrent writer on the
+/// same DB (another cartog process) doesn't crash this `Database::open`
+/// with `SQLITE_BUSY`. When the stored dimension already matches the
+/// effective one, the function returns without any DB writes at all.
 fn handle_embedding_dimension(
     conn: &Connection,
     requested_dim: usize,
@@ -425,24 +475,34 @@ fn handle_embedding_dimension(
         _ => requested_dim,
     };
 
-    if let Some(old_dim) = stored_dim {
-        if old_dim != effective_dim {
-            tracing::warn!(
-                old = old_dim,
-                new = effective_dim,
-                "Embedding dimension changed — clearing vector index. Run `cartog rag index` to re-embed."
-            );
-            conn.execute("DROP TABLE IF EXISTS symbol_vec", [])?;
-            conn.execute("DELETE FROM symbol_embedding_map", [])?;
-        }
+    // True early return: if the dim already matches, nothing to write.
+    // The `CREATE VIRTUAL TABLE IF NOT EXISTS` and `INSERT OR REPLACE` below
+    // are idempotent at the data level, but they still take a write lock —
+    // skipping them removes our contribution to any concurrent migration race.
+    if stored_dim == Some(effective_dim) {
+        return Ok(());
     }
 
-    conn.execute_batch(&rag_vec_schema(effective_dim))?;
+    if let Some(old_dim) = stored_dim {
+        // stored differs from effective, so we wipe and rebuild.
+        tracing::warn!(
+            old = old_dim,
+            new = effective_dim,
+            "Embedding dimension changed — clearing vector index. Run `cartog rag index` to re-embed."
+        );
+        retry_busy(|| conn.execute("DROP TABLE IF EXISTS symbol_vec", []))?;
+        retry_busy(|| conn.execute("DELETE FROM symbol_embedding_map", []))?;
+    }
 
-    conn.execute(
-        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_dimension', ?1)",
-        params![effective_dim.to_string()],
-    )?;
+    let schema = rag_vec_schema(effective_dim);
+    retry_busy(|| conn.execute_batch(&schema))?;
+
+    retry_busy(|| {
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_dimension', ?1)",
+            params![effective_dim.to_string()],
+        )
+    })?;
 
     Ok(())
 }
@@ -3987,6 +4047,110 @@ mod tests {
             let db = Database::open(&db_path, 1536).unwrap();
             assert_eq!(db.embedding_count().unwrap(), 0);
         }
+    }
+
+    #[test]
+    fn test_reopen_same_dim_does_not_rewrite_metadata() {
+        // True early-return guarantee: when stored dim already matches the
+        // requested dim, `handle_embedding_dimension` should not touch the
+        // metadata table. We assert this by snapshotting the row's content
+        // before and after re-open and verifying no write occurred (rowid
+        // would advance on INSERT OR REPLACE).
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        let _db = Database::open(&db_path, 384).unwrap();
+
+        let rowid_before: i64 = {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.query_row(
+                "SELECT rowid FROM metadata WHERE key = 'embedding_dimension'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+
+        let _db = Database::open(&db_path, 384).unwrap();
+
+        let rowid_after: i64 = {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.query_row(
+                "SELECT rowid FROM metadata WHERE key = 'embedding_dimension'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+
+        // INSERT OR REPLACE assigns a new rowid; identity here proves we
+        // skipped the write entirely.
+        assert_eq!(
+            rowid_before, rowid_after,
+            "same-dim reopen should not rewrite the embedding_dimension row"
+        );
+    }
+
+    #[test]
+    fn test_retry_busy_returns_on_non_busy_error() {
+        // A non-busy error should propagate immediately, no retries.
+        let attempts = std::cell::Cell::new(0);
+        let result = retry_busy(|| -> std::result::Result<(), rusqlite::Error> {
+            attempts.set(attempts.get() + 1);
+            Err(rusqlite::Error::InvalidQuery)
+        });
+        assert!(matches!(result, Err(rusqlite::Error::InvalidQuery)));
+        assert_eq!(attempts.get(), 1, "non-busy errors must not retry");
+    }
+
+    #[test]
+    fn test_retry_busy_succeeds_after_transient_busy() {
+        // Simulate a writer that returns BUSY on the first call and Ok on the second.
+        let attempts = std::cell::Cell::new(0);
+        let result = retry_busy(|| -> std::result::Result<u32, rusqlite::Error> {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() == 1 {
+                Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error {
+                        code: rusqlite::ErrorCode::DatabaseBusy,
+                        extended_code: 5,
+                    },
+                    Some("database is locked".to_string()),
+                ))
+            } else {
+                Ok(42)
+            }
+        });
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(attempts.get(), 2);
+    }
+
+    #[test]
+    fn test_retry_busy_exhausts_and_propagates() {
+        // After backoff schedule is exhausted, the original BUSY error must surface.
+        let attempts = std::cell::Cell::new(0);
+        let result = retry_busy(|| -> std::result::Result<(), rusqlite::Error> {
+            attempts.set(attempts.get() + 1);
+            Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: rusqlite::ErrorCode::DatabaseBusy,
+                    extended_code: 5,
+                },
+                Some("database is locked".to_string()),
+            ))
+        });
+        assert!(matches!(
+            result,
+            Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: rusqlite::ErrorCode::DatabaseBusy,
+                    ..
+                },
+                _
+            ))
+        ));
+        // 1 initial call + MIGRATION_RETRY_BACKOFF_MS.len() retries
+        assert_eq!(attempts.get(), MIGRATION_RETRY_BACKOFF_MS.len() + 1);
     }
 
     #[test]
