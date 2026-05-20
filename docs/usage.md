@@ -415,6 +415,23 @@ cartog serve --watch --rag    # MCP server + watcher + auto RAG embedding
 
 When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
 
+#### Multiple `cartog serve` instances on the same project
+
+Opening two Claude Code windows on the same project (or running `cartog serve` in a terminal while a Claude Code window has its own MCP child) is supported via **single-writer election**:
+
+- The first instance acquires `<state_dir>/serve.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 13 MCP tools.
+- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 11 of 13 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
+- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 13 tools become available on what was the secondary.
+
+Escape hatches:
+
+| Env var | Effect |
+|---|---|
+| `CARTOG_SINGLE_WRITER=0` | Disables election. Every `cartog serve` opens RW; the Phase 6a migration busy-retry is the only defense against the rare race window. |
+| `RUST_LOG=info` | Restores `info`-level tracing in MCP-child mode (defaults to `warn` when stderr is not a TTY so info lines don't surface as `[ERROR]` in the parent's log). |
+
+See [`spec-mcp-sharing.md`](spec-mcp-sharing.md) for the full design.
+
 ### `cartog init [--dry-run]`
 
 Scaffold a `.cartog.toml` template in the current project. That's all it does. The next-steps hint points at `cartog ide` (MCP wiring) and `cartog index` (build the graph).

@@ -128,6 +128,7 @@ After implementation, mark checklist items complete — the spec stays as a desi
 - **Indexing**: incremental (git-based + SHA-256 + Merkle-tree symbol diffing), `--force` re-index. Stable symbol IDs (`file:kind:qualified_name`) survive line movements. Scoped edge resolution for changed files only
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
 - **Watch**: `cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding
+- **MCP single-writer**: `cartog serve` instances on the same DB use atomic O_EXCL election. First is primary, subsequent attach read-only (11 of 13 tools); promoter on the secondary takes over within ~10s if the primary dies. Kill switch: `CARTOG_SINGLE_WRITER=0`. See [docs/spec-mcp-sharing.md](docs/spec-mcp-sharing.md).
 - **CI/CD**: fmt, clippy, test, coverage, release to crates.io + GitHub Releases
 - **Centrality**: in-degree ranking — search results prefer highly-referenced symbols
 - **Codebase map**: `cartog map --tokens N` produces budget-aware file tree + top symbols

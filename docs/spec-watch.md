@@ -32,7 +32,7 @@ Debounce filter (5s default) ──> code graph index (incremental, ~1-3s)
 
 2. **Deferred RAG embedding batch**: After each code graph re-index, if there are symbols needing embeddings (`symbols_needing_embeddings().len() > 0`), a timer starts. Resets on each new index cycle. When the timer fires (default 30s of inactivity), embeddings are generated in bulk. This amortizes the ~200ms model load and batches embedding calls.
 
-3. **Single DB connection**: The watcher holds the `Database` handle for its lifetime. No concurrent access concerns since `cartog watch` is the sole writer. MCP server reads are safe because SQLite WAL mode allows concurrent readers.
+3. **Single DB connection**: The watcher holds the `Database` handle for its lifetime. Concurrency is governed by single-writer election (see [`spec-mcp-sharing.md`](spec-mcp-sharing.md)): the watcher refuses to start if another live cartog process holds the `watch` slot, so only one writer thread touches the DB at a time. Read-only MCP secondaries see the watcher's edits via SQLite WAL.
 
 4. **Graceful shutdown**: Ctrl+C (SIGINT) handler flushes any pending embeddings before exit.
 

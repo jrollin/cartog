@@ -68,8 +68,49 @@ one re-index. If you still see bursts, raise it via
 ### RAG embeddings are stale after I changed `.cartog.toml`
 
 Changing `embedding.provider`, `embedding.model`, or `embedding.dimension`
-invalidates stored embeddings. Run
-`cartog rag index . --force` to re-embed from scratch.
+invalidates stored embeddings. cartog now records the provider + model + dim
+as a fingerprint in the DB and **auto-wipes** `symbol_vec` on the next open
+when any field differs. Just run `cartog rag index .` to re-embed (no
+`--force` needed). Older DBs that predate the fingerprint get a one-time
+backfill without wiping.
+
+## MCP server
+
+### `MCP error -32000: Connection closed` when opening a second Claude Code window
+
+This was the pre-Phase-2 symptom of two cartog processes racing on the
+embedding-dimension migration. As of v0.18 cartog uses single-writer
+election: the first `cartog serve` is the primary, the second attaches
+read-only and exposes 11 of 13 MCP tools (`cartog_index` and
+`cartog_rag_index` return a clear refusal pointing at the primary). If the
+primary process dies, the secondary takes over within ~10s. See
+[spec-mcp-sharing.md](spec-mcp-sharing.md).
+
+If you still see the error, check that the cartog binary is at v0.18 or
+newer (`cartog --version`) and that you haven't set `CARTOG_SINGLE_WRITER=0`.
+
+### `cartog watch` refuses to start with "another cartog process holds the watch lock"
+
+Exactly one `cartog watch` may run per project at a time. The watcher
+refuses to start (rather than attaching read-only — unlike `cartog serve`)
+because a second watcher would re-index the same files redundantly. Stop
+the running watcher or remove `<state_dir>/watch.pid` if you're certain
+the holder is dead (the file is auto-cleaned on the next acquire when the
+recorded PID + start_time no longer matches a live process).
+
+### My cartog process exited but the PID file is still there
+
+cartog unlinks its PID file via the `ProcessLock` Drop impl on clean exit
+(rmcp shutdown, SIGINT, SIGTERM). A hard kill (`kill -9`, power loss)
+leaves the file behind. The next acquire detects the stale entry via
+`is_same_process(pid, start_time)` and removes it; no manual action needed.
+
+### MCP stderr is full of `[ERROR]` lines that look like info-level messages
+
+Fixed in v0.18. When `cartog serve` runs as an MCP child (stderr not a
+TTY), the default tracing level is now `warn` so info-level progress lines
+no longer surface as `[ERROR]` in the parent's debug log. Set
+`RUST_LOG=info` to opt back in.
 
 ## Configuration
 
