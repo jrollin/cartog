@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use cartog_core::EdgeKind;
-use cartog_db::{Database, MAX_SEARCH_LIMIT};
+use cartog_db::{Database, PinnedAttach, MAX_SEARCH_LIMIT};
 use cartog_indexer as indexer;
 use cartog_rag as rag;
 use cartog_watch as watch;
@@ -392,8 +392,9 @@ pub struct CartogServer {
     /// and owns the RW DB connection. `ReadOnly` attached via
     /// [`Database::open_readonly`] because another cartog process owns
     /// the slot — the 2 write tools are gated, the 11 read tools work
-    /// unchanged.
-    role: Role,
+    /// unchanged. Mutated atomically when the Phase 5 promoter detects
+    /// the primary died and takes over.
+    role: Arc<AtomicRole>,
 }
 
 /// Role of this MCP server instance under single-writer election.
@@ -409,6 +410,40 @@ impl Role {
             Role::Primary => "primary",
             Role::ReadOnly => "read-only",
         }
+    }
+}
+
+/// Lock-free, `Clone`-able cell holding the current [`Role`]. Backed by an
+/// `AtomicU8` so the Phase 5 promoter task and every tool handler can read
+/// and update it without coordinating via the DB mutex.
+#[derive(Debug)]
+pub struct AtomicRole(std::sync::atomic::AtomicU8);
+
+impl AtomicRole {
+    const PRIMARY: u8 = 0;
+    const READ_ONLY: u8 = 1;
+
+    fn new(role: Role) -> Self {
+        Self(std::sync::atomic::AtomicU8::new(Self::encode(role)))
+    }
+
+    fn encode(role: Role) -> u8 {
+        match role {
+            Role::Primary => Self::PRIMARY,
+            Role::ReadOnly => Self::READ_ONLY,
+        }
+    }
+
+    fn load(&self) -> Role {
+        match self.0.load(std::sync::atomic::Ordering::Acquire) {
+            Self::PRIMARY => Role::Primary,
+            _ => Role::ReadOnly,
+        }
+    }
+
+    fn store(&self, role: Role) {
+        self.0
+            .store(Self::encode(role), std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -434,7 +469,7 @@ impl CartogServer {
             #[cfg(feature = "lsp")]
             lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
             cwd: Arc::from(cwd),
-            role: Role::Primary,
+            role: Arc::new(AtomicRole::new(Role::Primary)),
         })
     }
 
@@ -461,7 +496,7 @@ impl CartogServer {
             #[cfg(feature = "lsp")]
             lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
             cwd: Arc::from(cwd),
-            role: Role::ReadOnly,
+            role: Arc::new(AtomicRole::new(Role::ReadOnly)),
         })
     }
 
@@ -472,16 +507,17 @@ impl CartogServer {
     }
 
     /// Role this server is running under: `Primary` owns the lock and the
-    /// RW DB; `ReadOnly` attached behind a primary.
+    /// RW DB; `ReadOnly` attached behind a primary. May change at runtime
+    /// when the promoter takes over from a dead primary (Phase 5).
     pub fn role(&self) -> Role {
-        self.role
+        self.role.load()
     }
 
     /// If we're a read-only secondary, return an `McpError` explaining why
     /// the requested write tool isn't available. `None` when this is the
     /// primary and the call should proceed.
     fn refuse_if_read_only(&self, tool: &str) -> Option<McpError> {
-        if self.role == Role::ReadOnly {
+        if self.role.load() == Role::ReadOnly {
             Some(mcp_err(format!(
                 "This cartog instance is read-only because another cartog process is the \
                  primary writer for this project. Its file watcher picks up your changes \
@@ -789,7 +825,7 @@ impl CartogServer {
     )]
     async fn cartog_stats(&self) -> Result<CallToolResult, McpError> {
         let db = Arc::clone(&self.db);
-        let role = self.role;
+        let role = self.role.load();
 
         tokio::task::spawn_blocking(move || {
             debug!("stats");
@@ -1110,18 +1146,20 @@ pub async fn run_server(
 
     // Acquire first so an election loss is resolved before opening DB or
     // spawning the watcher.
-    let (role, _lock) = match acquire_serve_lock(&opts)? {
-        ServeLockOutcome::Primary(lock) => (Role::Primary, Some(lock)),
-        ServeLockOutcome::Untracked => (Role::Primary, None),
+    let (role, initial_lock, primary_to_watch) = match acquire_serve_lock(&opts)? {
+        ServeLockOutcome::Primary(lock) => (Role::Primary, Some(lock), None),
+        ServeLockOutcome::Untracked => (Role::Primary, None, None),
         ServeLockOutcome::Held(held) => {
             info!(
                 primary_pid = held.pid,
+                primary_start_time = ?held.start_time,
                 "another cartog process is the primary writer for this DB \
                  (PID {}); attaching read-only. \
-                 Indexing tools will return a read-only error; queries work normally.",
+                 Indexing tools will return a read-only error; queries work normally. \
+                 Promotion to primary happens automatically if the holder dies.",
                 held.pid
             );
-            (Role::ReadOnly, None)
+            (Role::ReadOnly, None, Some(held))
         }
     };
 
@@ -1129,7 +1167,7 @@ pub async fn run_server(
     // give us two indexers fighting over the DB. Read-only clients ride
     // along on the primary's index updates via WAL.
     let db_path_str = db_path.to_string_lossy().into_owned();
-    let _watch_handle: Option<WatchHandle> = if watch && role == Role::Primary {
+    let initial_watch_handle: Option<WatchHandle> = if watch && role == Role::Primary {
         let cwd = std::env::current_dir()?;
         let mut config = WatchConfig::new(cwd);
         config.rag = rag;
@@ -1146,15 +1184,53 @@ pub async fn run_server(
         }
     } else {
         if watch && role == Role::ReadOnly {
-            info!("watcher skipped: this is a read-only secondary; the primary owns indexing");
+            info!(
+                "watcher skipped: this is a read-only secondary; the primary owns indexing \
+                 (will start automatically on promotion)"
+            );
         }
         None
     };
 
     let server = match role {
-        Role::Primary => CartogServer::new(db_path, rag_config)?,
-        Role::ReadOnly => CartogServer::new_read_only(db_path, rag_config)?,
+        Role::Primary => CartogServer::new(db_path, rag_config.clone())?,
+        Role::ReadOnly => CartogServer::new_read_only(db_path, rag_config.clone())?,
     };
+
+    // Shared cells so the promoter (if any) can install the lock + watcher
+    // after winning election, and so the cells stay alive for the whole
+    // `run_server` lifetime — Drop on shutdown fires here.
+    let lock_cell = Arc::new(Mutex::new(initial_lock));
+    let watch_cell = Arc::new(Mutex::new(initial_watch_handle));
+
+    let _promoter_task: Option<tokio::task::JoinHandle<()>> = if role == Role::ReadOnly {
+        match (primary_to_watch, opts.pid_lock_dir.clone()) {
+            (Some(primary), Some(state_dir)) => {
+                let pinned = server
+                    .db
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.pinned_attach().cloned());
+                Some(tokio::task::spawn(promoter_task(PromoterArgs {
+                    db: Arc::clone(&server.db),
+                    role: Arc::clone(&server.role),
+                    lock_cell: Arc::clone(&lock_cell),
+                    watch_cell: Arc::clone(&watch_cell),
+                    db_path: db_path.to_path_buf(),
+                    state_dir,
+                    primary,
+                    pinned,
+                    watch_requested: watch,
+                    rag,
+                    rag_config,
+                })))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     let service = server.serve(stdio()).await?;
 
     // Wait for any of: rmcp's normal shutdown (stdin EOF when the parent
@@ -1176,6 +1252,171 @@ pub async fn run_server(
 
     // WatchHandle is dropped here, signaling the watcher thread to stop.
     info!("cartog MCP server stopped");
+    Ok(())
+}
+
+/// Inputs for the Phase 5 promoter task. Bundled so the call site in
+/// [`run_server`] stays readable; all fields are owned or `Arc`-cloned
+/// before the task is spawned.
+struct PromoterArgs {
+    /// Live DB handle on the secondary. The promoter replaces its contents
+    /// with a fresh RW [`Database`] when it takes ownership.
+    db: Arc<Mutex<Database>>,
+    /// Role flag visible to tool handlers. Flipped to `Primary` on
+    /// successful promotion.
+    role: Arc<AtomicRole>,
+    /// Slot for the acquired [`ProcessLock`] once we win election.
+    lock_cell: Arc<Mutex<Option<cartog_process_lock::ProcessLock>>>,
+    /// Slot for the watcher handle spawned after promotion (when the user
+    /// asked for `serve --watch`).
+    watch_cell: Arc<Mutex<Option<WatchHandle>>>,
+    db_path: std::path::PathBuf,
+    state_dir: std::path::PathBuf,
+    /// Snapshot of the primary we attached behind. Promotion fires when
+    /// this process is no longer running.
+    primary: cartog_process_lock::ActiveLock,
+    /// What we saw in `metadata` at attach time. Compared against the
+    /// on-disk values at promotion time so we abort cleanly if the primary
+    /// upgraded the schema or swapped the embedding stack under us.
+    pinned: Option<PinnedAttach>,
+    watch_requested: bool,
+    rag: bool,
+    rag_config: rag::EmbeddingProviderConfig,
+}
+
+/// How often the promoter checks whether the primary is still alive. Kept
+/// short enough that handoff feels responsive to a user closing the other
+/// Claude Code window, long enough that the polling cost is invisible.
+const PROMOTER_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Background task that runs in read-only mode and watches the primary's
+/// liveness. On primary death, validates schema/fingerprint and attempts
+/// promotion (atomic O_EXCL lock acquire → swap DB to RW → spawn watcher
+/// if the user asked for one → flip role). Exits cleanly on schema drift
+/// or when another reader wins the race.
+async fn promoter_task(args: PromoterArgs) {
+    loop {
+        tokio::time::sleep(PROMOTER_POLL_INTERVAL).await;
+
+        // Primary still alive? Liveness uses start_time when available
+        // (closes the PID-reuse window).
+        let primary_alive = match args.primary.start_time {
+            Some(st) => cartog_process_lock::is_same_process(args.primary.pid, st),
+            None => cartog_process_lock::is_alive(args.primary.pid),
+        };
+        if primary_alive {
+            continue;
+        }
+
+        info!(
+            primary_pid = args.primary.pid,
+            "primary cartog process is gone; attempting promotion to primary"
+        );
+
+        // Re-read on-disk metadata: another writer may already have taken
+        // over (then upgraded the schema) before we noticed.
+        if let Err(e) = validate_pinned_state(&args.db_path, args.pinned.as_ref()) {
+            info!(error = %e, "aborting promotion: on-disk state diverged from attach-time pin");
+            return;
+        }
+
+        // Atomic O_EXCL acquire. Other readers may race us; the loser stays
+        // read-only and tries again on the next tick.
+        let new_lock =
+            match cartog_process_lock::ProcessLock::acquire(&args.state_dir, SERVE_LOCK_SLOT) {
+                Ok(lock) => lock,
+                Err(cartog_process_lock::AcquireError::Held(held)) => {
+                    info!(
+                        new_primary_pid = held.pid,
+                        "another reader won the promotion race; staying read-only"
+                    );
+                    continue;
+                }
+                Err(cartog_process_lock::AcquireError::Io(e)) => {
+                    tracing::warn!(error = %e, "promotion lock acquire failed; staying read-only");
+                    continue;
+                }
+            };
+
+        // Swap the DB connection to read-write. We hold the Mutex for the
+        // entire swap, so no tool handler can be mid-query against the
+        // about-to-close read-only connection.
+        let swap_result = match Database::open_existing_rw(&args.db_path) {
+            Ok(rw) => match args.db.lock() {
+                Ok(mut guard) => {
+                    *guard = rw;
+                    Ok(())
+                }
+                Err(_) => Err(anyhow::anyhow!(
+                    "internal: db mutex poisoned, cannot promote"
+                )),
+            },
+            Err(e) => Err(anyhow::anyhow!("open_existing_rw failed: {e}")),
+        };
+        if let Err(e) = swap_result {
+            tracing::warn!(error = %e, "promotion aborted after lock acquire; dropping lock");
+            drop(new_lock);
+            return;
+        }
+
+        // Install the lock so it lives until shutdown (Drop unlinks the
+        // PID file). Spawn the watcher if the user asked for one — it
+        // opens its own RW connection via the `skip_migrations` shortcut.
+        if let Ok(mut guard) = args.lock_cell.lock() {
+            *guard = Some(new_lock);
+        }
+        if args.watch_requested {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let mut config = WatchConfig::new(cwd);
+            config.rag = args.rag;
+            config.rag_config = args.rag_config.clone();
+            config.pid_lock_dir = Some(args.state_dir.clone());
+            // We already own the `serve` lock; don't race the watcher
+            // slot against ourselves. We also validated the schema, so
+            // skip migrations to avoid re-running the embedding reconcile.
+            config.skip_pid_lock = true;
+            config.skip_migrations = true;
+            let db_path_str = args.db_path.to_string_lossy().into_owned();
+            match watch::spawn_watch(config, &db_path_str) {
+                Ok(handle) => {
+                    if let Ok(mut guard) = args.watch_cell.lock() {
+                        *guard = Some(handle);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "post-promotion watcher failed to start");
+                }
+            }
+        }
+
+        args.role.store(Role::Primary);
+        info!("promoted to primary for {}", args.db_path.display());
+        return;
+    }
+}
+
+/// Re-read `schema_version` and the embedding fingerprint from disk and
+/// compare to what the secondary saw at attach. Used by the promoter
+/// before attempting to take over — if either changed, a third writer
+/// already took over and upgraded under us.
+fn validate_pinned_state(
+    db_path: &std::path::Path,
+    pinned: Option<&PinnedAttach>,
+) -> anyhow::Result<()> {
+    let pinned = match pinned {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    let reader = Database::open_readonly(db_path)
+        .map_err(|e| anyhow::anyhow!("re-attach read-only failed: {e}"))?;
+    let now = reader
+        .pinned_attach()
+        .ok_or_else(|| anyhow::anyhow!("internal: re-attached DB has no pinned state"))?;
+    if now != pinned {
+        anyhow::bail!(
+            "DB metadata changed since attach: was {pinned:?}, now {now:?} (another writer took over)"
+        );
+    }
     Ok(())
 }
 
@@ -1578,6 +1819,53 @@ mod tests {
         let reader = CartogServer::new_read_only(&db_path, test_rag_config())
             .expect("read-only server constructs");
         assert_eq!(reader.role(), Role::ReadOnly);
+    }
+
+    #[test]
+    fn promoter_validate_pinned_state_matches_when_unchanged() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            // Materialize a DB so open_readonly can later read its state.
+            let _primary = Database::open(&db_path, 384).unwrap();
+        }
+        let pinned = Database::open_readonly(&db_path)
+            .unwrap()
+            .pinned_attach()
+            .cloned();
+        validate_pinned_state(&db_path, pinned.as_ref()).expect("matching pin must validate");
+    }
+
+    #[test]
+    fn promoter_validate_pinned_state_detects_schema_bump() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let pinned = {
+            let db = Database::open(&db_path, 384).unwrap();
+            drop(db);
+            Database::open_readonly(&db_path)
+                .unwrap()
+                .pinned_attach()
+                .cloned()
+        };
+        // Simulate another writer upgrading the schema underneath us.
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.set_metadata("schema_version", "9999").unwrap();
+        }
+        let result = validate_pinned_state(&db_path, pinned.as_ref());
+        // open_readonly returns SchemaDrift; validate_pinned_state wraps as anyhow.
+        assert!(result.is_err(), "schema bump under us must fail validation");
+    }
+
+    #[test]
+    fn atomic_role_round_trip() {
+        let r = AtomicRole::new(Role::ReadOnly);
+        assert_eq!(r.load(), Role::ReadOnly);
+        r.store(Role::Primary);
+        assert_eq!(r.load(), Role::Primary);
+        r.store(Role::ReadOnly);
+        assert_eq!(r.load(), Role::ReadOnly);
     }
 
     #[test]
