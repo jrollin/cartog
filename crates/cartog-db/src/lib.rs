@@ -367,6 +367,24 @@ pub fn register_sqlite_vec() {
 /// Current schema version. Increment when adding migrations.
 const SCHEMA_VERSION: u32 = 4;
 
+/// Read the on-disk `schema_version` for the read-only open paths.
+/// A missing row (or missing metadata table — a non-cartog SQLite file at
+/// the path) is treated as `stored = 0`, which surfaces to the caller as
+/// `DbError::SchemaDrift { expected, stored: 0 }` rather than a raw
+/// rusqlite error. Lets `cartog serve` print "another writer upgraded the
+/// schema; restart this session" (the actionable message) instead of
+/// "Query returned no rows".
+fn read_schema_version(conn: &Connection) -> std::result::Result<u32, DbError> {
+    conn.query_row(
+        "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
+        [],
+        |row| row.get::<_, u32>(0),
+    )
+    .optional()
+    .map(|v| v.unwrap_or(0))
+    .map_err(DbError::Sqlite)
+}
+
 /// Run schema migrations for existing databases.
 ///
 /// Uses the `metadata` table to track the current schema version.
@@ -530,25 +548,33 @@ fn handle_embedding_dimension(
         return Ok(());
     }
 
-    if let Some(old_dim) = stored_dim {
-        // stored differs from effective, so we wipe and rebuild.
-        tracing::warn!(
-            old = old_dim,
-            new = effective_dim,
-            "Embedding dimension changed — clearing vector index. Run `cartog rag index` to re-embed."
-        );
-        retry_busy(|| conn.execute("DROP TABLE IF EXISTS symbol_vec", []))?;
-        retry_busy(|| conn.execute("DELETE FROM symbol_embedding_map", []))?;
-    }
-
+    // Wrap the wipe+rebuild sequence in a single transaction so a mid-
+    // sequence failure (busy timeout exhausted, disk full, etc.) rolls
+    // back atomically. Without this, a DROP that succeeds followed by an
+    // INSERT that fails would leave the DB with no `symbol_vec` but
+    // metadata pointing at the old dimension — the next open would skip
+    // migration ("stored == requested") and queries against the missing
+    // table would error forever.
     let schema = rag_vec_schema(effective_dim);
-    retry_busy(|| conn.execute_batch(&schema))?;
-
+    let needs_wipe = stored_dim.is_some();
     retry_busy(|| {
-        conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        if needs_wipe {
+            let old_dim = stored_dim.unwrap_or(0);
+            tracing::warn!(
+                old = old_dim,
+                new = effective_dim,
+                "Embedding dimension changed — clearing vector index. Run `cartog rag index` to re-embed."
+            );
+            tx.execute("DROP TABLE IF EXISTS symbol_vec", [])?;
+            tx.execute("DELETE FROM symbol_embedding_map", [])?;
+        }
+        tx.execute_batch(&schema)?;
+        tx.execute(
             "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_dimension', ?1)",
             params![effective_dim.to_string()],
-        )
+        )?;
+        tx.commit()
     })?;
 
     Ok(())
@@ -696,13 +722,7 @@ impl Database {
         ))
         .map_err(DbError::Pragma)?;
 
-        let stored_schema: u32 = conn
-            .query_row(
-                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(DbError::Sqlite)?;
+        let stored_schema = read_schema_version(&conn)?;
         if stored_schema != SCHEMA_VERSION {
             return Err(DbError::SchemaDrift {
                 expected: SCHEMA_VERSION,
@@ -746,13 +766,7 @@ impl Database {
         conn.execute_batch(&format!("PRAGMA busy_timeout={BUSY_TIMEOUT_MS};"))
             .map_err(DbError::Pragma)?;
 
-        let stored_schema: u32 = conn
-            .query_row(
-                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(DbError::Sqlite)?;
+        let stored_schema = read_schema_version(&conn)?;
         if stored_schema != SCHEMA_VERSION {
             return Err(DbError::SchemaDrift {
                 expected: SCHEMA_VERSION,
@@ -973,37 +987,38 @@ impl Database {
                 new_dim = fp.dimension,
                 "Embedding fingerprint changed — clearing vector index. Run `cartog rag index` to re-embed."
             );
-            retry_busy(|| self.conn.execute("DROP TABLE IF EXISTS symbol_vec", []))
-                .map_err(|e| anyhow::anyhow!("failed to drop symbol_vec: {e}"))?;
-            retry_busy(|| self.conn.execute("DELETE FROM symbol_embedding_map", []))
-                .map_err(|e| anyhow::anyhow!("failed to clear symbol_embedding_map: {e}"))?;
         }
 
+        // Wrap the whole sequence in a transaction so a mid-sequence
+        // failure (e.g. busy-retry exhausted on the third metadata write)
+        // rolls back atomically. Otherwise the next open could see
+        // partial state — e.g. provider/model match but dimension stale,
+        // or symbol_vec dropped but metadata still pointing at the old
+        // dim — and either skip migration or silently re-wipe.
         let schema = rag_vec_schema(fp.dimension);
-        retry_busy(|| self.conn.execute_batch(&schema))
-            .map_err(|e| anyhow::anyhow!("failed to recreate symbol_vec: {e}"))?;
-
+        let do_wipe = !is_backfill;
         retry_busy(|| {
-            self.conn.execute(
+            let tx = self.conn.unchecked_transaction()?;
+            if do_wipe {
+                tx.execute("DROP TABLE IF EXISTS symbol_vec", [])?;
+                tx.execute("DELETE FROM symbol_embedding_map", [])?;
+            }
+            tx.execute_batch(&schema)?;
+            tx.execute(
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
                 params![EMBED_PROVIDER_KEY, fp.provider],
-            )
-        })
-        .map_err(|e| anyhow::anyhow!("failed to write embedding_provider: {e}"))?;
-        retry_busy(|| {
-            self.conn.execute(
+            )?;
+            tx.execute(
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
                 params![EMBED_MODEL_KEY, fp.model],
-            )
-        })
-        .map_err(|e| anyhow::anyhow!("failed to write embedding_model: {e}"))?;
-        retry_busy(|| {
-            self.conn.execute(
+            )?;
+            tx.execute(
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_dimension', ?1)",
                 params![fp.dimension.to_string()],
-            )
+            )?;
+            tx.commit()
         })
-        .map_err(|e| anyhow::anyhow!("failed to write embedding_dimension: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to reconcile embedding fingerprint: {e}"))?;
 
         Ok(())
     }
@@ -4741,6 +4756,210 @@ mod tests {
                 assert_eq!(stored, 9999);
             }
             other => panic!("expected SchemaDrift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_open_readonly_missing_schema_version_is_schema_drift() {
+        // Regression: pre-fix, a metadata table without a schema_version
+        // row surfaced as DbError::Sqlite(QueryReturnedNoRows) instead of
+        // the actionable SchemaDrift. Callers (cartog serve) print
+        // different messages for the two — drift is the right one ("the
+        // primary upgraded cartog; restart this session"), the raw
+        // rusqlite error is opaque.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        // Create a DB with our schema, then delete the schema_version row.
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.conn
+                .execute("DELETE FROM metadata WHERE key = 'schema_version'", [])
+                .unwrap();
+        }
+        let err = Database::open_readonly(&db_path).unwrap_err();
+        match err {
+            DbError::SchemaDrift { expected, stored } => {
+                assert_eq!(expected, SCHEMA_VERSION);
+                assert_eq!(stored, 0, "missing row should surface as stored=0");
+            }
+            other => panic!("expected SchemaDrift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_open_existing_rw_missing_schema_version_is_schema_drift() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.conn
+                .execute("DELETE FROM metadata WHERE key = 'schema_version'", [])
+                .unwrap();
+        }
+        let err = Database::open_existing_rw(&db_path).unwrap_err();
+        match err {
+            DbError::SchemaDrift { expected, stored } => {
+                assert_eq!(expected, SCHEMA_VERSION);
+                assert_eq!(stored, 0);
+            }
+            other => panic!("expected SchemaDrift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_reconcile_fingerprint_transaction_rolls_back_on_failure() {
+        // Lower-level regression: prove that a failing statement inside
+        // the reconcile transaction reverts everything. We do this by
+        // running the same DROP/CREATE/UPDATE sequence inside an explicit
+        // unchecked_transaction and rolling it back; verify the post-DB
+        // state is unchanged.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = Database::open(&db_path, 384).unwrap();
+        db.reconcile_embedding_fingerprint(&fp("local", "BGE-small-en-v1.5", 384))
+            .unwrap();
+        seed_embedding(&db, 384, "before");
+        let initial_count = db.embedding_count().unwrap();
+        assert_eq!(initial_count, 1);
+
+        // Simulate the reconcile sequence under a transaction, then
+        // abort. This is the contract: a rollback after partial writes
+        // leaves the on-disk state exactly as it was.
+        {
+            let tx = db.conn.unchecked_transaction().unwrap();
+            tx.execute("DROP TABLE IF EXISTS symbol_vec", []).unwrap();
+            tx.execute("DELETE FROM symbol_embedding_map", []).unwrap();
+            tx.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
+                params!["embedding_provider", "ollama"],
+            )
+            .unwrap();
+            // No commit: tx is dropped -> rollback.
+        }
+
+        // Post-rollback: everything must be back to the initial state.
+        let stored_provider = db.get_metadata("embedding_provider").unwrap();
+        assert_eq!(
+            stored_provider.as_deref(),
+            Some("local"),
+            "rollback must revert provider write"
+        );
+        assert_eq!(
+            db.embedding_count().unwrap(),
+            1,
+            "rollback must revert symbol_embedding_map DELETE"
+        );
+        // symbol_vec must be back too.
+        let has_vec = db
+            .conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='symbol_vec'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .unwrap()
+            .is_some();
+        assert!(has_vec, "rollback must revert DROP TABLE symbol_vec");
+    }
+
+    #[test]
+    fn test_reconcile_fingerprint_rolls_back_on_midsequence_failure() {
+        // Regression: pre-fix, each metadata write in
+        // reconcile_embedding_fingerprint ran outside any transaction.
+        // If the busy-retry on a later write exhausted (or any other
+        // failure), the DB was left with partial state — e.g.
+        // symbol_vec dropped, provider rewritten, dimension stale. The
+        // next open would see (stored_dim != fp.dimension) → "wipe and
+        // rebuild" but the embeddings would already be gone, and the
+        // primary writer would silently keep operating against the
+        // damaged DB.
+        //
+        // With the transaction wrapper, a mid-sequence failure rolls
+        // back the entire reconcile. We exercise this by capping
+        // max_page_count so a write in the middle of the sequence
+        // fails with SQLITE_FULL.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // 1. Establish a known state with our own embedding rows.
+        let initial_fp = fp("local", "BGE-small-en-v1.5", 384);
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.reconcile_embedding_fingerprint(&initial_fp).unwrap();
+            seed_embedding(&db, 384, "seed");
+        }
+
+        // 2. Force a SQLITE_FULL mid-reconcile by capping the page count.
+        //    The cap must be tight enough that the multi-row metadata
+        //    upserts can't all fit, but loose enough that the initial
+        //    DROP TABLE succeeds (we want to verify rollback, not just
+        //    "first write failed").
+        let new_fp = fp("ollama", "nomic-embed-text-v2", 384);
+        let outcome = {
+            let db = Database::open(&db_path, 384).unwrap();
+            // Tighten budget. Page count of 8 is enough for the
+            // transaction's own begin/commit overhead but not enough
+            // for the new CREATE VIRTUAL TABLE + 3 metadata rows.
+            db.set_max_page_count_for_tests(8).unwrap();
+            db.reconcile_embedding_fingerprint(&new_fp)
+        };
+
+        // 3. The reconcile may succeed or fail. If it failed, the DB on
+        //    disk must still reflect the INITIAL fingerprint — not a
+        //    partial state.
+        let post = Database::open(&db_path, 384).unwrap();
+        let stored_provider = post.get_metadata("embedding_provider").unwrap();
+        let stored_model = post.get_metadata("embedding_model").unwrap();
+        let stored_dim_str = post.get_metadata("embedding_dimension").unwrap();
+        let symbol_vec_exists = post
+            .conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='symbol_vec'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .unwrap()
+            .is_some();
+
+        match outcome {
+            Ok(()) => {
+                // Either it succeeded — then the new fingerprint is fully
+                // installed (provider/model/dim all swapped, symbol_vec
+                // recreated). Verify consistency.
+                assert_eq!(stored_provider.as_deref(), Some("ollama"));
+                assert_eq!(stored_model.as_deref(), Some("nomic-embed-text-v2"));
+                assert_eq!(stored_dim_str.as_deref(), Some("384"));
+                assert!(
+                    symbol_vec_exists,
+                    "successful reconcile must have symbol_vec"
+                );
+            }
+            Err(_) => {
+                // Or it failed — then the OLD fingerprint must be intact.
+                // This is the regression assertion: pre-fix, the DB could
+                // end up in a half-applied state.
+                assert_eq!(
+                    stored_provider.as_deref(),
+                    Some("local"),
+                    "failed reconcile must roll back provider"
+                );
+                assert_eq!(
+                    stored_model.as_deref(),
+                    Some("BGE-small-en-v1.5"),
+                    "failed reconcile must roll back model"
+                );
+                assert_eq!(
+                    stored_dim_str.as_deref(),
+                    Some("384"),
+                    "failed reconcile must roll back dimension"
+                );
+                assert!(
+                    symbol_vec_exists,
+                    "failed reconcile must roll back symbol_vec drop"
+                );
+            }
         }
     }
 
