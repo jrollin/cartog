@@ -936,6 +936,11 @@ impl ServerHandler for CartogServer {
 
 pub const SERVE_LOCK_SLOT: &str = "serve";
 
+/// Environment variable that, when set to `0`, disables single-writer
+/// election (every cartog process opens RW like pre-Phase-2 cartog). The
+/// migration-busy-retry from Phase 6a remains the only defense in that mode.
+pub const SINGLE_WRITER_ENV: &str = "CARTOG_SINGLE_WRITER";
+
 #[derive(Default)]
 pub struct ServerOptions {
     /// Directory for the server's PID file (written on startup, removed on
@@ -944,18 +949,57 @@ pub struct ServerOptions {
     pub pid_lock_dir: Option<PathBuf>,
 }
 
-/// Acquire the serve PID lock; returns `Ok(None)` when no lock dir is configured.
-pub fn acquire_serve_lock(
-    opts: &ServerOptions,
-) -> anyhow::Result<Option<cartog_process_lock::ProcessLock>> {
-    use anyhow::Context;
+/// Outcome of trying to claim the `serve` lock at MCP startup.
+#[derive(Debug)]
+pub enum ServeLockOutcome {
+    /// No `pid_lock_dir` configured — election skipped, this process runs
+    /// as if it were the only one (legacy behavior, used in tests).
+    Untracked,
+    /// We won the election; the lock is held until this value is dropped.
+    Primary(cartog_process_lock::ProcessLock),
+    /// Another cartog process holds the lock. The caller decides whether
+    /// to exit cleanly or (later, in Phase 4) attach read-only.
+    Held(cartog_process_lock::ActiveLock),
+}
+
+/// Read `CARTOG_SINGLE_WRITER` from the environment. Defaults to election
+/// enabled; set to `0` / `false` / `no` to opt out.
+fn single_writer_election_enabled() -> bool {
+    match std::env::var(SINGLE_WRITER_ENV) {
+        Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no"),
+        Err(_) => true,
+    }
+}
+
+/// Acquire the serve PID lock with single-writer election. Returns
+/// [`ServeLockOutcome::Held`] when a live peer already owns the slot so the
+/// caller can branch on it (exit cleanly today, attach read-only in a
+/// later phase).
+pub fn acquire_serve_lock(opts: &ServerOptions) -> anyhow::Result<ServeLockOutcome> {
     let dir = match opts.pid_lock_dir.as_deref() {
         Some(d) => d,
-        None => return Ok(None),
+        None => return Ok(ServeLockOutcome::Untracked),
     };
-    cartog_process_lock::ProcessLock::acquire(dir, SERVE_LOCK_SLOT)
-        .map(Some)
-        .with_context(|| format!("failed to acquire serve PID lock at {}", dir.display()))
+    if !single_writer_election_enabled() {
+        // Kill switch: use the old overwrite-on-acquire behavior. We still
+        // write our PID file so `cartog self update` and friends see us.
+        let lock = cartog_process_lock::ProcessLock::acquire_overwriting(dir, SERVE_LOCK_SLOT)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to acquire serve PID lock at {} (single-writer election disabled): {e}",
+                    dir.display()
+                )
+            })?;
+        return Ok(ServeLockOutcome::Primary(lock));
+    }
+    match cartog_process_lock::ProcessLock::acquire(dir, SERVE_LOCK_SLOT) {
+        Ok(lock) => Ok(ServeLockOutcome::Primary(lock)),
+        Err(cartog_process_lock::AcquireError::Held(held)) => Ok(ServeLockOutcome::Held(held)),
+        Err(cartog_process_lock::AcquireError::Io(e)) => Err(anyhow::anyhow!(
+            "failed to acquire serve PID lock at {}: {e}",
+            dir.display()
+        )),
+    }
 }
 
 /// Start the MCP server over stdio.
@@ -971,8 +1015,23 @@ pub async fn run_server(
 ) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
 
-    // Acquire first so a lock failure aborts before opening DB / watcher.
-    let _lock = acquire_serve_lock(&opts)?;
+    // Acquire first so an election loss aborts before opening DB / watcher.
+    // Phase 4 will turn `Held` into a read-only attach; until then we exit
+    // cleanly with a clear message so the user knows which process owns
+    // the slot.
+    let _lock = match acquire_serve_lock(&opts)? {
+        ServeLockOutcome::Primary(lock) => Some(lock),
+        ServeLockOutcome::Untracked => None,
+        ServeLockOutcome::Held(held) => {
+            info!(
+                slot = %held.slot,
+                primary_pid = held.pid,
+                "another cartog process owns the serve lock for this DB; exiting (read-only attach lands in a later phase). \
+                 Stop the running cartog or set CARTOG_SINGLE_WRITER=0 to opt out of single-writer election."
+            );
+            return Ok(());
+        }
+    };
 
     // Optionally spawn a background file watcher
     let db_path_str = db_path.to_string_lossy().into_owned();
@@ -1290,8 +1349,11 @@ mod tests {
         let opts = ServerOptions {
             pid_lock_dir: Some(dir.path().to_path_buf()),
         };
-        let lock = acquire_serve_lock(&opts).expect("acquire");
-        assert!(lock.is_some(), "lock should be returned when dir is set");
+        let outcome = acquire_serve_lock(&opts).expect("acquire");
+        let lock = match outcome {
+            ServeLockOutcome::Primary(l) => l,
+            other => panic!("expected Primary, got {other:?}"),
+        };
         let path = dir.path().join(format!("{SERVE_LOCK_SLOT}.pid"));
         assert!(path.exists(), "PID file should exist while lock is held");
         // File is now two lines (pid + start_time); only the first line is the PID.
@@ -1308,11 +1370,73 @@ mod tests {
     #[test]
     fn pid_file_skipped_when_lock_dir_unset() {
         let opts = ServerOptions::default();
-        let lock = acquire_serve_lock(&opts).expect("noop");
+        let outcome = acquire_serve_lock(&opts).expect("noop");
         assert!(
-            lock.is_none(),
-            "no lock dir → no PID file, no guard returned"
+            matches!(outcome, ServeLockOutcome::Untracked),
+            "no lock dir → Untracked"
         );
+    }
+
+    #[test]
+    fn second_acquire_for_same_dir_reports_held() {
+        // Two acquire_serve_lock calls against the same dir: the first wins,
+        // the second must surface Held(_) with the first's PID so the caller
+        // can branch.
+        let dir = tempfile::TempDir::new().unwrap();
+        let opts = ServerOptions {
+            pid_lock_dir: Some(dir.path().to_path_buf()),
+        };
+        let _first = match acquire_serve_lock(&opts).expect("first acquire") {
+            ServeLockOutcome::Primary(l) => l,
+            other => panic!("expected Primary, got {other:?}"),
+        };
+        let second = acquire_serve_lock(&opts).expect("second acquire returns ok");
+        match second {
+            ServeLockOutcome::Held(held) => {
+                assert_eq!(held.slot, SERVE_LOCK_SLOT);
+                assert_eq!(held.pid, std::process::id());
+            }
+            other => panic!("expected Held, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kill_switch_disables_election() {
+        // CARTOG_SINGLE_WRITER=0 must let a second acquire_overwriting-style
+        // call succeed despite a live first holder. Restoring the env var
+        // afterwards is best-effort; tests in a single binary share env so
+        // we set + unset around the call site.
+        let dir = tempfile::TempDir::new().unwrap();
+        let opts = ServerOptions {
+            pid_lock_dir: Some(dir.path().to_path_buf()),
+        };
+        let _first = match acquire_serve_lock(&opts).expect("first acquire") {
+            ServeLockOutcome::Primary(l) => l,
+            other => panic!("expected Primary, got {other:?}"),
+        };
+
+        // SAFETY: tests in `cargo test` run in threads, but env mutation is
+        // process-global. Other tests in this file don't depend on this var,
+        // and we restore it before returning.
+        let prev = std::env::var(SINGLE_WRITER_ENV).ok();
+        // SAFETY: env vars are inherently process-wide and tests share them.
+        // We restore the prior value before this test returns so adjacent
+        // tests aren't affected.
+        unsafe {
+            std::env::set_var(SINGLE_WRITER_ENV, "0");
+        }
+        let result = acquire_serve_lock(&opts);
+        // SAFETY: same reason — restoring prior state regardless of outcome.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(SINGLE_WRITER_ENV, v),
+                None => std::env::remove_var(SINGLE_WRITER_ENV),
+            }
+        }
+        match result.expect("kill switch acquire") {
+            ServeLockOutcome::Primary(_) => {} // expected
+            other => panic!("expected Primary with kill switch, got {other:?}"),
+        }
     }
 
     // ── Index + LSP gate tests ──

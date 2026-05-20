@@ -214,13 +214,28 @@ fn watch_loop(
     db_path: &str,
     shutdown: &AtomicBool,
 ) -> Result<()> {
-    // Acquire first so a lock failure aborts before opening DB / watcher.
+    // Acquire first so an election loss aborts before opening DB / watcher.
+    // Unlike `cartog serve`, the watcher does NOT attach read-only — if
+    // another writer already owns the slot, we refuse to start and let the
+    // user stop the running process.
     let _lock: Option<cartog_process_lock::ProcessLock> = match config.pid_lock_dir.as_deref() {
-        Some(dir) => Some(
-            cartog_process_lock::ProcessLock::acquire(dir, WATCH_LOCK_SLOT).with_context(|| {
-                format!("failed to acquire watch PID lock at {}", dir.display())
-            })?,
-        ),
+        Some(dir) => match cartog_process_lock::ProcessLock::acquire(dir, WATCH_LOCK_SLOT) {
+            Ok(lock) => Some(lock),
+            Err(cartog_process_lock::AcquireError::Held(held)) => {
+                anyhow::bail!(
+                    "another cartog process holds the watch lock at {} (slot {:?}, PID {}); \
+                     stop it before running `cartog watch`",
+                    dir.display(),
+                    held.slot,
+                    held.pid,
+                );
+            }
+            Err(cartog_process_lock::AcquireError::Io(e)) => {
+                return Err(e).with_context(|| {
+                    format!("failed to acquire watch PID lock at {}", dir.display())
+                });
+            }
+        },
         None => None,
     };
 

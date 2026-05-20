@@ -38,23 +38,146 @@ pub struct ProcessLock {
     path: PathBuf,
 }
 
+/// Why `ProcessLock::acquire` failed. The `Held` variant lets callers
+/// branch on "another writer owns the slot" (election lost — can attach
+/// read-only or refuse) vs a real I/O failure.
+#[derive(Debug)]
+pub enum AcquireError {
+    /// Another process holds the lock and its PID is still alive (and, if
+    /// the file uses the new 2-line format, the start_time matches —
+    /// closing the PID-reuse window). The held lock is returned so the
+    /// caller can format a useful message or attach in read-only mode.
+    Held(ActiveLock),
+    /// Filesystem / permission failure unrelated to peer detection.
+    Io(io::Error),
+}
+
+impl std::fmt::Display for AcquireError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AcquireError::Held(lock) => write!(
+                f,
+                "another cartog process holds slot {slot:?} (PID {pid})",
+                slot = lock.slot,
+                pid = lock.pid,
+            ),
+            AcquireError::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for AcquireError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            AcquireError::Io(e) => Some(e),
+            AcquireError::Held(_) => None,
+        }
+    }
+}
+
+impl From<io::Error> for AcquireError {
+    fn from(e: io::Error) -> Self {
+        AcquireError::Io(e)
+    }
+}
+
 impl ProcessLock {
-    /// Write `<state_dir>/<slot>.pid` with the current process's PID and
-    /// start time (two lines). Creates `state_dir` if missing. Returns an
-    /// error on permission / I/O failure.
+    /// Atomically acquire `<state_dir>/<slot>.pid` for this process. Fails
+    /// with [`AcquireError::Held`] if another live cartog process already
+    /// holds the slot. Stale files (PID gone, or start_time mismatch from
+    /// PID reuse) are unlinked and the acquire is retried once.
     ///
-    /// Note: this does NOT fail if a stale PID file already exists — the
-    /// caller is the long-lived command itself, and a stale file means
-    /// some prior crashed instance was using the slot. We overwrite. The
-    /// reader (`find_active_locks`) is the place that distinguishes stale
-    /// from live.
-    pub fn acquire(state_dir: &Path, slot: &str) -> io::Result<Self> {
+    /// Creates `state_dir` if missing.
+    pub fn acquire(state_dir: &Path, slot: &str) -> Result<Self, AcquireError> {
+        validate_slot(slot).map_err(AcquireError::Io)?;
+        fs::create_dir_all(state_dir).map_err(AcquireError::Io)?;
+        let path = state_dir.join(format!("{slot}.{PID_EXTENSION}"));
+        let pid = std::process::id();
+        let payload = match process_start_time(pid) {
+            Some(st) => format!("{pid}\n{st}\n"),
+            None => format!("{pid}\n"),
+        };
+
+        // Two attempts: first a straight O_CREAT|O_EXCL; on AlreadyExists we
+        // inspect the holder and, if stale, unlink + retry once. Two
+        // simultaneous acquires by different live processes still see only
+        // one winner — the loser's second attempt sees the winner's freshly
+        // O_EXCL-created file and returns Held.
+        for attempt in 0..2 {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut f) => {
+                    use std::io::Write;
+                    f.write_all(payload.as_bytes()).map_err(AcquireError::Io)?;
+                    f.sync_all().map_err(AcquireError::Io)?;
+                    return Ok(Self { path });
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    // Inspect the holder. If it's still the same process,
+                    // election lost. Otherwise it's stale; unlink and retry
+                    // (once — the second attempt's AlreadyExists is a real
+                    // peer that grabbed the slot in the gap).
+                    let active = read_lock_file(&path).and_then(|(pid, st)| {
+                        let alive = match st {
+                            Some(st) => is_same_process(pid, st),
+                            None => is_alive(pid),
+                        };
+                        if alive {
+                            Some(ActiveLock {
+                                slot: slot.to_string(),
+                                pid,
+                                start_time: st,
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                    match (active, attempt) {
+                        (Some(held), _) => return Err(AcquireError::Held(held)),
+                        (None, 0) => {
+                            let _ = fs::remove_file(&path);
+                            continue;
+                        }
+                        (None, _) => {
+                            // We tried to clean up but lost the next race.
+                            // Re-inspect once more to give the caller a
+                            // useful Held(_) error if a fresh peer landed.
+                            if let Some((pid, st)) = read_lock_file(&path) {
+                                return Err(AcquireError::Held(ActiveLock {
+                                    slot: slot.to_string(),
+                                    pid,
+                                    start_time: st,
+                                }));
+                            }
+                            return Err(AcquireError::Io(e));
+                        }
+                    }
+                }
+                Err(e) => return Err(AcquireError::Io(e)),
+            }
+        }
+        // Unreachable: the loop always returns. Defensive:
+        Err(AcquireError::Io(io::Error::other(
+            "process_lock: acquire loop fell through unexpectedly",
+        )))
+    }
+
+    /// Legacy acquire: overwrites any existing file. Use ONLY when the
+    /// caller has opted out of single-writer election (e.g. via
+    /// `CARTOG_SINGLE_WRITER=0`). Behaviour matches pre-Phase-2 cartog.
+    ///
+    /// Two processes calling this concurrently against the same slot will
+    /// both report success and the DB-level migration race that the
+    /// election was meant to prevent comes back. Phase 6a's busy-retry
+    /// remains the only defense in that case.
+    pub fn acquire_overwriting(state_dir: &Path, slot: &str) -> io::Result<Self> {
         validate_slot(slot)?;
         fs::create_dir_all(state_dir)?;
         let path = state_dir.join(format!("{slot}.{PID_EXTENSION}"));
         let pid = std::process::id();
-        // Per-PID staging file: two concurrent acquires for the same slot
-        // do not clobber each other's tmp before the rename.
         let tmp = state_dir.join(format!(".{slot}.{pid}.{PID_EXTENSION}.tmp"));
         let payload = match process_start_time(pid) {
             Some(st) => format!("{pid}\n{st}\n"),
@@ -305,7 +428,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         for bad in ["", "with/slash", "with\\back", "with.dot", "with space"] {
             let err = ProcessLock::acquire(dir.path(), bad).unwrap_err();
-            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "slot {bad:?}");
+            match err {
+                AcquireError::Io(io_err) => {
+                    assert_eq!(io_err.kind(), io::ErrorKind::InvalidInput, "slot {bad:?}");
+                }
+                AcquireError::Held(_) => panic!("invalid slot {bad:?} should be Io, got Held"),
+            }
         }
     }
 
@@ -517,5 +645,78 @@ mod tests {
             !is_same_process(pid, st.wrapping_add(1)),
             "mismatched start_time must be rejected"
         );
+    }
+
+    #[test]
+    fn acquire_returns_held_when_live_peer_owns_slot() {
+        // First acquire succeeds. Second must see the holder and report it.
+        let dir = TempDir::new().unwrap();
+        let first = ProcessLock::acquire(dir.path(), "serve").unwrap();
+
+        let err = ProcessLock::acquire(dir.path(), "serve").unwrap_err();
+        match err {
+            AcquireError::Held(held) => {
+                assert_eq!(held.slot, "serve");
+                assert_eq!(held.pid, std::process::id());
+            }
+            AcquireError::Io(e) => panic!("expected Held, got Io({e})"),
+        }
+        // The held file must still belong to the first lock — second attempt
+        // does NOT clobber it.
+        let (recorded_pid, _) = read_lock_file(first.path()).expect("file still parses");
+        assert_eq!(recorded_pid, std::process::id());
+        drop(first);
+    }
+
+    #[test]
+    fn acquire_cleans_stale_pid_and_succeeds() {
+        // A leftover PID file pointing at a dead process must NOT cause
+        // Held — we unlink it and our own acquire wins.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("serve.pid");
+        fs::write(&path, "4194304\n0\n").unwrap();
+        let lock = ProcessLock::acquire(dir.path(), "serve").unwrap();
+        let (recorded_pid, _) = read_lock_file(&path).expect("file parses");
+        assert_eq!(recorded_pid, std::process::id());
+        drop(lock);
+    }
+
+    #[test]
+    fn acquire_cleans_pid_reused_lock_and_succeeds() {
+        // File records our own PID but a wrong start_time — same outcome as
+        // a dead PID: we treat the holder as gone (PID was reused) and
+        // claim the slot.
+        let dir = TempDir::new().unwrap();
+        let pid = std::process::id();
+        let real_st = match process_start_time(pid) {
+            Some(s) => s,
+            None => return, // unsupported platform: skip
+        };
+        let path = dir.path().join("serve.pid");
+        fs::write(&path, format!("{pid}\n{}\n", real_st.wrapping_add(1))).unwrap();
+        let _lock = ProcessLock::acquire(dir.path(), "serve").unwrap();
+        // After acquire, the file should have the correct start_time.
+        let (recorded_pid, recorded_st) = read_lock_file(&path).expect("file parses");
+        assert_eq!(recorded_pid, pid);
+        assert_eq!(recorded_st, Some(real_st));
+    }
+
+    #[test]
+    fn acquire_overwriting_always_wins() {
+        // The kill-switch path must succeed even when a live peer holds the
+        // slot. We simulate the "live peer" with a real ProcessLock against
+        // a sibling slot, then have acquire_overwriting clobber a manual
+        // file we wrote first.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("serve.pid");
+        fs::write(&path, format!("{}\n0\n", std::process::id())).unwrap();
+        let _lock = ProcessLock::acquire_overwriting(dir.path(), "serve").unwrap();
+        let (recorded_pid, recorded_st) = read_lock_file(&path).expect("file parses");
+        assert_eq!(recorded_pid, std::process::id());
+        // On platforms where start_time is available, acquire_overwriting
+        // also records it (same format as the exclusive path).
+        if process_start_time(std::process::id()).is_some() {
+            assert!(recorded_st.is_some());
+        }
     }
 }
