@@ -15,7 +15,7 @@ background promoter on the secondary takes over.
 
 ## Architecture
 
-```
+```text
                           ┌─────────────────────────────────────────────┐
 cartog serve   →   acquire_serve_lock(O_EXCL on .cartog/state/serve.pid)
                           │
@@ -44,7 +44,7 @@ cartog serve   →   acquire_serve_lock(O_EXCL on .cartog/state/serve.pid)
 
 ### Key Design Decisions
 
-1. **Atomic O_EXCL election.** `ProcessLock::acquire` is now `OpenOptions::create_new(true)` on the final path, not write+rename. Two simultaneous acquires by different live processes see exactly one winner. The loser's `AlreadyExists` triggers a holder inspection — if the holder is the same live process (`is_same_process`), election lost; otherwise the file is stale and we retry once.
+1. **Atomic O_EXCL election.** `ProcessLock::acquire` writes the PID payload to a per-(PID, thread, counter) temp file, then `fs::hard_link`s it into the slot path. `hard_link` fails atomically with `AlreadyExists` if the target exists, and the target inode is fully written before becoming visible — concurrent readers never see an empty file (the pre-fix `create_new(true)` + `write_all` had a transient empty-target window). Two simultaneous acquires by different live processes see exactly one winner. The loser's `AlreadyExists` triggers a holder inspection — if the holder is the same live process (`is_same_process`), election lost; otherwise the file is stale and we retry once.
 
 2. **PID-reuse safety via start_time.** PID files are now two lines (`pid\n<start_time>`). `start_time` is platform-native (`/proc/<pid>/stat` field 22 on Linux, `proc_pidinfo PROC_PIDTBSDINFO` on macOS, `GetProcessTimes` on Windows). `is_same_process` rejects a recycled PID whose start time differs. Old single-line files still parse and fall back to `is_alive`-only checks; the next acquire rewrites them in the new format.
 
@@ -183,7 +183,7 @@ All items completed across the initial 8 implementation commits
 
 ### Phase 2: O_EXCL election + kill switch
 - [x] `AcquireError::{Held(ActiveLock), Io(io::Error)}`
-- [x] `ProcessLock::acquire` uses `OpenOptions::create_new(true)`, inspects holder on `AlreadyExists`, unlinks stale + retries once
+- [x] `ProcessLock::acquire` writes a temp file then `hard_link`s it into the slot path (O_EXCL semantics via `hard_link`'s `AlreadyExists` failure mode — see review-fix C3 below for the migration from the original `OpenOptions::create_new(true)` path). Inspects holder on `AlreadyExists`, unlinks stale + retries once.
 - [x] `ProcessLock::acquire_overwriting` (legacy path for kill switch)
 - [x] `ServeLockOutcome::{Untracked, Primary, Held}` in `cartog-mcp`
 - [x] `SINGLE_WRITER_ENV = "CARTOG_SINGLE_WRITER"` constant; `single_writer_election_enabled()` reads it

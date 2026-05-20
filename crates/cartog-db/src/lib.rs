@@ -367,22 +367,49 @@ pub fn register_sqlite_vec() {
 /// Current schema version. Increment when adding migrations.
 const SCHEMA_VERSION: u32 = 4;
 
+/// True when the `symbol_vec` virtual table exists in the open DB. Used by
+/// the fast-path early returns in [`handle_embedding_dimension`] and
+/// [`Database::reconcile_embedding_fingerprint`] so a previously-corrupted
+/// DB (table dropped externally, or a pre-C4 cartog that crashed between
+/// DROP and CREATE) is detected and rebuilt instead of silently passing
+/// the metadata-only check.
+fn symbol_vec_exists(conn: &Connection) -> std::result::Result<bool, rusqlite::Error> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='symbol_vec'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .map(|v| v.is_some())
+}
+
 /// Read the on-disk `schema_version` for the read-only open paths.
-/// A missing row (or missing metadata table — a non-cartog SQLite file at
-/// the path) is treated as `stored = 0`, which surfaces to the caller as
-/// `DbError::SchemaDrift { expected, stored: 0 }` rather than a raw
+/// A missing row (or missing `metadata` table — a non-cartog SQLite file
+/// at the path) is treated as `stored = 0`, which surfaces to the caller
+/// as `DbError::SchemaDrift { expected, stored: 0 }` rather than a raw
 /// rusqlite error. Lets `cartog serve` print "another writer upgraded the
 /// schema; restart this session" (the actionable message) instead of
-/// "Query returned no rows".
+/// "Query returned no rows" or "no such table: metadata".
 fn read_schema_version(conn: &Connection) -> std::result::Result<u32, DbError> {
-    conn.query_row(
+    match conn.query_row(
         "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
         [],
         |row| row.get::<_, u32>(0),
-    )
-    .optional()
-    .map(|v| v.unwrap_or(0))
-    .map_err(DbError::Sqlite)
+    ) {
+        Ok(v) => Ok(v),
+        // Missing row inside an existing table: stored=0.
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+        // Missing `metadata` table entirely (non-cartog SQLite file at the
+        // path, or a partially-initialised DB): stored=0. rusqlite reports
+        // this as a generic SqliteFailure; the message is the only stable
+        // signal for "no such table" specifically.
+        Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
+            if msg.contains("no such table: metadata") =>
+        {
+            Ok(0)
+        }
+        Err(e) => Err(DbError::Sqlite(e)),
+    }
 }
 
 /// Run schema migrations for existing databases.
@@ -540,11 +567,12 @@ fn handle_embedding_dimension(
         _ => requested_dim,
     };
 
-    // True early return: if the dim already matches, nothing to write.
-    // The `CREATE VIRTUAL TABLE IF NOT EXISTS` and `INSERT OR REPLACE` below
-    // are idempotent at the data level, but they still take a write lock —
-    // skipping them removes our contribution to any concurrent migration race.
-    if stored_dim == Some(effective_dim) {
+    // True early return: if the dim already matches AND the vector table
+    // actually exists, nothing to write. The dim+table pair is the real
+    // invariant; checking metadata alone misses the case where a previous
+    // open crashed mid-migration and left the DB without `symbol_vec`
+    // while metadata still claims a dimension.
+    if stored_dim == Some(effective_dim) && symbol_vec_exists(conn)? {
         return Ok(());
     }
 
@@ -962,10 +990,15 @@ impl Database {
             .optional()
             .context("Failed to query embedding dimension")?;
 
-        // Full match: zero writes.
+        // Full match AND `symbol_vec` actually exists on disk: zero writes.
+        // The dim+table pair is the real invariant; checking metadata
+        // alone misses the case where a previous open crashed mid-
+        // migration and left the DB without `symbol_vec` while metadata
+        // still claims a fingerprint.
         if stored_provider.as_deref() == Some(fp.provider.as_str())
             && stored_model.as_deref() == Some(fp.model.as_str())
             && stored_dim == Some(fp.dimension)
+            && symbol_vec_exists(&self.conn)?
         {
             return Ok(());
         }
@@ -4827,6 +4860,32 @@ mod tests {
     }
 
     #[test]
+    fn test_open_readonly_missing_metadata_table_is_schema_drift() {
+        // Regression: a non-cartog SQLite file at the path (or a
+        // partially-initialised DB where the `metadata` table is missing
+        // entirely) used to surface as a raw rusqlite "no such table:
+        // metadata" error instead of the actionable SchemaDrift. Fix:
+        // read_schema_version catches that specific SqliteFailure and
+        // returns stored=0.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        // Build a SQLite file that's NOT a cartog DB: empty schema.
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch("CREATE TABLE unrelated (x INTEGER);")
+                .unwrap();
+        }
+        let err = Database::open_readonly(&db_path).unwrap_err();
+        match err {
+            DbError::SchemaDrift { expected, stored } => {
+                assert_eq!(expected, SCHEMA_VERSION);
+                assert_eq!(stored, 0, "missing metadata table should be stored=0");
+            }
+            other => panic!("expected SchemaDrift, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_open_existing_rw_missing_schema_version_is_schema_drift() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
@@ -4844,6 +4903,90 @@ mod tests {
             }
             other => panic!("expected SchemaDrift, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_reconcile_rebuilds_when_metadata_matches_but_symbol_vec_missing() {
+        // Defensive regression: if `symbol_vec` is missing for any reason
+        // (external corruption, pre-C4 cartog that crashed mid-migration)
+        // but metadata still claims the matching fingerprint, the fast-
+        // path early return previously skipped the rebuild, leaving the
+        // DB stuck. After the fix, the symbol_vec_exists() check forces
+        // a rebuild.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let f = fp("local", "BGE-small-en-v1.5", 384);
+
+        // 1. Establish a normal state.
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.reconcile_embedding_fingerprint(&f).unwrap();
+        }
+
+        // 2. Drop the vector table out-of-band, simulating corruption.
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.conn
+                .execute("DROP TABLE IF EXISTS symbol_vec", [])
+                .unwrap();
+            // Metadata unchanged: still claims (local, BGE-small-en-v1.5, 384).
+            assert_eq!(
+                db.get_metadata("embedding_dimension").unwrap().as_deref(),
+                Some("384")
+            );
+        }
+
+        // 3. Re-reconcile with the same fingerprint. Pre-fix: early-return
+        //    skipped rebuild → symbol_vec stayed missing forever. Post-fix:
+        //    the symbol_vec_exists() check forces the rebuild.
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.reconcile_embedding_fingerprint(&f).unwrap();
+            let exists: bool = db
+                .conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE name='symbol_vec'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .unwrap()
+                .is_some();
+            assert!(
+                exists,
+                "reconcile must rebuild symbol_vec when missing, even on metadata match"
+            );
+        }
+    }
+
+    #[test]
+    fn test_handle_embedding_dimension_rebuilds_when_symbol_vec_missing() {
+        // Same defensive guarantee for the lower-level handle_embedding_dimension
+        // fast-path. Open a DB, drop symbol_vec, re-open: the table must come
+        // back even though stored_dim == requested_dim.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.conn
+                .execute("DROP TABLE IF EXISTS symbol_vec", [])
+                .unwrap();
+        }
+        let db = Database::open(&db_path, 384).unwrap();
+        let exists: bool = db
+            .conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE name='symbol_vec'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .unwrap()
+            .is_some();
+        assert!(
+            exists,
+            "Database::open must rebuild symbol_vec when missing, even on metadata match"
+        );
     }
 
     #[test]

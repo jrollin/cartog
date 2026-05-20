@@ -518,11 +518,19 @@ impl CartogServer {
     /// primary and the call should proceed.
     fn refuse_if_read_only(&self, tool: &str) -> Option<McpError> {
         if self.role.load() == Role::ReadOnly {
+            // The CLI fallback depends on which write tool was called: the
+            // graph index is the cartog graph (`cartog index`), the vector
+            // index is the embeddings (`cartog rag index`).
+            let cli_cmd = if tool == "cartog_index" {
+                "cartog index"
+            } else {
+                "cartog rag index"
+            };
             Some(mcp_err(format!(
-                "This cartog instance is read-only because another cartog process is the \
-                 primary writer for this project. Its file watcher picks up your changes \
-                 automatically within ~5s, so `{tool}` is not needed here. \
-                 To force a manual reindex, run `cartog rag index` from your terminal \
+                "`{tool}` is unavailable: this cartog instance is read-only because \
+                 another cartog process is the primary writer for this project. \
+                 The primary may be running a file watcher that picks up changes \
+                 automatically. To force a refresh from this terminal, run `{cli_cmd}` \
                  (or stop the primary and restart this MCP server)."
             )))
         } else {
@@ -1245,7 +1253,7 @@ pub async fn run_server(
         result = service.waiting() => {
             result?;
         }
-        _ = tokio::signal::ctrl_c() => {
+        _ = wait_for_sigint() => {
             info!("received SIGINT, shutting down");
         }
         _ = wait_for_sigterm() => {
@@ -1422,10 +1430,17 @@ async fn promoter_task(args: PromoterArgs) {
             config.rag = args.rag;
             config.rag_config = args.rag_config.clone();
             config.pid_lock_dir = Some(args.state_dir.clone());
-            // We already own the `serve` lock; don't race the watcher
-            // slot against ourselves. We also validated the schema, so
-            // skip migrations to avoid re-running the embedding reconcile.
-            config.skip_pid_lock = true;
+            // Skip migrations because we validated the schema when we
+            // attached read-only — re-running them would re-trigger the
+            // embedding-dimension reconcile the election prevents.
+            //
+            // We DO still acquire `watch.pid` (the watcher's own slot)
+            // even though we already hold `serve.pid`. The two slots
+            // serve different consumers: `serve.pid` blocks other MCP
+            // servers, `watch.pid` blocks a separately-running
+            // `cartog watch` from a terminal. Without the watch slot a
+            // terminal `cartog watch` would happily start and create
+            // two concurrent indexers writing to the same DB.
             config.skip_migrations = true;
             let db_path_str = args.db_path.to_string_lossy().into_owned();
             match watch::spawn_watch(config, &db_path_str) {
@@ -1475,6 +1490,22 @@ fn validate_pinned_state(
 /// and `CTRL_SHUTDOWN_EVENT`. On platforms where the relevant signal source
 /// can't be installed, the future never completes — `service.waiting()`
 /// remains the shutdown signal.
+///
+/// `wait_for_sigint` wraps `tokio::signal::ctrl_c()` so a failure to
+/// install the SIGINT handler does NOT immediately win the
+/// `tokio::select!` branch with an `Err` resolved future — without the
+/// wrapper, `_ = tokio::signal::ctrl_c()` would treat installation
+/// failure as "SIGINT fired" and exit. Mirrors `wait_for_sigterm`.
+async fn wait_for_sigint() {
+    match tokio::signal::ctrl_c().await {
+        Ok(()) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to install SIGINT handler; falling back to other shutdown signals");
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
 #[cfg(unix)]
 async fn wait_for_sigterm() {
     use tokio::signal::unix::{signal, SignalKind};
@@ -1940,6 +1971,16 @@ mod tests {
             msg.contains("read-only") && msg.contains("cartog_index"),
             "error must name the gate and the tool, got: {msg}"
         );
+        // cartog_index → suggests `cartog index` (graph), not `cartog rag index`.
+        assert!(
+            msg.contains("cartog index") && !msg.contains("cartog rag index"),
+            "cartog_index refusal must suggest `cartog index`, got: {msg}"
+        );
+        // Drops the misleading "~5s" promise.
+        assert!(
+            !msg.contains("~5s"),
+            "refusal must not promise an exact pickup latency, got: {msg}"
+        );
 
         let err = reader
             .refuse_if_read_only("cartog_rag_index")
@@ -1948,6 +1989,11 @@ mod tests {
         assert!(
             msg.contains("read-only") && msg.contains("cartog_rag_index"),
             "error must name the gate and the tool, got: {msg}"
+        );
+        // cartog_rag_index → suggests `cartog rag index` (vectors).
+        assert!(
+            msg.contains("cartog rag index"),
+            "cartog_rag_index refusal must suggest `cartog rag index`, got: {msg}"
         );
 
         let primary = CartogServer::new(&db_path, test_rag_config()).expect("primary reconstructs");

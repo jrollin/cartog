@@ -40,12 +40,6 @@ pub struct WatchConfig {
     /// graceful exit). `None` disables PID-file tracking. Consulted by
     /// `cartog self update` to detect a running watcher.
     pub pid_lock_dir: Option<PathBuf>,
-    /// Skip the watcher's own PID lock acquisition. Used when the caller
-    /// already holds the relevant lock (e.g. the MCP server's promoter
-    /// which owns the `serve` lock and spawns the watcher after winning
-    /// election). The watcher would otherwise race with itself trying to
-    /// claim the `watch` slot against an already-held PID file.
-    pub skip_pid_lock: bool,
     /// Open the on-disk DB via `Database::open_existing_rw` instead of
     /// `Database::open`. Used by the Phase 5 promoter to attach without
     /// re-running schema migrations (the promoter validated the schema
@@ -67,7 +61,6 @@ impl WatchConfig {
             rag_config: rag::EmbeddingProviderConfig::default(),
             json_events: false,
             pid_lock_dir: None,
-            skip_pid_lock: false,
             skip_migrations: false,
         }
     }
@@ -231,32 +224,30 @@ fn watch_loop(
     // Acquire first so an election loss aborts before opening DB / watcher.
     // Unlike `cartog serve`, the watcher does NOT attach read-only — if
     // another writer already owns the slot, we refuse to start and let the
-    // user stop the running process. The Phase 5 promoter sets
-    // `skip_pid_lock` because it already holds the relevant lock (`serve`)
-    // and doesn't want to race the watcher slot against itself.
-    let _lock: Option<cartog_process_lock::ProcessLock> = if config.skip_pid_lock {
-        None
-    } else {
-        match config.pid_lock_dir.as_deref() {
-            Some(dir) => match cartog_process_lock::ProcessLock::acquire(dir, WATCH_LOCK_SLOT) {
-                Ok(lock) => Some(lock),
-                Err(cartog_process_lock::AcquireError::Held(held)) => {
-                    anyhow::bail!(
-                        "another cartog process holds the watch lock at {} (slot {:?}, PID {}); \
-                         stop it before running `cartog watch`",
-                        dir.display(),
-                        held.slot,
-                        held.pid,
-                    );
-                }
-                Err(cartog_process_lock::AcquireError::Io(e)) => {
-                    return Err(e).with_context(|| {
-                        format!("failed to acquire watch PID lock at {}", dir.display())
-                    });
-                }
-            },
-            None => None,
-        }
+    // user stop the running process. This applies uniformly: the Phase 5
+    // promoter also acquires `watch.pid` so a separately-running
+    // `cartog watch` from a terminal correctly sees Held and aborts. Two
+    // watchers writing to the same DB would re-index the same files in
+    // parallel; the watch slot is the only thing preventing that.
+    let _lock: Option<cartog_process_lock::ProcessLock> = match config.pid_lock_dir.as_deref() {
+        Some(dir) => match cartog_process_lock::ProcessLock::acquire(dir, WATCH_LOCK_SLOT) {
+            Ok(lock) => Some(lock),
+            Err(cartog_process_lock::AcquireError::Held(held)) => {
+                anyhow::bail!(
+                    "another cartog process holds the watch lock at {} (slot {:?}, PID {}); \
+                     stop it before running `cartog watch`",
+                    dir.display(),
+                    held.slot,
+                    held.pid,
+                );
+            }
+            Err(cartog_process_lock::AcquireError::Io(e)) => {
+                return Err(e).with_context(|| {
+                    format!("failed to acquire watch PID lock at {}", dir.display())
+                });
+            }
+        },
+        None => None,
     };
 
     let db = if config.skip_migrations {
