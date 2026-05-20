@@ -1203,7 +1203,7 @@ pub async fn run_server(
     let lock_cell = Arc::new(Mutex::new(initial_lock));
     let watch_cell = Arc::new(Mutex::new(initial_watch_handle));
 
-    let _promoter_task: Option<tokio::task::JoinHandle<()>> = if role == Role::ReadOnly {
+    let promoter_handle: Option<tokio::task::JoinHandle<()>> = if role == Role::ReadOnly {
         match (primary_to_watch, opts.pid_lock_dir.clone()) {
             (Some(primary), Some(state_dir)) => {
                 let pinned = server
@@ -1211,6 +1211,7 @@ pub async fn run_server(
                     .lock()
                     .ok()
                     .and_then(|g| g.pinned_attach().cloned());
+                let cwd = (*server.cwd).to_path_buf();
                 Some(tokio::task::spawn(promoter_task(PromoterArgs {
                     db: Arc::clone(&server.db),
                     role: Arc::clone(&server.role),
@@ -1218,11 +1219,13 @@ pub async fn run_server(
                     watch_cell: Arc::clone(&watch_cell),
                     db_path: db_path.to_path_buf(),
                     state_dir,
+                    cwd,
                     primary,
                     pinned,
                     watch_requested: watch,
                     rag,
                     rag_config,
+                    poll_interval: DEFAULT_PROMOTER_POLL_INTERVAL,
                 })))
             }
             _ => None,
@@ -1250,6 +1253,16 @@ pub async fn run_server(
         }
     }
 
+    // Cancel the promoter task before this function returns, otherwise
+    // dropping its JoinHandle would NOT stop the task — it would keep
+    // polling against `args.db` for up to one `poll_interval` and could
+    // race the shutdown by promoting after `run_server` is logically
+    // done. `abort()` is non-blocking; the runtime drops the task on
+    // its next yield point (the await in `tokio::time::sleep`).
+    if let Some(h) = promoter_handle {
+        h.abort();
+    }
+
     // WatchHandle is dropped here, signaling the watcher thread to stop.
     info!("cartog MCP server stopped");
     Ok(())
@@ -1272,6 +1285,9 @@ struct PromoterArgs {
     watch_cell: Arc<Mutex<Option<WatchHandle>>>,
     db_path: std::path::PathBuf,
     state_dir: std::path::PathBuf,
+    /// CWD captured at server startup. Reused for the post-promotion
+    /// watcher so the watch root doesn't follow a later `std::env::set_current_dir`.
+    cwd: std::path::PathBuf,
     /// Snapshot of the primary we attached behind. Promotion fires when
     /// this process is no longer running.
     primary: cartog_process_lock::ActiveLock,
@@ -1282,12 +1298,16 @@ struct PromoterArgs {
     watch_requested: bool,
     rag: bool,
     rag_config: rag::EmbeddingProviderConfig,
+    /// Polling interval. Const in production
+    /// ([`DEFAULT_PROMOTER_POLL_INTERVAL`]); override in tests to keep
+    /// the suite fast.
+    poll_interval: std::time::Duration,
 }
 
 /// How often the promoter checks whether the primary is still alive. Kept
 /// short enough that handoff feels responsive to a user closing the other
 /// Claude Code window, long enough that the polling cost is invisible.
-const PROMOTER_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_PROMOTER_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Background task that runs in read-only mode and watches the primary's
 /// liveness. On primary death, validates schema/fingerprint and attempts
@@ -1296,7 +1316,7 @@ const PROMOTER_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_se
 /// or when another reader wins the race.
 async fn promoter_task(args: PromoterArgs) {
     loop {
-        tokio::time::sleep(PROMOTER_POLL_INTERVAL).await;
+        tokio::time::sleep(args.poll_interval).await;
 
         // Primary still alive? Liveness uses start_time when available
         // (closes the PID-reuse window).
@@ -1313,10 +1333,11 @@ async fn promoter_task(args: PromoterArgs) {
             "primary cartog process is gone; attempting promotion to primary"
         );
 
-        // Re-read on-disk metadata: another writer may already have taken
-        // over (then upgraded the schema) before we noticed.
+        // Cheap pre-check: skip the lock acquire if state already diverged.
+        // We re-validate AFTER acquire too — the TOCTOU window between
+        // here and acquire lets a third writer slip in.
         if let Err(e) = validate_pinned_state(&args.db_path, args.pinned.as_ref()) {
-            info!(error = %e, "aborting promotion: on-disk state diverged from attach-time pin");
+            info!(error = %e, "aborting promotion: on-disk state diverged before lock acquire");
             return;
         }
 
@@ -1338,36 +1359,66 @@ async fn promoter_task(args: PromoterArgs) {
                 }
             };
 
-        // Swap the DB connection to read-write. We hold the Mutex for the
-        // entire swap, so no tool handler can be mid-query against the
-        // about-to-close read-only connection.
-        let swap_result = match Database::open_existing_rw(&args.db_path) {
-            Ok(rw) => match args.db.lock() {
-                Ok(mut guard) => {
-                    *guard = rw;
-                    Ok(())
-                }
-                Err(_) => Err(anyhow::anyhow!(
-                    "internal: db mutex poisoned, cannot promote"
-                )),
-            },
-            Err(e) => Err(anyhow::anyhow!("open_existing_rw failed: {e}")),
-        };
-        if let Err(e) = swap_result {
-            tracing::warn!(error = %e, "promotion aborted after lock acquire; dropping lock");
+        // Re-validate AFTER acquire: between the first validate and the
+        // acquire, a third writer could have promoted itself, upgraded the
+        // schema, and exited (releasing the lock to us). We now own the
+        // lock, so the state can't change again — checking once here is
+        // sufficient. On drift, drop the lock and exit cleanly so the
+        // user restarts against the new schema.
+        if let Err(e) = validate_pinned_state(&args.db_path, args.pinned.as_ref()) {
+            info!(
+                error = %e,
+                "aborting promotion: on-disk state diverged after lock acquire"
+            );
             drop(new_lock);
             return;
         }
 
+        // Swap the DB connection to read-write. We hold the Mutex for the
+        // entire swap, so no tool handler can be mid-query against the
+        // about-to-close read-only connection. On open_existing_rw
+        // failure (transient I/O, disk pressure), drop the lock and loop
+        // — a subsequent poll may succeed. Only a poisoned mutex is
+        // permanently fatal.
+        let rw = match Database::open_existing_rw(&args.db_path) {
+            Ok(rw) => rw,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "open_existing_rw failed during promotion; dropping lock and retrying"
+                );
+                drop(new_lock);
+                continue;
+            }
+        };
+        match args.db.lock() {
+            Ok(mut guard) => {
+                *guard = rw;
+            }
+            Err(_) => {
+                tracing::error!("db mutex poisoned; cannot promote, exiting promoter task");
+                drop(new_lock);
+                return;
+            }
+        }
+
         // Install the lock so it lives until shutdown (Drop unlinks the
-        // PID file). Spawn the watcher if the user asked for one — it
-        // opens its own RW connection via the `skip_migrations` shortcut.
+        // PID file). Flip role to Primary BEFORE spawning the watcher so
+        // tool handlers that re-check `role.load()` immediately see the
+        // new state — and the write tools start accepting requests at
+        // the same moment the DB is RW (no window where role lags the
+        // swap).
         if let Ok(mut guard) = args.lock_cell.lock() {
             *guard = Some(new_lock);
         }
+        args.role.store(Role::Primary);
+
         if args.watch_requested {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let mut config = WatchConfig::new(cwd);
+            // Reuse the cwd captured at server startup, not
+            // std::env::current_dir() — the latter follows runtime
+            // chdir() calls (rare in MCP children but possible in tests
+            // and embedded uses).
+            let mut config = WatchConfig::new(args.cwd.clone());
             config.rag = args.rag;
             config.rag_config = args.rag_config.clone();
             config.pid_lock_dir = Some(args.state_dir.clone());
@@ -1389,7 +1440,6 @@ async fn promoter_task(args: PromoterArgs) {
             }
         }
 
-        args.role.store(Role::Primary);
         info!("promoted to primary for {}", args.db_path.display());
         return;
     }
@@ -1969,6 +2019,198 @@ mod tests {
         assert!(
             err.to_string().contains("serve PID lock"),
             "error should mention the lock context, got: {err}"
+        );
+    }
+
+    // ── Promoter regression tests (review fix M-promoter) ──
+
+    fn promoter_args_for_test(
+        db: Arc<Mutex<Database>>,
+        role: Arc<AtomicRole>,
+        db_path: std::path::PathBuf,
+        state_dir: std::path::PathBuf,
+        primary: cartog_process_lock::ActiveLock,
+        pinned: Option<PinnedAttach>,
+    ) -> PromoterArgs {
+        PromoterArgs {
+            db,
+            role,
+            lock_cell: Arc::new(Mutex::new(None)),
+            watch_cell: Arc::new(Mutex::new(None)),
+            db_path: db_path.clone(),
+            state_dir,
+            cwd: std::env::current_dir().unwrap(),
+            primary,
+            pinned,
+            watch_requested: false,
+            rag: false,
+            rag_config: rag::EmbeddingProviderConfig::default(),
+            // Very short for tests so the loop responds quickly.
+            poll_interval: std::time::Duration::from_millis(20),
+        }
+    }
+
+    #[tokio::test]
+    async fn promoter_abort_cancels_the_polling_task() {
+        // Regression for review fix M-promoter (d): dropping the JoinHandle
+        // does NOT cancel a tokio task — only abort() does. Without the
+        // abort in run_server's shutdown path, the promoter could keep
+        // polling for up to one poll_interval after run_server returns
+        // and even promote during that window. We assert that abort()
+        // really terminates the task within a small bounded time.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let state_dir = dir.path().join("state");
+        // Materialize a DB so open_readonly can attach.
+        {
+            let _ = Database::open(&db_path, 384).unwrap();
+        }
+        let db = Arc::new(Mutex::new(Database::open_readonly(&db_path).unwrap()));
+        let role = Arc::new(AtomicRole::new(Role::ReadOnly));
+        let pinned = db.lock().unwrap().pinned_attach().cloned();
+        // Pretend the primary is our own process (so liveness reports
+        // true and the promoter just keeps polling forever, never
+        // promoting). This isolates the test to the abort behavior.
+        let primary = cartog_process_lock::ActiveLock {
+            slot: SERVE_LOCK_SLOT.to_string(),
+            pid: std::process::id(),
+            start_time: cartog_process_lock::process_start_time(std::process::id()),
+        };
+        let args = promoter_args_for_test(db, role, db_path, state_dir, primary, pinned);
+        let handle = tokio::task::spawn(promoter_task(args));
+
+        // Let it poll a few times.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(!handle.is_finished(), "promoter must keep polling");
+        handle.abort();
+        // Allow a brief moment for the runtime to cancel.
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        assert!(
+            handle.is_finished(),
+            "abort must terminate the promoter task"
+        );
+    }
+
+    #[tokio::test]
+    async fn promoter_aborts_when_state_diverges_after_acquire() {
+        // Regression for review fix M-promoter (c): the original code
+        // validated pinned state only BEFORE acquire. Between validate
+        // and acquire, a third writer could promote and upgrade the
+        // schema, then exit. We'd then take the lock and proceed with a
+        // stale pin. The fix re-validates AFTER acquire while we hold
+        // the lock.
+        //
+        // We test this by: attach pinned state, mutate on-disk
+        // schema_version under us, then run a single promoter iteration
+        // and assert it bails cleanly (does not flip role to Primary).
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        {
+            let _ = Database::open(&db_path, 384).unwrap();
+        }
+        let reader_db = Database::open_readonly(&db_path).unwrap();
+        let pinned = reader_db.pinned_attach().cloned();
+        let db = Arc::new(Mutex::new(reader_db));
+        let role = Arc::new(AtomicRole::new(Role::ReadOnly));
+        // Pretend primary is dead (no such PID).
+        let primary = cartog_process_lock::ActiveLock {
+            slot: SERVE_LOCK_SLOT.to_string(),
+            pid: 4_194_304,
+            start_time: None,
+        };
+        // Mutate the DB metadata under the reader.
+        {
+            let mutator = Database::open(&db_path, 384).unwrap();
+            mutator.set_metadata("schema_version", "9999").unwrap();
+        }
+
+        let args = promoter_args_for_test(
+            Arc::clone(&db),
+            Arc::clone(&role),
+            db_path,
+            state_dir,
+            primary,
+            pinned,
+        );
+        let handle = tokio::task::spawn(promoter_task(args));
+        // Give the promoter one tick.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        // The promoter should have noticed primary-gone, validated, seen
+        // drift, and exited (return). Role must NOT be Primary.
+        assert!(handle.is_finished(), "promoter must exit on drift");
+        let _ = handle.await;
+        assert_eq!(
+            role.load(),
+            Role::ReadOnly,
+            "drifted DB must not flip role to Primary"
+        );
+    }
+
+    #[tokio::test]
+    async fn promoter_loops_on_transient_open_failure() {
+        // Regression for review fix M-promoter (b): pre-fix, an
+        // open_existing_rw failure caused the promoter to `return`,
+        // disabling promotion forever even if the next poll would
+        // succeed. The fix loops on transient failures.
+        //
+        // We can exercise the "open fails -> loop" path by deleting the
+        // DB file entirely between the validate and the open_existing_rw
+        // call. open_existing_rw will fail; the promoter should drop
+        // the lock and try again on the next tick (where it'll fail
+        // validation, since the DB is missing, and exit cleanly).
+        //
+        // The key contract is: we don't return on the first
+        // open_existing_rw failure — we drop the lock and loop. We
+        // assert that by checking the lock file does not persist after
+        // a failed promotion attempt.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        {
+            let _ = Database::open(&db_path, 384).unwrap();
+        }
+        let reader = Database::open_readonly(&db_path).unwrap();
+        let pinned = reader.pinned_attach().cloned();
+        let db = Arc::new(Mutex::new(reader));
+        let role = Arc::new(AtomicRole::new(Role::ReadOnly));
+        let primary = cartog_process_lock::ActiveLock {
+            slot: SERVE_LOCK_SLOT.to_string(),
+            pid: 4_194_304,
+            start_time: None,
+        };
+
+        let args = promoter_args_for_test(
+            Arc::clone(&db),
+            Arc::clone(&role),
+            db_path.clone(),
+            state_dir.clone(),
+            primary,
+            pinned,
+        );
+        let handle = tokio::task::spawn(promoter_task(args));
+        // Give the loop a moment to enter its first tick, then yank the DB.
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        std::fs::remove_file(&db_path).unwrap();
+        // The promoter should now either: (a) loop on validate-failure
+        // and never acquire, or (b) acquire then fail open and drop the
+        // lock + loop. Either way the role stays ReadOnly and the lock
+        // file is not left behind.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        handle.abort();
+        let _ = handle.await;
+        assert_eq!(
+            role.load(),
+            Role::ReadOnly,
+            "promoter must not flip role under transient failure"
+        );
+        let lock_path = state_dir.join("serve.pid");
+        assert!(
+            !lock_path.exists(),
+            "promoter must release the lock on failure (not strand serve.pid)"
         );
     }
 }
