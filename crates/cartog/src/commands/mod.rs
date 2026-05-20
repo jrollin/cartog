@@ -692,6 +692,8 @@ pub fn cmd_rag_index(
     let root = Path::new(path);
     let mut provider = rag::create_embedding_provider(provider_config)?;
     let db = open_db(db_path, provider.dimension())?;
+    db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
+        .context("failed to reconcile embedding fingerprint")?;
 
     let spinner = if json {
         None
@@ -737,6 +739,8 @@ pub fn cmd_rag_search(
 ) -> Result<()> {
     let mut provider = rag::create_embedding_provider(provider_config)?;
     let db = open_db(db_path, provider.dimension())?;
+    db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
+        .context("failed to reconcile embedding fingerprint")?;
     let kind_filter = match kind {
         Some(SymbolKindFilter::All) => rag::search::KindFilter::All,
         Some(k) => rag::search::KindFilter::Exact(cartog_core::SymbolKind::from(k)),

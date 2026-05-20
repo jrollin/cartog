@@ -10,6 +10,7 @@ const EMBED_BATCH_SIZE: usize = 64;
 /// Local ONNX embedding provider via fastembed.
 pub struct LocalEmbeddingProvider {
     model: TextEmbedding,
+    model_code: String,
     dim: usize,
     query_prefix: Option<String>,
     document_prefix: Option<String>,
@@ -42,6 +43,8 @@ impl LocalEmbeddingProvider {
             info!("Downloading embedding model (first time only)...");
         }
 
+        let model_code = embedding_model.to_string();
+
         let model = TextEmbedding::try_new(
             TextInitOptions::new(embedding_model)
                 .with_cache_dir(model_cache_dir())
@@ -51,6 +54,7 @@ impl LocalEmbeddingProvider {
 
         Ok(Self {
             model,
+            model_code,
             dim,
             query_prefix,
             document_prefix,
@@ -61,6 +65,10 @@ impl LocalEmbeddingProvider {
 impl EmbeddingProvider for LocalEmbeddingProvider {
     fn name(&self) -> &str {
         "local"
+    }
+
+    fn model_id(&self) -> &str {
+        &self.model_code
     }
 
     fn dimension(&self) -> usize {

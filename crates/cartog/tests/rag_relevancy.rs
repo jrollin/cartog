@@ -20,6 +20,9 @@ impl EmbeddingProvider for StubEmbeddingProvider {
     fn name(&self) -> &str {
         "stub"
     }
+    fn model_id(&self) -> &str {
+        "stub-model"
+    }
     fn dimension(&self) -> usize {
         384
     }

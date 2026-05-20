@@ -288,13 +288,22 @@ fn watch_loop(
 
     info!("watching for changes (Ctrl+C to stop)");
 
-    // Create the embedding provider once (lazy, on first RAG use)
+    // Create the embedding provider once (lazy, on first RAG use). On
+    // first creation we also reconcile the on-disk fingerprint so a
+    // provider/model swap (even at the same dimension) clears the now-stale
+    // vector index instead of returning garbage similarity scores.
     let mut rag_provider: Option<Box<dyn rag::provider::EmbeddingProvider>> = None;
     let ensure_provider =
         |provider: &mut Option<Box<dyn rag::provider::EmbeddingProvider>>| -> bool {
             if provider.is_none() {
                 match rag::create_embedding_provider(&config.rag_config) {
                     Ok(p) => {
+                        if let Err(e) =
+                            db.reconcile_embedding_fingerprint(&rag::fingerprint_of(p.as_ref()))
+                        {
+                            warn!(error = %e, "failed to reconcile embedding fingerprint");
+                            return false;
+                        }
                         *provider = Some(p);
                         true
                     }

@@ -403,6 +403,8 @@ impl CartogServer {
             .map_err(|e| anyhow::anyhow!("cannot determine CWD: {e}"))?;
         let provider = rag::create_embedding_provider(&rag_config)
             .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
+        db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
+            .map_err(|e| anyhow::anyhow!("failed to reconcile embedding fingerprint: {e}"))?;
         let reranker = rag::create_reranker_provider(&rag_config.reranker_provider);
         Ok(Self {
             tool_router: Self::tool_router(),

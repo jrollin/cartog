@@ -124,6 +124,10 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
         "ollama"
     }
 
+    fn model_id(&self) -> &str {
+        &self.model
+    }
+
     fn dimension(&self) -> usize {
         self.dim
     }
