@@ -415,6 +415,33 @@ cartog serve --watch --rag    # MCP server + watcher + auto RAG embedding
 
 When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
 
+#### Multiple `cartog serve` instances on the same project
+
+Opening two Claude Code windows on the same project (or running `cartog serve` in a terminal while a Claude Code window has its own MCP child) is supported via **single-writer election**:
+
+- The first instance acquires `<state_dir>/serve.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 13 MCP tools.
+- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 11 of 13 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
+- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 13 tools become available on what was the secondary.
+
+Escape hatches:
+
+| Env var | Effect |
+|---|---|
+| `CARTOG_SINGLE_WRITER=0` | Disables election. Every `cartog serve` opens RW; the migration busy-retry is the only defense against the rare race window. |
+| `RUST_LOG=info` | Restores `info`-level tracing in MCP-child mode (defaults to `warn` when stderr is not a TTY so info lines don't surface as `[ERROR]` in the parent's log). |
+
+`<state_dir>` resolves to the platform's standard state directory (via the `directories` crate):
+
+| OS | Path |
+|----|------|
+| Linux | `$XDG_STATE_HOME/cartog/` (default `~/.local/state/cartog/`) |
+| macOS | `~/Library/Application Support/io.cartog.cartog/` |
+| Windows | `%LOCALAPPDATA%\cartog\cartog\data\` |
+
+The directory holds `state.toml` (used by `cartog self update`) and PID lock files (`serve.pid`, `watch.pid`) for live long-lived commands.
+
+See [`spec-mcp-sharing.md`](spec-mcp-sharing.md) for the full design.
+
 ### `cartog init [--dry-run]`
 
 Scaffold a `.cartog.toml` template in the current project. That's all it does. The next-steps hint points at `cartog ide` (MCP wiring) and `cartog index` (build the graph).
@@ -933,10 +960,20 @@ The MCP server sends workflow instructions to the client at initialization, cove
 
 ### Logging
 
-Logs go to stderr. Default level is `info` (server start/stop only). Set `RUST_LOG` for more detail:
+Logs go to stderr. The default level depends on how cartog is invoked:
+
+| Invocation | Default level | Why |
+|------------|---------------|-----|
+| `cartog serve` / `cartog watch` / `cartog rag index`, stderr is a TTY | `info` | Foreground user wants progress |
+| Same, stderr is captured (MCP child, piped CI) | `warn` | The parent reads stderr; info-level lines surfaced as `[ERROR]` in client debug logs |
+| Other commands (one-shot CLI) | `warn` | Stay quiet by default |
+
+Set `RUST_LOG` to override in either direction:
 
 ```bash
 RUST_LOG=debug cartog serve   # per-request tool call logging
+RUST_LOG=info  cartog serve   # force info under MCP-child mode
+RUST_LOG=warn  cartog watch   # quieten down a foreground watcher
 ```
 
 ### Plugin vs MCP vs Skill

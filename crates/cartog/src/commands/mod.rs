@@ -692,6 +692,8 @@ pub fn cmd_rag_index(
     let root = Path::new(path);
     let mut provider = rag::create_embedding_provider(provider_config)?;
     let db = open_db(db_path, provider.dimension())?;
+    db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
+        .context("failed to reconcile embedding fingerprint")?;
 
     let spinner = if json {
         None
@@ -737,6 +739,14 @@ pub fn cmd_rag_search(
 ) -> Result<()> {
     let mut provider = rag::create_embedding_provider(provider_config)?;
     let db = open_db(db_path, provider.dimension())?;
+    // NOTE: `cartog rag search` deliberately does NOT call
+    // `reconcile_embedding_fingerprint`. The reconcile is destructive
+    // (drops `symbol_vec` on mismatch) and can race a primary
+    // `cartog serve` writer if the user's `.cartog.toml` changed since
+    // last index. Search is read-only by nature; if the fingerprint
+    // mismatches, the user gets the embeddings produced by the previous
+    // provider — possibly poor results, but no data loss. Re-embedding
+    // is `cartog rag index`'s job, which DOES reconcile.
     let kind_filter = match kind {
         Some(SymbolKindFilter::All) => rag::search::KindFilter::All,
         Some(k) => rag::search::KindFilter::Exact(cartog_core::SymbolKind::from(k)),

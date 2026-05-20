@@ -23,7 +23,13 @@ pub fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
 /// Implementations handle model-specific details like query/document prefixes
 /// (e.g. nomic prepends `"search_query:"` vs `"search_document:"`).
 pub trait EmbeddingProvider: Send {
+    /// Short identifier of the provider class (`"local"`, `"ollama"`, …).
     fn name(&self) -> &str;
+    /// Identifier of the specific model in use. Combined with [`Self::name`]
+    /// and [`Self::dimension`], forms the fingerprint stored in `metadata`
+    /// to detect when the user swaps embedding stacks and the existing
+    /// vector index becomes meaningless.
+    fn model_id(&self) -> &str;
     fn dimension(&self) -> usize;
 
     /// Embed a query (for search). Some models use a different prefix than documents.
@@ -92,6 +98,10 @@ pub mod test_utils {
     impl EmbeddingProvider for MockEmbeddingProvider {
         fn name(&self) -> &str {
             "mock"
+        }
+
+        fn model_id(&self) -> &str {
+            "mock-model"
         }
 
         fn dimension(&self) -> usize {

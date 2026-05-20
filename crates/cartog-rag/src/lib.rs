@@ -21,6 +21,18 @@ pub mod setup;
 /// Default embedding dimension (re-exported from cartog-db for convenience).
 pub const EMBEDDING_DIM: usize = cartog_db::DEFAULT_EMBEDDING_DIM;
 
+/// Snapshot the identity of a live `EmbeddingProvider` for the on-disk
+/// fingerprint check. Used by callers right after `Database::open` to
+/// detect (and clear) a stale `symbol_vec` when the user swaps provider
+/// or model.
+pub fn fingerprint_of(p: &dyn provider::EmbeddingProvider) -> cartog_db::EmbeddingFingerprint {
+    cartog_db::EmbeddingFingerprint {
+        provider: p.name().to_string(),
+        model: p.model_id().to_string(),
+        dimension: p.dimension(),
+    }
+}
+
 /// Parameters for creating an embedding provider.
 #[derive(Clone)]
 pub struct EmbeddingProviderConfig {

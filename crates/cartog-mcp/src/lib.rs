@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use cartog_core::EdgeKind;
-use cartog_db::{Database, MAX_SEARCH_LIMIT};
+use cartog_db::{Database, PinnedAttach, MAX_SEARCH_LIMIT};
 use cartog_indexer as indexer;
 use cartog_rag as rag;
 use cartog_watch as watch;
@@ -388,6 +388,70 @@ pub struct CartogServer {
     /// Persistent LSP manager for warm server reuse across index calls.
     #[cfg(feature = "lsp")]
     lsp_manager: Arc<Mutex<cartog_lsp::manager::LspManager>>,
+    /// Single-writer election role. `Primary` holds the `serve` PID lock
+    /// and owns the RW DB connection. `ReadOnly` attached via
+    /// [`Database::open_readonly`] because another cartog process owns
+    /// the slot — the 2 write tools are gated, the 11 read tools work
+    /// unchanged. Mutated atomically when the Phase 5 promoter detects
+    /// the primary died and takes over.
+    role: Arc<AtomicRole>,
+    /// True when this Primary instance has a live file watcher running
+    /// (`cartog serve --watch` or post-promotion equivalent). False for
+    /// `cartog serve` without `--watch`, for read-only secondaries, and
+    /// (importantly) for a Primary whose watcher failed to start after
+    /// promotion — surfaced in `cartog_stats` output so users can see
+    /// the degraded state.
+    watcher_active: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Role of this MCP server instance under single-writer election.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Primary,
+    ReadOnly,
+}
+
+impl Role {
+    fn as_str(self) -> &'static str {
+        match self {
+            Role::Primary => "primary",
+            Role::ReadOnly => "read-only",
+        }
+    }
+}
+
+/// Lock-free, `Clone`-able cell holding the current [`Role`]. Backed by an
+/// `AtomicU8` so the Phase 5 promoter task and every tool handler can read
+/// and update it without coordinating via the DB mutex.
+#[derive(Debug)]
+pub struct AtomicRole(std::sync::atomic::AtomicU8);
+
+impl AtomicRole {
+    const PRIMARY: u8 = 0;
+    const READ_ONLY: u8 = 1;
+
+    fn new(role: Role) -> Self {
+        Self(std::sync::atomic::AtomicU8::new(Self::encode(role)))
+    }
+
+    fn encode(role: Role) -> u8 {
+        match role {
+            Role::Primary => Self::PRIMARY,
+            Role::ReadOnly => Self::READ_ONLY,
+        }
+    }
+
+    fn load(&self) -> Role {
+        match self.0.load(std::sync::atomic::Ordering::Acquire) {
+            Self::PRIMARY => Role::Primary,
+            _ => Role::ReadOnly,
+        }
+    }
+
+    fn store(&self, role: Role) {
+        self.0
+            .store(Self::encode(role), std::sync::atomic::Ordering::Release);
+    }
 }
 
 #[tool_router]
@@ -398,9 +462,37 @@ impl CartogServer {
     ) -> anyhow::Result<Self> {
         let db = Database::open(db_path, rag_config.resolved_dimension())
             .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
-        let cwd = std::env::current_dir()
-            .and_then(|p| p.canonicalize())
-            .map_err(|e| anyhow::anyhow!("cannot determine CWD: {e}"))?;
+        let cwd = Self::cwd()?;
+        let provider = rag::create_embedding_provider(&rag_config)
+            .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
+        db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
+            .map_err(|e| anyhow::anyhow!("failed to reconcile embedding fingerprint: {e}"))?;
+        let reranker = rag::create_reranker_provider(&rag_config.reranker_provider);
+        Ok(Self {
+            tool_router: Self::tool_router(),
+            db: Arc::new(Mutex::new(db)),
+            embedding_provider: Arc::new(Mutex::new(provider)),
+            reranker_provider: Arc::new(Mutex::new(reranker)),
+            #[cfg(feature = "lsp")]
+            lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
+            cwd: Arc::from(cwd),
+            role: Arc::new(AtomicRole::new(Role::Primary)),
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
+    }
+
+    /// Construct a secondary MCP server that attached read-only because
+    /// another cartog process owns the `serve` PID lock. Skips schema
+    /// migrations and the embedding-fingerprint reconcile (the primary
+    /// owns both); the 2 write tools return a clear error at dispatch
+    /// time. The 11 read tools work normally.
+    pub fn new_read_only(
+        db_path: &std::path::Path,
+        rag_config: rag::EmbeddingProviderConfig,
+    ) -> anyhow::Result<Self> {
+        let db = Database::open_readonly(db_path)
+            .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?;
+        let cwd = Self::cwd()?;
         let provider = rag::create_embedding_provider(&rag_config)
             .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
         let reranker = rag::create_reranker_provider(&rag_config.reranker_provider);
@@ -412,7 +504,47 @@ impl CartogServer {
             #[cfg(feature = "lsp")]
             lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
             cwd: Arc::from(cwd),
+            role: Arc::new(AtomicRole::new(Role::ReadOnly)),
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
+    }
+
+    fn cwd() -> anyhow::Result<std::path::PathBuf> {
+        std::env::current_dir()
+            .and_then(|p| p.canonicalize())
+            .map_err(|e| anyhow::anyhow!("cannot determine CWD: {e}"))
+    }
+
+    /// Role this server is running under: `Primary` owns the lock and the
+    /// RW DB; `ReadOnly` attached behind a primary. May change at runtime
+    /// when the promoter takes over from a dead primary (Phase 5).
+    pub fn role(&self) -> Role {
+        self.role.load()
+    }
+
+    /// If we're a read-only secondary, return an `McpError` explaining why
+    /// the requested write tool isn't available. `None` when this is the
+    /// primary and the call should proceed.
+    fn refuse_if_read_only(&self, tool: &str) -> Option<McpError> {
+        if self.role.load() == Role::ReadOnly {
+            // The CLI fallback depends on which write tool was called: the
+            // graph index is the cartog graph (`cartog index`), the vector
+            // index is the embeddings (`cartog rag index`).
+            let cli_cmd = if tool == "cartog_index" {
+                "cartog index"
+            } else {
+                "cartog rag index"
+            };
+            Some(mcp_err(format!(
+                "`{tool}` is unavailable: this cartog instance is read-only because \
+                 another cartog process is the primary writer for this project. \
+                 The primary may be running a file watcher that picks up changes \
+                 automatically. To force a refresh from this terminal, run `{cli_cmd}` \
+                 (or stop the primary and restart this MCP server)."
+            )))
+        } else {
+            None
+        }
     }
 
     /// Build or rebuild the code graph index for a directory.
@@ -423,6 +555,9 @@ impl CartogServer {
         &self,
         Parameters(params): Parameters<IndexParams>,
     ) -> Result<CallToolResult, McpError> {
+        if let Some(err) = self.refuse_if_read_only("cartog_index") {
+            return Err(err);
+        }
         let path = params.path;
         let force = params.force;
         let db = Arc::clone(&self.db);
@@ -707,6 +842,10 @@ impl CartogServer {
     )]
     async fn cartog_stats(&self) -> Result<CallToolResult, McpError> {
         let db = Arc::clone(&self.db);
+        let role = self.role.load();
+        let watcher_active = self
+            .watcher_active
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         tokio::task::spawn_blocking(move || {
             debug!("stats");
@@ -717,7 +856,26 @@ impl CartogServer {
                 .stats()
                 .map_err(|e| mcp_err(format!("stats query failed: {e}")))?;
 
-            let json = serde_json::to_string_pretty(&stats)
+            // Serialize the base stats then splice the role + watcher
+            // status alongside. `watcher_active=false` on a Primary means
+            // either the user did not request `--watch`, or a post-
+            // promotion watcher spawn failed (e.g., another live
+            // `cartog watch` holds the watch slot, or notify install
+            // failed). The user can distinguish the cases by checking
+            // whether they passed `--watch`.
+            let mut value = serde_json::to_value(&stats)
+                .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(
+                    "role".to_string(),
+                    serde_json::Value::String(role.as_str().to_string()),
+                );
+                obj.insert(
+                    "watcher_active".to_string(),
+                    serde_json::Value::Bool(watcher_active),
+                );
+            }
+            let json = serde_json::to_string_pretty(&value)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         })
@@ -821,6 +979,9 @@ impl CartogServer {
         &self,
         Parameters(params): Parameters<RagIndexParams>,
     ) -> Result<CallToolResult, McpError> {
+        if let Some(err) = self.refuse_if_read_only("cartog_rag_index") {
+            return Err(err);
+        }
         let path = params.path;
         let force = params.force;
         let db = Arc::clone(&self.db);
@@ -934,6 +1095,11 @@ impl ServerHandler for CartogServer {
 
 pub const SERVE_LOCK_SLOT: &str = "serve";
 
+/// Environment variable that, when set to `0`, disables single-writer
+/// election (every cartog process opens RW like pre-Phase-2 cartog). The
+/// migration-busy-retry from Phase 6a remains the only defense in that mode.
+pub const SINGLE_WRITER_ENV: &str = "CARTOG_SINGLE_WRITER";
+
 #[derive(Default)]
 pub struct ServerOptions {
     /// Directory for the server's PID file (written on startup, removed on
@@ -942,18 +1108,57 @@ pub struct ServerOptions {
     pub pid_lock_dir: Option<PathBuf>,
 }
 
-/// Acquire the serve PID lock; returns `Ok(None)` when no lock dir is configured.
-pub fn acquire_serve_lock(
-    opts: &ServerOptions,
-) -> anyhow::Result<Option<cartog_process_lock::ProcessLock>> {
-    use anyhow::Context;
+/// Outcome of trying to claim the `serve` lock at MCP startup.
+#[derive(Debug)]
+pub enum ServeLockOutcome {
+    /// No `pid_lock_dir` configured — election skipped, this process runs
+    /// as if it were the only one (legacy behavior, used in tests).
+    Untracked,
+    /// We won the election; the lock is held until this value is dropped.
+    Primary(cartog_process_lock::ProcessLock),
+    /// Another cartog process holds the lock. The caller decides whether
+    /// to exit cleanly or (later, in Phase 4) attach read-only.
+    Held(cartog_process_lock::ActiveLock),
+}
+
+/// Read `CARTOG_SINGLE_WRITER` from the environment. Defaults to election
+/// enabled; set to `0` / `false` / `no` to opt out.
+fn single_writer_election_enabled() -> bool {
+    match std::env::var(SINGLE_WRITER_ENV) {
+        Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no"),
+        Err(_) => true,
+    }
+}
+
+/// Acquire the serve PID lock with single-writer election. Returns
+/// [`ServeLockOutcome::Held`] when a live peer already owns the slot so the
+/// caller can branch on it (exit cleanly today, attach read-only in a
+/// later phase).
+pub fn acquire_serve_lock(opts: &ServerOptions) -> anyhow::Result<ServeLockOutcome> {
     let dir = match opts.pid_lock_dir.as_deref() {
         Some(d) => d,
-        None => return Ok(None),
+        None => return Ok(ServeLockOutcome::Untracked),
     };
-    cartog_process_lock::ProcessLock::acquire(dir, SERVE_LOCK_SLOT)
-        .map(Some)
-        .with_context(|| format!("failed to acquire serve PID lock at {}", dir.display()))
+    if !single_writer_election_enabled() {
+        // Kill switch: use the old overwrite-on-acquire behavior. We still
+        // write our PID file so `cartog self update` and friends see us.
+        let lock = cartog_process_lock::ProcessLock::acquire_overwriting(dir, SERVE_LOCK_SLOT)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to acquire serve PID lock at {} (single-writer election disabled): {e}",
+                    dir.display()
+                )
+            })?;
+        return Ok(ServeLockOutcome::Primary(lock));
+    }
+    match cartog_process_lock::ProcessLock::acquire(dir, SERVE_LOCK_SLOT) {
+        Ok(lock) => Ok(ServeLockOutcome::Primary(lock)),
+        Err(cartog_process_lock::AcquireError::Held(held)) => Ok(ServeLockOutcome::Held(held)),
+        Err(cartog_process_lock::AcquireError::Io(e)) => Err(anyhow::anyhow!(
+            "failed to acquire serve PID lock at {}: {e}",
+            dir.display()
+        )),
+    }
 }
 
 /// Start the MCP server over stdio.
@@ -969,12 +1174,30 @@ pub async fn run_server(
 ) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
 
-    // Acquire first so a lock failure aborts before opening DB / watcher.
-    let _lock = acquire_serve_lock(&opts)?;
+    // Acquire first so an election loss is resolved before opening DB or
+    // spawning the watcher.
+    let (role, initial_lock, primary_to_watch) = match acquire_serve_lock(&opts)? {
+        ServeLockOutcome::Primary(lock) => (Role::Primary, Some(lock), None),
+        ServeLockOutcome::Untracked => (Role::Primary, None, None),
+        ServeLockOutcome::Held(held) => {
+            info!(
+                primary_pid = held.pid,
+                primary_start_time = ?held.start_time,
+                "another cartog process is the primary writer for this DB \
+                 (PID {}); attaching read-only. \
+                 Indexing tools will return a read-only error; queries work normally. \
+                 Promotion to primary happens automatically if the holder dies.",
+                held.pid
+            );
+            (Role::ReadOnly, None, Some(held))
+        }
+    };
 
-    // Optionally spawn a background file watcher
+    // Only the primary owns the watcher: starting one as a secondary would
+    // give us two indexers fighting over the DB. Read-only clients ride
+    // along on the primary's index updates via WAL.
     let db_path_str = db_path.to_string_lossy().into_owned();
-    let _watch_handle: Option<WatchHandle> = if watch {
+    let initial_watch_handle: Option<WatchHandle> = if watch && role == Role::Primary {
         let cwd = std::env::current_dir()?;
         let mut config = WatchConfig::new(cwd);
         config.rag = rag;
@@ -990,16 +1213,407 @@ pub async fn run_server(
             }
         }
     } else {
+        if watch && role == Role::ReadOnly {
+            info!(
+                "watcher skipped: this is a read-only secondary; the primary owns indexing \
+                 (will start automatically on promotion)"
+            );
+        }
         None
     };
 
-    let server = CartogServer::new(db_path, rag_config)?;
+    let server = match role {
+        Role::Primary => CartogServer::new(db_path, rag_config.clone())?,
+        Role::ReadOnly => CartogServer::new_read_only(db_path, rag_config.clone())?,
+    };
+
+    // Reflect initial watcher state on the server's flag so `cartog_stats`
+    // surfaces it accurately from request #1. Will be updated by the
+    // promoter on a successful post-promotion watcher spawn.
+    server.watcher_active.store(
+        initial_watch_handle.is_some(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+
+    // Shared cells so the promoter (if any) can install the lock + watcher
+    // after winning election, and so the cells stay alive for the whole
+    // `run_server` lifetime — Drop on shutdown fires here.
+    let lock_cell = Arc::new(Mutex::new(initial_lock));
+    let watch_cell = Arc::new(Mutex::new(initial_watch_handle));
+
+    let promoter_handle: Option<tokio::task::JoinHandle<()>> = if role == Role::ReadOnly {
+        match (primary_to_watch, opts.pid_lock_dir.clone()) {
+            (Some(primary), Some(state_dir)) => {
+                let pinned = server
+                    .db
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.pinned_attach().cloned());
+                let cwd = (*server.cwd).to_path_buf();
+                Some(tokio::task::spawn(promoter_task(PromoterArgs {
+                    db: Arc::clone(&server.db),
+                    role: Arc::clone(&server.role),
+                    lock_cell: Arc::clone(&lock_cell),
+                    watch_cell: Arc::clone(&watch_cell),
+                    watcher_active: Arc::clone(&server.watcher_active),
+                    db_path: db_path.to_path_buf(),
+                    state_dir,
+                    cwd,
+                    primary,
+                    pinned,
+                    watch_requested: watch,
+                    rag,
+                    rag_config,
+                    poll_interval: DEFAULT_PROMOTER_POLL_INTERVAL,
+                })))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     let service = server.serve(stdio()).await?;
-    service.waiting().await?;
+
+    // Wait for any of: rmcp's normal shutdown (stdin EOF when the parent
+    // dies, or an explicit close), SIGINT (Ctrl+C in a foreground terminal),
+    // or SIGTERM (kill <pid>; only fires on Unix). Returning from
+    // `run_server` lets the `ProcessLock` Drop impl unlink the PID file —
+    // we deliberately avoid `std::process::exit` here to keep that cleanup.
+    tokio::select! {
+        result = service.waiting() => {
+            result?;
+        }
+        _ = wait_for_sigint() => {
+            info!("received SIGINT, shutting down");
+        }
+        _ = wait_for_sigterm() => {
+            info!("received SIGTERM, shutting down");
+        }
+    }
+
+    // Cancel the promoter task before this function returns, otherwise
+    // dropping its JoinHandle would NOT stop the task — it would keep
+    // polling against `args.db` for up to one `poll_interval` and could
+    // race the shutdown by promoting after `run_server` is logically
+    // done. `abort()` is non-blocking; the runtime drops the task on
+    // its next yield point (the await in `tokio::time::sleep`).
+    if let Some(h) = promoter_handle {
+        h.abort();
+    }
 
     // WatchHandle is dropped here, signaling the watcher thread to stop.
     info!("cartog MCP server stopped");
     Ok(())
+}
+
+/// Inputs for the Phase 5 promoter task. Bundled so the call site in
+/// [`run_server`] stays readable; all fields are owned or `Arc`-cloned
+/// before the task is spawned.
+struct PromoterArgs {
+    /// Live DB handle on the secondary. The promoter replaces its contents
+    /// with a fresh RW [`Database`] when it takes ownership.
+    db: Arc<Mutex<Database>>,
+    /// Role flag visible to tool handlers. Flipped to `Primary` on
+    /// successful promotion.
+    role: Arc<AtomicRole>,
+    /// Slot for the acquired [`ProcessLock`] once we win election.
+    lock_cell: Arc<Mutex<Option<cartog_process_lock::ProcessLock>>>,
+    /// Slot for the watcher handle spawned after promotion (when the user
+    /// asked for `serve --watch`).
+    watch_cell: Arc<Mutex<Option<WatchHandle>>>,
+    /// Reflects whether a file watcher is currently running. Set to true
+    /// on a successful post-promotion spawn, left false if the watcher
+    /// failed to start (degraded Primary: surfaced in `cartog_stats`).
+    watcher_active: Arc<std::sync::atomic::AtomicBool>,
+    db_path: std::path::PathBuf,
+    state_dir: std::path::PathBuf,
+    /// CWD captured at server startup. Reused for the post-promotion
+    /// watcher so the watch root doesn't follow a later `std::env::set_current_dir`.
+    cwd: std::path::PathBuf,
+    /// Snapshot of the primary we attached behind. Promotion fires when
+    /// this process is no longer running.
+    primary: cartog_process_lock::ActiveLock,
+    /// What we saw in `metadata` at attach time. Compared against the
+    /// on-disk values at promotion time so we abort cleanly if the primary
+    /// upgraded the schema or swapped the embedding stack under us.
+    pinned: Option<PinnedAttach>,
+    watch_requested: bool,
+    rag: bool,
+    rag_config: rag::EmbeddingProviderConfig,
+    /// Polling interval. Const in production
+    /// ([`DEFAULT_PROMOTER_POLL_INTERVAL`]); override in tests to keep
+    /// the suite fast.
+    poll_interval: std::time::Duration,
+}
+
+/// How often the promoter checks whether the primary is still alive. Kept
+/// short enough that handoff feels responsive to a user closing the other
+/// Claude Code window, long enough that the polling cost is invisible.
+const DEFAULT_PROMOTER_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Background task that runs in read-only mode and watches the primary's
+/// liveness. On primary death, validates schema/fingerprint and attempts
+/// promotion (atomic O_EXCL lock acquire → swap DB to RW → spawn watcher
+/// if the user asked for one → flip role). Exits cleanly on schema drift
+/// or when another reader wins the race.
+async fn promoter_task(args: PromoterArgs) {
+    loop {
+        tokio::time::sleep(args.poll_interval).await;
+
+        // Primary still alive? Liveness uses start_time when available
+        // (closes the PID-reuse window).
+        let primary_alive = match args.primary.start_time {
+            Some(st) => cartog_process_lock::is_same_process(args.primary.pid, st),
+            None => cartog_process_lock::is_alive(args.primary.pid),
+        };
+        if primary_alive {
+            continue;
+        }
+
+        info!(
+            primary_pid = args.primary.pid,
+            "primary cartog process is gone; attempting promotion to primary"
+        );
+
+        // Cheap pre-check: skip the lock acquire if state already diverged.
+        // We re-validate AFTER acquire too — the TOCTOU window between
+        // here and acquire lets a third writer slip in.
+        if let Err(e) = validate_pinned_state(&args.db_path, args.pinned.as_ref()) {
+            info!(error = %e, "aborting promotion: on-disk state diverged before lock acquire");
+            return;
+        }
+
+        // Atomic O_EXCL acquire. Other readers may race us; the loser stays
+        // read-only and tries again on the next tick.
+        let new_lock =
+            match cartog_process_lock::ProcessLock::acquire(&args.state_dir, SERVE_LOCK_SLOT) {
+                Ok(lock) => lock,
+                Err(cartog_process_lock::AcquireError::Held(held)) => {
+                    info!(
+                        new_primary_pid = held.pid,
+                        "another reader won the promotion race; staying read-only"
+                    );
+                    continue;
+                }
+                Err(cartog_process_lock::AcquireError::Io(e)) => {
+                    tracing::warn!(error = %e, "promotion lock acquire failed; staying read-only");
+                    continue;
+                }
+            };
+
+        // Re-validate AFTER acquire: between the first validate and the
+        // acquire, a third writer could have promoted itself, upgraded the
+        // schema, and exited (releasing the lock to us). We now own the
+        // lock, so the state can't change again — checking once here is
+        // sufficient. On drift, drop the lock and exit cleanly so the
+        // user restarts against the new schema.
+        if let Err(e) = validate_pinned_state(&args.db_path, args.pinned.as_ref()) {
+            info!(
+                error = %e,
+                "aborting promotion: on-disk state diverged after lock acquire"
+            );
+            drop(new_lock);
+            return;
+        }
+
+        // Swap the DB connection to read-write. We hold the Mutex for the
+        // entire swap, so no tool handler can be mid-query against the
+        // about-to-close read-only connection. On open_existing_rw
+        // failure (transient I/O, disk pressure), drop the lock and loop
+        // — a subsequent poll may succeed. Only a poisoned mutex is
+        // permanently fatal.
+        let rw = match Database::open_existing_rw(&args.db_path) {
+            Ok(rw) => rw,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "open_existing_rw failed during promotion; dropping lock and retrying"
+                );
+                drop(new_lock);
+                continue;
+            }
+        };
+        match args.db.lock() {
+            Ok(mut guard) => {
+                *guard = rw;
+            }
+            Err(_) => {
+                tracing::error!("db mutex poisoned; cannot promote, exiting promoter task");
+                drop(new_lock);
+                return;
+            }
+        }
+
+        // Install the lock so it lives until shutdown (Drop unlinks the
+        // PID file). Flip role to Primary BEFORE spawning the watcher so
+        // tool handlers that re-check `role.load()` immediately see the
+        // new state — and the write tools start accepting requests at
+        // the same moment the DB is RW (no window where role lags the
+        // swap).
+        //
+        // A poisoned lock_cell mutex is fatal in the same way args.db
+        // poison is (treated symmetrically above): if we let `new_lock`
+        // fall off the end of an `if let Ok(_)` arm, Drop unlinks the
+        // PID file, and then storing Role::Primary creates a "primary
+        // with no lock" state — a fresh `cartog serve` would win the
+        // next O_EXCL acquire and we'd have two Primaries. Instead, bail
+        // out cleanly: drop the lock, leave role as ReadOnly, exit the
+        // promoter task. The next-attempt path is now closed (caller
+        // would need to restart the process), but a poisoned mutex
+        // means the whole server is degraded anyway.
+        match args.lock_cell.lock() {
+            Ok(mut guard) => {
+                *guard = Some(new_lock);
+            }
+            Err(_) => {
+                tracing::error!(
+                    "lock_cell mutex poisoned; cannot install serve lock, exiting promoter task without flipping role"
+                );
+                drop(new_lock);
+                return;
+            }
+        }
+        args.role.store(Role::Primary);
+
+        if args.watch_requested {
+            // Reuse the cwd captured at server startup, not
+            // std::env::current_dir() — the latter follows runtime
+            // chdir() calls (rare in MCP children but possible in tests
+            // and embedded uses).
+            let mut config = WatchConfig::new(args.cwd.clone());
+            config.rag = args.rag;
+            config.rag_config = args.rag_config.clone();
+            config.pid_lock_dir = Some(args.state_dir.clone());
+            // Skip migrations because we validated the schema when we
+            // attached read-only — re-running them would re-trigger the
+            // embedding-dimension reconcile the election prevents.
+            //
+            // We DO still acquire `watch.pid` (the watcher's own slot)
+            // even though we already hold `serve.pid`. The two slots
+            // serve different consumers: `serve.pid` blocks other MCP
+            // servers, `watch.pid` blocks a separately-running
+            // `cartog watch` from a terminal. Without the watch slot a
+            // terminal `cartog watch` would happily start and create
+            // two concurrent indexers writing to the same DB.
+            config.skip_migrations = true;
+            let db_path_str = args.db_path.to_string_lossy().into_owned();
+            match watch::spawn_watch(config, &db_path_str) {
+                Ok(handle) => {
+                    // If watch_cell is poisoned, dropping `handle` here
+                    // signals shutdown to the watcher thread (its
+                    // shutdown flag flips in Drop). That's the best we
+                    // can do; the server stays Primary with no watcher
+                    // — degraded but not corrupt — and we leave
+                    // watcher_active = false so `cartog_stats` surfaces
+                    // the degradation.
+                    match args.watch_cell.lock() {
+                        Ok(mut guard) => {
+                            *guard = Some(handle);
+                            args.watcher_active
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        Err(_) => {
+                            tracing::error!(
+                                "watch_cell mutex poisoned; post-promotion watcher discarded — \
+                                 server is Primary but will not auto-reindex"
+                            );
+                            drop(handle);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "post-promotion watcher failed to start");
+                }
+            }
+        }
+
+        info!("promoted to primary for {}", args.db_path.display());
+        return;
+    }
+}
+
+/// Re-read `schema_version` and the embedding fingerprint from disk and
+/// compare to what the secondary saw at attach. Used by the promoter
+/// before attempting to take over — if either changed, a third writer
+/// already took over and upgraded under us.
+fn validate_pinned_state(
+    db_path: &std::path::Path,
+    pinned: Option<&PinnedAttach>,
+) -> anyhow::Result<()> {
+    let pinned = match pinned {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    let reader = Database::open_readonly(db_path)
+        .map_err(|e| anyhow::anyhow!("re-attach read-only failed: {e}"))?;
+    let now = reader
+        .pinned_attach()
+        .ok_or_else(|| anyhow::anyhow!("internal: re-attached DB has no pinned state"))?;
+    if now != pinned {
+        anyhow::bail!(
+            "DB metadata changed since attach: was {pinned:?}, now {now:?} (another writer took over)"
+        );
+    }
+    Ok(())
+}
+
+/// Resolve to a future that completes when the process receives SIGTERM.
+/// On Windows this also covers `CTRL_CLOSE_EVENT` (console window closed)
+/// and `CTRL_SHUTDOWN_EVENT`. On platforms where the relevant signal source
+/// can't be installed, the future never completes — `service.waiting()`
+/// remains the shutdown signal.
+///
+/// `wait_for_sigint` wraps `tokio::signal::ctrl_c()` so a failure to
+/// install the SIGINT handler does NOT immediately win the
+/// `tokio::select!` branch with an `Err` resolved future — without the
+/// wrapper, `_ = tokio::signal::ctrl_c()` would treat installation
+/// failure as "SIGINT fired" and exit. Mirrors `wait_for_sigterm`.
+async fn wait_for_sigint() {
+    match tokio::signal::ctrl_c().await {
+        Ok(()) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to install SIGINT handler; falling back to other shutdown signals");
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn wait_for_sigterm() {
+    use tokio::signal::unix::{signal, SignalKind};
+    match signal(SignalKind::terminate()) {
+        Ok(mut stream) => {
+            stream.recv().await;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to install SIGTERM handler; falling back to stdin-EOF only");
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn wait_for_sigterm() {
+    use tokio::signal::windows::{ctrl_close, ctrl_shutdown};
+    let close = ctrl_close();
+    let shutdown = ctrl_shutdown();
+    match (close, shutdown) {
+        (Ok(mut c), Ok(mut s)) => {
+            tokio::select! {
+                _ = c.recv() => {}
+                _ = s.recv() => {}
+            }
+        }
+        _ => {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn wait_for_sigterm() {
+    std::future::pending::<()>().await;
 }
 
 #[cfg(test)]
@@ -1226,19 +1840,21 @@ mod tests {
 
     #[test]
     fn pid_file_acquired_when_lock_dir_set() {
+        let _guard = env_mutex().lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::TempDir::new().unwrap();
         let opts = ServerOptions {
             pid_lock_dir: Some(dir.path().to_path_buf()),
         };
-        let lock = acquire_serve_lock(&opts).expect("acquire");
-        assert!(lock.is_some(), "lock should be returned when dir is set");
+        let outcome = acquire_serve_lock(&opts).expect("acquire");
+        let lock = match outcome {
+            ServeLockOutcome::Primary(l) => l,
+            other => panic!("expected Primary, got {other:?}"),
+        };
         let path = dir.path().join(format!("{SERVE_LOCK_SLOT}.pid"));
         assert!(path.exists(), "PID file should exist while lock is held");
-        let pid: u32 = std::fs::read_to_string(&path)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        // File is now two lines (pid + start_time); only the first line is the PID.
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let pid: u32 = contents.lines().next().unwrap().trim().parse().unwrap();
         assert_eq!(pid, std::process::id());
         drop(lock);
         assert!(
@@ -1250,10 +1866,213 @@ mod tests {
     #[test]
     fn pid_file_skipped_when_lock_dir_unset() {
         let opts = ServerOptions::default();
-        let lock = acquire_serve_lock(&opts).expect("noop");
+        let outcome = acquire_serve_lock(&opts).expect("noop");
         assert!(
-            lock.is_none(),
-            "no lock dir → no PID file, no guard returned"
+            matches!(outcome, ServeLockOutcome::Untracked),
+            "no lock dir → Untracked"
+        );
+    }
+
+    /// Serialize tests that read or mutate the `CARTOG_SINGLE_WRITER` env
+    /// var. The variable is process-global; cargo test runs cases in
+    /// parallel by default, so without this mutex a concurrent setter
+    /// flips the value mid-read on another thread.
+    fn env_mutex() -> &'static std::sync::Mutex<()> {
+        static M: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        M.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    #[test]
+    fn second_acquire_for_same_dir_reports_held() {
+        // Two acquire_serve_lock calls against the same dir: the first wins,
+        // the second must surface Held(_) with the first's PID so the caller
+        // can branch.
+        let _guard = env_mutex().lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let opts = ServerOptions {
+            pid_lock_dir: Some(dir.path().to_path_buf()),
+        };
+        let _first = match acquire_serve_lock(&opts).expect("first acquire") {
+            ServeLockOutcome::Primary(l) => l,
+            other => panic!("expected Primary, got {other:?}"),
+        };
+        let second = acquire_serve_lock(&opts).expect("second acquire returns ok");
+        match second {
+            ServeLockOutcome::Held(held) => {
+                assert_eq!(held.slot, SERVE_LOCK_SLOT);
+                assert_eq!(held.pid, std::process::id());
+            }
+            other => panic!("expected Held, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kill_switch_disables_election() {
+        let _guard = env_mutex().lock().unwrap_or_else(|e| e.into_inner());
+        // CARTOG_SINGLE_WRITER=0 must let a second acquire_overwriting-style
+        // call succeed despite a live first holder. Restoring the env var
+        // afterwards is best-effort; tests in a single binary share env so
+        // we set + unset around the call site.
+        let dir = tempfile::TempDir::new().unwrap();
+        let opts = ServerOptions {
+            pid_lock_dir: Some(dir.path().to_path_buf()),
+        };
+        let _first = match acquire_serve_lock(&opts).expect("first acquire") {
+            ServeLockOutcome::Primary(l) => l,
+            other => panic!("expected Primary, got {other:?}"),
+        };
+
+        // SAFETY: tests in `cargo test` run in threads, but env mutation is
+        // process-global. Other tests in this file don't depend on this var,
+        // and we restore it before returning.
+        let prev = std::env::var(SINGLE_WRITER_ENV).ok();
+        // SAFETY: env vars are inherently process-wide and tests share them.
+        // We restore the prior value before this test returns so adjacent
+        // tests aren't affected.
+        unsafe {
+            std::env::set_var(SINGLE_WRITER_ENV, "0");
+        }
+        let result = acquire_serve_lock(&opts);
+        // SAFETY: same reason — restoring prior state regardless of outcome.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var(SINGLE_WRITER_ENV, v),
+                None => std::env::remove_var(SINGLE_WRITER_ENV),
+            }
+        }
+        match result.expect("kill switch acquire") {
+            ServeLockOutcome::Primary(_) => {} // expected
+            other => panic!("expected Primary with kill switch, got {other:?}"),
+        }
+    }
+
+    // ── Role / read-only attach tests (Phase 4) ──
+
+    fn test_rag_config() -> rag::EmbeddingProviderConfig {
+        rag::EmbeddingProviderConfig::default()
+    }
+
+    #[test]
+    fn primary_server_reports_primary_role() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let server =
+            CartogServer::new(&db_path, test_rag_config()).expect("primary server constructs");
+        assert_eq!(server.role(), Role::Primary);
+    }
+
+    #[test]
+    fn read_only_server_reports_read_only_role() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        // First open writable to materialize the file with current schema.
+        {
+            let _primary =
+                CartogServer::new(&db_path, test_rag_config()).expect("primary server constructs");
+        }
+        let reader = CartogServer::new_read_only(&db_path, test_rag_config())
+            .expect("read-only server constructs");
+        assert_eq!(reader.role(), Role::ReadOnly);
+    }
+
+    #[test]
+    fn promoter_validate_pinned_state_matches_when_unchanged() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            // Materialize a DB so open_readonly can later read its state.
+            let _primary = Database::open(&db_path, 384).unwrap();
+        }
+        let pinned = Database::open_readonly(&db_path)
+            .unwrap()
+            .pinned_attach()
+            .cloned();
+        validate_pinned_state(&db_path, pinned.as_ref()).expect("matching pin must validate");
+    }
+
+    #[test]
+    fn promoter_validate_pinned_state_detects_schema_bump() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let pinned = {
+            let db = Database::open(&db_path, 384).unwrap();
+            drop(db);
+            Database::open_readonly(&db_path)
+                .unwrap()
+                .pinned_attach()
+                .cloned()
+        };
+        // Simulate another writer upgrading the schema underneath us.
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.set_metadata("schema_version", "9999").unwrap();
+        }
+        let result = validate_pinned_state(&db_path, pinned.as_ref());
+        // open_readonly returns SchemaDrift; validate_pinned_state wraps as anyhow.
+        assert!(result.is_err(), "schema bump under us must fail validation");
+    }
+
+    #[test]
+    fn atomic_role_round_trip() {
+        let r = AtomicRole::new(Role::ReadOnly);
+        assert_eq!(r.load(), Role::ReadOnly);
+        r.store(Role::Primary);
+        assert_eq!(r.load(), Role::Primary);
+        r.store(Role::ReadOnly);
+        assert_eq!(r.load(), Role::ReadOnly);
+    }
+
+    #[test]
+    fn read_only_server_refuses_write_tools() {
+        // refuse_if_read_only is the helper gating cartog_index and
+        // cartog_rag_index. Verify both call sites get an error in
+        // ReadOnly mode and pass through silently in Primary mode.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let _primary =
+                CartogServer::new(&db_path, test_rag_config()).expect("primary server constructs");
+        }
+        let reader = CartogServer::new_read_only(&db_path, test_rag_config())
+            .expect("read-only server constructs");
+
+        let err = reader
+            .refuse_if_read_only("cartog_index")
+            .expect("read-only must refuse");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("read-only") && msg.contains("cartog_index"),
+            "error must name the gate and the tool, got: {msg}"
+        );
+        // cartog_index → suggests `cartog index` (graph), not `cartog rag index`.
+        assert!(
+            msg.contains("cartog index") && !msg.contains("cartog rag index"),
+            "cartog_index refusal must suggest `cartog index`, got: {msg}"
+        );
+        // Drops the misleading "~5s" promise.
+        assert!(
+            !msg.contains("~5s"),
+            "refusal must not promise an exact pickup latency, got: {msg}"
+        );
+
+        let err = reader
+            .refuse_if_read_only("cartog_rag_index")
+            .expect("read-only must refuse");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("read-only") && msg.contains("cartog_rag_index"),
+            "error must name the gate and the tool, got: {msg}"
+        );
+        // cartog_rag_index → suggests `cartog rag index` (vectors).
+        assert!(
+            msg.contains("cartog rag index"),
+            "cartog_rag_index refusal must suggest `cartog rag index`, got: {msg}"
+        );
+
+        let primary = CartogServer::new(&db_path, test_rag_config()).expect("primary reconstructs");
+        assert!(
+            primary.refuse_if_read_only("cartog_index").is_none(),
+            "primary must NOT refuse"
         );
     }
 
@@ -1319,6 +2138,199 @@ mod tests {
         assert!(
             err.to_string().contains("serve PID lock"),
             "error should mention the lock context, got: {err}"
+        );
+    }
+
+    // ── Promoter regression tests (review fix M-promoter) ──
+
+    fn promoter_args_for_test(
+        db: Arc<Mutex<Database>>,
+        role: Arc<AtomicRole>,
+        db_path: std::path::PathBuf,
+        state_dir: std::path::PathBuf,
+        primary: cartog_process_lock::ActiveLock,
+        pinned: Option<PinnedAttach>,
+    ) -> PromoterArgs {
+        PromoterArgs {
+            db,
+            role,
+            lock_cell: Arc::new(Mutex::new(None)),
+            watch_cell: Arc::new(Mutex::new(None)),
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            db_path: db_path.clone(),
+            state_dir,
+            cwd: std::env::current_dir().unwrap(),
+            primary,
+            pinned,
+            watch_requested: false,
+            rag: false,
+            rag_config: rag::EmbeddingProviderConfig::default(),
+            // Very short for tests so the loop responds quickly.
+            poll_interval: std::time::Duration::from_millis(20),
+        }
+    }
+
+    #[tokio::test]
+    async fn promoter_abort_cancels_the_polling_task() {
+        // Regression for review fix M-promoter (d): dropping the JoinHandle
+        // does NOT cancel a tokio task — only abort() does. Without the
+        // abort in run_server's shutdown path, the promoter could keep
+        // polling for up to one poll_interval after run_server returns
+        // and even promote during that window. We assert that abort()
+        // really terminates the task within a small bounded time.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let state_dir = dir.path().join("state");
+        // Materialize a DB so open_readonly can attach.
+        {
+            let _ = Database::open(&db_path, 384).unwrap();
+        }
+        let db = Arc::new(Mutex::new(Database::open_readonly(&db_path).unwrap()));
+        let role = Arc::new(AtomicRole::new(Role::ReadOnly));
+        let pinned = db.lock().unwrap().pinned_attach().cloned();
+        // Pretend the primary is our own process (so liveness reports
+        // true and the promoter just keeps polling forever, never
+        // promoting). This isolates the test to the abort behavior.
+        let primary = cartog_process_lock::ActiveLock {
+            slot: SERVE_LOCK_SLOT.to_string(),
+            pid: std::process::id(),
+            start_time: cartog_process_lock::process_start_time(std::process::id()),
+        };
+        let args = promoter_args_for_test(db, role, db_path, state_dir, primary, pinned);
+        let handle = tokio::task::spawn(promoter_task(args));
+
+        // Let it poll a few times.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        assert!(!handle.is_finished(), "promoter must keep polling");
+        handle.abort();
+        // Allow a brief moment for the runtime to cancel.
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        assert!(
+            handle.is_finished(),
+            "abort must terminate the promoter task"
+        );
+    }
+
+    #[tokio::test]
+    async fn promoter_aborts_when_state_diverges_after_acquire() {
+        // Regression for review fix M-promoter (c): the original code
+        // validated pinned state only BEFORE acquire. Between validate
+        // and acquire, a third writer could promote and upgrade the
+        // schema, then exit. We'd then take the lock and proceed with a
+        // stale pin. The fix re-validates AFTER acquire while we hold
+        // the lock.
+        //
+        // We test this by: attach pinned state, mutate on-disk
+        // schema_version under us, then run a single promoter iteration
+        // and assert it bails cleanly (does not flip role to Primary).
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        {
+            let _ = Database::open(&db_path, 384).unwrap();
+        }
+        let reader_db = Database::open_readonly(&db_path).unwrap();
+        let pinned = reader_db.pinned_attach().cloned();
+        let db = Arc::new(Mutex::new(reader_db));
+        let role = Arc::new(AtomicRole::new(Role::ReadOnly));
+        // Pretend primary is dead (no such PID).
+        let primary = cartog_process_lock::ActiveLock {
+            slot: SERVE_LOCK_SLOT.to_string(),
+            pid: 4_194_304,
+            start_time: None,
+        };
+        // Mutate the DB metadata under the reader.
+        {
+            let mutator = Database::open(&db_path, 384).unwrap();
+            mutator.set_metadata("schema_version", "9999").unwrap();
+        }
+
+        let args = promoter_args_for_test(
+            Arc::clone(&db),
+            Arc::clone(&role),
+            db_path,
+            state_dir,
+            primary,
+            pinned,
+        );
+        let handle = tokio::task::spawn(promoter_task(args));
+        // Give the promoter one tick.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        // The promoter should have noticed primary-gone, validated, seen
+        // drift, and exited (return). Role must NOT be Primary.
+        assert!(handle.is_finished(), "promoter must exit on drift");
+        let _ = handle.await;
+        assert_eq!(
+            role.load(),
+            Role::ReadOnly,
+            "drifted DB must not flip role to Primary"
+        );
+    }
+
+    #[tokio::test]
+    async fn promoter_loops_on_transient_open_failure() {
+        // Regression for review fix M-promoter (b): pre-fix, an
+        // open_existing_rw failure caused the promoter to `return`,
+        // disabling promotion forever even if the next poll would
+        // succeed. The fix loops on transient failures.
+        //
+        // We can exercise the "open fails -> loop" path by deleting the
+        // DB file entirely between the validate and the open_existing_rw
+        // call. open_existing_rw will fail; the promoter should drop
+        // the lock and try again on the next tick (where it'll fail
+        // validation, since the DB is missing, and exit cleanly).
+        //
+        // The key contract is: we don't return on the first
+        // open_existing_rw failure — we drop the lock and loop. We
+        // assert that by checking the lock file does not persist after
+        // a failed promotion attempt.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        {
+            let _ = Database::open(&db_path, 384).unwrap();
+        }
+        let reader = Database::open_readonly(&db_path).unwrap();
+        let pinned = reader.pinned_attach().cloned();
+        let db = Arc::new(Mutex::new(reader));
+        let role = Arc::new(AtomicRole::new(Role::ReadOnly));
+        let primary = cartog_process_lock::ActiveLock {
+            slot: SERVE_LOCK_SLOT.to_string(),
+            pid: 4_194_304,
+            start_time: None,
+        };
+
+        let args = promoter_args_for_test(
+            Arc::clone(&db),
+            Arc::clone(&role),
+            db_path.clone(),
+            state_dir.clone(),
+            primary,
+            pinned,
+        );
+        let handle = tokio::task::spawn(promoter_task(args));
+        // Give the loop a moment to enter its first tick, then yank the DB.
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        std::fs::remove_file(&db_path).unwrap();
+        // The promoter should now either: (a) loop on validate-failure
+        // and never acquire, or (b) acquire then fail open and drop the
+        // lock + loop. Either way the role stays ReadOnly and the lock
+        // file is not left behind.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        handle.abort();
+        let _ = handle.await;
+        assert_eq!(
+            role.load(),
+            Role::ReadOnly,
+            "promoter must not flip role under transient failure"
+        );
+        let lock_path = state_dir.join("serve.pid");
+        assert!(
+            !lock_path.exists(),
+            "promoter must release the lock on failure (not strand serve.pid)"
         );
     }
 }

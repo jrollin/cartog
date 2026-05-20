@@ -40,6 +40,12 @@ pub struct WatchConfig {
     /// graceful exit). `None` disables PID-file tracking. Consulted by
     /// `cartog self update` to detect a running watcher.
     pub pid_lock_dir: Option<PathBuf>,
+    /// Open the on-disk DB via `Database::open_existing_rw` instead of
+    /// `Database::open`. Used by the Phase 5 promoter to attach without
+    /// re-running schema migrations (the promoter validated the schema
+    /// when it pinned `PinnedAttach`; running them again would re-trigger
+    /// the SQLITE_BUSY race the election prevents).
+    pub skip_migrations: bool,
 }
 
 impl WatchConfig {
@@ -55,6 +61,7 @@ impl WatchConfig {
             rag_config: rag::EmbeddingProviderConfig::default(),
             json_events: false,
             pid_lock_dir: None,
+            skip_migrations: false,
         }
     }
 }
@@ -214,18 +221,42 @@ fn watch_loop(
     db_path: &str,
     shutdown: &AtomicBool,
 ) -> Result<()> {
-    // Acquire first so a lock failure aborts before opening DB / watcher.
+    // Acquire first so an election loss aborts before opening DB / watcher.
+    // Unlike `cartog serve`, the watcher does NOT attach read-only — if
+    // another writer already owns the slot, we refuse to start and let the
+    // user stop the running process. This applies uniformly: the Phase 5
+    // promoter also acquires `watch.pid` so a separately-running
+    // `cartog watch` from a terminal correctly sees Held and aborts. Two
+    // watchers writing to the same DB would re-index the same files in
+    // parallel; the watch slot is the only thing preventing that.
     let _lock: Option<cartog_process_lock::ProcessLock> = match config.pid_lock_dir.as_deref() {
-        Some(dir) => Some(
-            cartog_process_lock::ProcessLock::acquire(dir, WATCH_LOCK_SLOT).with_context(|| {
-                format!("failed to acquire watch PID lock at {}", dir.display())
-            })?,
-        ),
+        Some(dir) => match cartog_process_lock::ProcessLock::acquire(dir, WATCH_LOCK_SLOT) {
+            Ok(lock) => Some(lock),
+            Err(cartog_process_lock::AcquireError::Held(held)) => {
+                anyhow::bail!(
+                    "another cartog process holds the watch lock at {} (slot {:?}, PID {}); \
+                     stop it before running `cartog watch`",
+                    dir.display(),
+                    held.slot,
+                    held.pid,
+                );
+            }
+            Err(cartog_process_lock::AcquireError::Io(e)) => {
+                return Err(e).with_context(|| {
+                    format!("failed to acquire watch PID lock at {}", dir.display())
+                });
+            }
+        },
         None => None,
     };
 
-    let db = Database::open(db_path, config.rag_config.resolved_dimension())
-        .context("failed to open database for watcher")?;
+    let db = if config.skip_migrations {
+        Database::open_existing_rw(db_path)
+            .context("failed to open database for watcher (existing-rw)")?
+    } else {
+        Database::open(db_path, config.rag_config.resolved_dimension())
+            .context("failed to open database for watcher")?
+    };
 
     info!(
         path = %root.display(),
@@ -288,13 +319,22 @@ fn watch_loop(
 
     info!("watching for changes (Ctrl+C to stop)");
 
-    // Create the embedding provider once (lazy, on first RAG use)
+    // Create the embedding provider once (lazy, on first RAG use). On
+    // first creation we also reconcile the on-disk fingerprint so a
+    // provider/model swap (even at the same dimension) clears the now-stale
+    // vector index instead of returning garbage similarity scores.
     let mut rag_provider: Option<Box<dyn rag::provider::EmbeddingProvider>> = None;
     let ensure_provider =
         |provider: &mut Option<Box<dyn rag::provider::EmbeddingProvider>>| -> bool {
             if provider.is_none() {
                 match rag::create_embedding_provider(&config.rag_config) {
                     Ok(p) => {
+                        if let Err(e) =
+                            db.reconcile_embedding_fingerprint(&rag::fingerprint_of(p.as_ref()))
+                        {
+                            warn!(error = %e, "failed to reconcile embedding fingerprint");
+                            return false;
+                        }
                         *provider = Some(p);
                         true
                     }
