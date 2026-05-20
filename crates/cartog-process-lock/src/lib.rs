@@ -1,8 +1,9 @@
 //! PID-file locks for long-lived cartog commands (`serve`, `watch`, …).
 //!
 //! Each long-lived command grabs a [`ProcessLock`] at startup which writes
-//! `<state_dir>/<slot>.pid` containing the running process's PID. The
-//! `ProcessLock` value cleans the file up via `Drop` on graceful exit.
+//! `<state_dir>/<slot>.pid` containing two lines: the running PID and the
+//! process's OS-native start time. The `ProcessLock` value cleans the file
+//! up via `Drop` on graceful exit.
 //!
 //! `cartog self update` consults [`find_active_locks`] before swapping the
 //! binary so it can refuse to clobber a running peer (cross-platform — a
@@ -14,10 +15,18 @@
 //!   gone, `EPERM` means alive but unreachable (still considered alive).
 //! - Windows: `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, …)` returns a
 //!   non-null handle for live PIDs; we close the handle and return `true`.
+//!
+//! PID-reuse: the recorded start time lets us distinguish "PID was reused
+//! by an unrelated process" from "same process is still running". When the
+//! start time is absent (legacy single-line file from an older cartog) we
+//! fall back to liveness-only checks.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+
+mod start_time;
+pub use start_time::process_start_time;
 
 const PID_EXTENSION: &str = "pid";
 
@@ -30,9 +39,9 @@ pub struct ProcessLock {
 }
 
 impl ProcessLock {
-    /// Write `<state_dir>/<slot>.pid` with the current process's PID.
-    /// Creates `state_dir` if missing. Returns an error on permission /
-    /// I/O failure.
+    /// Write `<state_dir>/<slot>.pid` with the current process's PID and
+    /// start time (two lines). Creates `state_dir` if missing. Returns an
+    /// error on permission / I/O failure.
     ///
     /// Note: this does NOT fail if a stale PID file already exists — the
     /// caller is the long-lived command itself, and a stale file means
@@ -47,7 +56,11 @@ impl ProcessLock {
         // Per-PID staging file: two concurrent acquires for the same slot
         // do not clobber each other's tmp before the rename.
         let tmp = state_dir.join(format!(".{slot}.{pid}.{PID_EXTENSION}.tmp"));
-        write_atomic(&tmp, &path, pid.to_string().as_bytes())?;
+        let payload = match process_start_time(pid) {
+            Some(st) => format!("{pid}\n{st}\n"),
+            None => format!("{pid}\n"),
+        };
+        write_atomic(&tmp, &path, payload.as_bytes())?;
         Ok(Self { path })
     }
 
@@ -65,10 +78,16 @@ impl Drop for ProcessLock {
 
 /// One live PID file discovered by [`find_active_locks`]. The slot name is
 /// the file stem (`serve`, `watch`, …) and `pid` is the running PID.
+///
+/// `start_time` is the recorded process start time when the lock was
+/// acquired. `None` means the PID file came from an older cartog version
+/// that didn't record a start time — callers must fall back to liveness
+/// checks alone. New cartog releases always record it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveLock {
     pub slot: String,
     pub pid: u32,
+    pub start_time: Option<u64>,
 }
 
 /// Scan `state_dir` for `*.pid` files. Returns one [`ActiveLock`] per file
@@ -93,21 +112,45 @@ pub fn find_active_locks(state_dir: &Path) -> Vec<ActiveLock> {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => continue,
         };
-        let pid = match read_pid(&path) {
-            Some(p) => p,
+        let (pid, recorded_st) = match read_lock_file(&path) {
+            Some(v) => v,
             None => {
                 // Side effect: clean malformed files so the slot is reusable.
                 let _ = fs::remove_file(&path);
                 continue;
             }
         };
-        if is_alive(pid) {
-            active.push(ActiveLock { slot, pid });
+        let alive = match recorded_st {
+            // New format: PID + start_time pinned the original process. If
+            // the PID has been reused since, start times will differ and we
+            // correctly treat this entry as stale.
+            Some(st) => is_same_process(pid, st),
+            // Legacy single-line file from an older cartog. Fall back to
+            // liveness-only — we lose PID-reuse detection until the holder
+            // restarts and rewrites the file in the new format.
+            None => is_alive(pid),
+        };
+        if alive {
+            active.push(ActiveLock {
+                slot,
+                pid,
+                start_time: recorded_st,
+            });
         } else {
             let _ = fs::remove_file(&path);
         }
     }
     active
+}
+
+/// True when `pid` is still running AND its start time matches `recorded`.
+/// Use this in preference to [`is_alive`] anywhere PID reuse would matter
+/// (election, peer detection across long-lived state files).
+pub fn is_same_process(pid: u32, recorded: u64) -> bool {
+    match process_start_time(pid) {
+        Some(current) => current == recorded,
+        None => false,
+    }
 }
 
 /// Cross-platform "is this PID currently a running process?" check.
@@ -183,15 +226,21 @@ fn validate_slot(slot: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn read_pid(path: &Path) -> Option<u32> {
+/// Parse the on-disk PID file. Returns `(pid, Some(start_time))` for the
+/// current 2-line format, `(pid, None)` for a legacy single-line file from
+/// an older cartog. Yields `None` for malformed or unreadable files.
+fn read_lock_file(path: &Path) -> Option<(u32, Option<u64>)> {
     let text = fs::read_to_string(path).ok()?;
-    let pid = text.trim().parse::<u32>().ok()?;
-    // PID 0 in the file means corruption — std::process::id() never returns 0.
+    let mut lines = text.lines();
+    let pid = lines.next()?.trim().parse::<u32>().ok()?;
     if pid == 0 {
-        None
-    } else {
-        Some(pid)
+        // PID 0 in the file means corruption — std::process::id() never returns 0.
+        return None;
     }
+    let start_time = lines
+        .next()
+        .and_then(|line| line.trim().parse::<u64>().ok());
+    Some((pid, start_time))
 }
 
 /// Write `bytes` to `target` atomically: stage at `tmp`, then rename onto
@@ -219,8 +268,15 @@ mod tests {
         let lock = ProcessLock::acquire(dir.path(), "watch").unwrap();
         let path = dir.path().join("watch.pid");
         assert!(path.exists(), "pid file must exist after acquire");
-        let recorded: u32 = fs::read_to_string(&path).unwrap().trim().parse().unwrap();
-        assert_eq!(recorded, std::process::id());
+        let (recorded_pid, recorded_st) = read_lock_file(&path).expect("file parses");
+        assert_eq!(recorded_pid, std::process::id());
+        // On supported platforms acquire records a start_time too.
+        if process_start_time(std::process::id()).is_some() {
+            assert!(
+                recorded_st.is_some(),
+                "platforms that expose start_time must store it"
+            );
+        }
         drop(lock);
         assert!(!path.exists(), "drop must remove the pid file");
     }
@@ -237,10 +293,11 @@ mod tests {
     fn acquire_overwrites_stale_pid_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("serve.pid");
+        // Legacy single-line file (older cartog) — should be overwritten.
         fs::write(&path, "999999").unwrap();
         let _lock = ProcessLock::acquire(dir.path(), "serve").unwrap();
-        let recorded: u32 = fs::read_to_string(&path).unwrap().trim().parse().unwrap();
-        assert_eq!(recorded, std::process::id());
+        let (recorded_pid, _) = read_lock_file(&path).expect("file parses");
+        assert_eq!(recorded_pid, std::process::id());
     }
 
     #[test]
@@ -374,5 +431,91 @@ mod tests {
             "no leftover .tmp files expected, got {names:?}",
         );
         drop(lock);
+    }
+
+    #[test]
+    fn read_lock_file_parses_legacy_single_line() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("serve.pid");
+        fs::write(&path, "42").unwrap();
+        let (pid, st) = read_lock_file(&path).expect("legacy file parses");
+        assert_eq!(pid, 42);
+        assert_eq!(
+            st, None,
+            "legacy single-line files have no recorded start_time"
+        );
+    }
+
+    #[test]
+    fn read_lock_file_parses_new_two_line_format() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("serve.pid");
+        fs::write(&path, "42\n123456789\n").unwrap();
+        let (pid, st) = read_lock_file(&path).expect("new format parses");
+        assert_eq!(pid, 42);
+        assert_eq!(st, Some(123456789));
+    }
+
+    #[test]
+    fn read_lock_file_tolerates_garbage_start_time() {
+        // PID parses fine, start_time line is junk: treat as legacy.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("serve.pid");
+        fs::write(&path, "42\nnot-a-number\n").unwrap();
+        let (pid, st) = read_lock_file(&path).expect("pid line still parses");
+        assert_eq!(pid, 42);
+        assert_eq!(st, None);
+    }
+
+    #[test]
+    fn find_active_locks_carries_start_time() {
+        let dir = TempDir::new().unwrap();
+        let _lock = ProcessLock::acquire(dir.path(), "watch").unwrap();
+        let active = find_active_locks(dir.path());
+        assert_eq!(active.len(), 1);
+        // On supported platforms the acquired lock records a start_time.
+        if process_start_time(std::process::id()).is_some() {
+            assert!(active[0].start_time.is_some());
+        }
+    }
+
+    #[test]
+    fn find_active_locks_treats_stale_start_time_as_dead() {
+        // PID is alive (ours) but the file records a different start_time —
+        // the recorded value belongs to a previous process whose PID was
+        // recycled to ours. find_active_locks must NOT report it as active.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("watch.pid");
+        let pid = std::process::id();
+        let real_st = match process_start_time(pid) {
+            Some(s) => s,
+            // Skip on unsupported platforms — the reuse check is a no-op there.
+            None => return,
+        };
+        let bogus = real_st.wrapping_add(999_999);
+        fs::write(&path, format!("{pid}\n{bogus}\n")).unwrap();
+        let active = find_active_locks(dir.path());
+        assert!(
+            active.is_empty(),
+            "PID-reuse case must not surface as active"
+        );
+        assert!(
+            !path.exists(),
+            "stale (PID-reused) file should be cleaned up"
+        );
+    }
+
+    #[test]
+    fn is_same_process_matches_self() {
+        let pid = std::process::id();
+        let st = match process_start_time(pid) {
+            Some(s) => s,
+            None => return,
+        };
+        assert!(is_same_process(pid, st));
+        assert!(
+            !is_same_process(pid, st.wrapping_add(1)),
+            "mismatched start_time must be rejected"
+        );
     }
 }

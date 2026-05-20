@@ -30,11 +30,9 @@ fn pid_file_written_on_start_and_removed_on_stop() {
         wait_for(|| pid_path.exists(), Duration::from_secs(5)),
         "PID file should appear under {pid_path:?} once the watcher is running"
     );
-    let recorded: u32 = std::fs::read_to_string(&pid_path)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    // File is now two lines (pid + start_time); only the first line is the PID.
+    let contents = std::fs::read_to_string(&pid_path).unwrap();
+    let recorded: u32 = contents.lines().next().unwrap().trim().parse().unwrap();
     assert_eq!(
         recorded,
         std::process::id(),

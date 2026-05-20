@@ -84,7 +84,11 @@ fn main() -> Result<()> {
         cli.command,
         Command::Rag(RagCommand::Index { .. }) | Command::Rag(RagCommand::Setup)
     );
-    let default_level = if is_serve || is_rag || is_watch {
+    // When stderr is captured (MCP child, piped CI output) info-level tracing
+    // looks like errors to the parent. Default to warn in that mode so only
+    // real problems surface; foreground TTY users keep info-level progress.
+    let stderr_is_tty = std::io::stderr().is_terminal();
+    let default_level = if (is_serve || is_rag || is_watch) && stderr_is_tty {
         "info"
     } else {
         "warn"
@@ -92,7 +96,8 @@ fn main() -> Result<()> {
 
     // Initialize tracing to stderr for all commands.
     // - CLI mode: only warnings (e.g., unparseable files) show by default
-    // - Serve / RAG index / Watch mode: info-level for progress
+    // - Serve / RAG index / Watch mode (TTY): info-level for progress
+    // - Serve / RAG index / Watch mode (piped, e.g. MCP child): warn-only
     // Stdout stays clean for CLI output and MCP protocol.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)

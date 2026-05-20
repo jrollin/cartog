@@ -997,11 +997,69 @@ pub async fn run_server(
 
     let server = CartogServer::new(db_path, rag_config)?;
     let service = server.serve(stdio()).await?;
-    service.waiting().await?;
+
+    // Wait for any of: rmcp's normal shutdown (stdin EOF when the parent
+    // dies, or an explicit close), SIGINT (Ctrl+C in a foreground terminal),
+    // or SIGTERM (kill <pid>; only fires on Unix). Returning from
+    // `run_server` lets the `ProcessLock` Drop impl unlink the PID file —
+    // we deliberately avoid `std::process::exit` here to keep that cleanup.
+    tokio::select! {
+        result = service.waiting() => {
+            result?;
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("received SIGINT, shutting down");
+        }
+        _ = wait_for_sigterm() => {
+            info!("received SIGTERM, shutting down");
+        }
+    }
 
     // WatchHandle is dropped here, signaling the watcher thread to stop.
     info!("cartog MCP server stopped");
     Ok(())
+}
+
+/// Resolve to a future that completes when the process receives SIGTERM.
+/// On Windows this also covers `CTRL_CLOSE_EVENT` (console window closed)
+/// and `CTRL_SHUTDOWN_EVENT`. On platforms where the relevant signal source
+/// can't be installed, the future never completes — `service.waiting()`
+/// remains the shutdown signal.
+#[cfg(unix)]
+async fn wait_for_sigterm() {
+    use tokio::signal::unix::{signal, SignalKind};
+    match signal(SignalKind::terminate()) {
+        Ok(mut stream) => {
+            stream.recv().await;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to install SIGTERM handler; falling back to stdin-EOF only");
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn wait_for_sigterm() {
+    use tokio::signal::windows::{ctrl_close, ctrl_shutdown};
+    let close = ctrl_close();
+    let shutdown = ctrl_shutdown();
+    match (close, shutdown) {
+        (Ok(mut c), Ok(mut s)) => {
+            tokio::select! {
+                _ = c.recv() => {}
+                _ = s.recv() => {}
+            }
+        }
+        _ => {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+async fn wait_for_sigterm() {
+    std::future::pending::<()>().await;
 }
 
 #[cfg(test)]
@@ -1236,11 +1294,9 @@ mod tests {
         assert!(lock.is_some(), "lock should be returned when dir is set");
         let path = dir.path().join(format!("{SERVE_LOCK_SLOT}.pid"));
         assert!(path.exists(), "PID file should exist while lock is held");
-        let pid: u32 = std::fs::read_to_string(&path)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        // File is now two lines (pid + start_time); only the first line is the PID.
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let pid: u32 = contents.lines().next().unwrap().trim().parse().unwrap();
         assert_eq!(pid, std::process::id());
         drop(lock);
         assert!(
