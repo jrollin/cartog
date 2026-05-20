@@ -68,6 +68,16 @@ pub enum DbError {
     #[error("embedding dimension migration failed: {0}")]
     EmbeddingDimension(#[source] rusqlite::Error),
 
+    /// Read-only attach found a `schema_version` on disk that this binary
+    /// doesn't know how to query. The primary writer was upgraded to a
+    /// newer cartog; the read-only client should exit cleanly and let the
+    /// user restart against the new version.
+    #[error(
+        "schema_version mismatch: this binary expects {expected}, DB has {stored} \
+         (a different cartog process upgraded the schema; restart this session)"
+    )]
+    SchemaDrift { expected: u32, stored: u32 },
+
     /// A catch-all for other rusqlite-level failures inside `open` —
     /// use more specific variants whenever they fit.
     #[error(transparent)]
@@ -319,6 +329,20 @@ pub fn normalize_symbol_name(name: &str) -> String {
 
 pub struct Database {
     conn: Connection,
+    /// Set when this `Database` was opened via [`Database::open_readonly`].
+    /// Captures the `metadata` snapshot at attach time so a later promotion
+    /// (Phase 5) can detect drift before switching to read-write mode. `None`
+    /// for read-write opens.
+    pinned: Option<PinnedAttach>,
+}
+
+/// Snapshot of write-mode-relevant metadata captured by a read-only attach.
+/// Compared against the on-disk values when the reader decides whether it
+/// can still safely serve queries against the DB.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedAttach {
+    pub schema_version: u32,
+    pub embedding: Option<EmbeddingFingerprint>,
 }
 
 impl std::fmt::Debug for Database {
@@ -638,7 +662,100 @@ impl Database {
         )
         .map_err(DbError::Schema)?;
         handle_embedding_dimension(&conn, embedding_dim).map_err(DbError::EmbeddingDimension)?;
-        Ok(Self { conn })
+        Ok(Self { conn, pinned: None })
+    }
+
+    /// Open an existing on-disk database in **read-only** mode for a
+    /// secondary cartog process (Phase 4 read-only attach). Skips schema
+    /// migrations and the embedding-fingerprint reconcile — the primary
+    /// writer owns those.
+    ///
+    /// Behaviour:
+    /// - Opens with `SQLITE_OPEN_READ_ONLY` so write attempts surface as
+    ///   `SQLITE_READONLY` errors at runtime (a defense-in-depth backup
+    ///   for the higher-level tool gating).
+    /// - Reads the `metadata` snapshot (schema version + embedding
+    ///   fingerprint) and stores it on the returned [`Database`] so the
+    ///   promoter (Phase 5) can compare against the on-disk values later.
+    /// - Returns [`DbError::SchemaDrift`] if the stored `schema_version`
+    ///   doesn't match this binary's expected version — the primary
+    ///   upgraded cartog underneath us and queries can't be trusted.
+    pub fn open_readonly(path: impl AsRef<std::path::Path>) -> DbResult<Self> {
+        use rusqlite::OpenFlags;
+        register_sqlite_vec();
+        let db_path = path.as_ref();
+        let conn = Connection::open_with_flags(
+            db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|source| DbError::Open {
+            path: db_path.to_path_buf(),
+            source,
+        })?;
+        // busy_timeout is still useful: a long read can stall against a
+        // writer mid-checkpoint. WAL keeps readers and writers from
+        // blocking otherwise, but the timeout makes the bound explicit.
+        conn.execute_batch(&format!("PRAGMA busy_timeout={BUSY_TIMEOUT_MS};"))
+            .map_err(DbError::Pragma)?;
+
+        let stored_schema: u32 = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(DbError::Sqlite)?;
+        if stored_schema != SCHEMA_VERSION {
+            return Err(DbError::SchemaDrift {
+                expected: SCHEMA_VERSION,
+                stored: stored_schema,
+            });
+        }
+
+        let stored_provider: Option<String> = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                params![EMBED_PROVIDER_KEY],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(DbError::Sqlite)?;
+        let stored_model: Option<String> = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = ?1",
+                params![EMBED_MODEL_KEY],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(DbError::Sqlite)?;
+        let stored_dim: Option<usize> = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'embedding_dimension'",
+                [],
+                |row| row.get::<_, i64>(0).map(|v| v as usize),
+            )
+            .optional()
+            .map_err(DbError::Sqlite)?;
+        // Embedding fingerprint is recorded together (Phase 6b backfill).
+        // If any field is missing the fingerprint is "unknown" — readers
+        // can still serve graph queries, just can't validate against a
+        // promoter swap later.
+        let embedding = match (stored_provider, stored_model, stored_dim) {
+            (Some(provider), Some(model), Some(dimension)) => Some(EmbeddingFingerprint {
+                provider,
+                model,
+                dimension,
+            }),
+            _ => None,
+        };
+
+        Ok(Self {
+            conn,
+            pinned: Some(PinnedAttach {
+                schema_version: stored_schema,
+                embedding,
+            }),
+        })
     }
 
     /// Open an in-memory database (for tests and benchmarks).
@@ -658,7 +775,19 @@ impl Database {
                  ON edges(file_path) WHERE resolution_state = 0",
         )
         .map_err(DbError::Schema)?;
-        Ok(Self { conn })
+        Ok(Self { conn, pinned: None })
+    }
+
+    /// True when this `Database` was opened via [`Self::open_readonly`].
+    /// MCP tool gating (Phase 4) consults this to refuse the 2 write tools.
+    pub fn is_read_only(&self) -> bool {
+        self.pinned.is_some()
+    }
+
+    /// Snapshot captured at attach time when [`Self::open_readonly`] was
+    /// used. `None` for read-write opens.
+    pub fn pinned_attach(&self) -> Option<&PinnedAttach> {
+        self.pinned.as_ref()
     }
 
     /// Cap the number of pages this DB connection can hold.
@@ -4390,6 +4519,139 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored_dim, 1024);
+    }
+
+    // ── Read-only attach tests (Phase 3) ──
+
+    #[test]
+    fn test_open_readonly_succeeds_and_marks_read_only() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        // Primary creates and writes a fingerprint.
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.reconcile_embedding_fingerprint(&fp("local", "BGE-small-en-v1.5", 384))
+                .unwrap();
+            seed_embedding(&db, 384, "foo");
+        }
+
+        // Reader attaches read-only.
+        let reader = Database::open_readonly(&db_path).unwrap();
+        assert!(reader.is_read_only(), "open_readonly must set the flag");
+        let pinned = reader.pinned_attach().expect("read-only attach pins state");
+        assert_eq!(pinned.schema_version, SCHEMA_VERSION);
+        assert_eq!(
+            pinned.embedding,
+            Some(fp("local", "BGE-small-en-v1.5", 384))
+        );
+    }
+
+    #[test]
+    fn test_open_readonly_can_query_existing_data() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            let sym = Symbol::new(
+                "callable",
+                SymbolKind::Function,
+                "a.py",
+                1,
+                10,
+                0,
+                100,
+                None,
+            );
+            db.insert_symbol(&sym).unwrap();
+        }
+
+        let reader = Database::open_readonly(&db_path).unwrap();
+        let count: i64 = reader
+            .conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "reader sees primary's data");
+    }
+
+    #[test]
+    fn test_open_readonly_refuses_writes() {
+        // SQLITE_OPEN_READ_ONLY must turn any INSERT into SQLITE_READONLY at
+        // runtime — defense-in-depth for the higher-level tool gating in
+        // Phase 4.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let _db = Database::open(&db_path, 384).unwrap();
+        }
+
+        let reader = Database::open_readonly(&db_path).unwrap();
+        let err = reader
+            .conn
+            .execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('x', 'y')",
+                [],
+            )
+            .unwrap_err();
+        // The specific code is SQLITE_READONLY (8); rusqlite surfaces it as
+        // SqliteFailure with the matching error code variant. We just check
+        // that some error came back rather than match on the FFI integer.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("read") || msg.contains("readonly") || msg.contains("write"),
+            "read-only DB write should fail with a read-only-flavored error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_open_readonly_detects_schema_drift() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            // Simulate a future cartog: bump schema_version on disk.
+            db.set_metadata("schema_version", "9999").unwrap();
+        }
+
+        let err = Database::open_readonly(&db_path).unwrap_err();
+        match err {
+            DbError::SchemaDrift { expected, stored } => {
+                assert_eq!(expected, SCHEMA_VERSION);
+                assert_eq!(stored, 9999);
+            }
+            other => panic!("expected SchemaDrift, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_open_readonly_does_not_run_migrations() {
+        // After open_readonly returns, no PRAGMAs or writes should have
+        // landed beyond what was there before. We test the visible
+        // consequence: an existing user-set metadata key is unchanged.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.set_metadata("user_marker", "untouched").unwrap();
+        }
+        let _reader = Database::open_readonly(&db_path).unwrap();
+        // Re-open writable to verify the marker is still there and the
+        // schema didn't get rewritten.
+        let primary = Database::open(&db_path, 384).unwrap();
+        assert_eq!(
+            primary.get_metadata("user_marker").unwrap().as_deref(),
+            Some("untouched")
+        );
+    }
+
+    #[test]
+    fn test_open_default_is_not_read_only() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = Database::open(&db_path, 384).unwrap();
+        assert!(!db.is_read_only());
+        assert!(db.pinned_attach().is_none());
     }
 
     #[test]

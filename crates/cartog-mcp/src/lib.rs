@@ -1345,6 +1345,7 @@ mod tests {
 
     #[test]
     fn pid_file_acquired_when_lock_dir_set() {
+        let _guard = env_mutex().lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::TempDir::new().unwrap();
         let opts = ServerOptions {
             pid_lock_dir: Some(dir.path().to_path_buf()),
@@ -1377,11 +1378,21 @@ mod tests {
         );
     }
 
+    /// Serialize tests that read or mutate the `CARTOG_SINGLE_WRITER` env
+    /// var. The variable is process-global; cargo test runs cases in
+    /// parallel by default, so without this mutex a concurrent setter
+    /// flips the value mid-read on another thread.
+    fn env_mutex() -> &'static std::sync::Mutex<()> {
+        static M: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        M.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     #[test]
     fn second_acquire_for_same_dir_reports_held() {
         // Two acquire_serve_lock calls against the same dir: the first wins,
         // the second must surface Held(_) with the first's PID so the caller
         // can branch.
+        let _guard = env_mutex().lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::TempDir::new().unwrap();
         let opts = ServerOptions {
             pid_lock_dir: Some(dir.path().to_path_buf()),
@@ -1402,6 +1413,7 @@ mod tests {
 
     #[test]
     fn kill_switch_disables_election() {
+        let _guard = env_mutex().lock().unwrap_or_else(|e| e.into_inner());
         // CARTOG_SINGLE_WRITER=0 must let a second acquire_overwriting-style
         // call succeed despite a live first holder. Restoring the env var
         // afterwards is best-effort; tests in a single binary share env so
