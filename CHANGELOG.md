@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.17.0] - 2026-05-19
+## [0.17.1] - 2026-05-20
 
 ### Bug Fixes
 
@@ -60,6 +60,14 @@
 - Address CodeRabbit review findings ([`2f8c54c`](https://github.com/jrollin/cartog/commit/2f8c54cd90ae02558a8ca0cc87047f4aeb6cce1b))
 - **indexer**: Skip LSP edge resolution on no-op reindex ([`1d445bf`](https://github.com/jrollin/cartog/commit/1d445bf29eaae3e5135e84a38160e3c643ec07a5))
 - **db**: Keep target_id and resolution_state in sync across all UPDATE sites ([`264033b`](https://github.com/jrollin/cartog/commit/264033b8e72cc46322718910348d72f8ef29e2b1))
+- **db**: Retry embedding-dimension migration on SQLITE_BUSY ([`a75dec0`](https://github.com/jrollin/cartog/commit/a75dec038215d71ec3463c8ae4f8673f3abc8b2c))
+- **rag**: Detect provider/model swap, not just dimension change ([`c1a4112`](https://github.com/jrollin/cartog/commit/c1a411201e85a65a1ab60f8c4a902bc8d8e8c34e))
+- **serve,rag**: Close race windows and stabilize embedding fingerprint ([`949ac43`](https://github.com/jrollin/cartog/commit/949ac43ddacd87676157ea0f70e8b3bab866907a))
+- **db**: Wrap migration writes in transactions + tighten schema-drift error ([`1a563f7`](https://github.com/jrollin/cartog/commit/1a563f79331bedacb1196df9fbdfc9899a3c71f5))
+- **rag**: Drop fingerprint reconcile from cartog rag search ([`f66b796`](https://github.com/jrollin/cartog/commit/f66b796a5d080572f5e4186c882b78ee8c0d35af))
+- **mcp**: Harden promotion ordering, retry, validation, and cancellation ([`9e59f5b`](https://github.com/jrollin/cartog/commit/9e59f5baa5bdbc2bd2dda505e21cf49721b52884))
+- Address inline review findings on PR #55 fixes ([`081cdfc`](https://github.com/jrollin/cartog/commit/081cdfc20b816c45e932cb7766e754627966bcc4))
+- **mcp**: Poison-safe promotion + surface watcher_active in cartog_stats ([`9f157fe`](https://github.com/jrollin/cartog/commit/9f157fe87dba19f55262c2c7fac98de3bacbefc2))
 
 ### Documentation
 
@@ -89,6 +97,9 @@
 - **readme**: Add contributors section (#39) ([`cf1008d`](https://github.com/jrollin/cartog/commit/cf1008d7cf5577d77912e2f628d78fcdeeb5ecc1))
 - Sync README + usage to two-step bootstrap flow ([`bb12d61`](https://github.com/jrollin/cartog/commit/bb12d61ecef46cf54fd3dfc023730e2ef04ecc66))
 - **lsp**: Clarify two-mode coverage in no-servers regression test ([`a0533f6`](https://github.com/jrollin/cartog/commit/a0533f64f87a3b55d12b9ec1c660c20f88c8f840))
+- Spec + sync for single-writer MCP ([`bc2a747`](https://github.com/jrollin/cartog/commit/bc2a7470a460d8b1456700f54f91de1e9c1b2b86))
+- Drop unsafe manual lock deletion + fix log copy + state_dir path ([`4d876b1`](https://github.com/jrollin/cartog/commit/4d876b1eda51765da28b49821745036acb4532b1))
+- **spec**: Record review fixes + correct cartog rag search reconcile claim ([`8c01bde`](https://github.com/jrollin/cartog/commit/8c01bded3a33369b15925eda58a8f75d23ffea43))
 
 ### Features
 
@@ -155,6 +166,12 @@
 - **skill**: Ensure_indexed.sh hints at cartog init on fresh repos ([`7f81194`](https://github.com/jrollin/cartog/commit/7f811947d4b5a1e0e1b08f2e5b54a780ddd1de29))
 - **skill**: Defer index when .cartog.toml is missing on TTY sessions ([`4702206`](https://github.com/jrollin/cartog/commit/470220602123f5a7d558870b968deea7f7d5620f))
 - **db**: Persist edge resolution_state, skip unresolvable in LSP pass ([`ccbbea3`](https://github.com/jrollin/cartog/commit/ccbbea34b6cb93ac8bb8b5c9e701e4dcbf7f08a9))
+- **serve**: SIGTERM-aware shutdown, PID-reuse-safe locks, quieter MCP logs ([`2904177`](https://github.com/jrollin/cartog/commit/29041775b9def2ba83df38c9a7a63455171d6e55))
+- **serve**: Single-writer election via O_EXCL PID locks ([`c882021`](https://github.com/jrollin/cartog/commit/c88202170a75c50f8421a28a5c2761baac0ad24e))
+- **db**: Database::open_readonly for secondary cartog processes ([`56d220c`](https://github.com/jrollin/cartog/commit/56d220cc5262df5b82c0c8fb019e93b1da373bf4))
+- **mcp**: Attach read-only when another cartog process is primary ([`82c6f24`](https://github.com/jrollin/cartog/commit/82c6f24b2292313a1c94ca81a3c885f887df57cc))
+- **db,watch**: Open_existing_rw + watcher skip flags for promotion ([`5d8fe84`](https://github.com/jrollin/cartog/commit/5d8fe84545cbad8afb323fd1534b95a7018c93f4))
+- **mcp**: Promote secondary to primary when watched holder dies ([`24c5c70`](https://github.com/jrollin/cartog/commit/24c5c70b54976ea791facfcfa5eaa9e31b309aff))
 
 ### Miscellaneous
 
