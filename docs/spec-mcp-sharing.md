@@ -52,7 +52,7 @@ cartog serve   →   acquire_serve_lock(O_EXCL on .cartog/state/serve.pid)
 
 4. **Tool gating, not transport split.** Same MCP stdio transport for both roles. The two write tools (`cartog_index`, `cartog_rag_index`) early-return a clear error when role is `ReadOnly`. The other 11 (search, outline, refs, callees, impact, hierarchy, deps, stats, map, changes, rag_search) work unchanged. `cartog_stats` JSON includes `"role": "primary" | "read-only"` for introspection.
 
-5. **Promotion under the existing `Mutex<Database>`.** When the secondary's promoter detects the primary died, validates pinned state, and wins an O_EXCL acquire, it swaps the inner `Database` value under the mutex. No reader can be mid-query through the same guard (it must release before the promoter can claim it), so SQLITE_MISUSE from a connection-mid-use is impossible. The promoter then spawns the watcher (with `skip_pid_lock=true` so the watcher doesn't re-race the slot we already own, and `skip_migrations=true` via `Database::open_existing_rw` so we don't re-trigger the migration race the election prevents) and flips `Arc<AtomicRole>` to `Primary`.
+5. **Promotion under the existing `Mutex<Database>`.** When the secondary's promoter detects the primary died, validates pinned state, and wins an O_EXCL acquire, it swaps the inner `Database` value under the mutex. No reader can be mid-query through the same guard (it must release before the promoter can claim it), so SQLITE_MISUSE from a connection-mid-use is impossible. The promoter then spawns the watcher (acquiring `watch.pid` alongside the `serve.pid` it already holds — they're different slots gating different consumers; `serve.pid` blocks other MCP servers, `watch.pid` blocks a separately-running `cartog watch` from a terminal) via `Database::open_existing_rw` (`skip_migrations=true` so we don't re-trigger the migration race the election prevents), and flips `Arc<AtomicRole>` to `Primary`. `cartog_stats` exposes `"watcher_active"` so users can see whether the watcher actually started post-promotion (it may fail if a live terminal `cartog watch` holds the slot).
 
 6. **Migration-race safety net.** `handle_embedding_dimension` writes wrap in `retry_busy` on `SQLITE_BUSY` / `SQLITE_LOCKED` with 50/100/250/500/1000ms backoff. A true early-return on already-matching dimension means same-dim reopens never take a write lock at all. Layered defense for any case where two writers reach migration despite election (TOCTOU window, kill switch enabled).
 
@@ -91,7 +91,7 @@ While role is `ReadOnly` and the primary's `ActiveLock` is known, the system sha
 When the promoter detects the primary is gone AND `validate_pinned_state` confirms the on-disk schema and fingerprint match the attach-time `PinnedAttach`, the system shall:
 - attempt an atomic O_EXCL acquire of the serve slot;
 - on success, open `Database::open_existing_rw` and swap it into the existing `Arc<Mutex<Database>>` under the held guard;
-- spawn a watcher with `skip_pid_lock=true` and `skip_migrations=true` if the user invoked `serve --watch`;
+- spawn a watcher (with `skip_migrations=true` via `Database::open_existing_rw`, and acquiring `watch.pid` alongside the already-held `serve.pid`) if the user invoked `serve --watch`. If `watch.pid` is held by another live cartog process, the watcher fails to start and `cartog_stats` reports `"watcher_active": false`;
 - store `Role::Primary` in `AtomicRole`;
 - exit the promoter loop.
 
@@ -210,8 +210,8 @@ All items completed across the initial 8 implementation commits
 
 ### Phase 5: promotion
 - [x] `Database::open_existing_rw(path)` (full RW + PRAGMAs + schema-drift check, no migrations)
-- [x] `WatchConfig::skip_pid_lock` + `skip_migrations` flags
-- [x] `cartog-watch` watch loop honors both flags
+- [x] `WatchConfig::skip_migrations` flag (originally included `skip_pid_lock`, removed in a later review fix — both promoter-spawned and CLI-spawned watchers now claim `watch.pid` uniformly so two `cartog watch` processes can't run concurrently against the same DB)
+- [x] `cartog-watch` watch loop honors `skip_migrations`
 - [x] `AtomicRole` wrapping `AtomicU8`; `CartogServer.role: Arc<AtomicRole>`
 - [x] `PromoterArgs` struct + `promoter_task` async function
 - [x] Polls every 10s, validates pinned state, atomic O_EXCL acquire, swaps DB under Mutex, spawns watcher, flips role

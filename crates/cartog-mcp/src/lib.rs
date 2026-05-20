@@ -395,6 +395,13 @@ pub struct CartogServer {
     /// unchanged. Mutated atomically when the Phase 5 promoter detects
     /// the primary died and takes over.
     role: Arc<AtomicRole>,
+    /// True when this Primary instance has a live file watcher running
+    /// (`cartog serve --watch` or post-promotion equivalent). False for
+    /// `cartog serve` without `--watch`, for read-only secondaries, and
+    /// (importantly) for a Primary whose watcher failed to start after
+    /// promotion — surfaced in `cartog_stats` output so users can see
+    /// the degraded state.
+    watcher_active: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Role of this MCP server instance under single-writer election.
@@ -470,6 +477,7 @@ impl CartogServer {
             lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
             cwd: Arc::from(cwd),
             role: Arc::new(AtomicRole::new(Role::Primary)),
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -497,6 +505,7 @@ impl CartogServer {
             lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
             cwd: Arc::from(cwd),
             role: Arc::new(AtomicRole::new(Role::ReadOnly)),
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -834,6 +843,9 @@ impl CartogServer {
     async fn cartog_stats(&self) -> Result<CallToolResult, McpError> {
         let db = Arc::clone(&self.db);
         let role = self.role.load();
+        let watcher_active = self
+            .watcher_active
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         tokio::task::spawn_blocking(move || {
             debug!("stats");
@@ -844,13 +856,23 @@ impl CartogServer {
                 .stats()
                 .map_err(|e| mcp_err(format!("stats query failed: {e}")))?;
 
-            // Serialize the base stats then splice the role in alongside.
+            // Serialize the base stats then splice the role + watcher
+            // status alongside. `watcher_active=false` on a Primary means
+            // either the user did not request `--watch`, or a post-
+            // promotion watcher spawn failed (e.g., another live
+            // `cartog watch` holds the watch slot, or notify install
+            // failed). The user can distinguish the cases by checking
+            // whether they passed `--watch`.
             let mut value = serde_json::to_value(&stats)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             if let Some(obj) = value.as_object_mut() {
                 obj.insert(
                     "role".to_string(),
                     serde_json::Value::String(role.as_str().to_string()),
+                );
+                obj.insert(
+                    "watcher_active".to_string(),
+                    serde_json::Value::Bool(watcher_active),
                 );
             }
             let json = serde_json::to_string_pretty(&value)
@@ -1205,6 +1227,14 @@ pub async fn run_server(
         Role::ReadOnly => CartogServer::new_read_only(db_path, rag_config.clone())?,
     };
 
+    // Reflect initial watcher state on the server's flag so `cartog_stats`
+    // surfaces it accurately from request #1. Will be updated by the
+    // promoter on a successful post-promotion watcher spawn.
+    server.watcher_active.store(
+        initial_watch_handle.is_some(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+
     // Shared cells so the promoter (if any) can install the lock + watcher
     // after winning election, and so the cells stay alive for the whole
     // `run_server` lifetime — Drop on shutdown fires here.
@@ -1225,6 +1255,7 @@ pub async fn run_server(
                     role: Arc::clone(&server.role),
                     lock_cell: Arc::clone(&lock_cell),
                     watch_cell: Arc::clone(&watch_cell),
+                    watcher_active: Arc::clone(&server.watcher_active),
                     db_path: db_path.to_path_buf(),
                     state_dir,
                     cwd,
@@ -1291,6 +1322,10 @@ struct PromoterArgs {
     /// Slot for the watcher handle spawned after promotion (when the user
     /// asked for `serve --watch`).
     watch_cell: Arc<Mutex<Option<WatchHandle>>>,
+    /// Reflects whether a file watcher is currently running. Set to true
+    /// on a successful post-promotion spawn, left false if the watcher
+    /// failed to start (degraded Primary: surfaced in `cartog_stats`).
+    watcher_active: Arc<std::sync::atomic::AtomicBool>,
     db_path: std::path::PathBuf,
     state_dir: std::path::PathBuf,
     /// CWD captured at server startup. Reused for the post-promotion
@@ -1416,8 +1451,28 @@ async fn promoter_task(args: PromoterArgs) {
         // new state — and the write tools start accepting requests at
         // the same moment the DB is RW (no window where role lags the
         // swap).
-        if let Ok(mut guard) = args.lock_cell.lock() {
-            *guard = Some(new_lock);
+        //
+        // A poisoned lock_cell mutex is fatal in the same way args.db
+        // poison is (treated symmetrically above): if we let `new_lock`
+        // fall off the end of an `if let Ok(_)` arm, Drop unlinks the
+        // PID file, and then storing Role::Primary creates a "primary
+        // with no lock" state — a fresh `cartog serve` would win the
+        // next O_EXCL acquire and we'd have two Primaries. Instead, bail
+        // out cleanly: drop the lock, leave role as ReadOnly, exit the
+        // promoter task. The next-attempt path is now closed (caller
+        // would need to restart the process), but a poisoned mutex
+        // means the whole server is degraded anyway.
+        match args.lock_cell.lock() {
+            Ok(mut guard) => {
+                *guard = Some(new_lock);
+            }
+            Err(_) => {
+                tracing::error!(
+                    "lock_cell mutex poisoned; cannot install serve lock, exiting promoter task without flipping role"
+                );
+                drop(new_lock);
+                return;
+            }
         }
         args.role.store(Role::Primary);
 
@@ -1445,8 +1500,26 @@ async fn promoter_task(args: PromoterArgs) {
             let db_path_str = args.db_path.to_string_lossy().into_owned();
             match watch::spawn_watch(config, &db_path_str) {
                 Ok(handle) => {
-                    if let Ok(mut guard) = args.watch_cell.lock() {
-                        *guard = Some(handle);
+                    // If watch_cell is poisoned, dropping `handle` here
+                    // signals shutdown to the watcher thread (its
+                    // shutdown flag flips in Drop). That's the best we
+                    // can do; the server stays Primary with no watcher
+                    // — degraded but not corrupt — and we leave
+                    // watcher_active = false so `cartog_stats` surfaces
+                    // the degradation.
+                    match args.watch_cell.lock() {
+                        Ok(mut guard) => {
+                            *guard = Some(handle);
+                            args.watcher_active
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        Err(_) => {
+                            tracing::error!(
+                                "watch_cell mutex poisoned; post-promotion watcher discarded — \
+                                 server is Primary but will not auto-reindex"
+                            );
+                            drop(handle);
+                        }
                     }
                 }
                 Err(e) => {
@@ -2083,6 +2156,7 @@ mod tests {
             role,
             lock_cell: Arc::new(Mutex::new(None)),
             watch_cell: Arc::new(Mutex::new(None)),
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             db_path: db_path.clone(),
             state_dir,
             cwd: std::env::current_dir().unwrap(),
