@@ -665,6 +665,54 @@ impl Database {
         Ok(Self { conn, pinned: None })
     }
 
+    /// Open an existing on-disk database in **read-write** mode without
+    /// running schema migrations or the embedding-fingerprint reconcile.
+    /// Used by the Phase 5 promoter: a secondary that detected its primary
+    /// died and validated the on-disk schema/fingerprint against its
+    /// pinned snapshot before claiming the slot. Re-running the migration
+    /// would re-trigger the SQLITE_BUSY race that the election was meant
+    /// to prevent.
+    ///
+    /// Verifies that `schema_version` still matches `SCHEMA_VERSION` to
+    /// guard against a race where another writer upgraded the schema
+    /// between the secondary's attach and this promotion. Returns
+    /// [`DbError::SchemaDrift`] in that case so the promoter aborts and
+    /// the MCP process exits cleanly.
+    pub fn open_existing_rw(path: impl AsRef<std::path::Path>) -> DbResult<Self> {
+        register_sqlite_vec();
+        let db_path = path.as_ref();
+        let conn = Connection::open(db_path).map_err(|source| DbError::Open {
+            path: db_path.to_path_buf(),
+            source,
+        })?;
+        conn.execute_batch(&format!(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA busy_timeout={BUSY_TIMEOUT_MS};
+             PRAGMA foreign_keys=ON;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA cache_size=-65536;
+             PRAGMA temp_store=MEMORY;
+             PRAGMA mmap_size=268435456;"
+        ))
+        .map_err(DbError::Pragma)?;
+
+        let stored_schema: u32 = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(DbError::Sqlite)?;
+        if stored_schema != SCHEMA_VERSION {
+            return Err(DbError::SchemaDrift {
+                expected: SCHEMA_VERSION,
+                stored: stored_schema,
+            });
+        }
+
+        Ok(Self { conn, pinned: None })
+    }
+
     /// Open an existing on-disk database in **read-only** mode for a
     /// secondary cartog process (Phase 4 read-only attach). Skips schema
     /// migrations and the embedding-fingerprint reconcile — the primary
@@ -4652,6 +4700,48 @@ mod tests {
         let db = Database::open(&db_path, 384).unwrap();
         assert!(!db.is_read_only());
         assert!(db.pinned_attach().is_none());
+    }
+
+    // ── Promotion path: open_existing_rw (Phase 5) ──
+
+    #[test]
+    fn test_open_existing_rw_opens_writable_and_skips_migrations() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        // Materialize with a user-set metadata marker we can re-read.
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.set_metadata("marker", "preserved").unwrap();
+        }
+
+        let promoted = Database::open_existing_rw(&db_path).unwrap();
+        assert!(!promoted.is_read_only(), "open_existing_rw is RW");
+        assert!(promoted.pinned_attach().is_none(), "RW opens have no pin");
+        // The marker survives (we didn't wipe anything).
+        assert_eq!(
+            promoted.get_metadata("marker").unwrap().as_deref(),
+            Some("preserved")
+        );
+        // We can write — confirming it's a real RW handle.
+        promoted.set_metadata("write_check", "ok").unwrap();
+    }
+
+    #[test]
+    fn test_open_existing_rw_detects_schema_drift() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.set_metadata("schema_version", "9999").unwrap();
+        }
+        let err = Database::open_existing_rw(&db_path).unwrap_err();
+        match err {
+            DbError::SchemaDrift { expected, stored } => {
+                assert_eq!(expected, SCHEMA_VERSION);
+                assert_eq!(stored, 9999);
+            }
+            other => panic!("expected SchemaDrift, got {other:?}"),
+        }
     }
 
     #[test]
