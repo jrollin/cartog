@@ -93,10 +93,14 @@ newer (`cartog --version`) and that you haven't set `CARTOG_SINGLE_WRITER=0`.
 
 Exactly one `cartog watch` may run per project at a time. The watcher
 refuses to start (rather than attaching read-only — unlike `cartog serve`)
-because a second watcher would re-index the same files redundantly. Stop
-the running watcher or remove `<state_dir>/watch.pid` if you're certain
-the holder is dead (the file is auto-cleaned on the next acquire when the
-recorded PID + start_time no longer matches a live process).
+because a second watcher would re-index the same files redundantly.
+
+Find the holder via `cat <state_dir>/watch.pid` (first line is the PID,
+second is the OS start time) and stop it. **Do not manually delete the
+lock file** — cartog auto-cleans it on the next acquire once the
+recorded PID + start_time no longer matches a live process, and deleting
+it under a live writer would let a second watcher start and corrupt the
+index.
 
 ### My cartog process exited but the PID file is still there
 

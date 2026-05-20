@@ -427,8 +427,18 @@ Escape hatches:
 
 | Env var | Effect |
 |---|---|
-| `CARTOG_SINGLE_WRITER=0` | Disables election. Every `cartog serve` opens RW; the Phase 6a migration busy-retry is the only defense against the rare race window. |
+| `CARTOG_SINGLE_WRITER=0` | Disables election. Every `cartog serve` opens RW; the migration busy-retry is the only defense against the rare race window. |
 | `RUST_LOG=info` | Restores `info`-level tracing in MCP-child mode (defaults to `warn` when stderr is not a TTY so info lines don't surface as `[ERROR]` in the parent's log). |
+
+`<state_dir>` resolves to the platform's standard state directory (via the `directories` crate):
+
+| OS | Path |
+|----|------|
+| Linux | `$XDG_STATE_HOME/cartog/` (default `~/.local/state/cartog/`) |
+| macOS | `~/Library/Application Support/io.cartog.cartog/` |
+| Windows | `%LOCALAPPDATA%\cartog\cartog\data\` |
+
+The directory holds `state.toml` (used by `cartog self update`) and PID lock files (`serve.pid`, `watch.pid`) for live long-lived commands.
 
 See [`spec-mcp-sharing.md`](spec-mcp-sharing.md) for the full design.
 
@@ -950,10 +960,20 @@ The MCP server sends workflow instructions to the client at initialization, cove
 
 ### Logging
 
-Logs go to stderr. Default level is `info` (server start/stop only). Set `RUST_LOG` for more detail:
+Logs go to stderr. The default level depends on how cartog is invoked:
+
+| Invocation | Default level | Why |
+|------------|---------------|-----|
+| `cartog serve` / `cartog watch` / `cartog rag index`, stderr is a TTY | `info` | Foreground user wants progress |
+| Same, stderr is captured (MCP child, piped CI) | `warn` | The parent reads stderr; info-level lines surfaced as `[ERROR]` in client debug logs |
+| Other commands (one-shot CLI) | `warn` | Stay quiet by default |
+
+Set `RUST_LOG` to override in either direction:
 
 ```bash
 RUST_LOG=debug cartog serve   # per-request tool call logging
+RUST_LOG=info  cartog serve   # force info under MCP-child mode
+RUST_LOG=warn  cartog watch   # quieten down a foreground watcher
 ```
 
 ### Plugin vs MCP vs Skill
