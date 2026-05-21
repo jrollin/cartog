@@ -157,6 +157,15 @@ pub enum ProgressUpdate {
 /// Implementations must be cheap and non-blocking.
 pub type ProgressCallback<'a> = &'a (dyn Fn(ProgressUpdate) + Send + Sync);
 
+/// Optional cooperative-cancellation probe accepted by [`index_directory`].
+///
+/// Returns `true` when the caller wants the indexer to stop. Polled at phase
+/// boundaries and once per file in the storing loop, so worst-case latency is
+/// one file's write. When the probe trips, `index_directory` returns
+/// `Err` whose root cause string is `"cancelled"` — the MCP layer matches on
+/// this to surface a cancelled response. Behavior with `None` is unchanged.
+pub type CancelProbe<'a> = &'a (dyn Fn() -> bool + Send + Sync);
+
 /// Index a directory, updating the database incrementally.
 ///
 /// Change detection strategy (in order):
@@ -173,11 +182,18 @@ pub fn index_directory(
     force: bool,
     lsp: bool,
     progress: Option<ProgressCallback<'_>>,
+    cancel: Option<CancelProbe<'_>>,
 ) -> Result<IndexResult> {
     let emit = |u: ProgressUpdate| {
         if let Some(cb) = progress {
             cb(u);
         }
+    };
+    let check_cancel = || -> Result<()> {
+        if cancel.is_some_and(|c| c()) {
+            anyhow::bail!("cancelled");
+        }
+        Ok(())
     };
 
     let mut result = IndexResult::default();
@@ -211,6 +227,7 @@ pub fn index_directory(
     };
 
     // ── Phase 1: walk + filter candidates (cheap, single-threaded) ──
+    check_cancel()?;
     emit(ProgressUpdate::Walking);
     let mut candidates: Vec<(PathBuf, String, &'static str)> = Vec::new();
     for entry in WalkDir::new(&root)
@@ -254,6 +271,7 @@ pub fn index_directory(
     }
 
     // ── Phase 2: parallel parse + extract (CPU-bound, rayon-worker pool) ──
+    check_cancel()?;
     emit(ProgressUpdate::Parsing {
         total: candidates.len() as u32,
     });
@@ -295,11 +313,13 @@ pub fn index_directory(
         .iter()
         .filter(|p| matches!(p, ParseOutput::Parsed { .. }))
         .count() as u32;
+    check_cancel()?;
     emit(ProgressUpdate::Storing {
         total: storing_total,
     });
     let tx = db.begin_indexing_tx()?;
     for item in parsed {
+        check_cancel()?;
         let (rel_path, lang, source, hash, modified, symbols, edges) = match item {
             ParseOutput::Skipped => {
                 result.files_skipped += 1;
@@ -1077,12 +1097,12 @@ mod tests {
 
         if fixtures.exists() {
             // First index
-            let r1 = index_directory(&db, &fixtures, false, false, None).unwrap();
+            let r1 = index_directory(&db, &fixtures, false, false, None, None).unwrap();
             assert!(r1.files_indexed > 0);
             assert!(r1.dirty_files > 0);
 
             // Second index without force — should skip all files (no-op)
-            let r2 = index_directory(&db, &fixtures, false, false, None).unwrap();
+            let r2 = index_directory(&db, &fixtures, false, false, None, None).unwrap();
             assert_eq!(r2.files_indexed, 0);
             assert!(r2.files_skipped > 0);
             assert_eq!(
@@ -1095,7 +1115,7 @@ mod tests {
             );
 
             // Force re-index — dirty_files matches files_indexed
-            let r3 = index_directory(&db, &fixtures, true, false, None).unwrap();
+            let r3 = index_directory(&db, &fixtures, true, false, None, None).unwrap();
             assert_eq!(r3.files_indexed, r1.files_indexed);
             assert_eq!(r3.files_skipped, 0);
             assert_eq!(r3.dirty_files, r3.files_indexed);
@@ -1116,9 +1136,9 @@ mod tests {
 
         // Prime, then re-run. Don't assert LSP found anything (depends on
         // whether pyright is on PATH in CI) — only that the second pass skips it.
-        let _ = index_directory(&db, &fixtures, false, true, None).unwrap();
+        let _ = index_directory(&db, &fixtures, false, true, None, None).unwrap();
 
-        let r2 = index_directory(&db, &fixtures, false, true, None).unwrap();
+        let r2 = index_directory(&db, &fixtures, false, true, None, None).unwrap();
         assert_eq!(r2.dirty_files, 0);
         assert_eq!(r2.edges_lsp_resolved, 0);
     }
@@ -1137,7 +1157,7 @@ mod tests {
         std::fs::write(root.join("a.py"), "def caller():\n    find_user('x')\n").unwrap();
 
         let db = Database::open_memory().unwrap();
-        let r1 = index_directory(&db, &root, false, false, None).unwrap();
+        let r1 = index_directory(&db, &root, false, false, None, None).unwrap();
         assert!(
             r1.files_indexed >= 1,
             "expected a.py to index, got {:?}",
@@ -1155,7 +1175,7 @@ mod tests {
 
         // Adding b.py with find_user definition should reopen the marker.
         std::fs::write(root.join("b.py"), "def find_user(name):\n    return None\n").unwrap();
-        index_directory(&db, &root, false, false, None).unwrap();
+        index_directory(&db, &root, false, false, None, None).unwrap();
 
         assert!(
             !db.is_edge_unresolvable(edge_id).unwrap(),
@@ -1181,7 +1201,7 @@ mod tests {
         std::fs::write(root.join("a.py"), "def caller():\n    find_x()\n").unwrap();
 
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &root, false, false, None).unwrap();
+        index_directory(&db, &root, false, false, None, None).unwrap();
 
         let pre = db.unresolved_edges().unwrap();
         let find_x_id = pre
@@ -1192,7 +1212,7 @@ mod tests {
         db.mark_edge_unresolvable(find_x_id).unwrap();
 
         // --force = true: rebuilds edges with fresh IDs, must NOT inherit state=2.
-        index_directory(&db, &root, true, false, None).unwrap();
+        index_directory(&db, &root, true, false, None, None).unwrap();
         let post = db.unresolved_edges().unwrap();
         let has_find_x_unresolved = post.iter().any(|e| e.target_name == "find_x");
         assert!(
@@ -1217,7 +1237,7 @@ mod tests {
         .unwrap();
 
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &root, false, false, None).unwrap();
+        index_directory(&db, &root, false, false, None, None).unwrap();
 
         let unresolved = db.unresolved_edges().unwrap();
         let target = unresolved
@@ -1227,7 +1247,7 @@ mod tests {
         db.mark_edge_unresolvable(target.edge_id).unwrap();
 
         // No file changes → reindex is a no-op → marker survives.
-        let r = index_directory(&db, &root, false, false, None).unwrap();
+        let r = index_directory(&db, &root, false, false, None, None).unwrap();
         assert_eq!(r.dirty_files, 0);
 
         assert!(
@@ -1561,7 +1581,7 @@ def main():
         let db = Database::open_memory().unwrap();
 
         // ── Index 1: initial full index ──
-        let r1 = index_directory(&db, &dir, true, false, None).unwrap();
+        let r1 = index_directory(&db, &dir, true, false, None, None).unwrap();
         assert_eq!(r1.files_indexed, 2);
         assert!(r1.symbols_added > 0, "should have symbols");
 
@@ -1610,7 +1630,7 @@ def standalone():
         )
         .unwrap();
 
-        let r2 = index_directory(&db, &dir, false, false, None).unwrap();
+        let r2 = index_directory(&db, &dir, false, false, None, None).unwrap();
         assert_eq!(r2.files_indexed, 1, "only a.py changed");
         assert!(r2.files_skipped > 0, "b.py should be skipped");
         assert_eq!(r2.symbols_added, 1, "standalone is new");
@@ -1657,7 +1677,7 @@ def standalone():
         )
         .unwrap();
 
-        let r3 = index_directory(&db, &dir, false, false, None).unwrap();
+        let r3 = index_directory(&db, &dir, false, false, None, None).unwrap();
         assert_eq!(r3.files_indexed, 1);
         assert!(r3.symbols_removed >= 1, "goodbye should be removed");
 
@@ -1711,7 +1731,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
         .unwrap();
 
         let db = Database::open_memory().unwrap();
-        let result = index_directory(&db, &dir, false, false, None).unwrap();
+        let result = index_directory(&db, &dir, false, false, None, None).unwrap();
 
         assert_eq!(result.files_indexed, 1);
         assert!(result.symbols_added >= 3, "should have at least 3 sections");
@@ -1789,7 +1809,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
         std::fs::write(dir.join("seed.py"), "def keep_me():\n    return 1\n").unwrap();
 
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &dir, true, false, None).expect("seed index should succeed");
+        index_directory(&db, &dir, true, false, None, None).expect("seed index should succeed");
 
         // Snapshot the seed state so we can assert it is preserved across the
         // failed run.
@@ -1820,7 +1840,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
         // new functions through Phase 3.
         db.set_max_page_count_for_tests(30).unwrap();
 
-        let result = index_directory(&db, &dir, false, false, None);
+        let result = index_directory(&db, &dir, false, false, None, None);
         assert!(
             result.is_err(),
             "Phase 3 must fail when SQLite runs out of pages; got Ok({result:?})"
@@ -1881,7 +1901,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
 
         let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
         let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
-        let result = index_directory(&db, &root, true, false, Some(&cb)).unwrap();
+        let result = index_directory(&db, &root, true, false, Some(&cb), None).unwrap();
 
         assert!(result.files_indexed >= 2);
         let events = events.into_inner().unwrap();
@@ -1897,12 +1917,12 @@ We use PostgreSQL with connection pooling via pgbouncer.
 
         let (_t1, root1) = tiny_python_project();
         let db1 = Database::open_memory().unwrap();
-        let r_none = index_directory(&db1, &root1, true, false, None).unwrap();
+        let r_none = index_directory(&db1, &root1, true, false, None, None).unwrap();
 
         let (_t2, root2) = tiny_python_project();
         let db2 = Database::open_memory().unwrap();
         let cb = |_: ProgressUpdate| {};
-        let r_some = index_directory(&db2, &root2, true, false, Some(&cb)).unwrap();
+        let r_some = index_directory(&db2, &root2, true, false, Some(&cb), None).unwrap();
 
         // Different temp dirs → different file modified-times can shift, but the
         // count-based fields of IndexResult are deterministic on a fresh DB.
@@ -1933,7 +1953,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
         let db = Database::open_memory().unwrap();
         let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
         let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
-        index_directory(&db, &root, true, false, Some(&cb)).unwrap();
+        index_directory(&db, &root, true, false, Some(&cb), None).unwrap();
 
         let events = events.into_inner().unwrap();
         assert!(matches!(events.first(), Some(ProgressUpdate::Walking)));
@@ -1943,5 +1963,54 @@ We use PostgreSQL with connection pooling via pgbouncer.
         assert!(events
             .iter()
             .any(|e| matches!(e, ProgressUpdate::Storing { total } if *total > 0)));
+    }
+
+    #[test]
+    fn cancel_probe_returning_true_aborts_with_cancelled_error() {
+        use cartog_db::Database;
+
+        let (_tmp, root) = tiny_python_project();
+        let db = Database::open_memory().unwrap();
+
+        let probe = || true;
+        let err = index_directory(&db, &root, true, false, None, Some(&probe))
+            .expect_err("index must abort when probe trips at first phase boundary");
+        assert!(
+            err.to_string().contains("cancelled"),
+            "error must mention cancellation, got: {err}"
+        );
+    }
+
+    #[test]
+    fn cancel_probe_returning_false_runs_to_completion() {
+        use cartog_db::Database;
+
+        let (_tmp, root) = tiny_python_project();
+        let db = Database::open_memory().unwrap();
+
+        let probe = || false;
+        let result = index_directory(&db, &root, true, false, None, Some(&probe))
+            .expect("non-cancelling probe must not affect normal indexing");
+        assert!(result.files_indexed >= 2);
+    }
+
+    #[test]
+    fn rerun_after_cancellation_completes_normally() {
+        use cartog_db::Database;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let (_tmp, root) = tiny_python_project();
+        let db = Database::open_memory().unwrap();
+
+        let flag = AtomicBool::new(true);
+        let probe = || flag.load(Ordering::SeqCst);
+        let _ = index_directory(&db, &root, true, false, None, Some(&probe))
+            .expect_err("first run cancels");
+
+        // Flip the probe off — second run must complete and produce a real result.
+        flag.store(false, Ordering::SeqCst);
+        let result = index_directory(&db, &root, true, false, None, Some(&probe))
+            .expect("re-run after cancellation must succeed");
+        assert!(result.files_indexed >= 2);
     }
 }

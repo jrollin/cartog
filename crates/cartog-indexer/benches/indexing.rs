@@ -40,7 +40,7 @@ fn bench_indexing(c: &mut Criterion) {
     c.bench_function("index_full_force", |b| {
         b.iter(|| {
             let db = Database::open_memory().unwrap();
-            index_directory(&db, &fixture, true, false, None).unwrap();
+            index_directory(&db, &fixture, true, false, None, None).unwrap();
         });
     });
 
@@ -48,9 +48,9 @@ fn bench_indexing(c: &mut Criterion) {
     // before parsing.
     c.bench_function("index_incremental_noop", |b| {
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &fixture, true, false, None).unwrap();
+        index_directory(&db, &fixture, true, false, None, None).unwrap();
         b.iter(|| {
-            index_directory(&db, &fixture, false, false, None).unwrap();
+            index_directory(&db, &fixture, false, false, None, None).unwrap();
         });
     });
 
@@ -58,7 +58,7 @@ fn bench_indexing(c: &mut Criterion) {
     // and exercises the Merkle-diff path inside Phase 3.
     c.bench_function("index_incremental_one_file", |b| {
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &fixture, true, false, None).unwrap();
+        index_directory(&db, &fixture, true, false, None, None).unwrap();
         b.iter(|| {
             db.upsert_file(&FileInfo {
                 path: "auth/service.py".to_string(),
@@ -68,7 +68,7 @@ fn bench_indexing(c: &mut Criterion) {
                 num_symbols: 0,
             })
             .unwrap();
-            index_directory(&db, &fixture, false, false, None).unwrap();
+            index_directory(&db, &fixture, false, false, None, None).unwrap();
         });
     });
 }
