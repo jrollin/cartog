@@ -515,9 +515,25 @@ fn self_update_full_already_up_to_date_exits_zero() {
 
 #[cfg(unix)]
 fn copy_cartog_into(dir: &std::path::Path) -> PathBuf {
+    use std::fs::OpenOptions;
     use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("cartog");
-    std::fs::copy(cartog_bin(), &bin).expect("copy cartog");
+    // Linux returns ETXTBSY from execve() if any process still holds a write
+    // fd on the binary. `std::fs::copy` returns when bytes hit the page cache,
+    // not when the write fd is closed: racing parallel tests can then fail
+    // to spawn the freshly copied binary. Open/write/fsync/drop the dest fd
+    // in its own scope to close the race window before chmod+exec.
+    {
+        let mut src = std::fs::File::open(cartog_bin()).expect("open cartog");
+        let mut dst = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&bin)
+            .expect("create dest cartog");
+        std::io::copy(&mut src, &mut dst).expect("copy cartog");
+        dst.sync_all().expect("fsync dest cartog");
+    }
     let mut perms = std::fs::metadata(&bin).unwrap().permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&bin, perms).unwrap();
