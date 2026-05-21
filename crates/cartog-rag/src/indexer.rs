@@ -266,6 +266,10 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
     }
     pairs.sort_by_key(|(text, _)| text.len());
 
+    // Progress total uses the post-filter pair count so `processed` can reach
+    // 100%. The original `total = symbol_ids.len()` stays in tracing logs as
+    // the user-facing "how many symbols did you ask me to embed?" figure.
+    let progress_total = pairs.len() as u32;
     let mut db_batch: Vec<(i64, Vec<u8>)> = Vec::with_capacity(DB_BATCH_LIMIT);
     let mut processed = 0usize;
 
@@ -278,7 +282,7 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
 
         emit(ProgressUpdate::Embedding {
             processed: processed as u32,
-            total: total as u32,
+            total: progress_total,
         });
 
         if processed % 1000 < CHUNK_SIZE {
@@ -286,9 +290,14 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
         }
     }
 
-    // Flush remaining DB writes
-    if !db_batch.is_empty() {
+    // Always emit Storing when there was work to do, even if the last
+    // flush_embedding_batch already drained db_batch via DB_BATCH_LIMIT.
+    // Clients use Storing as the final-phase marker; suppressing it on
+    // large runs would leave the progress UI stuck at "embedding N/N".
+    if !pairs.is_empty() {
         emit(ProgressUpdate::Storing);
+    }
+    if !db_batch.is_empty() {
         db.insert_embeddings(&db_batch)?;
     }
 
@@ -593,6 +602,65 @@ mod tests {
         index_embeddings(&db, &mut provider, false, Some(&cb)).unwrap();
 
         assert!(events.into_inner().unwrap().is_empty());
+    }
+
+    /// B1 regression: when symbol count is a multiple of DB_BATCH_LIMIT (256),
+    /// the inner `flush_embedding_batch` drains `db_batch` mid-loop and the
+    /// outer `if !db_batch.is_empty()` check would skip Storing. The fix
+    /// emits Storing whenever `pairs` is non-empty.
+    #[test]
+    fn progress_callback_emits_storing_when_db_batch_drained_midloop() {
+        use std::sync::Mutex;
+
+        let db = setup_db_with_symbols(DB_BATCH_LIMIT);
+        let mut provider = MockEmbeddingProvider::new(384);
+
+        let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
+        let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
+        index_embeddings(&db, &mut provider, false, Some(&cb)).unwrap();
+
+        let events = events.into_inner().unwrap();
+        assert_eq!(events.last(), Some(&ProgressUpdate::Storing));
+    }
+
+    /// B2 regression: when some symbols are skipped (content too small), the
+    /// `total` reported in Embedding events must reflect the post-filter
+    /// pair count so a client can render a progress bar that reaches 100%.
+    #[test]
+    fn progress_callback_embedding_total_uses_post_filter_count() {
+        use std::sync::Mutex;
+
+        let db = Database::open_memory().unwrap();
+        // 1 valid + 1 too-small symbol
+        let s1 = Symbol::new("big", SymbolKind::Function, "a.py", 1, 2, 0, 10, None);
+        db.insert_symbol(&s1).unwrap();
+        let big_content =
+            "def big_function():\n    return 'a value long enough for the embedding threshold'\n";
+        db.upsert_symbol_content(&s1.id, "big", big_content, "// File: a.py | function big")
+            .unwrap();
+        let s2 = Symbol::new("tiny", SymbolKind::Function, "a.py", 5, 6, 0, 10, None);
+        db.insert_symbol(&s2).unwrap();
+        db.upsert_symbol_content(&s2.id, "tiny", "x=1", "h")
+            .unwrap();
+
+        let mut provider = MockEmbeddingProvider::new(384);
+        let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
+        let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
+        index_embeddings(&db, &mut provider, false, Some(&cb)).unwrap();
+
+        let events = events.into_inner().unwrap();
+        let emb = events
+            .iter()
+            .find_map(|e| match e {
+                ProgressUpdate::Embedding { processed, total } => Some((*processed, *total)),
+                _ => None,
+            })
+            .expect("expected an Embedding event");
+        assert_eq!(
+            emb,
+            (1, 1),
+            "total must reflect post-filter count, not symbol_ids.len()"
+        );
     }
 
     #[test]
