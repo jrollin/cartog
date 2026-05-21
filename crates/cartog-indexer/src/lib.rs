@@ -287,8 +287,16 @@ pub fn index_directory(
     let mut added_symbol_names: std::collections::HashSet<String> =
         std::collections::HashSet::new();
 
+    // `total` here is the number of files that will actually be written, not
+    // the parsed-vec length: `ParseOutput::Skipped` short-circuits before the
+    // DB write and `ParseOutput::Failed` is dropped. Without this filter a
+    // warm re-index reports `storing N` where N is the full candidate set.
+    let storing_total = parsed
+        .iter()
+        .filter(|p| matches!(p, ParseOutput::Parsed { .. }))
+        .count() as u32;
     emit(ProgressUpdate::Storing {
-        total: parsed.len() as u32,
+        total: storing_total,
     });
     let tx = db.begin_indexing_tx()?;
     for item in parsed {

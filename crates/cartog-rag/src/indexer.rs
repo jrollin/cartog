@@ -290,13 +290,11 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
         }
     }
 
-    // Always emit Storing when there was work to do, even if the last
-    // flush_embedding_batch already drained db_batch via DB_BATCH_LIMIT.
-    // Clients use Storing as the final-phase marker; suppressing it on
-    // large runs would leave the progress UI stuck at "embedding N/N".
-    if !pairs.is_empty() {
-        emit(ProgressUpdate::Storing);
-    }
+    // Always emit Storing once Preparing has fired (i.e. symbol_ids was
+    // non-empty at line 233). Closes the progress sequence even when every
+    // symbol was filtered out (empty pairs, no Embedding events) so clients
+    // never get stuck on a lone "preparing" event with no terminal marker.
+    emit(ProgressUpdate::Storing);
     if !db_batch.is_empty() {
         db.insert_embeddings(&db_batch)?;
     }
@@ -602,6 +600,44 @@ mod tests {
         index_embeddings(&db, &mut provider, false, Some(&cb)).unwrap();
 
         assert!(events.into_inner().unwrap().is_empty());
+    }
+
+    /// Regression: when symbol_ids is non-empty but every symbol is filtered
+    /// out (content too small for MIN_EMBED_TEXT_BYTES, or missing from the
+    /// content map), pairs ends up empty and no Embedding event fires. The
+    /// final Storing must still be emitted so the client sees a terminal
+    /// phase marker after Preparing and isn't left waiting forever.
+    #[test]
+    fn progress_callback_emits_storing_when_all_symbols_filtered() {
+        use std::sync::Mutex;
+
+        let db = Database::open_memory().unwrap();
+        // Seed two symbols whose content + header are below MIN_EMBED_TEXT_BYTES
+        // (40). Both will be filtered, leaving pairs empty.
+        for i in 0..2 {
+            let name = format!("tiny_{i}");
+            let sym = Symbol::new(&name, SymbolKind::Function, "a.py", 1, 2, 0, 10, None);
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(&sym.id, &name, "x=1", "h")
+                .unwrap();
+        }
+        let mut provider = MockEmbeddingProvider::new(384);
+
+        let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
+        let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
+        let result = index_embeddings(&db, &mut provider, false, Some(&cb)).unwrap();
+
+        assert_eq!(result.symbols_embedded, 0);
+        assert_eq!(result.symbols_skipped, 2);
+        let events = events.into_inner().unwrap();
+        assert_eq!(events.first(), Some(&ProgressUpdate::Preparing));
+        assert_eq!(events.last(), Some(&ProgressUpdate::Storing));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ProgressUpdate::Embedding { .. })),
+            "no Embedding events expected when pairs is empty"
+        );
     }
 
     /// B1 regression: when symbol count is a multiple of DB_BATCH_LIMIT (256),
