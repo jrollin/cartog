@@ -595,7 +595,7 @@ impl CartogServer {
             None => (None, None),
         };
 
-        let result = tokio::task::spawn_blocking(move || {
+        let join = tokio::task::spawn_blocking(move || {
             let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
             debug!(path = %validated.display(), force, "indexing directory");
             let result =
@@ -610,19 +610,18 @@ impl CartogServer {
             }
             Ok(CallToolResult::success(vec![Content::text(text)]))
         })
-        .await
-        .map_err(|e| mcp_err(format!("task join failed: {e}")))?;
+        .await;
 
-        // Drain the forwarder before returning so all queued notifications
-        // are written to the transport. The blocking closure already dropped
-        // its progress_tx clone; the Forwarder still holds one — drop it now
-        // so recv() can return None and the forwarder can exit.
+        // Drain the forwarder unconditionally — even on join error or tool
+        // error — so the spawned task doesn't leak waiting on `rx.recv()`.
+        // The blocking closure already dropped its progress_tx clone; the
+        // Forwarder still holds one, so we drop it here to close the channel.
         if let Some(fwd) = forwarder {
             drop(fwd.tx);
             let _ = fwd.join.await;
         }
 
-        result
+        join.map_err(|e| mcp_err(format!("task join failed: {e}")))?
     }
 
     /// Show symbols and structure of a file without reading its content.
@@ -1038,7 +1037,7 @@ impl CartogServer {
             None => (None, None),
         };
 
-        let result = tokio::task::spawn_blocking(move || {
+        let join = tokio::task::spawn_blocking(move || {
             let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
             debug!(path = %validated.display(), force, "rag index");
 
@@ -1072,15 +1071,15 @@ impl CartogServer {
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         })
-        .await
-        .map_err(|e| mcp_err(format!("task join failed: {e}")))?;
+        .await;
 
+        // Drain the forwarder unconditionally — see cartog_index for rationale.
         if let Some(fwd) = forwarder {
             drop(fwd.tx);
             let _ = fwd.join.await;
         }
 
-        result
+        join.map_err(|e| mcp_err(format!("task join failed: {e}")))?
     }
 
     /// Semantic search over code symbols using hybrid FTS5 + vector search.
