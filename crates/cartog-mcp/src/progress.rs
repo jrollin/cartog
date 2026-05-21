@@ -22,7 +22,10 @@ pub enum Phase {
     Indexer(cartog_indexer::ProgressUpdate),
     Rag(cartog_rag::indexer::ProgressUpdate),
     /// Free-form phase added by the MCP layer (e.g. `Resolving` after the
-    /// LSP edge-resolution pass).
+    /// LSP edge-resolution pass). Only constructed when the `lsp` feature
+    /// is enabled; `#[allow(dead_code)]` keeps `cargo check
+    /// --no-default-features` clean.
+    #[allow(dead_code)]
     Custom(&'static str),
 }
 
