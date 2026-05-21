@@ -2293,18 +2293,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn validate_pinned_state_returns_ok_when_pin_is_none() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let _ = Database::open(&db_path, 384).unwrap();
+        }
+        validate_pinned_state(&db_path, None).expect("no pin must validate trivially");
+    }
+
+    #[test]
+    fn validate_pinned_state_detects_drift() {
+        // Drift is exercised via the embedding fingerprint (not
+        // schema_version) because `open_readonly` rejects schema_version
+        // mismatch *before* this helper's comparison runs.
+        //
+        // A fresh `Database::open` writes only `embedding_dimension`
+        // (no provider/model), so the read-only attach captures
+        // `pinned.embedding = None`. After the test writes provider and
+        // model, the next `open_readonly` inside `validate_pinned_state`
+        // assembles `embedding = Some(...)`, and `None != Some(...)`
+        // surfaces as drift.
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let pinned = {
+            let _ = Database::open(&db_path, 384).unwrap();
+            Database::open_readonly(&db_path)
+                .unwrap()
+                .pinned_attach()
+                .cloned()
+        };
+        // Another writer rewrites the embedding provider under us.
+        {
+            let mutator = Database::open(&db_path, 384).unwrap();
+            mutator
+                .set_metadata("embedding_provider", "ollama")
+                .unwrap();
+            mutator
+                .set_metadata("embedding_model", "nomic-embed-text")
+                .unwrap();
+        }
+        let err = validate_pinned_state(&db_path, pinned.as_ref())
+            .expect_err("divergent disk state must surface as Err");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("DB metadata changed"),
+            "error message should name the drift, got: {msg}"
+        );
+    }
+
     #[tokio::test]
     async fn promoter_aborts_when_state_diverges_after_acquire() {
-        // Regression for review fix M-promoter (c): the original code
-        // validated pinned state only BEFORE acquire. Between validate
-        // and acquire, a third writer could promote and upgrade the
-        // schema, then exit. We'd then take the lock and proceed with a
-        // stale pin. The fix re-validates AFTER acquire while we hold
-        // the lock.
-        //
-        // We test this by: attach pinned state, mutate on-disk
-        // schema_version under us, then run a single promoter iteration
-        // and assert it bails cleanly (does not flip role to Primary).
+        // Integration smoke. The post-acquire branch logic is covered
+        // by `validate_pinned_state_detects_drift`; this test verifies
+        // the promoter wires drift detection to a clean exit (role stays
+        // ReadOnly, task finishes).
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         let state_dir = dir.path().join("state");

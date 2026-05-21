@@ -7,6 +7,12 @@
 //! Returned values are OS-native and not portable across machines, but they
 //! are stable across multiple reads of the same live PID — which is all we
 //! need for our same-process check.
+//!
+//! Linux PID-namespace caveat: a container whose `/proc` is overlaid (e.g.
+//! the container sees its own PID 1 but the host PID is different) may get
+//! `None` back from `process_start_time` for its own PID. Callers fall back
+//! to `is_alive` semantics, so PID-reuse detection just degrades to plain
+//! liveness: safe, not exact.
 
 /// Look up the start time of a running process. Returns `None` if the
 /// process is gone, inaccessible, or the platform is unsupported.
@@ -74,6 +80,9 @@ pub fn process_start_time(pid: u32) -> Option<u64> {
     if pid == 0 || pid > i32::MAX as u32 {
         return None;
     }
+    // proc_pidinfo returns 0 (and we return None) when the caller's UID
+    // doesn't match the target. Treated identically to "process gone";
+    // callers fall back to is_alive() semantics.
     let mut info = std::mem::MaybeUninit::<ProcBsdInfo>::uninit();
     let size = std::mem::size_of::<ProcBsdInfo>() as c_int;
     // SAFETY: proc_pidinfo is a stable libproc entry point; we pass an
@@ -91,10 +100,13 @@ pub fn process_start_time(pid: u32) -> Option<u64> {
     if bytes_written != size {
         return None;
     }
-    // SAFETY: proc_pidinfo wrote `size` bytes into `info`, so it is now
-    // fully initialised.
-    let info = unsafe { info.assume_init() };
-    Some(info.pbi_start_tvsec)
+    // SAFETY: proc_pidinfo wrote `size` bytes into `info`. We read only
+    // `pbi_start_tvsec` via addr_of! rather than assume_init on the whole
+    // struct, so if Apple appends fields to proc_bsdinfo in a future SDK
+    // (changing total size) we still tolerate the change as long as the
+    // offset of pbi_start_tvsec stays stable.
+    let start = unsafe { std::ptr::addr_of!((*info.as_ptr()).pbi_start_tvsec).read_unaligned() };
+    Some(start)
 }
 
 #[cfg(windows)]

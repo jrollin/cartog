@@ -901,11 +901,11 @@ mod tests {
     }
 
     #[test]
-    fn find_active_locks_does_not_unlink_a_freshly_rewritten_file() {
-        // Integration-level test: when the scanner reads (dead_pid, _)
-        // and decides not-alive but the file has been rewritten to a
-        // live entry by an external writer, the new content must survive
-        // the scan. Exercises find_active_locks's recheck pathway.
+    fn find_active_locks_keeps_live_entries() {
+        // Live PID payload must survive the scan. The prior name implied
+        // unlink coverage, but the alive branch never reaches
+        // unlink_if_unchanged: see the unlink_if_unchanged_* unit tests
+        // for that helper.
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("serve.pid");
         // We simulate the *current* state of the file (after an acquire
