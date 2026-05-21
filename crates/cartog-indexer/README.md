@@ -45,8 +45,9 @@ Edges that LSP definitively cannot resolve (stdlib targets, dyn dispatch, macro 
 
 | Export | Description |
 |--------|-------------|
-| `index_directory()` | Main entry point — index a directory into the database |
+| `index_directory()` | Main entry point — index a directory into the database. Optional `progress: Option<ProgressCallback>` fires at coarse phase boundaries (`Walking`, `Parsing`, `Storing`); pass `None` for the no-op default. |
 | `IndexResult` | Summary: files indexed/skipped/removed, symbols added/modified, edges resolved |
+| `ProgressUpdate` / `ProgressCallback` | Plain-data callback types for in-flight phase reporting (transport-agnostic) |
 | `is_ignored_dirname()` | Check if a directory name should be skipped (`.git`, `node_modules`, `target`, etc.) |
 | `git_recently_changed_files()` | List files changed in the last N git commits |
 

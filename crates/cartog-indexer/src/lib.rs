@@ -136,13 +136,50 @@ fn is_zero(v: &u32) -> bool {
     *v == 0
 }
 
+/// Coarse-grained progress events emitted by [`index_directory`].
+///
+/// Plain data — no transport or runtime types — so callers (CLI, watcher,
+/// MCP, tests) can adapt these to whatever channel they like.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgressUpdate {
+    /// Phase 1 starting: walking the directory tree, collecting candidates.
+    Walking,
+    /// Phase 2 starting: `total` candidates queued for parallel parse/extract.
+    Parsing { total: u32 },
+    /// Phase 3 starting: `total` parsed files about to be written in the
+    /// indexing transaction.
+    Storing { total: u32 },
+}
+
+/// Optional progress callback type accepted by [`index_directory`].
+///
+/// Called synchronously from inside the indexer (never on an async runtime).
+/// Implementations must be cheap and non-blocking.
+pub type ProgressCallback<'a> = &'a (dyn Fn(ProgressUpdate) + Send + Sync);
+
 /// Index a directory, updating the database incrementally.
 ///
 /// Change detection strategy (in order):
 /// 1. `force = true` → re-index everything, no checks
 /// 2. Git-based → diff `last_commit..HEAD` to find changed files, skip the rest without reading
 /// 3. SHA-256 fallback → read file, hash it, compare to stored hash
-pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Result<IndexResult> {
+///
+/// When `progress` is `Some`, the callback fires at each coarse phase boundary
+/// (see [`ProgressUpdate`]). Pass `None` for the no-op default — behavior is
+/// otherwise identical.
+pub fn index_directory(
+    db: &Database,
+    root: &Path,
+    force: bool,
+    lsp: bool,
+    progress: Option<ProgressCallback<'_>>,
+) -> Result<IndexResult> {
+    let emit = |u: ProgressUpdate| {
+        if let Some(cb) = progress {
+            cb(u);
+        }
+    };
+
     let mut result = IndexResult::default();
 
     let root = root.canonicalize().context("Failed to resolve root path")?;
@@ -174,6 +211,7 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
     };
 
     // ── Phase 1: walk + filter candidates (cheap, single-threaded) ──
+    emit(ProgressUpdate::Walking);
     let mut candidates: Vec<(PathBuf, String, &'static str)> = Vec::new();
     for entry in WalkDir::new(&root)
         .follow_links(true)
@@ -216,6 +254,9 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
     }
 
     // ── Phase 2: parallel parse + extract (CPU-bound, rayon-worker pool) ──
+    emit(ProgressUpdate::Parsing {
+        total: candidates.len() as u32,
+    });
     let parsed: Vec<ParseOutput> = candidates
         .par_iter()
         .map(|(abs, rel, lang)| {
@@ -246,6 +287,17 @@ pub fn index_directory(db: &Database, root: &Path, force: bool, lsp: bool) -> Re
     let mut added_symbol_names: std::collections::HashSet<String> =
         std::collections::HashSet::new();
 
+    // `total` here is the number of files that will actually be written, not
+    // the parsed-vec length: `ParseOutput::Skipped` short-circuits before the
+    // DB write and `ParseOutput::Failed` is dropped. Without this filter a
+    // warm re-index reports `storing N` where N is the full candidate set.
+    let storing_total = parsed
+        .iter()
+        .filter(|p| matches!(p, ParseOutput::Parsed { .. }))
+        .count() as u32;
+    emit(ProgressUpdate::Storing {
+        total: storing_total,
+    });
     let tx = db.begin_indexing_tx()?;
     for item in parsed {
         let (rel_path, lang, source, hash, modified, symbols, edges) = match item {
@@ -1025,12 +1077,12 @@ mod tests {
 
         if fixtures.exists() {
             // First index
-            let r1 = index_directory(&db, &fixtures, false, false).unwrap();
+            let r1 = index_directory(&db, &fixtures, false, false, None).unwrap();
             assert!(r1.files_indexed > 0);
             assert!(r1.dirty_files > 0);
 
             // Second index without force — should skip all files (no-op)
-            let r2 = index_directory(&db, &fixtures, false, false).unwrap();
+            let r2 = index_directory(&db, &fixtures, false, false, None).unwrap();
             assert_eq!(r2.files_indexed, 0);
             assert!(r2.files_skipped > 0);
             assert_eq!(
@@ -1043,7 +1095,7 @@ mod tests {
             );
 
             // Force re-index — dirty_files matches files_indexed
-            let r3 = index_directory(&db, &fixtures, true, false).unwrap();
+            let r3 = index_directory(&db, &fixtures, true, false, None).unwrap();
             assert_eq!(r3.files_indexed, r1.files_indexed);
             assert_eq!(r3.files_skipped, 0);
             assert_eq!(r3.dirty_files, r3.files_indexed);
@@ -1064,9 +1116,9 @@ mod tests {
 
         // Prime, then re-run. Don't assert LSP found anything (depends on
         // whether pyright is on PATH in CI) — only that the second pass skips it.
-        let _ = index_directory(&db, &fixtures, false, true).unwrap();
+        let _ = index_directory(&db, &fixtures, false, true, None).unwrap();
 
-        let r2 = index_directory(&db, &fixtures, false, true).unwrap();
+        let r2 = index_directory(&db, &fixtures, false, true, None).unwrap();
         assert_eq!(r2.dirty_files, 0);
         assert_eq!(r2.edges_lsp_resolved, 0);
     }
@@ -1085,7 +1137,7 @@ mod tests {
         std::fs::write(root.join("a.py"), "def caller():\n    find_user('x')\n").unwrap();
 
         let db = Database::open_memory().unwrap();
-        let r1 = index_directory(&db, &root, false, false).unwrap();
+        let r1 = index_directory(&db, &root, false, false, None).unwrap();
         assert!(
             r1.files_indexed >= 1,
             "expected a.py to index, got {:?}",
@@ -1103,7 +1155,7 @@ mod tests {
 
         // Adding b.py with find_user definition should reopen the marker.
         std::fs::write(root.join("b.py"), "def find_user(name):\n    return None\n").unwrap();
-        index_directory(&db, &root, false, false).unwrap();
+        index_directory(&db, &root, false, false, None).unwrap();
 
         assert!(
             !db.is_edge_unresolvable(edge_id).unwrap(),
@@ -1129,7 +1181,7 @@ mod tests {
         std::fs::write(root.join("a.py"), "def caller():\n    find_x()\n").unwrap();
 
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &root, false, false).unwrap();
+        index_directory(&db, &root, false, false, None).unwrap();
 
         let pre = db.unresolved_edges().unwrap();
         let find_x_id = pre
@@ -1140,7 +1192,7 @@ mod tests {
         db.mark_edge_unresolvable(find_x_id).unwrap();
 
         // --force = true: rebuilds edges with fresh IDs, must NOT inherit state=2.
-        index_directory(&db, &root, true, false).unwrap();
+        index_directory(&db, &root, true, false, None).unwrap();
         let post = db.unresolved_edges().unwrap();
         let has_find_x_unresolved = post.iter().any(|e| e.target_name == "find_x");
         assert!(
@@ -1165,7 +1217,7 @@ mod tests {
         .unwrap();
 
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &root, false, false).unwrap();
+        index_directory(&db, &root, false, false, None).unwrap();
 
         let unresolved = db.unresolved_edges().unwrap();
         let target = unresolved
@@ -1175,7 +1227,7 @@ mod tests {
         db.mark_edge_unresolvable(target.edge_id).unwrap();
 
         // No file changes → reindex is a no-op → marker survives.
-        let r = index_directory(&db, &root, false, false).unwrap();
+        let r = index_directory(&db, &root, false, false, None).unwrap();
         assert_eq!(r.dirty_files, 0);
 
         assert!(
@@ -1509,7 +1561,7 @@ def main():
         let db = Database::open_memory().unwrap();
 
         // ── Index 1: initial full index ──
-        let r1 = index_directory(&db, &dir, true, false).unwrap();
+        let r1 = index_directory(&db, &dir, true, false, None).unwrap();
         assert_eq!(r1.files_indexed, 2);
         assert!(r1.symbols_added > 0, "should have symbols");
 
@@ -1558,7 +1610,7 @@ def standalone():
         )
         .unwrap();
 
-        let r2 = index_directory(&db, &dir, false, false).unwrap();
+        let r2 = index_directory(&db, &dir, false, false, None).unwrap();
         assert_eq!(r2.files_indexed, 1, "only a.py changed");
         assert!(r2.files_skipped > 0, "b.py should be skipped");
         assert_eq!(r2.symbols_added, 1, "standalone is new");
@@ -1605,7 +1657,7 @@ def standalone():
         )
         .unwrap();
 
-        let r3 = index_directory(&db, &dir, false, false).unwrap();
+        let r3 = index_directory(&db, &dir, false, false, None).unwrap();
         assert_eq!(r3.files_indexed, 1);
         assert!(r3.symbols_removed >= 1, "goodbye should be removed");
 
@@ -1659,7 +1711,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
         .unwrap();
 
         let db = Database::open_memory().unwrap();
-        let result = index_directory(&db, &dir, false, false).unwrap();
+        let result = index_directory(&db, &dir, false, false, None).unwrap();
 
         assert_eq!(result.files_indexed, 1);
         assert!(result.symbols_added >= 3, "should have at least 3 sections");
@@ -1737,7 +1789,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
         std::fs::write(dir.join("seed.py"), "def keep_me():\n    return 1\n").unwrap();
 
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &dir, true, false).expect("seed index should succeed");
+        index_directory(&db, &dir, true, false, None).expect("seed index should succeed");
 
         // Snapshot the seed state so we can assert it is preserved across the
         // failed run.
@@ -1768,7 +1820,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
         // new functions through Phase 3.
         db.set_max_page_count_for_tests(30).unwrap();
 
-        let result = index_directory(&db, &dir, false, false);
+        let result = index_directory(&db, &dir, false, false, None);
         assert!(
             result.is_err(),
             "Phase 3 must fail when SQLite runs out of pages; got Ok({result:?})"
@@ -1806,5 +1858,90 @@ We use PostgreSQL with connection pooling via pgbouncer.
             .find(|s| s.id == seed_keep_me_id)
             .unwrap();
         assert_eq!(kept.kind, SymbolKind::Function);
+    }
+
+    // ── progress callback ──
+
+    fn tiny_python_project() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("a.py"), "def f():\n    pass\n").unwrap();
+        std::fs::write(root.join("b.py"), "def g():\n    pass\n").unwrap();
+        (tmp, root)
+    }
+
+    #[test]
+    fn progress_callback_fires_in_phase_order() {
+        use cartog_db::Database;
+        use std::sync::Mutex;
+
+        let (_tmp, root) = tiny_python_project();
+        let db = Database::open_memory().unwrap();
+
+        let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
+        let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
+        let result = index_directory(&db, &root, true, false, Some(&cb)).unwrap();
+
+        assert!(result.files_indexed >= 2);
+        let events = events.into_inner().unwrap();
+        assert_eq!(events.len(), 3, "expected 3 phase events, got {events:?}");
+        assert_eq!(events[0], ProgressUpdate::Walking);
+        assert!(matches!(events[1], ProgressUpdate::Parsing { total } if total >= 2));
+        assert!(matches!(events[2], ProgressUpdate::Storing { total } if total >= 2));
+    }
+
+    #[test]
+    fn progress_callback_none_matches_some_for_result() {
+        use cartog_db::Database;
+
+        let (_t1, root1) = tiny_python_project();
+        let db1 = Database::open_memory().unwrap();
+        let r_none = index_directory(&db1, &root1, true, false, None).unwrap();
+
+        let (_t2, root2) = tiny_python_project();
+        let db2 = Database::open_memory().unwrap();
+        let cb = |_: ProgressUpdate| {};
+        let r_some = index_directory(&db2, &root2, true, false, Some(&cb)).unwrap();
+
+        // Different temp dirs → different file modified-times can shift, but the
+        // count-based fields of IndexResult are deterministic on a fresh DB.
+        assert_eq!(r_none.files_indexed, r_some.files_indexed);
+        assert_eq!(r_none.symbols_added, r_some.symbols_added);
+        assert_eq!(r_none.edges_added, r_some.edges_added);
+    }
+
+    /// Realistic-repo smoke. Opt in by setting CARTOG_INTEGRATION_FIXTURE
+    /// to a directory containing real source (e.g. the cartog repo itself
+    /// or any sibling project on the local machine). Skipped otherwise so
+    /// CI and tree-clean runs never depend on external paths.
+    #[test]
+    fn progress_callback_realistic_repo() {
+        use cartog_db::Database;
+        use std::sync::Mutex;
+
+        let Ok(fixture) = std::env::var("CARTOG_INTEGRATION_FIXTURE") else {
+            eprintln!("skipped: CARTOG_INTEGRATION_FIXTURE not set");
+            return;
+        };
+        let root = PathBuf::from(fixture);
+        if !root.is_dir() {
+            eprintln!("skipped: CARTOG_INTEGRATION_FIXTURE is not a directory");
+            return;
+        }
+
+        let db = Database::open_memory().unwrap();
+        let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
+        let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
+        index_directory(&db, &root, true, false, Some(&cb)).unwrap();
+
+        let events = events.into_inner().unwrap();
+        assert!(matches!(events.first(), Some(ProgressUpdate::Walking)));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ProgressUpdate::Parsing { total } if *total > 0)));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ProgressUpdate::Storing { total } if *total > 0)));
     }
 }

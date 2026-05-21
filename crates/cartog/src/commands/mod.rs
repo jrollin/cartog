@@ -140,7 +140,7 @@ pub fn cmd_index(
     } else {
         Spinner::start("Indexing")
     };
-    let result = indexer::index_directory(&db, root, force, lsp);
+    let result = indexer::index_directory(&db, root, force, lsp, None);
     if let Some(s) = spinner {
         s.stop();
     }
@@ -700,7 +700,7 @@ pub fn cmd_rag_index(
     } else {
         Spinner::start("Indexing code graph")
     };
-    let index_res = indexer::index_directory(&db, root, false, false);
+    let index_res = indexer::index_directory(&db, root, false, false, None);
     if let Some(s) = spinner {
         s.stop();
     }
@@ -711,7 +711,7 @@ pub fn cmd_rag_index(
     } else {
         Spinner::start("Embedding symbols")
     };
-    let embed_res = rag::indexer::index_embeddings(&db, provider.as_mut(), force);
+    let embed_res = rag::indexer::index_embeddings(&db, provider.as_mut(), force, None);
     if let Some(s) = spinner {
         s.stop();
     }

@@ -10,9 +10,10 @@ use rmcp::schemars;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
+    service::RequestContext,
     tool, tool_handler, tool_router,
     transport::stdio,
-    ErrorData as McpError, ServerHandler, ServiceExt,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,8 @@ use cartog_indexer as indexer;
 use cartog_rag as rag;
 use cartog_watch as watch;
 use cartog_watch::{WatchConfig, WatchHandle};
+
+mod progress;
 
 const MAX_IMPACT_DEPTH: u32 = 10;
 
@@ -228,16 +231,25 @@ fn index_with_optional_lsp(
     lsp_manager: &Arc<Mutex<cartog_lsp::manager::LspManager>>,
     root: &Path,
     force: bool,
+    progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
 ) -> Result<indexer::IndexResult, McpError> {
+    let indexer_cb = progress_tx
+        .as_ref()
+        .map(|tx| progress::indexer_callback(tx.clone()));
     let mut result = {
         let db = db.lock().map_err(|_| {
             mcp_err("internal error: database lock poisoned (server restart required)")
         })?;
-        indexer::index_directory(&db, root, force, false)
+        let cb_ref: Option<&(dyn Fn(indexer::ProgressUpdate) + Send + Sync)> =
+            indexer_cb.as_ref().map(|f| f as _);
+        indexer::index_directory(&db, root, force, false, cb_ref)
             .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
     };
 
     if result.dirty_files > 0 {
+        if let Some(tx) = progress_tx.as_ref() {
+            let _ = tx.try_send(progress::Phase::Custom("resolving with LSP"));
+        }
         let mut mgr = lsp_manager.lock().map_err(|_| {
             mcp_err("internal error: LSP manager lock poisoned (server restart required)")
         })?;
@@ -267,11 +279,17 @@ fn index_with_optional_lsp(
     _lsp_manager: &(),
     root: &Path,
     force: bool,
+    progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
 ) -> Result<indexer::IndexResult, McpError> {
+    let indexer_cb = progress_tx
+        .as_ref()
+        .map(|tx| progress::indexer_callback(tx.clone()));
     let db = db
         .lock()
         .map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
-    indexer::index_directory(&db, root, force, false)
+    let cb_ref: Option<&(dyn Fn(indexer::ProgressUpdate) + Send + Sync)> =
+        indexer_cb.as_ref().map(|f| f as _);
+    indexer::index_directory(&db, root, force, false, cb_ref)
         .map_err(|e| mcp_err(format!("indexing failed: {e}")))
 }
 
@@ -554,6 +572,7 @@ impl CartogServer {
     async fn cartog_index(
         &self,
         Parameters(params): Parameters<IndexParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         if let Some(err) = self.refuse_if_read_only("cartog_index") {
             return Err(err);
@@ -567,10 +586,20 @@ impl CartogServer {
         #[cfg(not(feature = "lsp"))]
         let lsp_manager: () = ();
 
-        tokio::task::spawn_blocking(move || {
+        let (progress_tx, forwarder) = match ctx.meta.get_progress_token() {
+            Some(token) => {
+                let notifier = progress::peer_notifier(ctx.peer.clone());
+                let fwd = progress::spawn_forwarder(token, notifier);
+                (Some(fwd.tx.clone()), Some(fwd))
+            }
+            None => (None, None),
+        };
+
+        let join = tokio::task::spawn_blocking(move || {
             let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
             debug!(path = %validated.display(), force, "indexing directory");
-            let result = index_with_optional_lsp(&db, &lsp_manager, &validated, force)?;
+            let result =
+                index_with_optional_lsp(&db, &lsp_manager, &validated, force, progress_tx)?;
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
@@ -581,8 +610,18 @@ impl CartogServer {
             }
             Ok(CallToolResult::success(vec![Content::text(text)]))
         })
-        .await
-        .map_err(|e| mcp_err(format!("task join failed: {e}")))?
+        .await;
+
+        // Drain the forwarder unconditionally — even on join error or tool
+        // error — so the spawned task doesn't leak waiting on `rx.recv()`.
+        // The blocking closure already dropped its progress_tx clone; the
+        // Forwarder still holds one, so we drop it here to close the channel.
+        if let Some(fwd) = forwarder {
+            drop(fwd.tx);
+            let _ = fwd.join.await;
+        }
+
+        join.map_err(|e| mcp_err(format!("task join failed: {e}")))?
     }
 
     /// Show symbols and structure of a file without reading its content.
@@ -978,6 +1017,7 @@ impl CartogServer {
     async fn cartog_rag_index(
         &self,
         Parameters(params): Parameters<RagIndexParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         if let Some(err) = self.refuse_if_read_only("cartog_rag_index") {
             return Err(err);
@@ -988,7 +1028,16 @@ impl CartogServer {
         let cwd = Arc::clone(&self.cwd);
         let provider = Arc::clone(&self.embedding_provider);
 
-        tokio::task::spawn_blocking(move || {
+        let (progress_tx, forwarder) = match ctx.meta.get_progress_token() {
+            Some(token) => {
+                let notifier = progress::peer_notifier(ctx.peer.clone());
+                let fwd = progress::spawn_forwarder(token, notifier);
+                (Some(fwd.tx.clone()), Some(fwd))
+            }
+            None => (None, None),
+        };
+
+        let join = tokio::task::spawn_blocking(move || {
             let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
             debug!(path = %validated.display(), force, "rag index");
 
@@ -996,8 +1045,11 @@ impl CartogServer {
                 mcp_err("internal error: database lock poisoned (server restart required)")
             })?;
 
-            // Ensure the code graph index is up to date first
-            let _ = indexer::index_directory(&db, &validated, false, false)
+            // Ensure the code graph index is up to date first. Inner phases are
+            // intentionally suppressed: the RAG tool exposes only rag-specific
+            // phases (preparing/embedding/storing) so the client-facing
+            // vocabulary stays stable.
+            let _ = indexer::index_directory(&db, &validated, false, false, None)
                 .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
 
             let mut provider = provider.lock().map_err(|_| {
@@ -1005,15 +1057,29 @@ impl CartogServer {
                     "internal error: embedding provider lock poisoned (server restart required)",
                 )
             })?;
-            let result = rag::indexer::index_embeddings(&db, provider.as_mut(), force)
+
+            let rag_cb = progress_tx
+                .as_ref()
+                .map(|tx| progress::rag_callback(tx.clone()));
+            let cb_ref: Option<&(dyn Fn(rag::indexer::ProgressUpdate) + Send + Sync)> =
+                rag_cb.as_ref().map(|f| f as _);
+
+            let result = rag::indexer::index_embeddings(&db, provider.as_mut(), force, cb_ref)
                 .map_err(|e| mcp_err(format!("embedding indexing failed: {e}")))?;
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             Ok(CallToolResult::success(vec![Content::text(json)]))
         })
-        .await
-        .map_err(|e| mcp_err(format!("task join failed: {e}")))?
+        .await;
+
+        // Drain the forwarder unconditionally — see cartog_index for rationale.
+        if let Some(fwd) = forwarder {
+            drop(fwd.tx);
+            let _ = fwd.join.await;
+        }
+
+        join.map_err(|e| mcp_err(format!("task join failed: {e}")))?
     }
 
     /// Semantic search over code symbols using hybrid FTS5 + vector search.
@@ -2108,7 +2174,7 @@ mod tests {
 
         // First call primes the index. dirty_files > 0 → LSP is allowed (it may
         // resolve nothing if pyright isn't on PATH, but the gate must let it run).
-        let r1 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false).unwrap();
+        let r1 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false, None).unwrap();
         assert!(
             r1.dirty_files > 0,
             "first index must report dirty files (got {})",
@@ -2116,7 +2182,7 @@ mod tests {
         );
 
         // Second call without changes must be a no-op AND must skip LSP.
-        let r2 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false).unwrap();
+        let r2 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false, None).unwrap();
         assert_eq!(r2.dirty_files, 0);
         assert_eq!(
             r2.edges_lsp_resolved, 0,

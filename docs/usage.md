@@ -954,6 +954,8 @@ All tool responses are JSON.
 
 **Path restriction**: `cartog_index` and `cartog_rag_index` reject paths outside the project directory (CWD subtree). Agents cannot index arbitrary filesystem locations.
 
+**Progress notifications**: `cartog_index` and `cartog_rag_index` emit standard MCP `notifications/progress` when the client includes a `progressToken` in the request's `_meta`. `cartog_index` emits 3 phase events (`walking`, `parsing N files`, `storing N files`) plus an optional fourth (`resolving with LSP`) when the LSP pass runs. `cartog_rag_index` emits `preparing`, one `embedding processed/total` per ~512-symbol batch, then `storing` — so larger re-embed runs produce more events. The `message` field is human-readable, not a contract. Clients that do not supply a `progressToken` see no notifications and behavior is unchanged. Cold-cache or `force=true` runs report larger `total` values than warm runs; `total` is per-request, not historical.
+
 ### Built-in Workflow Guidance
 
 The MCP server sends workflow instructions to the client at initialization, covering tool chaining order (index → search → refs/callees/impact → re-index) and when to use semantic search. Clients that support the MCP `instructions` field will surface these automatically.

@@ -42,6 +42,10 @@ All user-supplied paths are validated against the project root:
 - Tool handlers run on `tokio::task::spawn_blocking` to avoid blocking the async runtime during SQLite queries
 - Optional background watch thread via `cartog-watch` for live re-indexing during MCP sessions
 
+### Progress notifications
+
+`cartog_index` and `cartog_rag_index` emit standard MCP `notifications/progress` events when the client supplies a `progressToken` in the request's `_meta`. The bridge lives in `src/progress.rs`: a bounded mpsc channel decouples the blocking indexer (best-effort `try_send`) from an async forwarder that calls `Peer::notify_progress` with a monotonic counter. Clients that don't subscribe see byte-identical behavior to the no-token path.
+
 ## Public API
 
 | Export | Description |

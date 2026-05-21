@@ -276,7 +276,7 @@ fn watch_loop(
 
     // Initial incremental index to ensure DB is current
     let initial_start = Instant::now();
-    match indexer::index_directory(&db, root, false, false) {
+    match indexer::index_directory(&db, root, false, false, None) {
         Ok(r) => {
             info!(
                 files = r.files_indexed,
@@ -377,7 +377,7 @@ fn watch_loop(
                         "file change events received, re-indexing"
                     );
                     let reindex_start = Instant::now();
-                    match indexer::index_directory(&db, root, false, false) {
+                    match indexer::index_directory(&db, root, false, false, None) {
                         Ok(r) => {
                             if r.files_indexed > 0 || r.files_removed > 0 {
                                 info!(
@@ -447,8 +447,12 @@ fn watch_loop(
                             }
                             if let Some(ref mut provider) = rag_provider {
                                 let embed_start = Instant::now();
-                                match rag::indexer::index_embeddings(&db, provider.as_mut(), false)
-                                {
+                                match rag::indexer::index_embeddings(
+                                    &db,
+                                    provider.as_mut(),
+                                    false,
+                                    None,
+                                ) {
                                     Ok(r) => {
                                         info!(
                                             embedded = r.symbols_embedded,
@@ -493,7 +497,7 @@ fn watch_loop(
         ensure_provider(&mut rag_provider);
         if let Some(ref mut provider) = rag_provider {
             let embed_start = Instant::now();
-            match rag::indexer::index_embeddings(&db, provider.as_mut(), false) {
+            match rag::indexer::index_embeddings(&db, provider.as_mut(), false, None) {
                 Ok(r) => {
                     info!(embedded = r.symbols_embedded, "final RAG flush complete");
                     if config.json_events {
