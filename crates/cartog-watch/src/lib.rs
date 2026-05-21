@@ -276,7 +276,7 @@ fn watch_loop(
 
     // Initial incremental index to ensure DB is current
     let initial_start = Instant::now();
-    match indexer::index_directory(&db, root, false, false) {
+    match indexer::index_directory(&db, root, false, false, None) {
         Ok(r) => {
             info!(
                 files = r.files_indexed,
@@ -377,7 +377,7 @@ fn watch_loop(
                         "file change events received, re-indexing"
                     );
                     let reindex_start = Instant::now();
-                    match indexer::index_directory(&db, root, false, false) {
+                    match indexer::index_directory(&db, root, false, false, None) {
                         Ok(r) => {
                             if r.files_indexed > 0 || r.files_removed > 0 {
                                 info!(

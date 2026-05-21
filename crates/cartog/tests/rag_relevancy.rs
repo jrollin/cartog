@@ -115,7 +115,7 @@ fn setup_db() -> Database {
         .join("webapp_py");
 
     let db = Database::open_memory().expect("open in-memory DB");
-    index_directory(&db, &fixture_dir, true, false).expect("index fixture");
+    index_directory(&db, &fixture_dir, true, false, None).expect("index fixture");
     db
 }
 
@@ -285,7 +285,7 @@ fn setup_java_db() -> Database {
         .join("webapp_java");
 
     let db = Database::open_memory().expect("open in-memory DB");
-    index_directory(&db, &fixture_dir, true, false).expect("index Java fixture");
+    index_directory(&db, &fixture_dir, true, false, None).expect("index Java fixture");
     db
 }
 

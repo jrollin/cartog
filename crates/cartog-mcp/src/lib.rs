@@ -233,7 +233,7 @@ fn index_with_optional_lsp(
         let db = db.lock().map_err(|_| {
             mcp_err("internal error: database lock poisoned (server restart required)")
         })?;
-        indexer::index_directory(&db, root, force, false)
+        indexer::index_directory(&db, root, force, false, None)
             .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
     };
 
@@ -271,7 +271,7 @@ fn index_with_optional_lsp(
     let db = db
         .lock()
         .map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
-    indexer::index_directory(&db, root, force, false)
+    indexer::index_directory(&db, root, force, false, None)
         .map_err(|e| mcp_err(format!("indexing failed: {e}")))
 }
 
@@ -997,7 +997,7 @@ impl CartogServer {
             })?;
 
             // Ensure the code graph index is up to date first
-            let _ = indexer::index_directory(&db, &validated, false, false)
+            let _ = indexer::index_directory(&db, &validated, false, false, None)
                 .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
 
             let mut provider = provider.lock().map_err(|_| {
