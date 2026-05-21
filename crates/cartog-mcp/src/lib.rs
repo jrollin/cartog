@@ -232,6 +232,7 @@ fn index_with_optional_lsp(
     root: &Path,
     force: bool,
     progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
+    cancel: Option<indexer::CancelProbe<'_>>,
 ) -> Result<indexer::IndexResult, McpError> {
     let indexer_cb = progress_tx
         .as_ref()
@@ -242,7 +243,7 @@ fn index_with_optional_lsp(
         })?;
         let cb_ref: Option<&(dyn Fn(indexer::ProgressUpdate) + Send + Sync)> =
             indexer_cb.as_ref().map(|f| f as _);
-        indexer::index_directory(&db, root, force, false, cb_ref)
+        indexer::index_directory(&db, root, force, false, cb_ref, cancel)
             .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
     };
 
@@ -280,6 +281,7 @@ fn index_with_optional_lsp(
     root: &Path,
     force: bool,
     progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
+    cancel: Option<indexer::CancelProbe<'_>>,
 ) -> Result<indexer::IndexResult, McpError> {
     let indexer_cb = progress_tx
         .as_ref()
@@ -289,7 +291,7 @@ fn index_with_optional_lsp(
         .map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
     let cb_ref: Option<&(dyn Fn(indexer::ProgressUpdate) + Send + Sync)> =
         indexer_cb.as_ref().map(|f| f as _);
-    indexer::index_directory(&db, root, force, false, cb_ref)
+    indexer::index_directory(&db, root, force, false, cb_ref, cancel)
         .map_err(|e| mcp_err(format!("indexing failed: {e}")))
 }
 
@@ -595,11 +597,20 @@ impl CartogServer {
             None => (None, None),
         };
 
+        let cancel = ctx.ct.clone();
         let join = tokio::task::spawn_blocking(move || {
             let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
             debug!(path = %validated.display(), force, "indexing directory");
-            let result =
-                index_with_optional_lsp(&db, &lsp_manager, &validated, force, progress_tx)?;
+            let probe = || cancel.is_cancelled();
+            let probe_ref: Option<&(dyn Fn() -> bool + Send + Sync)> = Some(&probe);
+            let result = index_with_optional_lsp(
+                &db,
+                &lsp_manager,
+                &validated,
+                force,
+                progress_tx,
+                probe_ref,
+            )?;
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
@@ -1037,6 +1048,7 @@ impl CartogServer {
             None => (None, None),
         };
 
+        let cancel = ctx.ct.clone();
         let join = tokio::task::spawn_blocking(move || {
             let validated = validate_path_within_cwd_canonical(&path, &cwd).map_err(mcp_err)?;
             debug!(path = %validated.display(), force, "rag index");
@@ -1045,11 +1057,14 @@ impl CartogServer {
                 mcp_err("internal error: database lock poisoned (server restart required)")
             })?;
 
+            let probe = || cancel.is_cancelled();
+            let probe_ref: Option<&(dyn Fn() -> bool + Send + Sync)> = Some(&probe);
+
             // Ensure the code graph index is up to date first. Inner phases are
             // intentionally suppressed: the RAG tool exposes only rag-specific
             // phases (preparing/embedding/storing) so the client-facing
             // vocabulary stays stable.
-            let _ = indexer::index_directory(&db, &validated, false, false, None)
+            let _ = indexer::index_directory(&db, &validated, false, false, None, probe_ref)
                 .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
 
             let mut provider = provider.lock().map_err(|_| {
@@ -1064,8 +1079,9 @@ impl CartogServer {
             let cb_ref: Option<&(dyn Fn(rag::indexer::ProgressUpdate) + Send + Sync)> =
                 rag_cb.as_ref().map(|f| f as _);
 
-            let result = rag::indexer::index_embeddings(&db, provider.as_mut(), force, cb_ref)
-                .map_err(|e| mcp_err(format!("embedding indexing failed: {e}")))?;
+            let result =
+                rag::indexer::index_embeddings(&db, provider.as_mut(), force, cb_ref, probe_ref)
+                    .map_err(|e| mcp_err(format!("embedding indexing failed: {e}")))?;
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
@@ -2174,7 +2190,7 @@ mod tests {
 
         // First call primes the index. dirty_files > 0 → LSP is allowed (it may
         // resolve nothing if pyright isn't on PATH, but the gate must let it run).
-        let r1 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false, None).unwrap();
+        let r1 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false, None, None).unwrap();
         assert!(
             r1.dirty_files > 0,
             "first index must report dirty files (got {})",
@@ -2182,7 +2198,7 @@ mod tests {
         );
 
         // Second call without changes must be a no-op AND must skip LSP.
-        let r2 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false, None).unwrap();
+        let r2 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false, None, None).unwrap();
         assert_eq!(r2.dirty_files, 0);
         assert_eq!(
             r2.edges_lsp_resolved, 0,

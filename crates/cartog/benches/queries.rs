@@ -24,7 +24,7 @@ fn setup_db() -> Database {
         .join("webapp_py");
 
     let db = Database::open_memory().expect("open in-memory DB");
-    index_directory(&db, &fixture_dir, true, false, None).expect("index fixture");
+    index_directory(&db, &fixture_dir, true, false, None, None).expect("index fixture");
     db
 }
 
@@ -147,7 +147,7 @@ fn setup_java_db() -> Database {
         .join("webapp_java");
 
     let db = Database::open_memory().expect("open in-memory DB");
-    index_directory(&db, &fixture_dir, true, false, None).expect("index Java fixture");
+    index_directory(&db, &fixture_dir, true, false, None, None).expect("index Java fixture");
     db
 }
 
@@ -277,21 +277,21 @@ fn bench_indexing(c: &mut Criterion) {
     c.bench_function("index_full_force", |b| {
         b.iter(|| {
             let db = Database::open_memory().unwrap();
-            index_directory(&db, &fixture_dir, true, false, None).unwrap()
+            index_directory(&db, &fixture_dir, true, false, None, None).unwrap()
         })
     });
 
     // Incremental no-op: all files already indexed with matching hashes
     c.bench_function("index_incremental_noop", |b| {
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &fixture_dir, true, false, None).unwrap();
-        b.iter(|| index_directory(&db, &fixture_dir, false, false, None).unwrap())
+        index_directory(&db, &fixture_dir, true, false, None, None).unwrap();
+        b.iter(|| index_directory(&db, &fixture_dir, false, false, None, None).unwrap())
     });
 
     // Incremental one-file change: invalidate one file's hash to force re-parse + Merkle diff
     c.bench_function("index_incremental_one_file", |b| {
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &fixture_dir, true, false, None).unwrap();
+        index_directory(&db, &fixture_dir, true, false, None, None).unwrap();
         b.iter(|| {
             // Invalidate hash to simulate file change
             db.upsert_file(&FileInfo {
@@ -302,7 +302,7 @@ fn bench_indexing(c: &mut Criterion) {
                 num_symbols: 0,
             })
             .unwrap();
-            index_directory(&db, &fixture_dir, false, false, None).unwrap()
+            index_directory(&db, &fixture_dir, false, false, None, None).unwrap()
         })
     });
 }

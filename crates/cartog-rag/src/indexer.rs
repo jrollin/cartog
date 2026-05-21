@@ -180,6 +180,14 @@ pub enum ProgressUpdate {
 /// Implementations must be cheap and non-blocking.
 pub type ProgressCallback<'a> = &'a (dyn Fn(ProgressUpdate) + Send + Sync);
 
+/// Optional cooperative-cancellation probe accepted by [`index_embeddings`].
+///
+/// Returns `true` when the caller wants the indexer to stop. Polled at phase
+/// boundaries and once per embedding batch, so worst-case latency is one
+/// CHUNK_SIZE worth of inference. When the probe trips, the function returns
+/// `Err` whose root cause string is `"cancelled"`.
+pub type CancelProbe<'a> = &'a (dyn Fn() -> bool + Send + Sync);
+
 /// Embed all symbols that have content but no embedding yet.
 ///
 /// Requires the embedding model to be available (downloaded via `cartog rag setup`
@@ -192,11 +200,18 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
     provider: &mut P,
     force: bool,
     progress: Option<ProgressCallback<'_>>,
+    cancel: Option<CancelProbe<'_>>,
 ) -> Result<RagIndexResult> {
     let emit = |u: ProgressUpdate| {
         if let Some(cb) = progress {
             cb(u);
         }
+    };
+    let check_cancel = || -> Result<()> {
+        if cancel.is_some_and(|c| c()) {
+            anyhow::bail!("cancelled");
+        }
+        Ok(())
     };
     let total_content_symbols = db.symbol_content_count()?;
 
@@ -235,6 +250,7 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
         return Ok(result);
     }
 
+    check_cancel()?;
     emit(ProgressUpdate::Preparing);
     info!("Embedding {} symbols...", symbol_ids.len());
 
@@ -274,6 +290,7 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
     let mut processed = 0usize;
 
     for batch in pairs.chunks(CHUNK_SIZE) {
+        check_cancel()?;
         let texts: Vec<String> = batch.iter().map(|(t, _)| t.clone()).collect();
         let sids: Vec<String> = batch.iter().map(|(_, s)| s.clone()).collect();
 
@@ -492,7 +509,7 @@ mod tests {
         let db = setup_db_with_symbols(5);
         let mut provider = MockEmbeddingProvider::new(384);
 
-        let result = index_embeddings(&db, &mut provider, false, None).unwrap();
+        let result = index_embeddings(&db, &mut provider, false, None, None).unwrap();
         assert_eq!(result.symbols_embedded, 5);
         assert_eq!(result.symbols_skipped, 0);
         assert_eq!(result.total_content_symbols, 5);
@@ -504,10 +521,10 @@ mod tests {
         let db = setup_db_with_symbols(3);
         let mut provider = MockEmbeddingProvider::new(384);
 
-        let r1 = index_embeddings(&db, &mut provider, false, None).unwrap();
+        let r1 = index_embeddings(&db, &mut provider, false, None, None).unwrap();
         assert_eq!(r1.symbols_embedded, 3);
 
-        let r2 = index_embeddings(&db, &mut provider, false, None).unwrap();
+        let r2 = index_embeddings(&db, &mut provider, false, None, None).unwrap();
         assert_eq!(r2.symbols_embedded, 0, "second run should embed nothing");
     }
 
@@ -516,10 +533,10 @@ mod tests {
         let db = setup_db_with_symbols(3);
         let mut provider = MockEmbeddingProvider::new(384);
 
-        let r1 = index_embeddings(&db, &mut provider, false, None).unwrap();
+        let r1 = index_embeddings(&db, &mut provider, false, None, None).unwrap();
         assert_eq!(r1.symbols_embedded, 3);
 
-        let r2 = index_embeddings(&db, &mut provider, true, None).unwrap();
+        let r2 = index_embeddings(&db, &mut provider, true, None, None).unwrap();
         assert_eq!(r2.symbols_embedded, 3, "force should re-embed everything");
     }
 
@@ -528,7 +545,7 @@ mod tests {
         let db = setup_db_with_symbols(1);
         let mut provider = MockEmbeddingProvider::new(384);
 
-        index_embeddings(&db, &mut provider, false, None).unwrap();
+        index_embeddings(&db, &mut provider, false, None, None).unwrap();
 
         let version: String = db
             .get_metadata("embedding_format_version")
@@ -542,7 +559,7 @@ mod tests {
         let db = Database::open_memory().unwrap();
         let mut provider = MockEmbeddingProvider::new(384);
 
-        let result = index_embeddings(&db, &mut provider, false, None).unwrap();
+        let result = index_embeddings(&db, &mut provider, false, None, None).unwrap();
         assert_eq!(result.symbols_embedded, 0);
         assert_eq!(result.total_content_symbols, 0);
         assert_eq!(provider.embed_count, 0);
@@ -558,7 +575,7 @@ mod tests {
             .unwrap();
 
         let mut provider = MockEmbeddingProvider::new(384);
-        let result = index_embeddings(&db, &mut provider, false, None).unwrap();
+        let result = index_embeddings(&db, &mut provider, false, None, None).unwrap();
         assert_eq!(result.symbols_skipped, 1);
         assert_eq!(result.symbols_embedded, 0);
     }
@@ -574,7 +591,7 @@ mod tests {
 
         let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
         let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
-        index_embeddings(&db, &mut provider, false, Some(&cb)).unwrap();
+        index_embeddings(&db, &mut provider, false, Some(&cb), None).unwrap();
 
         let events = events.into_inner().unwrap();
         assert!(!events.is_empty(), "expected at least one event");
@@ -597,7 +614,7 @@ mod tests {
 
         let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
         let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
-        index_embeddings(&db, &mut provider, false, Some(&cb)).unwrap();
+        index_embeddings(&db, &mut provider, false, Some(&cb), None).unwrap();
 
         assert!(events.into_inner().unwrap().is_empty());
     }
@@ -625,7 +642,7 @@ mod tests {
 
         let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
         let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
-        let result = index_embeddings(&db, &mut provider, false, Some(&cb)).unwrap();
+        let result = index_embeddings(&db, &mut provider, false, Some(&cb), None).unwrap();
 
         assert_eq!(result.symbols_embedded, 0);
         assert_eq!(result.symbols_skipped, 2);
@@ -653,7 +670,7 @@ mod tests {
 
         let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
         let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
-        index_embeddings(&db, &mut provider, false, Some(&cb)).unwrap();
+        index_embeddings(&db, &mut provider, false, Some(&cb), None).unwrap();
 
         let events = events.into_inner().unwrap();
         assert_eq!(events.last(), Some(&ProgressUpdate::Storing));
@@ -682,7 +699,7 @@ mod tests {
         let mut provider = MockEmbeddingProvider::new(384);
         let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
         let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
-        index_embeddings(&db, &mut provider, false, Some(&cb)).unwrap();
+        index_embeddings(&db, &mut provider, false, Some(&cb), None).unwrap();
 
         let events = events.into_inner().unwrap();
         let emb = events
@@ -703,15 +720,40 @@ mod tests {
     fn progress_callback_none_matches_some_for_result() {
         let db1 = setup_db_with_symbols(3);
         let mut p1 = MockEmbeddingProvider::new(384);
-        let r_none = index_embeddings(&db1, &mut p1, false, None).unwrap();
+        let r_none = index_embeddings(&db1, &mut p1, false, None, None).unwrap();
 
         let db2 = setup_db_with_symbols(3);
         let mut p2 = MockEmbeddingProvider::new(384);
         let cb = |_: ProgressUpdate| {};
-        let r_some = index_embeddings(&db2, &mut p2, false, Some(&cb)).unwrap();
+        let r_some = index_embeddings(&db2, &mut p2, false, Some(&cb), None).unwrap();
 
         assert_eq!(r_none.symbols_embedded, r_some.symbols_embedded);
         assert_eq!(r_none.symbols_skipped, r_some.symbols_skipped);
         assert_eq!(r_none.total_content_symbols, r_some.total_content_symbols);
+    }
+
+    #[test]
+    fn cancel_probe_returning_true_aborts_with_cancelled_error() {
+        let db = setup_db_with_symbols(3);
+        let mut provider = MockEmbeddingProvider::new(384);
+
+        let probe = || true;
+        let err = index_embeddings(&db, &mut provider, false, None, Some(&probe))
+            .expect_err("embedding must abort when probe trips at first checkpoint");
+        assert!(
+            err.to_string().contains("cancelled"),
+            "error must mention cancellation, got: {err}"
+        );
+    }
+
+    #[test]
+    fn cancel_probe_returning_false_runs_to_completion() {
+        let db = setup_db_with_symbols(3);
+        let mut provider = MockEmbeddingProvider::new(384);
+
+        let probe = || false;
+        let result = index_embeddings(&db, &mut provider, false, None, Some(&probe))
+            .expect("non-cancelling probe must not affect normal embedding");
+        assert_eq!(result.symbols_embedded, 3);
     }
 }
