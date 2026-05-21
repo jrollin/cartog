@@ -1005,7 +1005,7 @@ impl CartogServer {
                     "internal error: embedding provider lock poisoned (server restart required)",
                 )
             })?;
-            let result = rag::indexer::index_embeddings(&db, provider.as_mut(), force)
+            let result = rag::indexer::index_embeddings(&db, provider.as_mut(), force, None)
                 .map_err(|e| mcp_err(format!("embedding indexing failed: {e}")))?;
 
             let json = serde_json::to_string_pretty(&result)

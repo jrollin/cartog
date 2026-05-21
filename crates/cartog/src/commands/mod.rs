@@ -711,7 +711,7 @@ pub fn cmd_rag_index(
     } else {
         Spinner::start("Embedding symbols")
     };
-    let embed_res = rag::indexer::index_embeddings(&db, provider.as_mut(), force);
+    let embed_res = rag::indexer::index_embeddings(&db, provider.as_mut(), force, None);
     if let Some(s) = spinner {
         s.stop();
     }
