@@ -124,6 +124,11 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
         "ollama"
     }
 
+    /// Returns the exact string the user configured, not the canonical
+    /// name Ollama resolves it to. A typo (`nomic-embed-tex` vs
+    /// `nomic-embed-text`) stays as written, so the next reconcile sees
+    /// fingerprint drift. Intentional: we'd rather re-embed than silently
+    /// keep stale vectors when the model identity is unclear.
     fn model_id(&self) -> &str {
         &self.model
     }

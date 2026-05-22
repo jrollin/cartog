@@ -250,6 +250,15 @@ pub const LEGACY_DB_FILE: &str = ".cartog.db";
 /// to every on-disk connection.
 pub const BUSY_TIMEOUT_MS: u32 = 5000;
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only fault injection: when set to true, `reconcile_embedding_fingerprint`
+    /// returns SQLITE_FULL between the model write and the dimension write.
+    /// Cleared (swapped to false) on read so each fire is one-shot.
+    static RECONCILE_FAIL_AFTER_MODEL: std::sync::atomic::AtomicBool =
+        const { std::sync::atomic::AtomicBool::new(false) };
+}
+
 /// Run `PRAGMA wal_checkpoint(TRUNCATE)` on the SQLite file at `path`.
 /// No-op for missing files. Used before moving the DB to flush the WAL.
 pub fn checkpoint_wal(path: &std::path::Path) -> anyhow::Result<()> {
@@ -333,6 +342,9 @@ pub struct Database {
     /// Captures the `metadata` snapshot at attach time so a later promotion
     /// (Phase 5) can detect drift before switching to read-write mode. `None`
     /// for read-write opens.
+    ///
+    /// Invariant: `pinned.is_some() == is_read_only()`. Both flow from the
+    /// same opening path, and the equivalence is what callers rely on.
     pinned: Option<PinnedAttach>,
 }
 
@@ -1045,6 +1057,15 @@ impl Database {
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
                 params![EMBED_MODEL_KEY, fp.model],
             )?;
+            #[cfg(test)]
+            if RECONCILE_FAIL_AFTER_MODEL
+                .with(|b| b.swap(false, std::sync::atomic::Ordering::SeqCst))
+            {
+                return Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+                    Some("injected mid-sequence failure".into()),
+                ));
+            }
             tx.execute(
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_dimension', ?1)",
                 params![fp.dimension.to_string()],
@@ -4615,6 +4636,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored_dim, 1024);
+        // A successful wipe must also recreate symbol_vec at the new dim.
+        // Without this assertion, an early return between the DROP and the
+        // CREATE in reconcile_embedding_fingerprint would pass the count +
+        // metadata checks above while leaving the DB unusable for RAG.
+        assert!(
+            symbol_vec_exists(&db.conn).unwrap(),
+            "successful reconcile must recreate symbol_vec"
+        );
     }
 
     // ── Read-only attach tests (Phase 3) ──
@@ -4990,63 +5019,6 @@ mod tests {
     }
 
     #[test]
-    fn test_reconcile_fingerprint_transaction_rolls_back_on_failure() {
-        // Lower-level regression: prove that a failing statement inside
-        // the reconcile transaction reverts everything. We do this by
-        // running the same DROP/CREATE/UPDATE sequence inside an explicit
-        // unchecked_transaction and rolling it back; verify the post-DB
-        // state is unchanged.
-        let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test.db");
-        let db = Database::open(&db_path, 384).unwrap();
-        db.reconcile_embedding_fingerprint(&fp("local", "BGE-small-en-v1.5", 384))
-            .unwrap();
-        seed_embedding(&db, 384, "before");
-        let initial_count = db.embedding_count().unwrap();
-        assert_eq!(initial_count, 1);
-
-        // Simulate the reconcile sequence under a transaction, then
-        // abort. This is the contract: a rollback after partial writes
-        // leaves the on-disk state exactly as it was.
-        {
-            let tx = db.conn.unchecked_transaction().unwrap();
-            tx.execute("DROP TABLE IF EXISTS symbol_vec", []).unwrap();
-            tx.execute("DELETE FROM symbol_embedding_map", []).unwrap();
-            tx.execute(
-                "INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)",
-                params!["embedding_provider", "ollama"],
-            )
-            .unwrap();
-            // No commit: tx is dropped -> rollback.
-        }
-
-        // Post-rollback: everything must be back to the initial state.
-        let stored_provider = db.get_metadata("embedding_provider").unwrap();
-        assert_eq!(
-            stored_provider.as_deref(),
-            Some("local"),
-            "rollback must revert provider write"
-        );
-        assert_eq!(
-            db.embedding_count().unwrap(),
-            1,
-            "rollback must revert symbol_embedding_map DELETE"
-        );
-        // symbol_vec must be back too.
-        let has_vec = db
-            .conn
-            .query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='symbol_vec'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()
-            .unwrap()
-            .is_some();
-        assert!(has_vec, "rollback must revert DROP TABLE symbol_vec");
-    }
-
-    #[test]
     fn test_reconcile_fingerprint_rolls_back_on_midsequence_failure() {
         // Regression: pre-fix, each metadata write in
         // reconcile_embedding_fingerprint ran outside any transaction.
@@ -5073,24 +5045,20 @@ mod tests {
             seed_embedding(&db, 384, "seed");
         }
 
-        // 2. Force a SQLITE_FULL mid-reconcile by capping the page count.
-        //    The cap must be tight enough that the multi-row metadata
-        //    upserts can't all fit, but loose enough that the initial
-        //    DROP TABLE succeeds (we want to verify rollback, not just
-        //    "first write failed").
+        // 2. Force a deterministic mid-sequence failure via the
+        //    RECONCILE_FAIL_AFTER_MODEL fault-injection hook (gated by
+        //    #[cfg(test)]). Page-cap tricks don't reliably trigger
+        //    SQLITE_FULL: SQLite reuses freed pages after DROP TABLE.
         let new_fp = fp("ollama", "nomic-embed-text-v2", 384);
         let outcome = {
             let db = Database::open(&db_path, 384).unwrap();
-            // Tighten budget. Page count of 8 is enough for the
-            // transaction's own begin/commit overhead but not enough
-            // for the new CREATE VIRTUAL TABLE + 3 metadata rows.
-            db.set_max_page_count_for_tests(8).unwrap();
+            RECONCILE_FAIL_AFTER_MODEL.with(|b| b.store(true, std::sync::atomic::Ordering::SeqCst));
             db.reconcile_embedding_fingerprint(&new_fp)
         };
+        assert!(outcome.is_err(), "injected SQLITE_FULL must surface as Err");
 
-        // 3. The reconcile may succeed or fail. If it failed, the DB on
-        //    disk must still reflect the INITIAL fingerprint — not a
-        //    partial state.
+        // 3. Failure path: the DB on disk must still reflect the INITIAL
+        //    fingerprint, not a partial state.
         let post = Database::open(&db_path, 384).unwrap();
         let stored_provider = post.get_metadata("embedding_provider").unwrap();
         let stored_model = post.get_metadata("embedding_model").unwrap();
@@ -5105,45 +5073,30 @@ mod tests {
             .optional()
             .unwrap()
             .is_some();
-
-        match outcome {
-            Ok(()) => {
-                // Either it succeeded — then the new fingerprint is fully
-                // installed (provider/model/dim all swapped, symbol_vec
-                // recreated). Verify consistency.
-                assert_eq!(stored_provider.as_deref(), Some("ollama"));
-                assert_eq!(stored_model.as_deref(), Some("nomic-embed-text-v2"));
-                assert_eq!(stored_dim_str.as_deref(), Some("384"));
-                assert!(
-                    symbol_vec_exists,
-                    "successful reconcile must have symbol_vec"
-                );
-            }
-            Err(_) => {
-                // Or it failed — then the OLD fingerprint must be intact.
-                // This is the regression assertion: pre-fix, the DB could
-                // end up in a half-applied state.
-                assert_eq!(
-                    stored_provider.as_deref(),
-                    Some("local"),
-                    "failed reconcile must roll back provider"
-                );
-                assert_eq!(
-                    stored_model.as_deref(),
-                    Some("BGE-small-en-v1.5"),
-                    "failed reconcile must roll back model"
-                );
-                assert_eq!(
-                    stored_dim_str.as_deref(),
-                    Some("384"),
-                    "failed reconcile must roll back dimension"
-                );
-                assert!(
-                    symbol_vec_exists,
-                    "failed reconcile must roll back symbol_vec drop"
-                );
-            }
-        }
+        assert_eq!(
+            stored_provider.as_deref(),
+            Some("local"),
+            "failed reconcile must roll back provider"
+        );
+        assert_eq!(
+            stored_model.as_deref(),
+            Some("BGE-small-en-v1.5"),
+            "failed reconcile must roll back model"
+        );
+        assert_eq!(
+            stored_dim_str.as_deref(),
+            Some("384"),
+            "failed reconcile must roll back dimension"
+        );
+        assert!(
+            symbol_vec_exists,
+            "failed reconcile must roll back symbol_vec drop"
+        );
+        assert_eq!(
+            post.embedding_count().unwrap(),
+            1,
+            "failed reconcile must roll back the symbol_embedding_map DELETE"
+        );
     }
 
     #[test]

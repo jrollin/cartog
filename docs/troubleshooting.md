@@ -150,6 +150,23 @@ The recursive CTE is fast, but SQLite may still need to populate the page
 cache. A second call should drop back to sub-ms. If it doesn't, please attach
 the output of `cartog stats` to your issue.
 
+## Logging and signals
+
+### Info-level lines appear as `[ERROR]` in my MCP client debug log
+
+The CLI uses `info` level when stderr is a TTY and `warn` otherwise. Under
+`tmux`, `docker run -t`, or other terminal-emulating launchers, `IsTerminal`
+may return true even though the MCP parent is consuming stderr, so info
+lines get surfaced as `[ERROR]` by the client. Set `RUST_LOG=warn` to opt
+out.
+
+### What happens if cartog cannot install a SIGINT handler
+
+`cartog serve` and `cartog watch` register a SIGINT handler at startup. If
+the install fails (rare, usually a sandboxed runtime), the handler future
+parks instead of resolving immediately. Other shutdown signals (SIGTERM,
+service shutdown) still work; only Ctrl-C is unavailable until restart.
+
 ## Reporting bugs
 
 A useful issue includes:
