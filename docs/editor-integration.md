@@ -197,7 +197,7 @@ Add to `.vscode/tasks.json` so `Ctrl+Shift+P → Tasks: Run Task` can run cartog
 
 ### MCP (Continue, Copilot Chat with MCP extensions)
 
-Same pattern as Claude Code — extensions that speak MCP read a config with an `mcpServers` entry. See [MCP Server Setup in usage.md](usage.md#mcp-server) for the generic block.
+Same pattern as Claude Code — extensions that speak MCP read a config with an `mcpServers` entry. See [mcp-setup.md](mcp-setup.md) for per-client recipes.
 
 ---
 
@@ -225,7 +225,7 @@ The output format (`path:line  kind  source`) happens to match compilation-mode'
 
 ## Zed
 
-Already supports cartog via MCP; see [MCP Server Setup](usage.md#mcp-server).
+Already supports cartog via MCP; see [mcp-setup.md — Zed](mcp-setup.md#zed).
 
 ---
 

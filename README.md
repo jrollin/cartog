@@ -229,8 +229,9 @@ VS Code (`.vscode/mcp.json`). User-scope: Claude Code user settings,
 Claude Desktop, Codex CLI (TOML), Gemini CLI, OpenCode, Windsurf, Zed.
 Idempotent: existing servers in each file are preserved.
 
-See [docs/usage.md](docs/usage.md#mcp-server) for flags, the JSON / TOML
-shape per client, and the manual-setup fallback.
+See [docs/usage.md](docs/usage.md#mcp-server) for flags and
+[docs/mcp-setup.md](docs/mcp-setup.md) for the JSON / TOML shape per client
+and the manual-setup fallback.
 
 ## Commands
 

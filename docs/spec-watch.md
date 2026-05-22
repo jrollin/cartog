@@ -1,5 +1,10 @@
 # Feature: `cartog watch`
 
+> **Status:** implemented and shipped. Kept as a design record — see
+> [usage.md — `cartog watch`](usage.md#cartog-watch-path---debounce-n---rag---rag-delay-n---json)
+> for the current user-facing surface. Implementation lives in
+> `crates/cartog-watch/`.
+
 ## Overview
 
 A long-running CLI command that watches filesystem events, debounces changes, and automatically re-indexes the code graph + RAG embeddings. Keeps `.cartog/db.sqlite` fresh without manual `cartog index` / `cartog rag index` cycles, especially useful during active development before commits.

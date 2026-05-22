@@ -1,5 +1,10 @@
 # Feature: single-writer MCP with read-only attach and promotion
 
+> **Status:** implemented in v0.17.x. Kept as a design record — see
+> [usage.md — `cartog serve`](usage.md#cartog-serve---watch---rag) and the
+> `cartog-process-lock` crate for the current behaviour. Kill switch:
+> `CARTOG_SINGLE_WRITER=0`.
+
 ## Overview
 
 When two cartog processes open the same `.cartog/db.sqlite` as writer (for
