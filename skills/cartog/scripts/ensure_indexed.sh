@@ -1,26 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ensure the cartog index exists and is up to date.
-# Run this at the start of a coding session.
+# SessionStart hook: ensure cartog index is current without blocking the TUI.
 #
-# Foreground (must finish before Claude responds):
-#   F1. Install cartog if the binary is missing (MCP server can't start without it).
-#   F2. Code graph index (fast, incremental — usually <1s for unchanged codebases).
-#   F3. Passive drift warning if the binary is out of sync with plugin.json.
-#       Update itself runs from the SessionEnd hook (update_on_exit.sh) — the
-#       MCP `cartog serve` peer is still alive at SessionStart, which would
-#       make `cartog self update` fail with PEER_RUNNING (exit 6).
+# Foreground (sub-second when binary is present):
+#   F1. Surface any error from the previous session's background pipeline.
+#   F2. If binary is MISSING, fork install + first-index + RAG into the
+#       background subshell and exit 0 fast. MCP won't have cartog this
+#       session — it will pick up next session. /cartog-install repairs
+#       on demand.
+#   F3. Drift warning if the installed binary doesn't match plugin.json.
+#       The actual update is the user's call via /cartog-install (or, for
+#       binaries <0.14.0, the transitional SessionEnd hook).
+#   F4. `cartog index .` (incremental, typically <1s for unchanged trees).
 #
 # Background (forked into one subshell, logged to ~/.cache/cartog/session.log):
-#   B1. Model download (`cartog rag setup`) — enables cross-encoder reranker.
-#   B2. RAG embedding (`cartog rag index`) — enables vector/semantic search.
+#   B1. cartog rag setup — download cross-encoder reranker (~100MB, first time).
+#   B2. cartog rag index . — embed symbols for vector search.
 #
-# Failures during the background pipeline (or the previous session-end update)
-# are written to the log file and surfaced via ~/.cache/cartog/last-error.
+# Failures during the background pipeline (or, separately, the foreground
+# index) are written to ~/.cache/cartog/last-error and surfaced on the next
+# SessionStart.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SCRIPT_DIR="."
 LOCK_DIR="${CARTOG_LOCK_DIR:-/tmp/cartog-rag-index.lock}"
+
+# GIT_ROOT is needed for both the DB resolver below and the no-toml gate
+# in the foreground flow, so resolve it once up front, independent of
+# CARTOG_DB. (Setting CARTOG_DB used to bypass the resolver branch and
+# leave GIT_ROOT unset, causing the gate to miss a git-root .cartog.toml
+# when run from a subdirectory.)
+GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || true
 
 # Resolve the database path using the same priority as the Rust binary:
 #   1. CARTOG_DB env var (explicit override)
@@ -31,7 +41,6 @@ if [ -n "${CARTOG_DB:-}" ]; then
     DB_FILE="$CARTOG_DB"
 else
     TOML_DB=""
-    GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || true
     for _dir in "." "$GIT_ROOT"; do
         [ -n "$_dir" ] && [ -f "$_dir/.cartog.toml" ] && {
             TOML_DB="$(sed -n '/^\[database\]/,/^\[/{s/^path[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p;}' "$_dir/.cartog.toml" 2>/dev/null)" || true
@@ -56,11 +65,9 @@ else
 fi
 
 # Plugin tag is kept in sync with the binary version at release time.
-# Reading it locally avoids any network call for the version check.
 PLUGIN_JSON="${CARTOG_PLUGIN_JSON:-${SCRIPT_DIR}/../../../.claude-plugin/plugin.json}"
 PLUGIN_VERSION="$( { sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PLUGIN_JSON" 2>/dev/null || true; } | head -n 1)"
 
-# Background log directory. Falls back to /tmp if ~/.cache isn't writable.
 SESSION_LOG_DIR="${CARTOG_LOG_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cartog}"
 if ! mkdir -p "$SESSION_LOG_DIR" 2>/dev/null; then
     SESSION_LOG_DIR="/tmp"
@@ -68,62 +75,26 @@ fi
 SESSION_LOG="$SESSION_LOG_DIR/session.log"
 LAST_ERROR_FILE="$SESSION_LOG_DIR/last-error"
 
-# Surface any error from the previous session's background pipeline.
+# F1: surface any error from the previous session's background pipeline.
 if [ -f "$LAST_ERROR_FILE" ]; then
     echo "Previous cartog background task failed:" >&2
     cat "$LAST_ERROR_FILE" >&2
     rm -f "$LAST_ERROR_FILE"
 fi
 
-# F1: install cartog only when the binary is missing. Outdated-but-present
-# binaries are upgraded by the SessionEnd hook (update_on_exit.sh), so this
-# function does NOT touch the network when cartog is already on PATH.
-ensure_cartog_installed() {
-    if command -v cartog >/dev/null 2>&1; then
-        return 0
-    fi
-    echo "cartog binary not found on PATH. Installing via $SCRIPT_DIR/install.sh..." >&2
-    # Pin to the version this skill was tested against to avoid drift on the next session.
-    if ! bash "$SCRIPT_DIR/install.sh" ${PLUGIN_VERSION:+"$PLUGIN_VERSION"} >&2; then
-        echo "cartog install failed. See output above." >&2
-        exit 1
-    fi
-    # Probe the same candidates install.sh writes to, in case the chosen dir
-    # isn't on PATH yet.
-    if ! command -v cartog >/dev/null 2>&1; then
-        for _candidate in \
-            "${CARTOG_INSTALL_DIR:-}" \
-            "$HOME/.local/bin" \
-            "${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"; do
-            [ -n "$_candidate" ] || continue
-            if [ -x "$_candidate/cartog" ]; then
-                export PATH="$_candidate:$PATH"
-                break
-            fi
-        done
-    fi
-    if ! command -v cartog >/dev/null 2>&1; then
-        echo "cartog still not on PATH after install. Add the install directory (printed above) to PATH and retry." >&2
-        exit 1
-    fi
-}
-
 # F3: passive drift warning. Compares the installed binary version against
-# the plugin's pinned version and prints a one-line notice. The actual update
-# happens in the SessionEnd hook (update_on_exit.sh) where MCP is shutting
-# down — `cartog self update` refuses to run while a peer is alive.
+# the plugin's pinned version. The actual update is the user's call via
+# /cartog-install (or, for <0.14.0, the SessionEnd transitional hook).
 warn_if_drifted() {
     [ -n "$PLUGIN_VERSION" ] || return 0
     local installed
     installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')"
     [ -n "$installed" ] || return 0
     [ "$installed" = "$PLUGIN_VERSION" ] && return 0
-    echo "cartog binary $installed is out of sync with plugin $PLUGIN_VERSION (will sync on session exit)." >&2
+    echo "cartog binary $installed is out of sync with plugin $PLUGIN_VERSION (run /cartog-install to update)." >&2
 }
 
-# Background pipeline: model download → RAG embedding.
-# Single subshell guarded by LOCK_DIR; failures recorded to LAST_ERROR_FILE
-# so the next session surfaces them.
+# Background pipeline (steady-state): RAG setup → RAG index.
 run_background_pipeline() {
     local pipeline_rc=0
     {
@@ -147,41 +118,167 @@ run_background_pipeline() {
     return "$pipeline_rc"
 }
 
+# Background pipeline (first install): install.sh → [index → RAG].
+# Runs when the binary was missing at SessionStart, so we cannot rely on
+# anything from the user's PATH at the time the hook was invoked.
+#
+# Args:
+#   $1 = "1" to run B1/B2/B3 (index + RAG) after install, "0" to install only.
+#        Set to "0" when the no-toml gate would have skipped indexing in the
+#        foreground (so we don't auto-index a project the user hasn't opted into).
+run_install_pipeline() {
+    local do_index="${1:-1}"
+    local pipeline_rc=0
+    {
+        echo "=== cartog install + first-index $(date '+%Y-%m-%d %H:%M:%S') ==="
+        echo "--- B0: install.sh ---"
+        # Pin to PLUGIN_VERSION so the marketplace pin holds. install.sh
+        # accepts an empty arg as "latest"; ${VAR:+"$VAR"} expands to nothing
+        # when VAR is empty, which is the right fallback (e.g. test fixtures
+        # without plugin.json).
+        if ! bash "$SCRIPT_DIR/install.sh" ${PLUGIN_VERSION:+"$PLUGIN_VERSION"}; then
+            pipeline_rc=1
+            echo "B0: install.sh failed; aborting pipeline." >&2
+        fi
+        if [ "$pipeline_rc" -eq 0 ]; then
+            # install.sh may write to ~/.local/bin or CARGO_HOME/bin — probe.
+            for _candidate in \
+                "${CARTOG_INSTALL_DIR:-}" \
+                "$HOME/.local/bin" \
+                "${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin"; do
+                [ -n "$_candidate" ] || continue
+                if [ -x "$_candidate/cartog" ]; then
+                    export PATH="$_candidate:$PATH"
+                    break
+                fi
+            done
+            hash -r 2>/dev/null || true
+            if ! command -v cartog >/dev/null 2>&1; then
+                pipeline_rc=1
+                echo "B0: install.sh succeeded but cartog is still not on PATH." >&2
+            fi
+        fi
+        if [ "$pipeline_rc" -eq 0 ] && [ "$do_index" = "1" ]; then
+            echo "--- B1: cartog index ---"
+            if ! cartog index .; then
+                pipeline_rc=1
+                echo "B1: index failed; skipping RAG steps (they depend on a valid index)." >&2
+            else
+                echo "--- B2: rag setup (model download) ---"
+                if ! cartog rag setup; then
+                    pipeline_rc=1
+                    echo "B2: rag setup failed; semantic search will use FTS5 only." >&2
+                fi
+                echo "--- B3: rag index (vector embedding) ---"
+                if ! cartog rag index .; then
+                    pipeline_rc=1
+                    echo "B3: rag index failed; vector search unavailable." >&2
+                fi
+            fi
+        elif [ "$pipeline_rc" -eq 0 ]; then
+            echo "--- no-toml gate active: skipping B1/B2/B3 (run \`cartog init\` then re-launch) ---"
+        fi
+        echo "=== pipeline exit $pipeline_rc ==="
+    } >> "$SESSION_LOG" 2>&1
+
+    if [ "$pipeline_rc" -ne 0 ]; then
+        printf 'See %s for details (install pipeline exit %d).\n' "$SESSION_LOG" "$pipeline_rc" > "$LAST_ERROR_FILE"
+    fi
+    return "$pipeline_rc"
+}
+
+# Acquire the lock and fork the chosen pipeline.
+# $1 = function name to run inside the background subshell.
+# Remaining args are forwarded to the function.
+fork_background() {
+    local pipeline_fn="$1"
+    shift
+    # Fail loudly if the dispatched function doesn't exist — a typo here would
+    # otherwise produce a green "background tasks started" with no actual work
+    # and no last-error to surface next session.
+    if ! declare -F "$pipeline_fn" >/dev/null; then
+        echo "Internal error: pipeline function '$pipeline_fn' is not defined." >&2
+        printf 'Internal error: pipeline function %s is not defined (see hook script).\n' \
+            "$pipeline_fn" > "$LAST_ERROR_FILE"
+        return 2
+    fi
+    # Stale lock (>1h) is removed automatically — handles crashed processes.
+    if [ -d "$LOCK_DIR" ]; then
+        local lock_mtime
+        lock_mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)"
+        case "$lock_mtime" in
+            ''|*[!0-9]*) lock_mtime=0 ;;
+        esac
+        local lock_age=$(( $(date +%s) - lock_mtime ))
+        if [ "$lock_age" -gt 3600 ]; then
+            echo "Removing stale cartog background lock (${lock_age}s old)."
+            rmdir "$LOCK_DIR" 2>/dev/null || true
+        fi
+    fi
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+        (
+            trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+            "$pipeline_fn" "$@"
+        ) &
+        BG_PID=$!
+        disown "$BG_PID" 2>/dev/null || true
+        echo "cartog background tasks started (PID $BG_PID, log: $SESSION_LOG)"
+        return 0
+    else
+        echo "cartog background pipeline already running (lock: $LOCK_DIR), skipping."
+        return 1
+    fi
+}
+
 # --- Foreground execution starts here ---
 
-ensure_cartog_installed
-
-# F2a: config gate. The new bootstrap flow is `cartog init` (writes
-# .cartog.toml) BEFORE `cartog index` so the index lands at the configured
-# location. On interactive TTY sessions, defer the index when no
-# .cartog.toml is present so the agent can ask the user before proceeding.
-#
-# Bypass cases (proceed with default-config index, no prompt):
-#   - non-TTY stdin (CI / piped scripts / unattended setups)
-#   - CARTOG_AUTO_INIT=1 (explicit opt-in for users who want defaults)
-#
-# Note: in MCP sessions, `cartog serve` may have already auto-created an
-# empty `.cartog/db.sqlite` at startup. That's harmless — queries against
-# an empty index return zero results until the user runs init+index.
+# Evaluate the no-toml gate first so we can decide whether the missing-binary
+# background pipeline should also index (it should NOT auto-index a project
+# the user hasn't opted into). Check both cwd and the git root — matches
+# the DB resolver's search order above.
 _toml_root="${GIT_ROOT:-.}"
-if [ ! -f "${_toml_root}/.cartog.toml" ] \
-   && [ -z "${CARTOG_AUTO_INIT:-}" ] \
-   && [ -t 0 ]; then
-    echo "No .cartog.toml found at ${_toml_root}."
-    echo "Run \`cartog init\` to scaffold one (writes a commented template, never"
-    echo "overwrites). Then \`cartog index\` will build the graph at the configured"
-    echo "location. Set CARTOG_AUTO_INIT=1 to skip this check and index with defaults."
+_has_toml=0
+if [ -n "${CARTOG_AUTO_INIT:-}" ] \
+   || [ -f "./.cartog.toml" ] \
+   || { [ -n "$GIT_ROOT" ] && [ -f "${GIT_ROOT}/.cartog.toml" ]; }; then
+    _has_toml=1
+fi
+
+# F2: binary missing → background-install. MCP can't start this session;
+# /cartog-install is the explicit repair verb.
+if ! command -v cartog >/dev/null 2>&1; then
+    echo "cartog binary not on PATH. Installing in background — MCP tools available next session."
+    echo "Run /cartog-install to install synchronously or to retry on failure."
+    # Pass _has_toml so run_install_pipeline skips B1/B2/B3 when the gate
+    # would have skipped indexing in the foreground.
+    if ! fork_background run_install_pipeline "$_has_toml"; then
+        # Lock held by another process AND binary is missing — the user's
+        # "MCP tools available next session" promise won't hold. Surface
+        # this so they don't wait forever.
+        echo "Another cartog session is already installing or indexing. If this persists, remove $LOCK_DIR and run /cartog-install." >&2
+        printf 'SessionStart could not start install: lock %s held by another process. If stale, remove it and run /cartog-install.\n' \
+            "$LOCK_DIR" > "$LAST_ERROR_FILE"
+    fi
     exit 0
 fi
 
-# F2b: Code graph index — kept foreground because cartog MCP queries depend on it
-# and it's typically <1s for incremental updates.
-#
-# Failure handling: we deliberately do NOT abort the script on a non-zero exit.
-# The background pipeline (B1/B2) is independent of F2b — reranker download and
-# embedding still help even if the symbol graph is stale — so we record the
-# failure for surfacing next session and keep going. `set -e` would otherwise
-# kill the script before run_background_pipeline could be spawned.
+# F2a: config gate. If `.cartog.toml` is missing, defer indexing on
+# interactive TTY sessions (so the agent can ask the user before running
+# `cartog init`). Non-TTY sessions (CI, piped scripts) exit silently —
+# auto-indexing with defaults would write to a location the user didn't
+# choose. CARTOG_AUTO_INIT=1 forces indexing regardless.
+if [ "$_has_toml" -ne 1 ]; then
+    if [ -t 0 ]; then
+        echo "No .cartog.toml found at ${_toml_root}."
+        echo "Run \`cartog init\` to scaffold one, then re-launch Claude Code."
+        echo "Set CARTOG_AUTO_INIT=1 to index with defaults instead."
+    fi
+    exit 0
+fi
+
+# F4: foreground index. Incremental, typically <1s. Failure is recorded
+# and surfaced next session; we do NOT abort because the background RAG
+# pipeline is independent and reranker + vector search are still useful.
 if [ ! -f "$DB_FILE" ]; then
     echo "No cartog index found. Building..."
 else
@@ -197,32 +294,9 @@ fi
 # F3: drift warning (the SessionEnd hook does the actual update).
 warn_if_drifted
 
-# Background pipeline: model download + RAG embedding.
-# Stale lock (>1h) is removed automatically — handles crashed processes where trap didn't fire.
-if [ -d "$LOCK_DIR" ]; then
-    # GNU stat (Linux) uses -c %Y; BSD stat (macOS) uses -f %m. Try GNU first
-    # because BSD `stat -f %m` would *succeed* on Linux (printing filesystem
-    # stats instead of mtime), which would corrupt the arithmetic below.
-    lock_mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null || stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0)"
-    case "$lock_mtime" in
-        ''|*[!0-9]*) lock_mtime=0 ;;
-    esac
-    lock_age=$(( $(date +%s) - lock_mtime ))
-    if [ "$lock_age" -gt 3600 ]; then
-        echo "Removing stale cartog background lock (${lock_age}s old)."
-        rmdir "$LOCK_DIR" 2>/dev/null || true
-    fi
-fi
-if mkdir "$LOCK_DIR" 2>/dev/null; then
-    (
-        trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
-        run_background_pipeline
-    ) &
-    BG_PID=$!
-    disown "$BG_PID" 2>/dev/null || true
-    echo "cartog background tasks started (PID $BG_PID, log: $SESSION_LOG)"
+# Background pipeline.
+if fork_background run_background_pipeline; then
     echo "cartog index ready. Reranker + vector search become available once background tasks complete."
 else
-    echo "cartog background pipeline already running (lock: $LOCK_DIR), skipping."
     echo "cartog index ready."
 fi

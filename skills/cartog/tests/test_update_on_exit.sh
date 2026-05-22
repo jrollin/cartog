@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Unit tests for update_on_exit.sh (SessionEnd hook).
-# Mirrors the mock setup of test_ensure_indexed.sh.
+# Unit tests for update_on_exit.sh (SessionEnd hook, transitional).
+#
+# Contract: only the pre-self-update cohort (<0.14.0) is upgraded by this
+# hook. Modern binaries (>=0.14.0) are a noop — drift is the user's call
+# via /cartog-install.
 #
 # Usage: bash skills/cartog/tests/test_update_on_exit.sh
 
@@ -22,11 +25,8 @@ setup() {
     : > "$CARTOG_TEST_LOG"
     export CARTOG_LOG_DIR="$TEST_DIR/log"
     export CARTOG_LOCK_DIR="$TEST_DIR/rag-index.lock"
-    export PEER_WAIT_SECS=1   # speed up peer-wait tests
-    # Override the platform state dir so peer_alive() reads our fixtures.
     export HOME="$TEST_DIR/home"
-    export XDG_STATE_HOME="$TEST_DIR/xdg_state"
-    mkdir -p "$HOME" "$XDG_STATE_HOME"
+    mkdir -p "$HOME"
     write_plugin_json "0.14.3"
     export CARTOG_PLUGIN_JSON="$TEST_DIR/plugin.json"
 }
@@ -34,30 +34,7 @@ setup() {
 teardown() {
     rmdir "${CARTOG_LOCK_DIR:-}" 2>/dev/null || true
     [ -n "$TEST_DIR" ] && rm -rf "$TEST_DIR"
-    unset CARTOG_PLUGIN_JSON CARTOG_LOG_DIR CARTOG_TEST_LOG CARTOG_LOCK_DIR \
-          PEER_WAIT_SECS XDG_STATE_HOME
-}
-
-# Resolve the state dir the same way update_on_exit.sh does, then write a
-# PID file there. Use the current shell's PID — it's guaranteed live.
-write_serve_pid_file() {
-    local pid="${1:-$$}"
-    local state_dir
-    case "$(uname -s)" in
-        Darwin) state_dir="$HOME/Library/Application Support/io.cartog.cartog" ;;
-        Linux)  state_dir="$XDG_STATE_HOME/cartog" ;;
-        *)      return 1 ;;
-    esac
-    mkdir -p "$state_dir"
-    printf '%s\n' "$pid" > "$state_dir/serve.pid"
-    printf '%s\n' "$state_dir/serve.pid"
-}
-
-# Pick a PID we know is dead: spawn a noop subshell and wait. PID is reused
-# eventually but stays free for ~milliseconds, plenty for a test.
-dead_pid() {
-    ( exit 0 ) & local p=$!; wait "$p" 2>/dev/null
-    printf '%s\n' "$p"
+    unset CARTOG_PLUGIN_JSON CARTOG_LOG_DIR CARTOG_TEST_LOG CARTOG_LOCK_DIR
 }
 
 assert_eq() {
@@ -84,18 +61,6 @@ assert_contains() {
     fi
 }
 
-assert_not_contains() {
-    local label="$1" needle="$2" haystack="$3"
-    if echo "$haystack" | grep -qF "$needle"; then
-        echo "  FAIL: $label"
-        echo "    expected NOT to contain: $needle"
-        echo "    actual: $haystack"
-        FAIL=$((FAIL + 1))
-    else
-        echo "  PASS: $label"; PASS=$((PASS + 1))
-    fi
-}
-
 write_plugin_json() {
     local version="$1"
     cat > "$TEST_DIR/plugin.json" <<JSON
@@ -103,12 +68,9 @@ write_plugin_json() {
 JSON
 }
 
-# Mock cartog supporting --version, self update --check, self update.
-# Args: version, self_update_exit, check_exit (peer-running simulation).
+# Mock cartog: supports --version, logs other invocations.
 create_mock_cartog() {
     local mock_version="${1:-0.14.1}"
-    local self_update_exit="${2:-0}"
-    local check_exit="${3:-0}"
     cat > "$TEST_DIR/bin/cartog" <<MOCK
 #!/usr/bin/env bash
 if [ "\$1" = "--version" ]; then
@@ -116,17 +78,6 @@ if [ "\$1" = "--version" ]; then
     exit 0
 fi
 echo "\$@" >> "$CARTOG_TEST_LOG"
-if [ "\$1" = "self" ] && [ "\$2" = "update" ] && [ "\$3" = "--check" ]; then
-    exit $check_exit
-fi
-if [ "\$1" = "self" ] && [ "\$2" = "update" ]; then
-    if [ "$self_update_exit" -ne 0 ]; then
-        echo "self update mock failure" >&2
-    else
-        echo "cartog updated"
-    fi
-    exit $self_update_exit
-fi
 exit 0
 MOCK
     chmod +x "$TEST_DIR/bin/cartog"
@@ -156,7 +107,6 @@ restore_install_sh() {
 run_update_on_exit() {
     (
         export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        # HOME and XDG_STATE_HOME are already exported by setup().
         bash "$UPDATE_SCRIPT" 2>&1
     )
 }
@@ -168,90 +118,9 @@ session_log() {
 
 # --- tests ---
 
-test_synced_binary_noop() {
-    echo "TEST: installed == plugin version is a noop (no self update call)"
-    setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.3"
-
-    run_update_on_exit > /dev/null
-
-    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  FAIL: 'self update' ran when versions matched"; FAIL=$((FAIL + 1))
-    else
-        echo "  PASS: 'self update' skipped when versions matched"; PASS=$((PASS + 1))
-    fi
-    teardown
-}
-
-test_modern_outdated_runs_self_update() {
-    echo "TEST: modern binary (>=0.14.0) outdated runs 'cartog self update'"
-    setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.2"
-
-    run_update_on_exit > /dev/null
-
-    local log
-    log=$(session_log)
-    assert_contains "log announces update" "Updating cartog 0.14.2 → 0.14.3 via 'cartog self update'" "$log"
-    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  PASS: 'self update' invoked"; PASS=$((PASS + 1))
-    else
-        echo "  FAIL: 'self update' not invoked"; FAIL=$((FAIL + 1))
-    fi
-    teardown
-}
-
-test_self_update_failure_recorded() {
-    echo "TEST: self update failure writes last-error and logs exit code"
-    setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.2" 6   # exit 6 = PEER_RUNNING
-
-    run_update_on_exit > /dev/null
-
-    if [ -f "$CARTOG_LOG_DIR/last-error" ]; then
-        echo "  PASS: last-error file written"; PASS=$((PASS + 1))
-    else
-        echo "  FAIL: last-error file missing"; FAIL=$((FAIL + 1))
-    fi
-    local log
-    log=$(session_log)
-    assert_contains "log captures exit code" "cartog self update failed (exit 6)" "$log"
-    teardown
-}
-
-test_legacy_binary_uses_install_sh() {
-    echo "TEST: pre-self-update binary (<0.14.0) routes through install.sh"
-    setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.13.5"
-    shadow_install_sh 0
-
-    run_update_on_exit > /dev/null
-    restore_install_sh
-
-    local log
-    log=$(session_log)
-    assert_contains "log announces install fallback" "Updating cartog 0.13.5 → 0.14.3 via install.sh (pre-self-update)" "$log"
-    if [ -f "$TEST_DIR/install.log" ]; then
-        echo "  PASS: install.sh invoked"; PASS=$((PASS + 1))
-    else
-        echo "  FAIL: install.sh not invoked"; FAIL=$((FAIL + 1))
-    fi
-    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  FAIL: 'self update' called on legacy binary"; FAIL=$((FAIL + 1))
-    else
-        echo "  PASS: 'self update' skipped on legacy binary"; PASS=$((PASS + 1))
-    fi
-    teardown
-}
-
 test_missing_binary_is_noop() {
     echo "TEST: missing cartog binary exits cleanly without touching anything"
     setup
-    # No mock cartog created; PATH points to empty bin dir.
 
     local rc=0
     run_update_on_exit > /dev/null || rc=$?
@@ -265,178 +134,191 @@ test_missing_binary_is_noop() {
     teardown
 }
 
-test_no_plugin_json_proceeds_to_update() {
-    echo "TEST: missing plugin.json — script falls through to self update"
+test_modern_binary_is_noop_even_when_outdated() {
+    echo "TEST: modern binary (>=0.14.0) is a noop — drift left for /cartog-install"
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.14.0"
+    shadow_install_sh 0
+
+    run_update_on_exit > /dev/null
+    restore_install_sh
+
+    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
+        echo "  FAIL: 'self update' ran (transitional hook should not handle modern binaries)"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: 'self update' not invoked on modern binary"; PASS=$((PASS + 1))
+    fi
+    if [ -s "$TEST_DIR/install.log" ]; then
+        echo "  FAIL: install.sh ran (transitional hook should not handle >=0.14.0)"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: install.sh not invoked on modern binary"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+test_modern_binary_in_sync_is_noop() {
+    echo "TEST: modern binary in sync with plugin is a noop"
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.14.3"
+
+    run_update_on_exit > /dev/null
+
+    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
+        echo "  FAIL: 'self update' ran when versions matched"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: 'self update' not invoked when versions matched"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+test_legacy_binary_outdated_routes_to_install_sh() {
+    echo "TEST: legacy binary (<0.14.0) outdated → install.sh upgrade with plugin version"
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.13.5"
+    shadow_install_sh 0
+
+    run_update_on_exit > /dev/null
+    restore_install_sh
+
+    local log
+    log=$(session_log)
+    assert_contains "log announces pre-self-update upgrade" \
+        "Upgrading pre-self-update cartog 0.13.5 → 0.14.3" "$log"
+    if [ -f "$TEST_DIR/install.log" ]; then
+        echo "  PASS: install.sh invoked"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: install.sh not invoked"; FAIL=$((FAIL + 1))
+    fi
+    assert_contains "install.sh receives plugin version" \
+        "args=[0.14.3]" "$(cat "$TEST_DIR/install.log")"
+    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
+        echo "  FAIL: 'self update' called on legacy binary"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: 'self update' skipped on legacy binary"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+test_legacy_binary_in_sync_is_noop() {
+    echo "TEST: legacy binary version == plugin is a noop (no install.sh call)"
+    setup
+    write_plugin_json "0.13.5"
+    create_mock_cartog "0.13.5"
+    shadow_install_sh 0
+
+    run_update_on_exit > /dev/null
+    restore_install_sh
+
+    if [ -s "$TEST_DIR/install.log" ]; then
+        echo "  FAIL: install.sh ran when legacy binary matched plugin"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: install.sh not invoked when versions matched"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+test_no_plugin_json_is_noop() {
+    echo "TEST: missing plugin.json → noop (nothing to upgrade to)"
     setup
     rm -f "$TEST_DIR/plugin.json"
-    create_mock_cartog "0.14.0"
+    create_mock_cartog "0.13.5"
+    shadow_install_sh 0
 
     run_update_on_exit > /dev/null
+    restore_install_sh
 
-    # Without PLUGIN_VERSION, version-equality short-circuit can't fire,
-    # so we fall through to wait_for_peer_exit + self update.
-    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  PASS: self update invoked when plugin.json absent and binary outdated"; PASS=$((PASS + 1))
+    if [ -s "$TEST_DIR/install.log" ]; then
+        echo "  FAIL: install.sh ran without plugin.json"; FAIL=$((FAIL + 1))
     else
-        echo "  FAIL: self update not invoked"; FAIL=$((FAIL + 1))
+        echo "  PASS: install.sh not invoked when PLUGIN_VERSION unknown"; PASS=$((PASS + 1))
     fi
     teardown
 }
 
-# --- C1: peer detection via PID files (no network, no cartog invocation) ---
-
-test_peer_wait_proceeds_when_no_pid_file() {
-    echo "TEST: wait_for_peer_exit returns without polling when no serve.pid exists"
+test_legacy_install_failure_records_last_error() {
+    echo "TEST: install.sh failure on legacy upgrade writes last-error"
     setup
     write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.2"
-    # PEER_WAIT_SECS large enough that polling would be obvious. We just need to
-    # prove the peer-wait loop didn't block — exact subsecond timing is too
-    # noisy on cold macOS bash, so we assert "well under PEER_WAIT_SECS".
-    export PEER_WAIT_SECS=20
-    # No write_serve_pid_file — state dir has no PID files.
+    create_mock_cartog "0.13.5"
+    shadow_install_sh 17
 
-    local start end elapsed
-    start=$(date +%s)
     run_update_on_exit > /dev/null
-    end=$(date +%s)
-    elapsed=$((end - start))
+    restore_install_sh
 
-    if [ "$elapsed" -lt 10 ]; then
-        echo "  PASS: returned in ${elapsed}s (no peer → no full PEER_WAIT_SECS=20 wait)"; PASS=$((PASS + 1))
+    if [ -f "$CARTOG_LOG_DIR/last-error" ]; then
+        echo "  PASS: last-error file written on legacy upgrade failure"; PASS=$((PASS + 1))
     else
-        echo "  FAIL: blocked ${elapsed}s — peer-wait loop polled despite no PID file"; FAIL=$((FAIL + 1))
+        echo "  FAIL: last-error file missing after legacy upgrade failure"; FAIL=$((FAIL + 1))
     fi
     teardown
 }
 
-test_peer_wait_proceeds_when_pid_is_dead() {
-    echo "TEST: wait_for_peer_exit ignores stale PID files (process not running)"
+test_skips_legacy_upgrade_when_rag_pipeline_running() {
+    echo "TEST: legacy upgrade skipped when RAG pipeline lock is recent"
     setup
     write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.2"
-    write_serve_pid_file "$(dead_pid)" >/dev/null
-    export PEER_WAIT_SECS=20
-
-    local start end elapsed
-    start=$(date +%s)
-    run_update_on_exit > /dev/null
-    end=$(date +%s)
-    elapsed=$((end - start))
-
-    if [ "$elapsed" -lt 10 ]; then
-        echo "  PASS: returned in ${elapsed}s (dead PID treated as no peer)"; PASS=$((PASS + 1))
-    else
-        echo "  FAIL: blocked ${elapsed}s on dead peer"; FAIL=$((FAIL + 1))
-    fi
-    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  PASS: self update ran (dead peer doesn't block)"; PASS=$((PASS + 1))
-    else
-        echo "  FAIL: self update did not run"; FAIL=$((FAIL + 1))
-    fi
-    teardown
-}
-
-test_peer_wait_polls_until_pid_disappears() {
-    echo "TEST: wait_for_peer_exit polls until live PID file is removed"
-    setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.2"
-    local pid_file
-    pid_file="$(write_serve_pid_file "$$")"   # our own PID — live
-    export PEER_WAIT_SECS=10
-
-    # Remove the PID file after 2s so the loop notices the peer is gone.
-    ( sleep 2; rm -f "$pid_file" ) &
-    local cleaner=$!
-
-    local start end elapsed
-    start=$(date +%s)
-    run_update_on_exit > /dev/null
-    end=$(date +%s)
-    elapsed=$((end - start))
-    wait "$cleaner" 2>/dev/null || true
-
-    # We polled at least once (peer was alive). Tolerate macOS bash startup
-    # noise: lower bound 2s (the cleaner sleep), upper bound 8s.
-    if [ "$elapsed" -ge 2 ] && [ "$elapsed" -le 8 ]; then
-        echo "  PASS: waited ${elapsed}s (peer cleared at 2s, within wait window)"; PASS=$((PASS + 1))
-    else
-        echo "  FAIL: elapsed ${elapsed}s, expected 2-8s"; FAIL=$((FAIL + 1))
-    fi
-    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  PASS: self update ran after peer cleared"; PASS=$((PASS + 1))
-    else
-        echo "  FAIL: self update never ran"; FAIL=$((FAIL + 1))
-    fi
-    teardown
-}
-
-# --- C2: RAG pipeline lock coordination ---
-
-test_skips_update_when_rag_pipeline_running() {
-    echo "TEST: update is skipped when RAG pipeline lock is recent (<1h old)"
-    setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.2"
+    create_mock_cartog "0.13.5"
+    shadow_install_sh 0
     mkdir -p "$CARTOG_LOCK_DIR"   # fresh lock — pipeline "running"
 
     run_update_on_exit > /dev/null
+    restore_install_sh
 
-    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  FAIL: self update ran while RAG pipeline lock was active"; FAIL=$((FAIL + 1))
+    if [ -s "$TEST_DIR/install.log" ]; then
+        echo "  FAIL: install.sh ran while RAG pipeline lock was active"; FAIL=$((FAIL + 1))
     else
-        echo "  PASS: update skipped while RAG pipeline lock active"; PASS=$((PASS + 1))
+        echo "  PASS: install.sh skipped while RAG pipeline lock active"; PASS=$((PASS + 1))
     fi
     local log
     log=$(session_log)
-    assert_contains "log explains skip" "RAG pipeline still running" "$log"
+    assert_contains "log explains skip" "background pipeline still running" "$log"
     teardown
 }
 
 test_proceeds_when_rag_lock_is_stale() {
-    echo "TEST: update proceeds when RAG lock is older than 1h (stale)"
+    echo "TEST: legacy upgrade proceeds when RAG lock is older than 1h"
     setup
     write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.2"
+    create_mock_cartog "0.13.5"
+    shadow_install_sh 0
     mkdir -p "$CARTOG_LOCK_DIR"
     # Backdate to 2h ago — older than the 1h staleness threshold.
     touch -t "$(date -v-2H '+%Y%m%d%H%M.%S' 2>/dev/null || date -d '2 hours ago' '+%Y%m%d%H%M.%S' 2>/dev/null)" "$CARTOG_LOCK_DIR"
 
     run_update_on_exit > /dev/null
+    restore_install_sh
 
-    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  PASS: self update ran (stale RAG lock ignored)"; PASS=$((PASS + 1))
+    if [ -f "$TEST_DIR/install.log" ]; then
+        echo "  PASS: install.sh ran (stale RAG lock ignored)"; PASS=$((PASS + 1))
     else
-        echo "  FAIL: self update did not run despite stale RAG lock"; FAIL=$((FAIL + 1))
+        echo "  FAIL: install.sh did not run despite stale RAG lock"; FAIL=$((FAIL + 1))
     fi
     teardown
 }
 
 # --- run ---
 
-echo "=== update_on_exit.sh unit tests ==="
+echo "=== update_on_exit.sh unit tests (transitional, <0.14 cohort) ==="
 echo ""
 
-test_synced_binary_noop
-echo ""
-test_modern_outdated_runs_self_update
-echo ""
-test_self_update_failure_recorded
-echo ""
-test_legacy_binary_uses_install_sh
-echo ""
 test_missing_binary_is_noop
 echo ""
-test_no_plugin_json_proceeds_to_update
+test_modern_binary_is_noop_even_when_outdated
 echo ""
-test_peer_wait_proceeds_when_no_pid_file
+test_modern_binary_in_sync_is_noop
 echo ""
-test_peer_wait_proceeds_when_pid_is_dead
+test_legacy_binary_outdated_routes_to_install_sh
 echo ""
-test_peer_wait_polls_until_pid_disappears
+test_legacy_binary_in_sync_is_noop
 echo ""
-test_skips_update_when_rag_pipeline_running
+test_no_plugin_json_is_noop
+echo ""
+test_legacy_install_failure_records_last_error
+echo ""
+test_skips_legacy_upgrade_when_rag_pipeline_running
 echo ""
 test_proceeds_when_rag_lock_is_stale
 

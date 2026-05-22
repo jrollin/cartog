@@ -20,7 +20,7 @@ TEST_DIR=""
 
 setup() {
     TEST_DIR=$(mktemp -d)
-    mkdir -p "$TEST_DIR/bin"
+    mkdir -p "$TEST_DIR/bin" "$TEST_DIR/workdir"
     export CARTOG_TEST_LOG="$TEST_DIR/commands.log"
     : > "$CARTOG_TEST_LOG"
     export CARTOG_LOCK_DIR="$TEST_DIR/rag-index.lock"
@@ -28,6 +28,10 @@ setup() {
     # Default plugin.json fixture — tests can override via write_plugin_json.
     write_plugin_json "0.14.1"
     export CARTOG_PLUGIN_JSON="$TEST_DIR/plugin.json"
+    # Default `.cartog.toml` so tests exercise the indexed-project path.
+    # Tests that exercise the missing-toml gate must remove this file
+    # (or override CARTOG_AUTO_INIT) explicitly.
+    : > "$TEST_DIR/workdir/.cartog.toml"
 }
 
 teardown() {
@@ -521,10 +525,15 @@ test_output_messages() {
     teardown
 }
 
-# --- tests: missing binary → install.sh ---
+# --- tests: missing binary → background install.sh ---
+#
+# Contract: hook returns fast (exit 0), install runs in the background
+# subshell, install + index + RAG chain logged to session.log. Failures
+# land in last-error and surface on the next session. MCP cannot work
+# this session — /cartog-install is the explicit repair verb.
 
-test_missing_binary_runs_install() {
-    echo "TEST: missing cartog binary triggers install.sh pinned to PLUGIN_VERSION"
+test_missing_binary_forks_install_in_background() {
+    echo "TEST: missing cartog binary forks install in background (hook exits fast)"
     setup
     write_plugin_json "0.14.1"
     shadow_install_sh 0 "0.14.1"
@@ -534,45 +543,139 @@ test_missing_binary_runs_install() {
     wait_for_rag_index
     restore_install_sh
 
-    assert_eq "succeeds after install" "0" "$rc"
+    assert_eq "hook exits 0 (install runs in background)" "0" "$rc"
+    assert_contains "announces background install" "Installing in background" "$output"
+    assert_contains "points at /cartog-install" "/cartog-install" "$output"
     assert_file_exists "install.sh ran" "$TEST_DIR/install.log"
-    assert_contains "announces install" "Installing via" "$output"
-    assert_contains "install.sh pinned to plugin version" "args=[0.14.1]" "$(cat "$TEST_DIR/install.log")"
-    local line1
-    line1=$(sed -n '1p' "$CARTOG_TEST_LOG")
-    assert_eq "indexing runs" "index ." "$line1"
+    # Regression guard for fix #1: install.sh must be pinned to PLUGIN_VERSION,
+    # not invoked bare (which would install the latest GitHub release and
+    # cause drift on session 2).
+    assert_contains "install.sh pinned to plugin version" \
+        "args=[0.14.1]" "$(cat "$TEST_DIR/install.log")"
+    # Background pipeline writes session.log; install.sh + index logged there.
+    local log
+    log=$(session_log)
+    assert_contains "install logged" "B0: install.sh" "$log"
+    # With .cartog.toml present (default in setup), B1 should have run.
+    if grep -qx 'index .' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: B1 (cartog index) ran after install (toml present)"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: B1 (cartog index) did not run despite toml present"
+        FAIL=$((FAIL + 1))
+    fi
     teardown
 }
 
-test_missing_binary_no_plugin_json_runs_install_unpinned() {
-    echo "TEST: missing binary + no plugin.json runs install.sh with no version arg"
+test_missing_binary_no_toml_skips_index_phases() {
+    echo "TEST: missing binary + no .cartog.toml → install runs but B1/B2/B3 are skipped (fix #4)"
     setup
-    rm -f "$TEST_DIR/plugin.json"
+    write_plugin_json "0.14.1"
+    rm -f "$TEST_DIR/workdir/.cartog.toml"
     shadow_install_sh 0 "0.14.1"
 
-    local output rc
-    output=$(run_ensure_indexed) && rc=0 || rc=$?
+    local rc
+    run_ensure_indexed >/dev/null && rc=0 || rc=$?
     wait_for_rag_index
     restore_install_sh
 
-    assert_eq "succeeds after install" "0" "$rc"
-    assert_contains "install.sh unpinned" "args=[]" "$(cat "$TEST_DIR/install.log")"
+    assert_eq "hook exits 0" "0" "$rc"
+    assert_file_exists "install.sh still ran (binary needs to land)" "$TEST_DIR/install.log"
+    # Crucially: no cartog index / rag setup / rag index commands ran —
+    # the install pipeline must respect the no-toml gate.
+    if grep -qx 'index .' "$CARTOG_TEST_LOG"; then
+        echo "  FAIL: cartog index ran despite no .cartog.toml (gate bypassed)"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: B1 skipped — no-toml gate respected by install pipeline"
+        PASS=$((PASS + 1))
+    fi
+    if grep -q '^rag' "$CARTOG_TEST_LOG"; then
+        echo "  FAIL: rag commands ran despite no .cartog.toml"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: B2/B3 skipped — no-toml gate respected"
+        PASS=$((PASS + 1))
+    fi
+    local log
+    log=$(session_log)
+    assert_contains "session log mentions no-toml gate" "no-toml gate active" "$log"
     teardown
 }
 
-test_missing_binary_install_failure_propagates() {
-    echo "TEST: install.sh failure on missing binary exits 1 with stderr"
+test_missing_binary_lock_held_records_last_error() {
+    echo "TEST: missing binary + lock held → hook exits 0 AND writes last-error (fix #5)"
+    setup
+    shadow_install_sh 0 "0.14.1"
+    # Pre-existing lock simulates a concurrent or crashed-but-recent session.
+    mkdir "$CARTOG_LOCK_DIR"
+
+    local output rc
+    output=$(run_ensure_indexed 2>&1) && rc=0 || rc=$?
+    restore_install_sh
+
+    assert_eq "hook exits 0" "0" "$rc"
+    assert_contains "user-visible warning about concurrent session" \
+        "Another cartog session is already" "$output"
+    assert_file_exists "last-error written so next session surfaces it" \
+        "$CARTOG_LOG_DIR/last-error"
+    # No install.sh ran (lock held the fork off).
+    if [ -s "$TEST_DIR/install.log" ]; then
+        echo "  FAIL: install.sh ran despite lock contention"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: install.sh skipped (lock held)"
+        PASS=$((PASS + 1))
+    fi
+    rmdir "$CARTOG_LOCK_DIR" 2>/dev/null || true
+    teardown
+}
+
+test_fork_background_rejects_undefined_function() {
+    echo "TEST: fork_background fails loudly when dispatched function is undefined (fix #6)"
+    setup
+    create_mock_cartog "0.14.1"
+
+    # Invoke fork_background directly through the script's source so we can
+    # exercise the declare -F guard without changing the public flow. Run in
+    # a subshell, source the script up to the function definitions, then
+    # call fork_background with a typo'd name.
+    local err rc
+    err=$(
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        mkdir -p "$HOME" "$TEST_DIR/workdir"
+        cd "$TEST_DIR/workdir"
+        # Strip the foreground-execution tail (after "--- Foreground execution starts here ---")
+        # so we can source the function definitions without running them.
+        awk '/^# --- Foreground execution starts here ---$/{exit} 1' "$ENSURE_SCRIPT" > "$TEST_DIR/fns.sh"
+        # shellcheck disable=SC1090
+        source "$TEST_DIR/fns.sh"
+        fork_background run_typo_does_not_exist 2>&1 >/dev/null
+    ) && rc=0 || rc=$?
+
+    assert_eq "fork_background returns non-zero on undefined function" "2" "$rc"
+    assert_contains "stderr names the missing function" "run_typo_does_not_exist" "$err"
+    assert_file_exists "last-error written for the typo" \
+        "$CARTOG_LOG_DIR/last-error"
+    teardown
+}
+
+test_missing_binary_install_failure_records_last_error() {
+    echo "TEST: install.sh failure in background writes last-error"
     setup
     shadow_install_sh 17
 
-    local output rc
-    output=$(run_ensure_indexed) && rc=0 || rc=$?
+    local rc
+    run_ensure_indexed >/dev/null && rc=0 || rc=$?
+    wait_for_rag_index
     restore_install_sh
 
-    assert_eq "exits non-zero" "1" "$rc"
-    assert_contains "surfaces install error" "install.sh: simulated failure" "$output"
-    assert_contains "summary line" "cartog install failed" "$output"
-    # No indexing should have happened
+    # Hook still exits 0 — background failure is a soft signal.
+    assert_eq "hook exits 0 even on background install failure" "0" "$rc"
+    assert_file_exists "last-error written on background failure" \
+        "$CARTOG_LOG_DIR/last-error"
+    # No cartog commands ran (binary was never installed).
     if [ -s "$CARTOG_TEST_LOG" ]; then
         echo "  FAIL: cartog commands ran despite install failure"
         FAIL=$((FAIL + 1))
@@ -612,66 +715,58 @@ STUB
 }
 
 test_install_to_local_bin_recovered_via_path_probe() {
-    echo "TEST: install.sh drops binary in ~/.local/bin → ensure_indexed adds it to PATH"
+    echo "TEST: install.sh drops binary in ~/.local/bin → background pipeline probes PATH and indexes"
     setup
     write_plugin_json "0.14.1"
-    # Drop binary outside the test PATH; ensure_indexed must probe ~/.local/bin.
+    # Default setup() already created $TEST_DIR/workdir/.cartog.toml, so the
+    # background pipeline's do_index=1 path runs B1 after install.sh + PATH
+    # probe — that's exactly what this test exercises.
     shadow_install_sh_to_dir "$TEST_DIR/home/.local/bin" "0.14.1"
 
-    local output rc
-    output=$(run_ensure_indexed) && rc=0 || rc=$?
+    local rc
+    run_ensure_indexed >/dev/null && rc=0 || rc=$?
     wait_for_rag_index
     restore_install_sh
 
-    assert_eq "succeeds despite binary outside PATH" "0" "$rc"
-    assert_contains "install.sh ran" "args=[0.14.1]" "$(cat "$TEST_DIR/install.log")"
-    local line1
-    line1=$(sed -n '1p' "$CARTOG_TEST_LOG")
-    assert_eq "indexing runs (PATH was augmented)" "index ." "$line1"
+    assert_eq "hook exits 0" "0" "$rc"
+    assert_file_exists "install.sh ran" "$TEST_DIR/install.log"
+    # install.sh was called with the pinned version (fix #1 regression guard).
+    assert_contains "install.sh pinned to plugin version" \
+        "args=[0.14.1]" "$(cat "$TEST_DIR/install.log")"
+    # The background pipeline should have indexed once cartog landed on PATH.
+    if grep -qx 'index .' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: background pipeline indexed via PATH probe"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: background pipeline did not index (PATH probe failed?)"
+        FAIL=$((FAIL + 1))
+    fi
     teardown
 }
 
-test_install_to_cartog_install_dir_recovered_via_path_probe() {
-    echo "TEST: install.sh honors \$CARTOG_INSTALL_DIR → ensure_indexed probes it"
+test_install_to_unreachable_dir_records_last_error() {
+    echo "TEST: install.sh writes binary outside probe candidates → background pipeline records last-error"
     setup
     write_plugin_json "0.14.1"
-    local override_dir="$TEST_DIR/custom-install/bin"
-    shadow_install_sh_to_dir "$override_dir" "0.14.1"
-
-    local output rc
-    output=$(
-        export CARTOG_INSTALL_DIR="$override_dir"
-        # Pre-create HOME/.local/bin to prove the override beats it in priority.
-        mkdir -p "$TEST_DIR/home/.local/bin" "$TEST_DIR/workdir"
-        # Same hermetic PATH as run_ensure_indexed, plus the override env var.
-        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        export HOME="$TEST_DIR/home"
-        cd "$TEST_DIR/workdir"
-        bash "$ENSURE_SCRIPT" 2>&1
-    ) && rc=0 || rc=$?
-    wait_for_rag_index
-    restore_install_sh
-
-    assert_eq "succeeds with override dir" "0" "$rc"
-    local line1
-    line1=$(sed -n '1p' "$CARTOG_TEST_LOG")
-    assert_eq "indexing runs from override dir" "index ." "$line1"
-    teardown
-}
-
-test_install_to_unreachable_dir_fails_with_clear_error() {
-    echo "TEST: install.sh writes to a dir NOT in any probe candidate → ensure_indexed fails loudly"
-    setup
-    write_plugin_json "0.14.1"
+    # Default `.cartog.toml` from setup() is fine — the pipeline aborts at
+    # the PATH probe (B0 fails to find cartog on PATH) before B1 runs, so
+    # toml state doesn't matter here. The probe-failure last-error is the
+    # asserted outcome.
     # Drop in a dir nothing probes (not ~/.local/bin, not ~/.cargo/bin, no override).
     shadow_install_sh_to_dir "$TEST_DIR/totally-isolated/bin" "0.14.1"
 
-    local output rc
-    output=$(run_ensure_indexed 2>&1) && rc=0 || rc=$?
+    local rc
+    run_ensure_indexed >/dev/null && rc=0 || rc=$?
+    wait_for_rag_index
     restore_install_sh
 
-    assert_eq "exits non-zero" "1" "$rc"
-    assert_contains "explains PATH problem" "still not on PATH after install" "$output"
+    assert_eq "hook still exits 0" "0" "$rc"
+    assert_file_exists "last-error written on PATH probe failure" \
+        "$CARTOG_LOG_DIR/last-error"
+    local log
+    log=$(session_log)
+    assert_contains "session log explains PATH problem" \
+        "still not on PATH" "$log"
     teardown
 }
 
@@ -688,7 +783,7 @@ test_drift_warning_emitted_when_versions_differ() {
     wait_for_rag_index
 
     assert_contains "warns about version drift" "out of sync with plugin 0.14.3" "$output"
-    assert_contains "mentions sync on exit" "will sync on session exit" "$output"
+    assert_contains "points at /cartog-install" "run /cartog-install to update" "$output"
     # Crucially: SessionStart must NOT actually update.
     if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
         echo "  FAIL: 'self update' ran during SessionStart drift warning"
@@ -910,35 +1005,38 @@ MOCK
     teardown
 }
 
-# --- tests: Option B fresh-repo gate (no .cartog.toml) ---
-
-# run_ensure_indexed treats stdin as non-TTY (pipe). For Option B we need a
-# matching TTY-aware helper. Force TTY by closing stdin to /dev/tty if available,
-# otherwise fake it with `script` (BSD/macOS) or `unbuffer`. The cleanest portable
-# path is to call the script with stdin attached to /dev/tty when present.
+# --- tests: fresh-repo gate (no .cartog.toml) ---
 #
-# We avoid that complexity by exercising the gate's two non-TTY bypasses
-# (CARTOG_AUTO_INIT=1 and stdin redirection) — both must NOT defer. The TTY
-# defer path is exercised via a direct invocation that pretends to be a TTY by
-# wrapping stdin with /dev/tty if the test environment provides one; otherwise
-# we accept that integration coverage is best-effort here and verify the
-# branch logic via the test below using a TTY-shaped stdin.
-test_no_toml_non_tty_proceeds_with_index() {
-    echo "TEST: missing .cartog.toml + non-TTY stdin -> indexes anyway (bypass)"
+# Non-TTY sessions (CI, piped, hooks running under harness): exit silently
+# without indexing. This is the contract — auto-indexing with defaults
+# would write to a location the user didn't pick.
+#
+# TTY sessions: print a hint pointing at `cartog init`, no indexing.
+#
+# CARTOG_AUTO_INIT=1: bypass everything and index with defaults (opt-in).
+
+test_no_toml_non_tty_exits_silently() {
+    echo "TEST: missing .cartog.toml + non-TTY stdin -> silent exit (no index, no install)"
     setup
     create_mock_cartog "0.14.1"
-    # Ensure no .cartog.toml exists anywhere (default state).
+    rm -f "$TEST_DIR/workdir/.cartog.toml"
+
     local output
     output=$(run_ensure_indexed)
-    wait_for_rag_index
-    assert_contains "indexes despite missing toml on non-TTY" \
-        "cartog index ready" "$output"
-    # The deferral hint must NOT fire when stdin is piped.
+
+    # No deferral hint (TTY-only), no index, no background pipeline.
     if echo "$output" | grep -q "Run \`cartog init\`"; then
-        echo "  FAIL: deferral hint fired on non-TTY session" >&2
+        echo "  FAIL: TTY-only deferral hint fired on non-TTY session" >&2
         FAIL=$((FAIL + 1))
     else
         echo "  PASS: no deferral hint on non-TTY"
+        PASS=$((PASS + 1))
+    fi
+    if [ -s "$CARTOG_TEST_LOG" ]; then
+        echo "  FAIL: cartog commands ran on non-TTY missing-toml session" >&2
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: no cartog commands ran"
         PASS=$((PASS + 1))
     fi
     teardown
@@ -948,6 +1046,8 @@ test_no_toml_auto_init_env_proceeds_with_index() {
     echo "TEST: missing .cartog.toml + CARTOG_AUTO_INIT=1 -> indexes anyway (bypass)"
     setup
     create_mock_cartog "0.14.1"
+    rm -f "$TEST_DIR/workdir/.cartog.toml"
+
     local output
     output=$(CARTOG_AUTO_INIT=1 run_ensure_indexed)
     wait_for_rag_index
@@ -1045,6 +1145,9 @@ test_readonly_cache_dir_fallback() {
     create_mock_cartog "0.14.1"
     local tmp_log="/tmp/session.log"
     rm -f "$tmp_log" "/tmp/last-error"
+    # cd $TEST_DIR (not $TEST_DIR/workdir) — ensure .cartog.toml is present there
+    # so the no-toml gate doesn't short-circuit before the log-fallback path.
+    : > "$TEST_DIR/.cartog.toml"
 
     local output
     output=$(
@@ -1198,6 +1301,54 @@ MOCK
     teardown
 }
 
+# Regression guard for fix #8: setting CARTOG_DB used to skip the GIT_ROOT
+# resolver, so the no-toml gate run from a subdir would miss a git-root
+# .cartog.toml and exit silently on non-TTY sessions.
+test_cartog_db_set_does_not_skip_git_root_toml() {
+    echo "TEST: CARTOG_DB set + cwd in git subdir -> git-root .cartog.toml still satisfies the gate"
+    setup
+    create_mock_cartog "0.14.1"
+    local repo="$TEST_DIR/workdir"
+    local subdir="$repo/src"
+    mkdir -p "$subdir"
+    # Remove the default workdir toml — we want the toml ONLY at the git
+    # root, not at the cwd, to prove GIT_ROOT is resolved even with CARTOG_DB.
+    rm -f "$repo/.cartog.toml"
+    echo "# user config" > "$repo/.cartog.toml"
+
+    cat > "$TEST_DIR/bin/git" <<MOCK
+#!/usr/bin/env bash
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--show-toplevel" ]; then
+    echo "$repo"; exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    local output
+    output=$(
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        export CARTOG_DB="/explicit/path.db"
+        mkdir -p "$HOME"
+        cd "$subdir"
+        bash "$ENSURE_SCRIPT" 2>&1
+    )
+    wait_for_rag_index
+
+    # Gate must NOT have fired: we should see indexing happen, not a silent exit.
+    assert_contains "indexing happened from subdir despite CARTOG_DB" \
+        "cartog index ready" "$output"
+    if echo "$output" | grep -q "Run \`cartog init\`"; then
+        echo "  FAIL: no-toml hint fired despite git-root toml present"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: no-toml hint did not fire (gate found git-root toml)"
+        PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
 # 7. .cartog/db.sqlite is a symlink to elsewhere. The "Updating cartog index"
 #    branch (not "Building") must fire — `[ -f ... ]` follows symlinks.
 test_symlinked_db_path() {
@@ -1297,9 +1448,13 @@ test_auto_init_env_bypasses_gate_with_tty() {
     echo "TEST: CARTOG_AUTO_INIT=1 bypasses defer gate even when stdin is a TTY"
     setup
     create_mock_cartog "0.14.1"
-    # No .cartog.toml, no git repo (so GIT_ROOT="").
+    # No .cartog.toml, no git repo (so GIT_ROOT=""). setup() seeds a default
+    # .cartog.toml in workdir — remove it so the gate condition is actually
+    # exercised; otherwise the test passes via the toml-present branch
+    # instead of via the AUTO_INIT bypass it claims to validate.
     local workdir="$TEST_DIR/workdir"
     mkdir -p "$workdir"
+    rm -f "$workdir/.cartog.toml"
     cat > "$TEST_DIR/bin/git" <<'MOCK'
 #!/usr/bin/env bash
 exit 1
@@ -1404,17 +1559,19 @@ test_stale_lock_removed
 echo ""
 test_output_messages
 echo ""
-test_missing_binary_runs_install
+test_missing_binary_forks_install_in_background
 echo ""
-test_missing_binary_no_plugin_json_runs_install_unpinned
+test_missing_binary_no_toml_skips_index_phases
 echo ""
-test_missing_binary_install_failure_propagates
+test_missing_binary_lock_held_records_last_error
+echo ""
+test_fork_background_rejects_undefined_function
+echo ""
+test_missing_binary_install_failure_records_last_error
 echo ""
 test_install_to_local_bin_recovered_via_path_probe
 echo ""
-test_install_to_cartog_install_dir_recovered_via_path_probe
-echo ""
-test_install_to_unreachable_dir_fails_with_clear_error
+test_install_to_unreachable_dir_records_last_error
 echo ""
 test_drift_warning_emitted_when_versions_differ
 echo ""
@@ -1436,7 +1593,7 @@ test_legacy_root_db_used_when_only_legacy_exists
 echo ""
 test_new_layout_wins_over_legacy
 echo ""
-test_no_toml_non_tty_proceeds_with_index
+test_no_toml_non_tty_exits_silently
 echo ""
 test_no_toml_auto_init_env_proceeds_with_index
 echo ""
@@ -1453,6 +1610,8 @@ echo ""
 test_cartog_db_env_vs_toml_priority
 echo ""
 test_no_git_repo_with_toml_in_cwd
+echo ""
+test_cartog_db_set_does_not_skip_git_root_toml
 echo ""
 test_symlinked_db_path
 echo ""

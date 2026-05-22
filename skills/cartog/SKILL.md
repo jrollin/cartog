@@ -30,7 +30,7 @@ Three states a repo can be in. Detect which one the user is in, then act.
 
 ### Fresh-repo handling (the most common pitfall)
 
-When `.cartog.toml` is missing, the bootstrap script (`ensure_indexed.sh`) **defers indexing** on interactive sessions and prints a hint pointing at `cartog init`. The agent must then:
+When `.cartog.toml` is missing on a git repo, the agent must:
 
 1. **ASK the user** before running `cartog init`. Do not run it automatically — it writes a `.cartog.toml` file in the user's repo.
 2. On user **YES**: run `cartog init` via Bash, check the exit code, then run `cartog index .`. Both commands are safe to chain in a single session.
@@ -38,7 +38,7 @@ When `.cartog.toml` is missing, the bootstrap script (`ensure_indexed.sh`) **def
 
 If `cartog init` returns non-zero (rare — usually a filesystem permission issue), surface the error to the user and **do not proceed** to `cartog index`.
 
-**Non-interactive sessions** (CI, piped, `CARTOG_AUTO_INIT=1`): the bootstrap script skips the deferral and indexes with defaults. No prompt fires.
+**Non-interactive sessions** (CI, piped): cartog's SessionStart hook exits silently when no `.cartog.toml` is present. Setting `CARTOG_AUTO_INIT=1` bypasses the gate and indexes with defaults.
 
 ### Running cartog commands while MCP is alive
 
@@ -120,23 +120,15 @@ Before first use, ensure cartog is installed and indexed.
 
 If the project uses Ollama (check `.cartog.toml` for `[embedding] provider = "ollama"`), Ollama manages the **embedding** model itself — but `cartog rag setup` still downloads the cross-encoder **reranker** (~100MB, provider-agnostic). Skip `rag setup` only if you also disable the reranker; otherwise run it once.
 
-The `scripts/` directory is located next to this SKILL.md file. **Before running any setup command**, look at the absolute path from which this SKILL.md was loaded (visible in your tool call history), take its parent directory, and use that as the scripts root in the bash commands below.
+The plugin's SessionStart hook handles install + indexing automatically:
 
-For example: if this file was loaded from `/home/user/.claude/skills/cartog/SKILL.md`, run:
-```bash
-# Install if missing
-command -v cartog || bash "/home/user/.claude/skills/cartog/scripts/install.sh"
+- **Missing binary**: install runs in the background; MCP tools become available on the next session. The user can type `/cartog-install` to install synchronously, or to retry on failure.
+- **Binary present, no `.cartog.toml`**: on an interactive session, the hook prints a hint pointing at `cartog init`. On a non-interactive session it exits silently. See "Fresh-repo handling" above for the agent flow.
+- **Binary present, `.cartog.toml` present**: the hook runs `cartog index .` (foreground, typically <1s incremental) then forks `cartog rag setup` + `cartog rag index` in the background.
 
-# Run the setup script (handles version check + 3 indexing phases)
-bash "/home/user/.claude/skills/cartog/scripts/ensure_indexed.sh"
-```
+If `cartog --version` fails (binary missing, broken install, wrong architecture), tell the user to run `/cartog-install` and explain it installs the cartog binary that matches the plugin version.
 
-The setup script checks for newer cartog versions (cached, at most once per 24h).
-If an update is available it prints a notice like:
-```
-New cartog version available: X.Y.Z (installed: A.B.C). Update with: bash "/path/to/skill/scripts/install.sh" X.Y.Z
-```
-When you see this notice, ask the user if they want to update before continuing. If they agree, run the suggested command, then re-run `bash "/path/to/skill/scripts/ensure_indexed.sh"`.
+If `cartog --version` shows the installed binary is **older** than the plugin's pinned version, suggest `/cartog-install` to upgrade (or `cartog self update` for users on 0.14.0+). Ask before running either — the user may have pinned an older version deliberately.
 
 ### Search quality tiers
 

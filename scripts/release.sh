@@ -3,6 +3,7 @@ set -euo pipefail
 
 CARGO_TOML="Cargo.toml"
 PLUGIN_JSON=".claude-plugin/plugin.json"
+INSTALL_SKILL="skills/cartog-install/SKILL.md"
 
 # ── helpers ──────────────────────────────────────────────────────────
 die()  { echo "error: $*" >&2; exit 1; }
@@ -82,6 +83,22 @@ if [[ -f "$PLUGIN_JSON" ]]; then
   sed "s/\"version\": \".*\"/\"version\": \"${NEW}\"/" "$PLUGIN_JSON" > "$PLUGIN_JSON.tmp" && mv "$PLUGIN_JSON.tmp" "$PLUGIN_JSON"
 fi
 
+# Update the pinned PLUGIN_VERSION line inside the /cartog-install skill.
+# The skill body uses `$PLUGIN_VERSION` as a token everywhere else, so we
+# only need to maintain the single anchor line — no other version literals
+# to keep in sync. The skill prose tells the agent to substitute the token
+# at invocation time.
+if [[ -f "$INSTALL_SKILL" ]]; then
+  if ! grep -q "^PLUGIN_VERSION=" "$INSTALL_SKILL"; then
+    die "$INSTALL_SKILL missing PLUGIN_VERSION= anchor line"
+  fi
+  sed "s/^PLUGIN_VERSION=.*/PLUGIN_VERSION=${NEW}/" \
+      "$INSTALL_SKILL" > "$INSTALL_SKILL.tmp" && mv "$INSTALL_SKILL.tmp" "$INSTALL_SKILL"
+  if ! grep -q "^PLUGIN_VERSION=${NEW}\$" "$INSTALL_SKILL"; then
+    die "PLUGIN_VERSION bump did not stick in $INSTALL_SKILL"
+  fi
+fi
+
 # update site version references (footers + badges)
 for f in site/index.html site/usage.html; do
   if [[ -f "$f" ]]; then
@@ -93,7 +110,7 @@ done
 cargo generate-lockfile --quiet 2>/dev/null || true
 
 info "committing version bump"
-git add "$CARGO_TOML" Cargo.lock "$PLUGIN_JSON" site/
+git add "$CARGO_TOML" Cargo.lock "$PLUGIN_JSON" "$INSTALL_SKILL" site/
 git commit -m "chore: bump version to ${NEW}"
 
 info "tagging $TAG"

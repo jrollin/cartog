@@ -1,5 +1,8 @@
 # Cooperative Cancellation for MCP Indexing Tools
 
+> **Status:** implemented on `main` (post-v0.17.1, ships next release). Kept
+> as a design record — implementation lives in `crates/cartog-mcp/`.
+
 ## Overview
 
 Cooperative cancellation for the long-running MCP tools `cartog_index` and
