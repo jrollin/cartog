@@ -40,6 +40,18 @@ pub struct WatchConfig {
     /// graceful exit). `None` disables PID-file tracking. Consulted by
     /// `cartog self update` to detect a running watcher.
     pub pid_lock_dir: Option<PathBuf>,
+    /// Slot name used when acquiring the watch PID file. Required when
+    /// `pid_lock_dir` is set — [`run_watch`]/[`spawn_watch`] hard-fail
+    /// if a directory is configured without a slot, to prevent a
+    /// global-slot watcher from silently colliding with DB-scoped peers
+    /// in multi-project setups. `None` is only valid when `pid_lock_dir`
+    /// is also `None` (untracked mode used by tests).
+    ///
+    /// In the cartog binary the slot is derived via
+    /// `cartog::state::slot_for_db("watch", db_path)`. Library
+    /// embedders should follow the same shape: `<prefix>-<16 hex chars>`
+    /// where the hex is a SHA-256 prefix of the canonicalized DB path.
+    pub pid_lock_slot: Option<String>,
     /// Open the on-disk DB via `Database::open_existing_rw` instead of
     /// `Database::open`. Used by the Phase 5 promoter to attach without
     /// re-running schema migrations (the promoter validated the schema
@@ -49,6 +61,12 @@ pub struct WatchConfig {
 }
 
 impl WatchConfig {
+    /// Build a [`WatchConfig`] rooted at `root` with these defaults:
+    /// `debounce = 5s`, `rag = false`, `rag_delay = 30s`,
+    /// `json_events = false`, both `pid_lock_*` = `None` (untracked
+    /// mode), `skip_migrations = false`. Callers wanting PID-lock
+    /// tracking must set BOTH `pid_lock_dir` and `pid_lock_slot` after
+    /// construction — see [`WatchConfig::pid_lock_slot`].
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
@@ -61,11 +79,17 @@ impl WatchConfig {
             rag_config: rag::EmbeddingProviderConfig::default(),
             json_events: false,
             pid_lock_dir: None,
+            pid_lock_slot: None,
             skip_migrations: false,
         }
     }
 }
 
+/// Legacy fallback slot used in untracked mode (`pid_lock_dir = None`,
+/// `pid_lock_slot = None`). When `pid_lock_dir` is set, callers must
+/// provide a DB-scoped slot via
+/// `cartog::state::slot_for_db("watch", db_path)` — see
+/// [`WatchConfig::pid_lock_slot`].
 pub const WATCH_LOCK_SLOT: &str = "watch";
 
 /// A single event emitted by the watch loop when `json_events` is enabled.
@@ -147,14 +171,46 @@ impl Drop for WatchHandle {
     }
 }
 
+/// Validate that the PID-lock configuration on a [`WatchConfig`] is
+/// internally consistent. The two dangerous half-configured states are
+/// `(Some(dir), None)` — a global slot would collide with DB-scoped
+/// peers — and `(None, Some(slot))` — the slot is silently ignored and
+/// the caller's intent is dropped. Called synchronously by both
+/// [`spawn_watch`] and [`run_watch`] so a misconfigured embedder never
+/// gets an `Ok(WatchHandle)` for a watcher that died on the spot.
+fn validate_pid_lock_config(config: &WatchConfig) -> Result<()> {
+    match (
+        config.pid_lock_dir.is_some(),
+        config.pid_lock_slot.is_some(),
+    ) {
+        (true, false) => anyhow::bail!(
+            "WatchConfig::pid_lock_dir is set but pid_lock_slot is None; \
+             refusing to claim the global watch slot — pass a DB-scoped slot \
+             (e.g. `cartog::state::slot_for_db(\"watch\", db_path)`)"
+        ),
+        (false, true) => anyhow::bail!(
+            "WatchConfig::pid_lock_slot is set but pid_lock_dir is None; \
+             a slot without a directory is silently ignored — either set \
+             both fields or clear both to run in untracked mode"
+        ),
+        _ => Ok(()),
+    }
+}
+
 /// Spawn the watch loop on a background thread.
 ///
-/// Returns a `WatchHandle` that can be used to stop the watcher.
-/// The watcher opens its own `Database` connection (SQLite WAL allows concurrent readers).
+/// Returns a `WatchHandle` that can be used to stop the watcher. The
+/// watcher opens its own `Database` connection (SQLite WAL allows
+/// concurrent readers).
 ///
-/// Errors from `watch_loop` (including PID-lock acquire failures) are
-/// logged inside the thread; the caller still receives `Ok(WatchHandle)`.
-/// Use [`run_watch`] when lock failures must propagate synchronously.
+/// Static misconfiguration of [`WatchConfig`] (e.g. `pid_lock_dir` set
+/// without `pid_lock_slot`, or vice versa) is checked synchronously
+/// before the thread is spawned and surfaced as `Err`, so a
+/// misconfigured embedder never gets a `WatchHandle` whose thread is
+/// already dead. Errors that emerge later (PID-lock contention with a
+/// live peer, filesystem I/O failures) are logged inside the thread;
+/// the caller still receives `Ok(WatchHandle)`. Use [`run_watch`] when
+/// ALL failures must propagate synchronously.
 pub fn spawn_watch(config: WatchConfig, db_path: &str) -> Result<WatchHandle> {
     let root = config
         .root
@@ -164,6 +220,7 @@ pub fn spawn_watch(config: WatchConfig, db_path: &str) -> Result<WatchHandle> {
     if !root.is_dir() {
         anyhow::bail!("watch target is not a directory: {}", root.display());
     }
+    validate_pid_lock_config(&config)?;
 
     let db_path = db_path.to_string();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -188,6 +245,7 @@ pub fn spawn_watch(config: WatchConfig, db_path: &str) -> Result<WatchHandle> {
 ///
 /// Used by `cartog watch` CLI command.
 pub fn run_watch(config: WatchConfig, db_path: &str) -> Result<()> {
+    validate_pid_lock_config(&config)?;
     let root = config
         .root
         .canonicalize()
@@ -229,26 +287,34 @@ fn watch_loop(
     // `cartog watch` from a terminal correctly sees Held and aborts. Two
     // watchers writing to the same DB would re-index the same files in
     // parallel; the watch slot is the only thing preventing that.
-    let _lock: Option<cartog_process_lock::ProcessLock> = match config.pid_lock_dir.as_deref() {
-        Some(dir) => match cartog_process_lock::ProcessLock::acquire(dir, WATCH_LOCK_SLOT) {
-            Ok(lock) => Some(lock),
-            Err(cartog_process_lock::AcquireError::Held(held)) => {
-                anyhow::bail!(
-                    "another cartog process holds the watch lock at {} (slot {:?}, PID {}); \
-                     stop it before running `cartog watch`",
-                    dir.display(),
-                    held.slot,
-                    held.pid,
-                );
-            }
-            Err(cartog_process_lock::AcquireError::Io(e)) => {
-                return Err(e).with_context(|| {
-                    format!("failed to acquire watch PID lock at {}", dir.display())
-                });
-            }
-        },
-        None => None,
-    };
+    //
+    // The (Some(dir), None) hard-fail is enforced synchronously by
+    // `validate_pid_lock_config` in spawn_watch/run_watch BEFORE this
+    // function runs; reaching this point with a misconfigured pair
+    // means a caller bypassed those entry points.
+    validate_pid_lock_config(&config)?;
+    let watch_slot: Option<&str> = config.pid_lock_slot.as_deref();
+    let _lock: Option<cartog_process_lock::ProcessLock> =
+        match (config.pid_lock_dir.as_deref(), watch_slot) {
+            (Some(dir), Some(slot)) => match cartog_process_lock::ProcessLock::acquire(dir, slot) {
+                Ok(lock) => Some(lock),
+                Err(cartog_process_lock::AcquireError::Held(held)) => {
+                    anyhow::bail!(
+                        "another cartog process holds the watch lock at {} (slot {}, PID {}); \
+                         stop it before running `cartog watch`",
+                        dir.display(),
+                        held.slot,
+                        held.pid,
+                    );
+                }
+                Err(cartog_process_lock::AcquireError::Io(e)) => {
+                    return Err(e).with_context(|| {
+                        format!("failed to acquire watch PID lock at {}", dir.display())
+                    });
+                }
+            },
+            _ => None,
+        };
 
     let db = if config.skip_migrations {
         Database::open_existing_rw(db_path)

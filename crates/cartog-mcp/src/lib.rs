@@ -1178,6 +1178,35 @@ impl ServerHandler for CartogServer {
 
 pub const SERVE_LOCK_SLOT: &str = "serve";
 
+/// Convert a serve-family slot (legacy `"serve"` or DB-scoped
+/// `"serve-<hash>"`) to the matching watch-family slot
+/// (`"watch"` / `"watch-<hash>"`). Used by [`run_server`] so both PID files
+/// for the same DB share their scope.
+///
+/// Anchored on the exact prefixes `"serve"` (literal, legacy) and
+/// `"serve-"` (DB-scoped, followed by the hex suffix). Inputs that
+/// happen to start with the four letters `serve` but are NOT a
+/// serve-family slot (`"server"`, `"serverless"`, `"servefoo"`, …) fall
+/// through to the global watch slot rather than silently producing a
+/// corrupted "watch{rest}" string.
+fn serve_to_watch_slot(serve_slot: &str) -> String {
+    if serve_slot == "serve" {
+        return watch::WATCH_LOCK_SLOT.to_string();
+    }
+    // strip_prefix + non-empty filter: `"serve-"` alone (trailing dash,
+    // empty hex) is treated as off-pattern, not as the legitimate
+    // serve-<hex> shape. Without the filter it would silently produce
+    // the slot "watch-" which validates but encodes no DB scope.
+    if let Some(rest) = serve_slot.strip_prefix("serve-").filter(|r| !r.is_empty()) {
+        return format!("watch-{rest}");
+    }
+    // Unknown prefix or off-pattern input: fall back to the global watch
+    // slot so we don't emit a fabricated slot that no other process can
+    // reproduce. Should not happen for slots produced by
+    // `state::slot_for_db("serve", _)` but guards against caller mistakes.
+    watch::WATCH_LOCK_SLOT.to_string()
+}
+
 /// Environment variable that, when set to `0`, disables single-writer
 /// election (every cartog process opens RW like pre-Phase-2 cartog). The
 /// migration-busy-retry from Phase 6a remains the only defense in that mode.
@@ -1189,6 +1218,18 @@ pub struct ServerOptions {
     /// graceful exit). `None` disables PID-file tracking. Consulted by
     /// `cartog self update` to detect a running peer.
     pub pid_lock_dir: Option<PathBuf>,
+    /// Slot name used when acquiring the serve PID file. Required when
+    /// `pid_lock_dir` is set — [`acquire_serve_lock`] hard-fails if a
+    /// directory is configured without a slot, to prevent a global-slot
+    /// peer from silently colliding with DB-scoped peers in
+    /// multi-project setups. `None` is only valid when `pid_lock_dir`
+    /// is also `None` (untracked mode used by tests).
+    ///
+    /// In the cartog binary the slot is derived via
+    /// `cartog::state::slot_for_db("serve", db_path)`. Library
+    /// embedders should follow the same shape: `<prefix>-<16 hex chars>`
+    /// where the hex is a SHA-256 prefix of the canonicalized DB path.
+    pub pid_lock_slot: Option<String>,
 }
 
 /// Outcome of trying to claim the `serve` lock at MCP startup.
@@ -1220,13 +1261,38 @@ fn single_writer_election_enabled() -> bool {
 pub fn acquire_serve_lock(opts: &ServerOptions) -> anyhow::Result<ServeLockOutcome> {
     let dir = match opts.pid_lock_dir.as_deref() {
         Some(d) => d,
-        None => return Ok(ServeLockOutcome::Untracked),
+        None => {
+            // Inverse half-config: slot set but no dir. The slot is unused
+            // and the caller's intent is silently dropped, so we surface
+            // it as an error rather than running untracked.
+            if opts.pid_lock_slot.is_some() {
+                return Err(anyhow::anyhow!(
+                    "ServerOptions::pid_lock_slot is set but pid_lock_dir is None; \
+                     a slot without a directory is silently ignored — either set \
+                     both fields or clear both to run untracked"
+                ));
+            }
+            return Ok(ServeLockOutcome::Untracked);
+        }
     };
+    // Reject the dangerous half-configured state: pid_lock_dir set but no
+    // slot. Falling back to a global SERVE_LOCK_SLOT here would let an
+    // embedder claim `serve.pid` while a CLI peer on the same DB derives
+    // `serve-<hash>.pid`, producing two primaries on the same DB. Require
+    // the caller to opt into a slot explicitly (use
+    // `cartog::state::slot_for_db("serve", db_path)` from the bin crate).
+    let slot: &str = opts.pid_lock_slot.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "ServerOptions::pid_lock_dir is set but pid_lock_slot is None; \
+             refusing to claim the global serve slot — pass a DB-scoped slot \
+             (e.g. `cartog::state::slot_for_db(\"serve\", db_path)`)"
+        )
+    })?;
     if !single_writer_election_enabled() {
         // Kill switch: use the old overwrite-on-acquire behavior. We still
         // write our PID file so `cartog self update` and friends see us.
-        let lock = cartog_process_lock::ProcessLock::acquire_overwriting(dir, SERVE_LOCK_SLOT)
-            .map_err(|e| {
+        let lock =
+            cartog_process_lock::ProcessLock::acquire_overwriting(dir, slot).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to acquire serve PID lock at {} (single-writer election disabled): {e}",
                     dir.display()
@@ -1234,7 +1300,7 @@ pub fn acquire_serve_lock(opts: &ServerOptions) -> anyhow::Result<ServeLockOutco
             })?;
         return Ok(ServeLockOutcome::Primary(lock));
     }
-    match cartog_process_lock::ProcessLock::acquire(dir, SERVE_LOCK_SLOT) {
+    match cartog_process_lock::ProcessLock::acquire(dir, slot) {
         Ok(lock) => Ok(ServeLockOutcome::Primary(lock)),
         Err(cartog_process_lock::AcquireError::Held(held)) => Ok(ServeLockOutcome::Held(held)),
         Err(cartog_process_lock::AcquireError::Io(e)) => Err(anyhow::anyhow!(
@@ -1280,11 +1346,20 @@ pub async fn run_server(
     // give us two indexers fighting over the DB. Read-only clients ride
     // along on the primary's index updates via WAL.
     let db_path_str = db_path.to_string_lossy().into_owned();
+    // Derive the watcher's slot from the serve slot so per-DB scoping is
+    // consistent across both PID files. When serve runs un-scoped (legacy /
+    // tests), the watcher also runs un-scoped via the WATCH_LOCK_SLOT
+    // fallback inside `cartog-watch`.
+    let watch_slot: Option<String> = opts.pid_lock_slot.as_deref().map(serve_to_watch_slot);
     let initial_watch_handle: Option<WatchHandle> = if watch && role == Role::Primary {
         let cwd = std::env::current_dir()?;
         let mut config = WatchConfig::new(cwd);
         config.rag = rag;
         config.rag_config = rag_config.clone();
+        // Claim the watcher's PID slot so a separately-running `cartog watch`
+        // from a terminal correctly refuses to start against the same DB.
+        config.pid_lock_dir = opts.pid_lock_dir.clone();
+        config.pid_lock_slot = watch_slot.clone();
         match watch::spawn_watch(config, &db_path_str) {
             Ok(handle) => {
                 info!(rag, "background file watcher started");
@@ -1341,6 +1416,18 @@ pub async fn run_server(
                     watcher_active: Arc::clone(&server.watcher_active),
                     db_path: db_path.to_path_buf(),
                     state_dir,
+                    // .expect documents the precondition: this branch
+                    // requires opts.pid_lock_dir.is_some() (see line above),
+                    // and acquire_serve_lock already hard-fails when dir is
+                    // Some but slot is None. A future refactor that loosens
+                    // either guard will trip this assertion loudly rather
+                    // than silently re-introducing global-slot peers.
+                    serve_slot: opts.pid_lock_slot.clone().expect(
+                        "precondition: acquire_serve_lock rejects pid_lock_dir without pid_lock_slot",
+                    ),
+                    watch_slot: watch_slot.clone().expect(
+                        "precondition: watch_slot is derived from opts.pid_lock_slot above",
+                    ),
                     cwd,
                     primary,
                     pinned,
@@ -1411,6 +1498,13 @@ struct PromoterArgs {
     watcher_active: Arc<std::sync::atomic::AtomicBool>,
     db_path: std::path::PathBuf,
     state_dir: std::path::PathBuf,
+    /// Slot to claim when the promoter wins election. Matches the slot the
+    /// originally-attached primary held — DB-scoped (`serve-<hash>`) in
+    /// production, the global `SERVE_LOCK_SLOT` in legacy / test paths.
+    serve_slot: String,
+    /// Slot the post-promotion watcher claims. Derived from `serve_slot`
+    /// (see `serve_to_watch_slot`) so both PID files share their scope.
+    watch_slot: String,
     /// CWD captured at server startup. Reused for the post-promotion
     /// watcher so the watch root doesn't follow a later `std::env::set_current_dir`.
     cwd: std::path::PathBuf,
@@ -1470,7 +1564,7 @@ async fn promoter_task(args: PromoterArgs) {
         // Atomic O_EXCL acquire. Other readers may race us; the loser stays
         // read-only and tries again on the next tick.
         let new_lock =
-            match cartog_process_lock::ProcessLock::acquire(&args.state_dir, SERVE_LOCK_SLOT) {
+            match cartog_process_lock::ProcessLock::acquire(&args.state_dir, &args.serve_slot) {
                 Ok(lock) => lock,
                 Err(cartog_process_lock::AcquireError::Held(held)) => {
                     info!(
@@ -1568,6 +1662,7 @@ async fn promoter_task(args: PromoterArgs) {
             config.rag = args.rag;
             config.rag_config = args.rag_config.clone();
             config.pid_lock_dir = Some(args.state_dir.clone());
+            config.pid_lock_slot = Some(args.watch_slot.clone());
             // Skip migrations because we validated the schema when we
             // attached read-only — re-running them would re-trigger the
             // embedding-dimension reconcile the election prevents.
@@ -1962,6 +2057,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let opts = ServerOptions {
             pid_lock_dir: Some(dir.path().to_path_buf()),
+            pid_lock_slot: Some(SERVE_LOCK_SLOT.to_string()),
         };
         let outcome = acquire_serve_lock(&opts).expect("acquire");
         let lock = match outcome {
@@ -2001,6 +2097,93 @@ mod tests {
     }
 
     #[test]
+    fn acquire_serve_lock_rejects_dir_without_slot() {
+        // Regression: a half-configured ServerOptions (pid_lock_dir set,
+        // pid_lock_slot None) used to silently fall back to the global
+        // SERVE_LOCK_SLOT, letting an embedder collide with — or be hidden
+        // from — a CLI peer that derives a DB-scoped slot. The mixed-scope
+        // hazard must surface as a hard error.
+        let _guard = env_mutex().lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let opts = ServerOptions {
+            pid_lock_dir: Some(dir.path().to_path_buf()),
+            pid_lock_slot: None,
+        };
+        let err = acquire_serve_lock(&opts).unwrap_err();
+        assert!(
+            err.to_string().contains("pid_lock_slot is None"),
+            "error must explain the misconfiguration, got: {err}"
+        );
+    }
+
+    #[test]
+    fn acquire_serve_lock_rejects_slot_without_dir() {
+        // Inverse half-config: pid_lock_slot set but pid_lock_dir is
+        // None. Pre-fix the slot was silently ignored and the function
+        // returned Ok(Untracked), losing the caller's intent. Must
+        // surface as a hard error.
+        let _guard = env_mutex().lock().unwrap_or_else(|e| e.into_inner());
+        let opts = ServerOptions {
+            pid_lock_dir: None,
+            pid_lock_slot: Some("serve-deadbeef".to_string()),
+        };
+        let err = acquire_serve_lock(&opts).unwrap_err();
+        assert!(
+            err.to_string().contains("pid_lock_dir is None"),
+            "error must explain the misconfiguration, got: {err}"
+        );
+    }
+
+    #[test]
+    fn distinct_slots_for_different_dbs_do_not_collide() {
+        // Two cartog peers serving different DBs in the same per-user state
+        // dir must coexist. Pre-PR, both fought over a single `serve.pid`
+        // slot; with DB-scoped slots they each claim their own
+        // `serve-<hash>.pid`.
+        let _guard = env_mutex().lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let opts_a = ServerOptions {
+            pid_lock_dir: Some(dir.path().to_path_buf()),
+            pid_lock_slot: Some("serve-aaaa1111".to_string()),
+        };
+        let opts_b = ServerOptions {
+            pid_lock_dir: Some(dir.path().to_path_buf()),
+            pid_lock_slot: Some("serve-bbbb2222".to_string()),
+        };
+        let _a = match acquire_serve_lock(&opts_a).expect("acquire A") {
+            ServeLockOutcome::Primary(l) => l,
+            other => panic!("expected Primary for A, got {other:?}"),
+        };
+        let _b = match acquire_serve_lock(&opts_b).expect("acquire B") {
+            ServeLockOutcome::Primary(l) => l,
+            other => panic!("expected Primary for B, got {other:?}"),
+        };
+        // Both PID files present on disk, no Held collision.
+        assert!(dir.path().join("serve-aaaa1111.pid").exists());
+        assert!(dir.path().join("serve-bbbb2222.pid").exists());
+    }
+
+    #[test]
+    fn serve_to_watch_slot_preserves_db_scope() {
+        // The watcher slot is derived from the serve slot so both PID files
+        // for the same DB share their scope suffix.
+        assert_eq!(serve_to_watch_slot("serve"), "watch");
+        assert_eq!(serve_to_watch_slot("serve-abc123"), "watch-abc123");
+        // Unknown prefix falls back to the global watch slot.
+        assert_eq!(serve_to_watch_slot("unknown-prefix"), "watch");
+        // Off-pattern inputs that start with the bytes "serve" but are NOT
+        // a serve-family slot must fall back to the global slot rather than
+        // produce a silently-corrupted "watch{rest}" string.
+        assert_eq!(serve_to_watch_slot("server"), "watch");
+        assert_eq!(serve_to_watch_slot("serverless"), "watch");
+        assert_eq!(serve_to_watch_slot("servefoo"), "watch");
+        assert_eq!(serve_to_watch_slot("Serve"), "watch");
+        assert_eq!(serve_to_watch_slot(""), "watch");
+        // Trailing-dash with empty hex: must fall back, not emit "watch-".
+        assert_eq!(serve_to_watch_slot("serve-"), "watch");
+    }
+
+    #[test]
     fn second_acquire_for_same_dir_reports_held() {
         // Two acquire_serve_lock calls against the same dir: the first wins,
         // the second must surface Held(_) with the first's PID so the caller
@@ -2009,6 +2192,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let opts = ServerOptions {
             pid_lock_dir: Some(dir.path().to_path_buf()),
+            pid_lock_slot: Some(SERVE_LOCK_SLOT.to_string()),
         };
         let _first = match acquire_serve_lock(&opts).expect("first acquire") {
             ServeLockOutcome::Primary(l) => l,
@@ -2034,6 +2218,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let opts = ServerOptions {
             pid_lock_dir: Some(dir.path().to_path_buf()),
+            pid_lock_slot: Some(SERVE_LOCK_SLOT.to_string()),
         };
         let _first = match acquire_serve_lock(&opts).expect("first acquire") {
             ServeLockOutcome::Primary(l) => l,
@@ -2257,6 +2442,7 @@ mod tests {
         let blocker = tempfile::NamedTempFile::new().unwrap();
         let opts = ServerOptions {
             pid_lock_dir: Some(blocker.path().to_path_buf()),
+            pid_lock_slot: Some(SERVE_LOCK_SLOT.to_string()),
         };
         let err = acquire_serve_lock(&opts).unwrap_err();
         assert!(
@@ -2275,6 +2461,26 @@ mod tests {
         primary: cartog_process_lock::ActiveLock,
         pinned: Option<PinnedAttach>,
     ) -> PromoterArgs {
+        promoter_args_with_slot(
+            db,
+            role,
+            db_path,
+            state_dir,
+            primary,
+            pinned,
+            SERVE_LOCK_SLOT,
+        )
+    }
+
+    fn promoter_args_with_slot(
+        db: Arc<Mutex<Database>>,
+        role: Arc<AtomicRole>,
+        db_path: std::path::PathBuf,
+        state_dir: std::path::PathBuf,
+        primary: cartog_process_lock::ActiveLock,
+        pinned: Option<PinnedAttach>,
+        serve_slot: &str,
+    ) -> PromoterArgs {
         PromoterArgs {
             db,
             role,
@@ -2283,6 +2489,8 @@ mod tests {
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             db_path: db_path.clone(),
             state_dir,
+            serve_slot: serve_slot.to_string(),
+            watch_slot: serve_to_watch_slot(serve_slot),
             cwd: std::env::current_dir().unwrap(),
             primary,
             pinned,
@@ -2434,6 +2642,164 @@ mod tests {
             msg.contains("DB metadata changed"),
             "error message should name the drift, got: {msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn promoter_acquires_db_scoped_slot_from_args() {
+        // Regression: promoter_task must acquire the slot carried in
+        // `args.serve_slot`, not a hardcoded `SERVE_LOCK_SLOT`. The
+        // previous test scaffolding hardcoded the global slot, so a
+        // refactor that reverts the acquire call to `SERVE_LOCK_SLOT`
+        // would have shipped green. This test passes a non-global serve
+        // slot and asserts the on-disk PID filename matches.
+        let _serial = test_validate_call_counter::SERIAL.lock().await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        {
+            let _ = Database::open(&db_path, 384).unwrap();
+        }
+        let reader_db = Database::open_readonly(&db_path).unwrap();
+        let pinned = reader_db.pinned_attach().cloned();
+        let db = Arc::new(Mutex::new(reader_db));
+        let role = Arc::new(AtomicRole::new(Role::ReadOnly));
+        // Dead primary holding the scoped slot we want the promoter to
+        // claim. Slot name must match exactly what the promoter acquires
+        // so the original `serve-fa11`.pid file (planted below) gets
+        // reclaimed.
+        let scoped_slot = "serve-fa11ed7e57c0fed5";
+        let primary_pid_path = state_dir.join(format!("{scoped_slot}.pid"));
+        std::fs::write(&primary_pid_path, "4194304\n0\n").unwrap();
+        let primary = cartog_process_lock::ActiveLock {
+            slot: scoped_slot.to_string(),
+            pid: 4_194_304,
+            start_time: None,
+        };
+
+        let args = promoter_args_with_slot(
+            Arc::clone(&db),
+            Arc::clone(&role),
+            db_path,
+            state_dir.clone(),
+            primary,
+            pinned,
+            scoped_slot,
+        );
+        // Keep the lock_cell Arc alive past the task so the acquired
+        // ProcessLock isn't dropped (and the PID file removed) before we
+        // assert on it. The production run_server lifecycle does the
+        // same: it holds lock_cell for the whole server lifetime.
+        let lock_cell = Arc::clone(&args.lock_cell);
+
+        let handle = tokio::task::spawn(promoter_task(args));
+        // Give the promoter time to notice primary-gone and acquire.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert_eq!(
+            role.load(),
+            Role::Primary,
+            "promoter must flip role after acquiring the scoped slot"
+        );
+        // The on-disk PID file must use the scoped slot, not the global.
+        assert!(
+            primary_pid_path.exists(),
+            "expected promoter to acquire {primary_pid_path:?}"
+        );
+        let global_path = state_dir.join(format!("{SERVE_LOCK_SLOT}.pid"));
+        assert!(
+            !global_path.exists(),
+            "promoter must NOT acquire the global slot ({global_path:?})"
+        );
+
+        // Drop the held lock explicitly so the temp dir teardown is clean.
+        {
+            let mut guard = lock_cell.lock().unwrap();
+            *guard = None;
+        }
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn promoter_spawns_watcher_with_db_scoped_watch_slot() {
+        // Regression for review finding #2: promoter_task must claim the
+        // watch slot carried in `args.watch_slot`, not a hardcoded
+        // `WATCH_LOCK_SLOT`. The previous regression test only verified
+        // the serve-slot acquire path; a refactor that reverts the
+        // post-promotion watcher's `config.pid_lock_slot = Some(args
+        // .watch_slot.clone())` to the global constant would have shipped
+        // green. This test sets `watch_requested = true`, lets the
+        // promoter spawn a watcher, and asserts the watcher claims the
+        // scoped slot on disk.
+        let _serial = test_validate_call_counter::SERIAL.lock().await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        {
+            let _ = Database::open(&db_path, 384).unwrap();
+        }
+        let reader_db = Database::open_readonly(&db_path).unwrap();
+        let pinned = reader_db.pinned_attach().cloned();
+        let db = Arc::new(Mutex::new(reader_db));
+        let role = Arc::new(AtomicRole::new(Role::ReadOnly));
+        let scoped_slot = "serve-fa11ed7e57c0fed5";
+        let primary_pid_path = state_dir.join(format!("{scoped_slot}.pid"));
+        std::fs::write(&primary_pid_path, "4194304\n0\n").unwrap();
+        let primary = cartog_process_lock::ActiveLock {
+            slot: scoped_slot.to_string(),
+            pid: 4_194_304,
+            start_time: None,
+        };
+
+        let mut args = promoter_args_with_slot(
+            Arc::clone(&db),
+            Arc::clone(&role),
+            db_path,
+            state_dir.clone(),
+            primary,
+            pinned,
+            scoped_slot,
+        );
+        // Enable the watcher-spawn path. RAG stays off and watch root
+        // (cwd, captured by the helper) is the cartog crate dir — fine
+        // for spawning the watcher; we tear it down immediately.
+        args.watch_requested = true;
+        let lock_cell = Arc::clone(&args.lock_cell);
+        let watch_cell = Arc::clone(&args.watch_cell);
+
+        let handle = tokio::task::spawn(promoter_task(args));
+        // Give the promoter time to promote + spawn the watcher thread.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // The expected watcher PID file uses the SCOPED watch slot derived
+        // via `serve_to_watch_slot(scoped_slot)`.
+        let expected_watch_slot = serve_to_watch_slot(scoped_slot);
+        let expected_watch_pid = state_dir.join(format!("{expected_watch_slot}.pid"));
+        let global_watch_pid = state_dir.join(format!("{}.pid", watch::WATCH_LOCK_SLOT));
+        assert!(
+            expected_watch_pid.exists(),
+            "watcher should have claimed the scoped slot at {expected_watch_pid:?}"
+        );
+        assert!(
+            !global_watch_pid.exists(),
+            "watcher must NOT claim the global slot ({global_watch_pid:?})"
+        );
+
+        // Clean shutdown so the temp dir teardown succeeds.
+        {
+            let mut wguard = watch_cell.lock().unwrap();
+            if let Some(handle) = wguard.take() {
+                handle.stop();
+            }
+        }
+        {
+            let mut guard = lock_cell.lock().unwrap();
+            *guard = None;
+        }
+        handle.abort();
+        let _ = handle.await;
     }
 
     #[tokio::test]

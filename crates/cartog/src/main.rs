@@ -213,6 +213,7 @@ fn main() -> Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             let opts = mcp::ServerOptions {
                 pid_lock_dir: state::default_state_dir(),
+                pid_lock_slot: Some(state::slot_for_db("serve", &db_path)),
             };
             runtime.block_on(mcp::run_server(&db_path, watch, rag, provider_config, opts))
         }

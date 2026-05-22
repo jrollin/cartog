@@ -22,7 +22,7 @@ background promoter on the secondary takes over.
 
 ```text
                           ┌─────────────────────────────────────────────┐
-cartog serve   →   acquire_serve_lock(O_EXCL on .cartog/state/serve.pid)
+cartog serve   →   acquire_serve_lock(O_EXCL on <state_dir>/serve-<db_hash>.pid)
                           │
               ┌───────────┴───────────┐
               │                       │
@@ -57,7 +57,7 @@ cartog serve   →   acquire_serve_lock(O_EXCL on .cartog/state/serve.pid)
 
 4. **Tool gating, not transport split.** Same MCP stdio transport for both roles. The two write tools (`cartog_index`, `cartog_rag_index`) early-return a clear error when role is `ReadOnly`. The other 11 (search, outline, refs, callees, impact, hierarchy, deps, stats, map, changes, rag_search) work unchanged. `cartog_stats` JSON includes `"role": "primary" | "read-only"` for introspection.
 
-5. **Promotion under the existing `Mutex<Database>`.** When the secondary's promoter detects the primary died, validates pinned state, and wins an O_EXCL acquire, it swaps the inner `Database` value under the mutex. No reader can be mid-query through the same guard (it must release before the promoter can claim it), so SQLITE_MISUSE from a connection-mid-use is impossible. The promoter then spawns the watcher (acquiring `watch.pid` alongside the `serve.pid` it already holds — they're different slots gating different consumers; `serve.pid` blocks other MCP servers, `watch.pid` blocks a separately-running `cartog watch` from a terminal) via `Database::open_existing_rw` (`skip_migrations=true` so we don't re-trigger the migration race the election prevents), and flips `Arc<AtomicRole>` to `Primary`. `cartog_stats` exposes `"watcher_active"` so users can see whether the watcher actually started post-promotion (it may fail if a live terminal `cartog watch` holds the slot).
+5. **Promotion under the existing `Mutex<Database>`.** When the secondary's promoter detects the primary died, validates pinned state, and wins an O_EXCL acquire, it swaps the inner `Database` value under the mutex. No reader can be mid-query through the same guard (it must release before the promoter can claim it), so SQLITE_MISUSE from a connection-mid-use is impossible. The promoter then spawns the watcher (acquiring the DB-scoped watch slot `watch-<db_hash>` alongside the `serve-<db_hash>` it already holds — they're different slots gating different consumers; serve blocks other MCP servers for the same DB, watch blocks a separately-running `cartog watch` from a terminal) via `Database::open_existing_rw` (`skip_migrations=true` so we don't re-trigger the migration race the election prevents), and flips `Arc<AtomicRole>` to `Primary`. `cartog_stats` exposes `"watcher_active"` so users can see whether the watcher actually started post-promotion (it may fail if a live terminal `cartog watch` holds the slot).
 
 6. **Migration-race safety net.** `handle_embedding_dimension` writes wrap in `retry_busy` on `SQLITE_BUSY` / `SQLITE_LOCKED` with 50/100/250/500/1000ms backoff. A true early-return on already-matching dimension means same-dim reopens never take a write lock at all. Layered defense for any case where two writers reach migration despite election (TOCTOU window, kill switch enabled).
 
@@ -72,7 +72,7 @@ cartog serve   →   acquire_serve_lock(O_EXCL on .cartog/state/serve.pid)
 ## Functional Requirements
 
 ### FR-001: Election
-When `cartog serve` starts, the system shall attempt `ProcessLock::acquire` against `<state_dir>/serve.pid` with O_EXCL semantics, returning `Primary` on success, `Held(ActiveLock)` when a live peer (same PID + start_time) owns the slot, and `Io(error)` for filesystem failures.
+When `cartog serve` starts, the system shall attempt `ProcessLock::acquire` against `<state_dir>/serve-<db_hash>.pid` with O_EXCL semantics, returning `Primary` on success, `Held(ActiveLock)` when a live peer (same PID + start_time) owns the slot, and `Io(error)` for filesystem failures. The `<db_hash>` is a 16-char SHA-256 prefix of the canonical DB path (`cartog::state::slot_for_db`), so two peers on different DBs claim different slots and coexist; two peers on the same DB collide on the same slot.
 
 ### FR-002: Stale-lock cleanup
 While `ProcessLock::acquire` sees `AlreadyExists` and the recorded holder is no longer alive (PID gone, or start_time mismatch from PID reuse), the system shall unlink the stale file and retry the acquire once.
@@ -96,7 +96,7 @@ While role is `ReadOnly` and the primary's `ActiveLock` is known, the system sha
 When the promoter detects the primary is gone AND `validate_pinned_state` confirms the on-disk schema and fingerprint match the attach-time `PinnedAttach`, the system shall:
 - attempt an atomic O_EXCL acquire of the serve slot;
 - on success, open `Database::open_existing_rw` and swap it into the existing `Arc<Mutex<Database>>` under the held guard;
-- spawn a watcher (with `skip_migrations=true` via `Database::open_existing_rw`, and acquiring `watch.pid` alongside the already-held `serve.pid`) if the user invoked `serve --watch`. If `watch.pid` is held by another live cartog process, the watcher fails to start and `cartog_stats` reports `"watcher_active": false`;
+- spawn a watcher (with `skip_migrations=true` via `Database::open_existing_rw`, and acquiring `watch-<db_hash>.pid` alongside the already-held `serve-<db_hash>.pid`) if the user invoked `serve --watch`. If the watch slot is held by another live cartog process, the watcher fails to start and `cartog_stats` reports `"watcher_active": false`;
 - store `Role::Primary` in `AtomicRole`;
 - exit the promoter loop.
 
@@ -148,7 +148,7 @@ While `cartog watch` starts and another live cartog process holds the watch slot
    - All 13 tools then work on what was the secondary.
 3. Two readers race for promotion: exactly one wins, the loser stays read-only, no `SQLITE_BUSY` on the new primary's `open_existing_rw`.
 4. Promoter aborts cleanly when a third writer upgraded the schema or swapped the embedding stack between the secondary's attach and the primary's death.
-5. `kill -INT` or `kill -TERM` on a primary serve unlinks `serve.pid` before exit; the PID file is gone when the process is gone.
+5. `kill -INT` or `kill -TERM` on a primary serve unlinks its `serve-<db_hash>.pid` before exit; the PID file is gone when the process is gone. A hard kill (`kill -9`, power loss) leaves the file behind; the next `cartog serve` / `cartog watch` startup runs a `sweep_stale_locks` pass that reaps every dead `.pid` entry in the state dir (not just the slot being claimed), so leftovers from crashed peers of any project disappear automatically.
 6. `cartog serve` stderr in MCP-child mode no longer emits `info!` lines as `[ERROR]` in `~/.claude/debug/*.txt`. `cartog serve` in a foreground terminal still shows `info!` progress.
 7. `CARTOG_SINGLE_WRITER=0 cartog serve` reproduces the pre-Phase-2 overwrite-on-acquire behavior; two such processes both report `Primary` and the migration busy-retry catches any race.
 
@@ -215,7 +215,7 @@ All items completed across the initial 8 implementation commits
 
 ### Phase 5: promotion
 - [x] `Database::open_existing_rw(path)` (full RW + PRAGMAs + schema-drift check, no migrations)
-- [x] `WatchConfig::skip_migrations` flag (originally included `skip_pid_lock`, removed in a later review fix — both promoter-spawned and CLI-spawned watchers now claim `watch.pid` uniformly so two `cartog watch` processes can't run concurrently against the same DB)
+- [x] `WatchConfig::skip_migrations` flag (originally included `skip_pid_lock`, removed in a later review fix — both promoter-spawned and CLI-spawned watchers now claim the same DB-scoped watch slot (`watch-<db_hash>`) uniformly so two `cartog watch` processes can't run concurrently against the same DB)
 - [x] `cartog-watch` watch loop honors `skip_migrations`
 - [x] `AtomicRole` wrapping `AtomicU8`; `CartogServer.role: Arc<AtomicRole>`
 - [x] `PromoterArgs` struct + `promoter_task` async function
@@ -250,6 +250,31 @@ regression test.
   - (e) Watcher post-promotion reuses the server's captured `cwd` (was: `std::env::current_dir()`).
   - `poll_interval` becomes a `PromoterArgs` field so tests can shrink it from 10s to milliseconds.
 - [x] `4d876b1 docs`: removed unsafe "manually delete `watch.pid`" advice; clarified log-level autodetect; documented per-OS `<state_dir>` paths.
+
+### DB-scoped lock slots + stale-file sweep (issue #53)
+
+Slot names became DB-scoped — `serve-<hash>.pid` / `watch-<hash>.pid`
+where `<hash>` is a 16-char SHA-256 prefix of the canonicalized DB
+path — so two cartog peers on different DBs in the same per-user state
+dir coexist without colliding on a single global `serve.pid` /
+`watch.pid`. Slot derivation lives in
+`cartog::state::slot_for_db(prefix, db_path)` in the binary crate.
+
+Additional safeguards landed alongside:
+
+- `ProcessLock::acquire` (and `acquire_overwriting`) call
+  `sweep_stale_locks(state_dir)` at the top, reaping every dead `.pid`
+  entry — not just the slot being claimed — via
+  `unlink_if_unchanged`. Hard-killed peers from any project disappear
+  on the next long-lived command launch.
+- `acquire_serve_lock` and the watch path hard-fail when
+  `pid_lock_dir` is set but `pid_lock_slot` is None, preventing an
+  embedder from silently claiming the global slot while a CLI peer
+  uses a DB-scoped slot.
+- `slot_for_db` canonicalizes the full DB path when the file exists
+  (resolving symlinked leaves), and walks up ancestors when it
+  doesn't, so equivalent-but-different path forms hash to the same
+  slot whether or not the DB has been created yet.
 
 ## Out of Scope
 

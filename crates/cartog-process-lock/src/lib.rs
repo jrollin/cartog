@@ -57,7 +57,7 @@ impl std::fmt::Display for AcquireError {
         match self {
             AcquireError::Held(lock) => write!(
                 f,
-                "another cartog process holds slot {slot:?} (PID {pid})",
+                "another cartog process holds slot {slot} (PID {pid})",
                 slot = lock.slot,
                 pid = lock.pid,
             ),
@@ -99,6 +99,12 @@ impl ProcessLock {
     pub fn acquire(state_dir: &Path, slot: &str) -> Result<Self, AcquireError> {
         validate_slot(slot).map_err(AcquireError::Io)?;
         fs::create_dir_all(state_dir).map_err(AcquireError::Io)?;
+        // Reap any stale `*.pid` files left by crashed peers before we try
+        // to claim our own slot. Without this, DB-scoped slots accumulate
+        // (each crashed project leaves its own `serve-<hash>.pid`) until a
+        // `cartog self update` runs. Sweep uses `unlink_if_unchanged` so a
+        // live peer that lands fresh content during the scan is preserved.
+        sweep_stale_locks(state_dir);
         let path = state_dir.join(format!("{slot}.{PID_EXTENSION}"));
         let pid = std::process::id();
         let payload = match process_start_time(pid) {
@@ -250,6 +256,10 @@ impl ProcessLock {
     pub fn acquire_overwriting(state_dir: &Path, slot: &str) -> io::Result<Self> {
         validate_slot(slot)?;
         fs::create_dir_all(state_dir)?;
+        // Same sweep as the O_EXCL path: even with election disabled, we
+        // want crashed-peer leftovers from other DBs to disappear so a
+        // listing of the state dir doesn't grow without bound.
+        sweep_stale_locks(state_dir);
         let path = state_dir.join(format!("{slot}.{PID_EXTENSION}"));
         let pid = std::process::id();
         let tmp = state_dir.join(format!(".{slot}.{pid}.{PID_EXTENSION}.tmp"));
@@ -344,6 +354,28 @@ pub fn find_active_locks(state_dir: &Path) -> Vec<ActiveLock> {
         }
     }
     active
+}
+
+/// Reap stale PID files in `state_dir`. Side-effect equivalent of
+/// [`find_active_locks`] without the return value.
+///
+/// Each `*.pid` whose recorded PID is dead (or whose recorded start_time
+/// disagrees with the live PID, i.e. PID-reuse) is unlinked via
+/// [`unlink_if_unchanged`] so a concurrent writer landing fresh content in
+/// the TOCTOU window is preserved. Malformed files (unreadable on two
+/// consecutive reads) are removed unconditionally because there is no
+/// holder identity to protect.
+///
+/// Called from [`ProcessLock::acquire`] so every long-lived command launch
+/// (`cartog serve`, `cartog watch`, promoter handoff) reaps leftovers from
+/// crashed peers before claiming its own slot. Cost is one `read_dir` plus
+/// one `kill(pid, 0)` per file — sub-millisecond on a state dir with a
+/// handful of entries.
+///
+/// A missing or unreadable `state_dir` is a no-op (the caller will create
+/// it during their own acquire).
+pub fn sweep_stale_locks(state_dir: &Path) {
+    let _ = find_active_locks(state_dir);
 }
 
 /// Unlink the PID file at `path` only if its current contents still match
@@ -1020,6 +1052,91 @@ mod tests {
         let (recorded_pid, recorded_st) = read_lock_file(&path).expect("file parses");
         assert_eq!(recorded_pid, pid);
         assert_eq!(recorded_st, Some(real_st));
+    }
+
+    #[test]
+    fn sweep_stale_locks_removes_dead_entries_from_other_slots() {
+        // Regression for the DB-scoped-slot accumulation: pre-sweep, a
+        // crashed peer for project A left `serve-aaaa.pid` lying in the
+        // state dir forever; a fresh acquire for project B's slot
+        // `serve-bbbb` never touched it. Now every acquire scans first
+        // and reaps stale files belonging to ANY slot.
+        let dir = TempDir::new().unwrap();
+        let stale_a = dir.path().join("serve-aaaa1111.pid");
+        let stale_b = dir.path().join("watch-bbbb2222.pid");
+        // PIDs guaranteed dead (above Linux's pid_max).
+        fs::write(&stale_a, "4194304\n0\n").unwrap();
+        fs::write(&stale_b, "4194304\n0\n").unwrap();
+
+        // Acquire a fresh, unrelated slot. Sweep must run during acquire
+        // and clean both unrelated stale files even though we are not
+        // claiming either of them.
+        let _lock = ProcessLock::acquire(dir.path(), "serve-cccc3333").unwrap();
+        assert!(
+            !stale_a.exists(),
+            "stale serve-aaaa1111.pid should be swept by acquire"
+        );
+        assert!(
+            !stale_b.exists(),
+            "stale watch-bbbb2222.pid should be swept by acquire"
+        );
+    }
+
+    #[test]
+    fn sweep_stale_locks_preserves_live_entries() {
+        // The sweep must NOT touch a live peer's PID file. We plant our
+        // own PID under an unrelated slot, then acquire a fresh slot;
+        // the live file must survive.
+        let dir = TempDir::new().unwrap();
+        let live_slot = "serve-live9999";
+        let live_path = dir.path().join(format!("{live_slot}.pid"));
+        let pid = std::process::id();
+        let payload = match process_start_time(pid) {
+            Some(st) => format!("{pid}\n{st}\n"),
+            None => format!("{pid}\n"),
+        };
+        fs::write(&live_path, &payload).unwrap();
+
+        let _lock = ProcessLock::acquire(dir.path(), "serve-other1111").unwrap();
+        assert!(
+            live_path.exists(),
+            "live peer's PID file must survive a sweep from an unrelated acquire"
+        );
+    }
+
+    #[test]
+    fn sweep_stale_locks_is_callable_independently() {
+        // Public entry point should be usable from any cartog tool (e.g.
+        // a hypothetical `cartog doctor --clean-locks`).
+        let dir = TempDir::new().unwrap();
+        let stale = dir.path().join("watch-stale1234.pid");
+        fs::write(&stale, "4194304\n0\n").unwrap();
+        sweep_stale_locks(dir.path());
+        assert!(!stale.exists(), "sweep should remove the stale file");
+    }
+
+    #[test]
+    fn sweep_stale_locks_no_op_on_missing_dir() {
+        // Defensive: a missing state_dir must not panic or error.
+        let parent = TempDir::new().unwrap();
+        let missing = parent.path().join("does-not-exist");
+        sweep_stale_locks(&missing);
+        // No assertion needed — absence of panic is the test.
+    }
+
+    #[test]
+    fn acquire_overwriting_sweeps_stale_too() {
+        // The kill-switch path runs the same sweep; we test it
+        // explicitly so a future refactor that only touches `acquire`
+        // doesn't drop the cleanup on the other path.
+        let dir = TempDir::new().unwrap();
+        let stale = dir.path().join("watch-old5678.pid");
+        fs::write(&stale, "4194304\n0\n").unwrap();
+        let _lock = ProcessLock::acquire_overwriting(dir.path(), "serve-new").unwrap();
+        assert!(
+            !stale.exists(),
+            "stale entries should be swept by acquire_overwriting"
+        );
     }
 
     #[test]

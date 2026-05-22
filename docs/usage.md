@@ -419,7 +419,7 @@ When `--watch` is passed, a background file watcher keeps the code graph up to d
 
 Opening two Claude Code windows on the same project (or running `cartog serve` in a terminal while a Claude Code window has its own MCP child) is supported via **single-writer election**:
 
-- The first instance acquires `<state_dir>/serve.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 13 MCP tools.
+- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 13 MCP tools. The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
 - Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 11 of 13 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
 - If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 13 tools become available on what was the secondary.
 
@@ -438,7 +438,12 @@ Escape hatches:
 | macOS | `~/Library/Application Support/io.cartog.cartog/` |
 | Windows | `%LOCALAPPDATA%\cartog\cartog\data\` |
 
-The directory holds `state.toml` (used by `cartog self update`) and PID lock files (`serve.pid`, `watch.pid`) for live long-lived commands.
+The directory holds `state.toml` (used by `cartog self update`) and PID lock files for live long-lived commands. Slots are scoped per DB so peers in different projects coexist:
+
+- `serve-<hash>.pid` — `cartog serve` (the MCP server)
+- `watch-<hash>.pid` — `cartog watch` or the `serve --watch` background watcher
+
+`<hash>` is a 16-char SHA-256 prefix of the canonical DB path. On every `cartog serve` / `cartog watch` startup, stale PID files (whose recorded process has exited) are reaped automatically — no manual cleanup needed.
 
 See [`spec-mcp-sharing.md`](spec-mcp-sharing.md) for the full design.
 

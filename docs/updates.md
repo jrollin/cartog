@@ -105,17 +105,17 @@ cartog persists `last_update_check`, `last_known_latest`, and `last_known_outdat
 
 The file is best-effort: if it is missing, malformed, or unwritable, cartog falls back to defaults and continues. Safe to delete; it will be recreated on the next check.
 
-PID files for `cartog serve` and `cartog watch` (`serve.pid`, `watch.pid`) live in the same directory.
+PID files for `cartog serve` and `cartog watch` live in the same directory. Slot names are DB-scoped — `serve-<hash>.pid` / `watch-<hash>.pid` — where `<hash>` is a 16-char SHA-256 prefix of the canonical DB path. Two cartog peers on different projects therefore claim different files and coexist; `cartog self update` still detects any running peer regardless of scope.
 
 ## Troubleshooting
 
 ### "another cartog process is running"
 
-The upgrade refused because a peer `cartog serve` or `cartog watch` is holding the binary open. Stop the named process and re-run `cartog self update`. The error message includes the slot (`serve`/`watch`) and PID.
+The upgrade refused because a peer `cartog serve` or `cartog watch` is holding the binary open. Stop the named process and re-run `cartog self update`. The error message includes the slot (`serve-<hash>` / `watch-<hash>`, where `<hash>` is a SHA-256 prefix of the peer's DB path) and PID.
 
 ### Stale PID files
 
-If a `cartog serve`/`watch` was killed with `SIGKILL` (or the machine crashed), the PID file may remain after the process is gone. cartog detects and removes stale entries automatically — the next `cartog self update` clears them. To clear manually: `rm $XDG_STATE_HOME/cartog/{serve,watch}.pid`.
+If a `cartog serve`/`watch` was killed with `SIGKILL` (or the machine crashed), the PID file may remain after the process is gone. Cartog reaps stale entries automatically: every `cartog serve` / `cartog watch` startup runs a sweep that unlinks every `.pid` file whose recorded process has exited (not just the slot being claimed), and `cartog self update` also clears them. Manual cleanup is rarely needed; to clear by hand: `rm $XDG_STATE_HOME/cartog/{serve,watch}-*.pid` (Linux paths; substitute the platform-specific state dir).
 
 ### "checksum mismatch"
 
