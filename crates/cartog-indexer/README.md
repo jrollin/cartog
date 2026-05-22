@@ -39,7 +39,7 @@ Edges are always fully re-inserted for dirty files (no edge-level diff).
 
 When the `lsp` feature is enabled, a second pass resolves edges that the heuristic resolver in `cartog-db` left unresolved, using real language servers via `cartog-lsp`. Skipped on no-op reindexes (no file added, modified, or removed) — the unresolved set is identical to the previous run. Use `--force` to retry resolution after toggling `--no-lsp` off.
 
-Edges that LSP definitively cannot resolve (stdlib targets, dyn dispatch, macro expansion) are marked `resolution_state = 2` and skipped on future runs. When a new symbol is added whose name matches such an edge, the indexer auto-resets the marker so the next pass retries — see `Database::reset_unresolvable_for_names`.
+Edges that LSP classifies are persisted to `resolution_state` so future runs skip them: `2` (unresolvable — typo, dyn dispatch, macro expansion) and `3` (external — stdlib, deps, node_modules). When a new symbol is added whose name matches such an edge (e.g. the user vendors a dep in-tree), the indexer auto-resets the marker so the next pass retries — see `Database::reset_unresolvable_for_names`. `--force` resets all sticky markers (see `Database::reset_all_unresolvable`).
 
 ## Public API
 

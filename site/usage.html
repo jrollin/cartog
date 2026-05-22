@@ -284,7 +284,7 @@ cartog rag setup     <span class="comment"># only downloads embedding model (~80
 cartog index src/           <span class="comment"># index a subdirectory</span>
 cartog index . --force      <span class="comment"># full re-index</span>
 cartog index . --no-lsp     <span class="comment"># heuristic-only (~1-4s)</span></pre>
-      <p>Incremental by default — skips unchanged files (git + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. The LSP pass skips edges already proven unresolvable (LSP returned a definitive "no definition" — e.g. stdlib calls, dyn dispatch); they auto-retry when a matching symbol is added. <code>--force</code> resets those markers for a clean retry.</p>
+      <p>Incremental by default — skips unchanged files (git + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. The LSP pass skips edges already classified as unresolvable (typo, dyn dispatch, macro) or external (stdlib, deps, node_modules); both auto-retry when a matching symbol is added in-tree. <code>--force</code> resets those markers for a clean retry.</p>
 
       <h2 id="cmd-search"><code>cartog search &lt;query&gt;</code></h2>
       <p>Find symbols by partial name. Results ranked: exact match → prefix → substring.</p>

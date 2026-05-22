@@ -261,6 +261,7 @@ fn index_with_optional_lsp(
             Ok(stats) => {
                 result.edges_lsp_resolved = stats.resolved;
                 result.edges_marked_unresolvable = stats.marked_unresolvable;
+                result.edges_marked_external = stats.marked_external;
                 if stats.resolved > 0 {
                     let _ = db.compute_in_degrees();
                 }
@@ -569,7 +570,7 @@ impl CartogServer {
 
     /// Build or rebuild the code graph index for a directory.
     #[tool(
-        description = "Build or rebuild the code graph index. Run this first before any other cartog tool, or after making code changes to keep the graph current. Incremental by default — only re-indexes changed files. Use force=true if results seem stale. Not for: routine queries (call once per session, not before every read). Returns: {files_indexed, files_skipped, symbols_added, edges_added, edges_resolved, edges_lsp_resolved, edges_marked_unresolvable}."
+        description = "Build or rebuild the code graph index. Run this first before any other cartog tool, or after making code changes to keep the graph current. Incremental by default — only re-indexes changed files. Use force=true if results seem stale. Not for: routine queries (call once per session, not before every read). Returns: {files_indexed, files_skipped, symbols_added, edges_added, edges_resolved, edges_lsp_resolved, edges_marked_unresolvable, edges_marked_external}."
     )]
     async fn cartog_index(
         &self,
@@ -888,7 +889,7 @@ impl CartogServer {
 
     /// Index statistics summary.
     #[tool(
-        description = "Show index health: file count, symbol count, edge count, resolution rate. Use to verify the index is built and check coverage. Not for: finding code (use cartog_search or cartog_rag_search). Returns: {num_files, num_symbols, num_edges, resolution_rate_percent}."
+        description = "Show index health: file count, symbol count, edge count, and edge resolution buckets. Use to verify the index is built and check coverage. Not for: finding code (use cartog_search or cartog_rag_search). Returns: {num_files, num_symbols, num_edges, num_resolved, num_unresolvable, num_external, languages, symbol_kinds, role, watcher_active}. num_external counts edges whose LSP-resolved target lives outside the indexed root (stdlib, deps, node_modules)."
     )]
     async fn cartog_stats(&self) -> Result<CallToolResult, McpError> {
         let db = Arc::clone(&self.db);
@@ -2240,6 +2241,10 @@ mod tests {
         assert_eq!(
             r2.edges_lsp_resolved, 0,
             "no-op reindex must skip LSP (MCP-side gate broken)"
+        );
+        assert_eq!(
+            r2.edges_marked_external, 0,
+            "no-op reindex must not produce new external marks"
         );
         assert_eq!(r2.files_indexed, 0);
     }

@@ -127,6 +127,11 @@ pub struct IndexResult {
     /// They are skipped by future LSP queries until a matching symbol is added.
     #[serde(skip_serializing_if = "is_zero")]
     pub edges_marked_unresolvable: u32,
+    /// Edges LSP marked `resolution_state = 3` (target lives outside the indexed
+    /// root: stdlib, deps, node_modules). Same skip + reopen semantics as
+    /// `edges_marked_unresolvable`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub edges_marked_external: u32,
     /// Files added, modified, or removed this run. Callers gate post-index passes (e.g. LSP) on this.
     #[serde(skip)]
     pub dirty_files: u32,
@@ -300,8 +305,10 @@ pub fn index_directory(
     // helpers — the regular versions issue their own `BEGIN` and would fail
     // here.
     // Names of symbols added this run. Used after the per-file loop to reset
-    // resolution_state=2 markers on edges that newly have a matching target —
-    // closes the "added b.ts after a.ts's import was marked unresolvable" gap.
+    // resolution_state {2, 3} markers on edges that newly have a matching
+    // target — closes the "added b.ts after a.ts's import was marked
+    // unresolvable" gap, and the "vendored a dep in-tree so an external edge
+    // is now internal" gap.
     let mut added_symbol_names: std::collections::HashSet<String> =
         std::collections::HashSet::new();
 
@@ -447,14 +454,15 @@ pub fn index_directory(
         }
     }
 
-    // Force-reindex must retry edges previously marked unresolvable —
-    // otherwise --force would silently honor a stale state=2 marker.
+    // Force-reindex must retry edges previously marked unresolvable OR
+    // external — otherwise --force would silently honor a stale state {2, 3}
+    // marker.
     if force {
         db.reset_all_unresolvable()?;
     }
 
-    // Reopen state=2 markers whose target_name was just added. Runs BEFORE
-    // the heuristic + LSP passes so reopened edges flow through both.
+    // Reopen state {2, 3} markers whose target_name was just added. Runs
+    // BEFORE the heuristic + LSP passes so reopened edges flow through both.
     if !added_symbol_names.is_empty() {
         let names: Vec<String> = added_symbol_names.iter().cloned().collect();
         db.reset_unresolvable_for_names(&names)?;
@@ -485,6 +493,7 @@ pub fn index_directory(
         let stats = cartog_lsp::lsp_resolve_edges(db, &root, None)?;
         result.edges_lsp_resolved = stats.resolved;
         result.edges_marked_unresolvable = stats.marked_unresolvable;
+        result.edges_marked_external = stats.marked_external;
     }
     #[cfg(not(feature = "lsp"))]
     let _ = lsp; // suppress unused warning when feature is off
@@ -1184,21 +1193,26 @@ mod tests {
     }
 
     #[test]
-    fn test_force_reindex_resets_unresolvable_markers() {
-        // --force is the documented escape hatch for "retry everything".
-        // A state=2 marker must not survive a forced reindex; otherwise the
-        // user has no way to un-burn an edge after a transient false positive
-        // would have escaped the per-language gate.
-        //
-        // After --force, edges are re-inserted with new auto-increment IDs and
-        // default state=0. We assert: no edge with target_name="find_x" stays
-        // at state=2 (use the marker filter on unresolved_edges).
+    fn test_force_reindex_does_not_inherit_sticky_markers() {
+        // End-to-end contract: --force is the documented escape hatch for
+        // "retry everything". Under --force, every file is re-parsed and
+        // `clear_edges_for_file` / `clear_file_data_in_tx` wipe the edge
+        // rows before `resolve_edges` runs — so the post-force edges have
+        // fresh auto-increment IDs at default state=0 regardless of what
+        // state the pre-force edges held. This test exercises that path
+        // through real indexing; the targeted unit test for the SQL filter
+        // (`IN (2, 3)`) lives in cartog-db
+        // (test_reset_all_unresolvable_resets_state_two_and_three).
         use cartog_db::Database;
 
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap().join("project");
         std::fs::create_dir(&root).unwrap();
-        std::fs::write(root.join("a.py"), "def caller():\n    find_x()\n").unwrap();
+        std::fs::write(
+            root.join("a.py"),
+            "def caller():\n    find_x()\n    find_ext()\n",
+        )
+        .unwrap();
 
         let db = Database::open_memory().unwrap();
         index_directory(&db, &root, false, false, None, None).unwrap();
@@ -1209,21 +1223,75 @@ mod tests {
             .find(|e| e.target_name == "find_x")
             .expect("find_x edge should exist")
             .edge_id;
+        let find_ext_id = pre
+            .iter()
+            .find(|e| e.target_name == "find_ext")
+            .expect("find_ext edge should exist")
+            .edge_id;
         db.mark_edge_unresolvable(find_x_id).unwrap();
+        db.mark_edge_external(find_ext_id).unwrap();
 
-        // --force = true: rebuilds edges with fresh IDs, must NOT inherit state=2.
+        // --force = true: rebuilds edges with fresh IDs, must NOT inherit state {2, 3}.
         index_directory(&db, &root, true, false, None, None).unwrap();
         let post = db.unresolved_edges().unwrap();
-        let has_find_x_unresolved = post.iter().any(|e| e.target_name == "find_x");
         assert!(
-            has_find_x_unresolved,
+            post.iter().any(|e| e.target_name == "find_x"),
             "after --force, find_x must be back in unresolved_edges (state=0)"
+        );
+        assert!(
+            post.iter().any(|e| e.target_name == "find_ext"),
+            "after --force, find_ext must be back in unresolved_edges (state=0)"
         );
     }
 
     #[test]
-    fn test_noop_reindex_preserves_unresolvable_markers() {
-        // Defensive: a no-op reindex must not touch state=2 markers — no
+    fn test_name_keyed_reset_reopens_external_edges() {
+        // If an edge was marked state=3 (target outside the indexed root) and
+        // the user then vendors that target in-tree, indexing the new file
+        // must reopen the external marker so LSP retries it.
+        use cartog_db::Database;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("a.py"), "def caller():\n    vendored_helper()\n").unwrap();
+
+        let db = Database::open_memory().unwrap();
+        index_directory(&db, &root, false, false, None, None).unwrap();
+
+        let unresolved = db.unresolved_edges().unwrap();
+        let edge_id = unresolved
+            .iter()
+            .find(|e| e.target_name == "vendored_helper")
+            .expect("vendored_helper edge should exist")
+            .edge_id;
+        db.mark_edge_external(edge_id).unwrap();
+        assert_eq!(db.edge_resolution_state(edge_id).unwrap(), 3);
+
+        // Vendor the dep in-tree.
+        std::fs::write(
+            root.join("vendor.py"),
+            "def vendored_helper():\n    return 1\n",
+        )
+        .unwrap();
+        index_directory(&db, &root, false, false, None, None).unwrap();
+
+        // After the name-keyed reset, the edge is reopened (state=0) and the
+        // heuristic resolver runs in the same indexing pass — `vendored_helper`
+        // is now defined in the same directory, so the same-dir heuristic
+        // resolves the edge to state=1. Asserting state=1 (not just "not 3")
+        // catches a future regression that breaks the reset-then-resolve
+        // pipeline (e.g. silently re-marking as state=2).
+        assert_eq!(
+            db.edge_resolution_state(edge_id).unwrap(),
+            1,
+            "vendored target should reopen the external marker AND be resolved by the heuristic"
+        );
+    }
+
+    #[test]
+    fn test_noop_reindex_preserves_unresolvable_and_external_markers() {
+        // Defensive: a no-op reindex must not touch state {2, 3} markers — no
         // spurious resets (would burn the gate), no spurious re-marks.
         use cartog_db::Database;
 
@@ -1240,19 +1308,30 @@ mod tests {
         index_directory(&db, &root, false, false, None, None).unwrap();
 
         let unresolved = db.unresolved_edges().unwrap();
-        let target = unresolved
+        let burned = unresolved
             .iter()
             .find(|e| e.target_name == "find_x")
             .expect("find_x edge should exist");
-        db.mark_edge_unresolvable(target.edge_id).unwrap();
+        let ext = unresolved
+            .iter()
+            .find(|e| e.target_name == "find_y")
+            .expect("find_y edge should exist");
+        db.mark_edge_unresolvable(burned.edge_id).unwrap();
+        db.mark_edge_external(ext.edge_id).unwrap();
 
-        // No file changes → reindex is a no-op → marker survives.
+        // No file changes → reindex is a no-op → markers survive.
         let r = index_directory(&db, &root, false, false, None, None).unwrap();
         assert_eq!(r.dirty_files, 0);
 
-        assert!(
-            db.is_edge_unresolvable(target.edge_id).unwrap(),
+        assert_eq!(
+            db.edge_resolution_state(burned.edge_id).unwrap(),
+            2,
             "no-op reindex must not reset state=2"
+        );
+        assert_eq!(
+            db.edge_resolution_state(ext.edge_id).unwrap(),
+            3,
+            "no-op reindex must not reset state=3"
         );
     }
 
