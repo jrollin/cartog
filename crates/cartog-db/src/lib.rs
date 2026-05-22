@@ -4636,6 +4636,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stored_dim, 1024);
+        // A successful wipe must also recreate symbol_vec at the new dim.
+        // Without this assertion, an early return between the DROP and the
+        // CREATE in reconcile_embedding_fingerprint would pass the count +
+        // metadata checks above while leaving the DB unusable for RAG.
+        assert!(
+            symbol_vec_exists(&db.conn).unwrap(),
+            "successful reconcile must recreate symbol_vec"
+        );
     }
 
     // ── Read-only attach tests (Phase 3) ──

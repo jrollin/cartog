@@ -1627,6 +1627,10 @@ fn validate_pinned_state(
         Some(p) => p,
         None => return Ok(()),
     };
+    // Bump AFTER the None-pin early return so the test counter only
+    // tracks meaningful validations (a None pin is a trivial pass).
+    #[cfg(test)]
+    test_validate_call_counter::bump();
     let reader = Database::open_readonly(db_path)
         .map_err(|e| anyhow::anyhow!("re-attach read-only failed: {e}"))?;
     let now = reader
@@ -1638,6 +1642,37 @@ fn validate_pinned_state(
         );
     }
     Ok(())
+}
+
+/// Test-only call counter for `validate_pinned_state`. Lets the promoter
+/// suite assert that BOTH the pre-acquire and post-acquire validate
+/// branches fire — deleting either call site would surface as a count
+/// regression. Production builds compile this whole module away.
+///
+/// `COUNT` is the running tally; `SERIAL` is a separate `tokio` Mutex
+/// tests hold for their full duration to serialize against any sibling
+/// test that also reads/writes the counter (Cargo runs tests in parallel
+/// by default, and these statics are process-global). We use the async
+/// Mutex so the guard can be held across `.await` in `#[tokio::test]`
+/// bodies; sync tests use `blocking_lock()`.
+#[cfg(test)]
+mod test_validate_call_counter {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    pub(super) static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    pub(super) static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    pub(super) fn bump() {
+        COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(super) fn reset() {
+        COUNT.store(0, Ordering::SeqCst);
+    }
+
+    pub(super) fn snapshot() -> usize {
+        COUNT.load(Ordering::SeqCst)
+    }
 }
 
 /// Resolve to a future that completes when the process receives SIGTERM.
@@ -2059,6 +2094,7 @@ mod tests {
 
     #[test]
     fn promoter_validate_pinned_state_matches_when_unchanged() {
+        let _serial = test_validate_call_counter::SERIAL.blocking_lock();
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         {
@@ -2074,6 +2110,7 @@ mod tests {
 
     #[test]
     fn promoter_validate_pinned_state_detects_schema_bump() {
+        let _serial = test_validate_call_counter::SERIAL.blocking_lock();
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         let pinned = {
@@ -2260,6 +2297,7 @@ mod tests {
         // polling for up to one poll_interval after run_server returns
         // and even promote during that window. We assert that abort()
         // really terminates the task within a small bounded time.
+        let _serial = test_validate_call_counter::SERIAL.lock().await;
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         let state_dir = dir.path().join("state");
@@ -2295,6 +2333,7 @@ mod tests {
 
     #[test]
     fn validate_pinned_state_returns_ok_when_pin_is_none() {
+        let _serial = test_validate_call_counter::SERIAL.blocking_lock();
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         {
@@ -2304,17 +2343,16 @@ mod tests {
     }
 
     #[test]
-    fn validate_pinned_state_detects_drift() {
-        // Drift is exercised via the embedding fingerprint (not
-        // schema_version) because `open_readonly` rejects schema_version
-        // mismatch *before* this helper's comparison runs.
-        //
-        // A fresh `Database::open` writes only `embedding_dimension`
-        // (no provider/model), so the read-only attach captures
-        // `pinned.embedding = None`. After the test writes provider and
-        // model, the next `open_readonly` inside `validate_pinned_state`
-        // assembles `embedding = Some(...)`, and `None != Some(...)`
-        // surfaces as drift.
+    fn validate_pinned_state_detects_none_vs_some_drift() {
+        // A brand-new DB never reconciled has no provider/model in
+        // metadata, so a read-only attach captures `pinned.embedding =
+        // None`. If the primary subsequently runs `rag index` and stamps
+        // provider/model, the secondary must detect this as drift — pin
+        // was None, disk is now Some(...). This path is distinct from
+        // `validate_pinned_state_detects_drift`, which seeds provider+
+        // model BEFORE the attach so the pin is Some(...) and only the
+        // Some-vs-Some inequality is exercised.
+        let _serial = test_validate_call_counter::SERIAL.blocking_lock();
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         let pinned = {
@@ -2324,7 +2362,57 @@ mod tests {
                 .pinned_attach()
                 .cloned()
         };
-        // Another writer rewrites the embedding provider under us.
+        assert!(
+            pinned.as_ref().is_some_and(|p| p.embedding.is_none()),
+            "pin against an un-reconciled DB must capture embedding = None",
+        );
+        // Primary stamps provider+model.
+        {
+            let mutator = Database::open(&db_path, 384).unwrap();
+            mutator.set_metadata("embedding_provider", "local").unwrap();
+            mutator
+                .set_metadata("embedding_model", "BGE-small-en-v1.5")
+                .unwrap();
+        }
+        let err = validate_pinned_state(&db_path, pinned.as_ref())
+            .expect_err("None pin vs Some on disk must surface as drift");
+        assert!(
+            err.to_string().contains("DB metadata changed"),
+            "drift error should name the metadata change, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_pinned_state_detects_drift() {
+        // Drift is exercised via the embedding fingerprint (not
+        // schema_version) because `open_readonly` rejects schema_version
+        // mismatch *before* this helper's comparison runs.
+        //
+        // We seed provider+model BEFORE the read-only attach so the pin
+        // captures `embedding = Some(local, BGE-..., 384)`, then mutate
+        // to a different `Some(ollama, nomic, 384)`. This exercises the
+        // Some vs Some inequality directly — not the None vs Some accident
+        // that would silently stop firing if `Database::open` ever seeded
+        // default provider/model values.
+        let _serial = test_validate_call_counter::SERIAL.blocking_lock();
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let pinned = {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.set_metadata("embedding_provider", "local").unwrap();
+            db.set_metadata("embedding_model", "BGE-small-en-v1.5")
+                .unwrap();
+            drop(db);
+            Database::open_readonly(&db_path)
+                .unwrap()
+                .pinned_attach()
+                .cloned()
+        };
+        assert!(
+            pinned.as_ref().and_then(|p| p.embedding.as_ref()).is_some(),
+            "pin must capture Some(...) so the test exercises Some vs Some drift",
+        );
+        // Another writer rewrites provider + model under us.
         {
             let mutator = Database::open(&db_path, 384).unwrap();
             mutator
@@ -2349,6 +2437,7 @@ mod tests {
         // by `validate_pinned_state_detects_drift`; this test verifies
         // the promoter wires drift detection to a clean exit (role stays
         // ReadOnly, task finishes).
+        let _serial = test_validate_call_counter::SERIAL.lock().await;
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         let state_dir = dir.path().join("state");
@@ -2412,6 +2501,7 @@ mod tests {
         // open_existing_rw failure — we drop the lock and loop. We
         // assert that by checking the lock file does not persist after
         // a failed promotion attempt.
+        let _serial = test_validate_call_counter::SERIAL.lock().await;
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         let state_dir = dir.path().join("state");
@@ -2457,6 +2547,85 @@ mod tests {
         assert!(
             !lock_path.exists(),
             "promoter must release the lock on failure (not strand serve.pid)"
+        );
+    }
+
+    #[tokio::test]
+    async fn promoter_runs_validate_pinned_state_both_before_and_after_acquire() {
+        // Regression for the M-promoter (c) fix at the test layer: the
+        // promoter must call `validate_pinned_state` BOTH before and
+        // after `ProcessLock::acquire`. We need an assertion that catches
+        // deleting EITHER call site:
+        //
+        // - `calls >= 2` alone is insufficient: pre-acquire validate
+        //   bumps on every tick, so over multiple ticks the count climbs
+        //   past 2 even if the post-acquire site is gone.
+        // - `role == Primary` alone is insufficient: the role swap
+        //   succeeds even if pre-acquire validate is skipped entirely.
+        //
+        // Asserting BOTH catches either deletion: post-acquire validate
+        // gates the role swap (so Primary => post-acquire ran on at
+        // least one tick), and we additionally require `calls >= 2` to
+        // prove a second validate fired in the promote path.
+        let _serial = test_validate_call_counter::SERIAL.lock().await;
+        test_validate_call_counter::reset();
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        {
+            let _ = Database::open(&db_path, 384).unwrap();
+        }
+        let reader = Database::open_readonly(&db_path).unwrap();
+        let pinned = reader.pinned_attach().cloned();
+        let db = Arc::new(Mutex::new(reader));
+        let role = Arc::new(AtomicRole::new(Role::ReadOnly));
+        // Pretend the primary is dead so the promoter exits the
+        // primary-alive `continue` branch and reaches the validate calls.
+        let primary = cartog_process_lock::ActiveLock {
+            slot: SERVE_LOCK_SLOT.to_string(),
+            pid: 4_194_304,
+            start_time: None,
+        };
+
+        let args = promoter_args_for_test(
+            Arc::clone(&db),
+            Arc::clone(&role),
+            db_path,
+            state_dir,
+            primary,
+            pinned,
+        );
+        let handle = tokio::task::spawn(promoter_task(args));
+
+        // Bounded poll instead of a fixed wall-clock sleep: keeps the
+        // test fast on a healthy box and tolerates a stalled CI runner
+        // up to the 2s deadline. We wait for BOTH conditions before
+        // asserting — reading them once after a fixed sleep was the
+        // source of the previous CI-flake risk.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if role.load() == Role::Primary && test_validate_call_counter::snapshot() >= 2 {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        handle.abort();
+        let _ = handle.await;
+
+        let calls = test_validate_call_counter::snapshot();
+        assert_eq!(
+            role.load(),
+            Role::Primary,
+            "post-acquire validate gates the role swap; missing role flip implies the post-acquire site never ran"
+        );
+        assert!(
+            calls >= 2,
+            "validate_pinned_state must run twice per promotion tick (pre + post acquire), saw {calls}"
         );
     }
 }
