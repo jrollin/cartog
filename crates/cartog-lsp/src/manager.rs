@@ -139,8 +139,9 @@ impl LspManager {
     /// `Ok(None)` means the server gave no parseable answer (truly unresolvable —
     /// typo, dyn dispatch, macro, or a non-`file://` URI like jdtls's `jdt://`).
     /// `Ok(Some(InRoot(..)))` means the target lives inside the indexed root.
-    /// `Ok(Some(External { uri }))` means the target lives outside the root
-    /// (stdlib, deps, node_modules) — caller should mark `state=3`.
+    /// `Ok(Some(External))` means the target lives outside the root (stdlib,
+    /// deps, node_modules) — caller should mark `state=3`. See
+    /// [`DefinitionOutcome::External`].
     pub fn definition(
         &mut self,
         language: &str,
@@ -457,16 +458,19 @@ fn parse_definition_response(result: &Value, root: &Path) -> Result<Option<Defin
         None => return Ok(None),
     };
 
-    // Canonicalize before the in-root check: language servers can emit
-    // non-canonical URIs (e.g. `/var/folders/...` on macOS where root is
-    // `/private/var/...`, or symlinked workspaces). A lexical strip_prefix
-    // would wrongly tag these as External and burn a sticky state=3 marker.
-    // Fall back to the raw path when canonicalize fails (file may not exist
-    // on disk yet — generated code, race against unsaved buffer).
+    // Canonicalize both sides before the in-root check: language servers can
+    // emit non-canonical URIs (e.g. `/var/folders/...` on macOS where root
+    // canonical is `/private/var/...`), AND the caller may have passed a
+    // symlinked root (e.g. `/tmp/proj` → `/private/tmp/proj`). A lexical
+    // strip_prefix on either asymmetric pair would wrongly tag in-root edges
+    // as External and burn a sticky state=3 marker. Fall back to the raw
+    // path on either side when canonicalize fails (file may not exist on
+    // disk yet — generated code, race against an unsaved buffer).
     let abs_path = std::fs::canonicalize(&raw_path).unwrap_or(raw_path);
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
 
     // Out-of-root targets (stdlib, deps, node_modules) become External.
-    let rel_path = match abs_path.strip_prefix(root) {
+    let rel_path = match abs_path.strip_prefix(&canonical_root) {
         Ok(rel) => rel.to_string_lossy().to_string(),
         Err(_) => {
             tracing::debug!("definition outside root: {uri}");
