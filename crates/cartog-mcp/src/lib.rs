@@ -1261,7 +1261,19 @@ fn single_writer_election_enabled() -> bool {
 pub fn acquire_serve_lock(opts: &ServerOptions) -> anyhow::Result<ServeLockOutcome> {
     let dir = match opts.pid_lock_dir.as_deref() {
         Some(d) => d,
-        None => return Ok(ServeLockOutcome::Untracked),
+        None => {
+            // Inverse half-config: slot set but no dir. The slot is unused
+            // and the caller's intent is silently dropped, so we surface
+            // it as an error rather than running untracked.
+            if opts.pid_lock_slot.is_some() {
+                return Err(anyhow::anyhow!(
+                    "ServerOptions::pid_lock_slot is set but pid_lock_dir is None; \
+                     a slot without a directory is silently ignored — either set \
+                     both fields or clear both to run untracked"
+                ));
+            }
+            return Ok(ServeLockOutcome::Untracked);
+        }
     };
     // Reject the dangerous half-configured state: pid_lock_dir set but no
     // slot. Falling back to a global SERVE_LOCK_SLOT here would let an
@@ -2100,6 +2112,24 @@ mod tests {
         let err = acquire_serve_lock(&opts).unwrap_err();
         assert!(
             err.to_string().contains("pid_lock_slot is None"),
+            "error must explain the misconfiguration, got: {err}"
+        );
+    }
+
+    #[test]
+    fn acquire_serve_lock_rejects_slot_without_dir() {
+        // Inverse half-config: pid_lock_slot set but pid_lock_dir is
+        // None. Pre-fix the slot was silently ignored and the function
+        // returned Ok(Untracked), losing the caller's intent. Must
+        // surface as a hard error.
+        let _guard = env_mutex().lock().unwrap_or_else(|e| e.into_inner());
+        let opts = ServerOptions {
+            pid_lock_dir: None,
+            pid_lock_slot: Some("serve-deadbeef".to_string()),
+        };
+        let err = acquire_serve_lock(&opts).unwrap_err();
+        assert!(
+            err.to_string().contains("pid_lock_dir is None"),
             "error must explain the misconfiguration, got: {err}"
         );
     }

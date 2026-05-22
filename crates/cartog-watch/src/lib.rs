@@ -61,6 +61,12 @@ pub struct WatchConfig {
 }
 
 impl WatchConfig {
+    /// Build a [`WatchConfig`] rooted at `root` with these defaults:
+    /// `debounce = 5s`, `rag = false`, `rag_delay = 30s`,
+    /// `json_events = false`, both `pid_lock_*` = `None` (untracked
+    /// mode), `skip_migrations = false`. Callers wanting PID-lock
+    /// tracking must set BOTH `pid_lock_dir` and `pid_lock_slot` after
+    /// construction — see [`WatchConfig::pid_lock_slot`].
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
@@ -165,39 +171,46 @@ impl Drop for WatchHandle {
     }
 }
 
-/// Spawn the watch loop on a background thread.
-///
-/// Returns a `WatchHandle` that can be used to stop the watcher.
-/// The watcher opens its own `Database` connection (SQLite WAL allows concurrent readers).
-///
 /// Validate that the PID-lock configuration on a [`WatchConfig`] is
-/// internally consistent. The dangerous half-configured state is
-/// `pid_lock_dir = Some(_)` with `pid_lock_slot = None`: a global
-/// `watch.pid` claim coexists undetected with any DB-scoped peer for the
-/// same DB and two indexers race. Called synchronously by both
+/// internally consistent. The two dangerous half-configured states are
+/// `(Some(dir), None)` — a global slot would collide with DB-scoped
+/// peers — and `(None, Some(slot))` — the slot is silently ignored and
+/// the caller's intent is dropped. Called synchronously by both
 /// [`spawn_watch`] and [`run_watch`] so a misconfigured embedder never
 /// gets an `Ok(WatchHandle)` for a watcher that died on the spot.
 fn validate_pid_lock_config(config: &WatchConfig) -> Result<()> {
-    if config.pid_lock_dir.is_some() && config.pid_lock_slot.is_none() {
-        anyhow::bail!(
+    match (
+        config.pid_lock_dir.is_some(),
+        config.pid_lock_slot.is_some(),
+    ) {
+        (true, false) => anyhow::bail!(
             "WatchConfig::pid_lock_dir is set but pid_lock_slot is None; \
              refusing to claim the global watch slot — pass a DB-scoped slot \
              (e.g. `cartog::state::slot_for_db(\"watch\", db_path)`)"
-        );
+        ),
+        (false, true) => anyhow::bail!(
+            "WatchConfig::pid_lock_slot is set but pid_lock_dir is None; \
+             a slot without a directory is silently ignored — either set \
+             both fields or clear both to run in untracked mode"
+        ),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
-/// Errors from `watch_loop` after the synchronous validation pass
-/// (PID-lock contention with a live peer, filesystem I/O failures) are
-/// logged inside the thread; the caller still receives `Ok(WatchHandle)`.
-/// Static misconfiguration of [`WatchConfig`] (e.g. `pid_lock_dir` set
-/// without `pid_lock_slot`) is checked synchronously before the thread
-/// is spawned and surfaced as `Err`, so a misconfigured embedder never
-/// gets a `WatchHandle` whose thread is already dead.
+/// Spawn the watch loop on a background thread.
 ///
-/// Use [`run_watch`] when ALL failures (including post-spawn lock
-/// contention) must propagate synchronously.
+/// Returns a `WatchHandle` that can be used to stop the watcher. The
+/// watcher opens its own `Database` connection (SQLite WAL allows
+/// concurrent readers).
+///
+/// Static misconfiguration of [`WatchConfig`] (e.g. `pid_lock_dir` set
+/// without `pid_lock_slot`, or vice versa) is checked synchronously
+/// before the thread is spawned and surfaced as `Err`, so a
+/// misconfigured embedder never gets a `WatchHandle` whose thread is
+/// already dead. Errors that emerge later (PID-lock contention with a
+/// live peer, filesystem I/O failures) are logged inside the thread;
+/// the caller still receives `Ok(WatchHandle)`. Use [`run_watch`] when
+/// ALL failures must propagate synchronously.
 pub fn spawn_watch(config: WatchConfig, db_path: &str) -> Result<WatchHandle> {
     let root = config
         .root

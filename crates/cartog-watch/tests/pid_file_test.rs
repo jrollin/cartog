@@ -110,3 +110,22 @@ fn pid_file_dir_without_slot_is_rejected() {
         "error should explain the misconfiguration, got: {msg}"
     );
 }
+
+#[test]
+fn pid_file_slot_without_dir_is_rejected() {
+    // Inverse half-config: pid_lock_slot set but pid_lock_dir is None.
+    // Pre-fix this was silently ignored — the slot did nothing and the
+    // caller's intent was dropped. Must surface as a hard error.
+    let workspace = tempfile::TempDir::new().unwrap();
+    let mut config = WatchConfig::new(workspace.path().to_path_buf());
+    config.pid_lock_dir = None;
+    config.pid_lock_slot = Some("watch-deadbeef".to_string());
+
+    let err =
+        run_watch(config, ":memory:").expect_err("run_watch must reject slot without lock_dir");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("pid_lock_dir is None"),
+        "error should explain the misconfiguration, got: {msg}"
+    );
+}

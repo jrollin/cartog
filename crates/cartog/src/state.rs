@@ -122,11 +122,27 @@ fn resolve_db_path_for_slot(db_path: &Path) -> PathBuf {
     // ending with "/" (or "" for a relative path with no separators).
     let mut suffix: Vec<&OsStr> = Vec::new();
     for ancestor in db_path.ancestors() {
-        // Skip empty ancestor (relative paths end with "" or "."):
-        // canonicalize("") errors; canonicalize(".") would silently
-        // succeed but couple the slot to the cwd. We only want to
-        // canonicalize real ancestor directories.
-        if ancestor.as_os_str().is_empty() {
+        // Empty ("") or current-dir (".") ancestor: a bare relative path
+        // (e.g. `db.sqlite`, `subdir/db.sqlite`) exhausts its ancestors
+        // before finding one that canonicalizes. Anchor on the canonical
+        // CWD so two equivalent forms (`db.sqlite` and `./db.sqlite` from
+        // the same cwd) produce the same slot. Note: this couples the
+        // slot to the cwd, which is the correct behaviour — the same
+        // bare relative path from a different cwd refers to a different
+        // physical DB.
+        let is_implicit_cwd =
+            ancestor.as_os_str().is_empty() || ancestor.as_os_str() == std::ffi::OsStr::new(".");
+        if is_implicit_cwd {
+            if let Ok(cwd) = std::env::current_dir() {
+                // Best-effort canonicalize so symlinked cwds normalize.
+                let base = cwd.canonicalize().unwrap_or(cwd);
+                let mut result = base;
+                for component in suffix.iter().rev() {
+                    result.push(component);
+                }
+                return result;
+            }
+            // No cwd available (extremely unusual): fall through to step 3.
             break;
         }
         if let Ok(canon_ancestor) = ancestor.canonicalize() {
@@ -488,6 +504,36 @@ mod tests {
         assert_eq!(
             via_real, via_link,
             "symlinked DB leaf must produce the same slot as the real target"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn slot_for_db_bare_relative_anchors_on_cwd() {
+        // Regression: a bare relative path like `db.sqlite` exhausted
+        // its ancestors (`db.sqlite`, ``) before finding one that
+        // canonicalized, falling through to the raw-path branch and
+        // hashing just "db.sqlite". A peer running from a DIFFERENT cwd
+        // with the same `--db db.sqlite` arg would compute the SAME
+        // hash for a DIFFERENT physical file. Anchoring on the
+        // canonical cwd fixes this — and also makes `db.sqlite` and
+        // `./db.sqlite` from the same cwd produce the same slot.
+        let dir = tempfile::TempDir::new().unwrap();
+        let prev = std::env::current_dir().ok();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let bare = slot_for_db("serve", Path::new("db.sqlite"));
+        let dotted = slot_for_db("serve", Path::new("./db.sqlite"));
+        let absolute = slot_for_db("serve", &dir.path().join("db.sqlite"));
+        if let Some(p) = prev {
+            let _ = std::env::set_current_dir(p);
+        }
+        assert_eq!(
+            bare, dotted,
+            "bare relative and './' relative must produce the same slot"
+        );
+        assert_eq!(
+            bare, absolute,
+            "bare relative must anchor on cwd and match the absolute equivalent"
         );
     }
 
