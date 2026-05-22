@@ -95,19 +95,26 @@ Exactly one `cartog watch` may run per project at a time. The watcher
 refuses to start (rather than attaching read-only — unlike `cartog serve`)
 because a second watcher would re-index the same files redundantly.
 
-Find the holder via `cat <state_dir>/watch.pid` (first line is the PID,
-second is the OS start time) and stop it. **Do not manually delete the
-lock file** — cartog auto-cleans it on the next acquire once the
-recorded PID + start_time no longer matches a live process, and deleting
-it under a live writer would let a second watcher start and corrupt the
-index.
+Find the holder by listing `<state_dir>/watch-*.pid` (one file per
+project). Each file's first line is the PID, second is the OS start
+time. Stop the holder process. **Do not manually delete the lock file**
+— cartog auto-cleans it on the next acquire once the recorded PID +
+start_time no longer matches a live process, and deleting it under a
+live writer would let a second watcher start and corrupt the index.
+
+PID file names are DB-scoped: `<state_dir>/serve-<hash>.pid` and
+`watch-<hash>.pid` where `<hash>` is a 16-char SHA-256 prefix of the
+canonical DB path. Run `cartog config` to see your DB path, then list
+the state dir to find the matching file.
 
 ### My cartog process exited but the PID file is still there
 
 cartog unlinks its PID file via the `ProcessLock` Drop impl on clean exit
 (rmcp shutdown, SIGINT, SIGTERM). A hard kill (`kill -9`, power loss)
-leaves the file behind. The next acquire detects the stale entry via
-`is_same_process(pid, start_time)` and removes it; no manual action needed.
+leaves the file behind. The next `cartog serve` / `cartog watch`
+startup runs a `sweep_stale_locks` pass that reaps every dead `.pid`
+file in the state dir (not just the slot being claimed), so leftovers
+from crashed peers disappear automatically — no manual action needed.
 
 ### MCP stderr is full of `[ERROR]` lines that look like info-level messages
 

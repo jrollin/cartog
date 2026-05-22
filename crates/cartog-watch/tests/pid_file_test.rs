@@ -22,6 +22,7 @@ fn pid_file_written_on_start_and_removed_on_stop() {
 
     let mut config = WatchConfig::new(workspace.path().to_path_buf());
     config.pid_lock_dir = Some(lock_dir.path().to_path_buf());
+    config.pid_lock_slot = Some(WATCH_LOCK_SLOT.to_string());
 
     let handle = spawn_watch(config, ":memory:").expect("spawn watch");
 
@@ -54,6 +55,7 @@ fn pid_file_run_watch_propagates_acquire_failure() {
     let blocker = tempfile::NamedTempFile::new().unwrap();
     let mut config = WatchConfig::new(workspace.path().to_path_buf());
     config.pid_lock_dir = Some(blocker.path().to_path_buf());
+    config.pid_lock_slot = Some(WATCH_LOCK_SLOT.to_string());
 
     let err =
         run_watch(config, ":memory:").expect_err("run_watch should fail when lock dir is unusable");
@@ -61,5 +63,50 @@ fn pid_file_run_watch_propagates_acquire_failure() {
     assert!(
         msg.contains("watch PID lock"),
         "error should mention the lock context, got: {msg}"
+    );
+}
+
+#[test]
+fn spawn_watch_rejects_dir_without_slot_synchronously() {
+    // Regression: pre-fix, spawn_watch returned Ok(WatchHandle) even when
+    // watch_loop bailed inside the thread on the (Some(dir), None) misconfig
+    // — the caller got a handle for an already-dead watcher with only a
+    // tracing::warn! to indicate the failure. The synchronous validation
+    // pass in spawn_watch must surface the error to the caller.
+    let workspace = tempfile::TempDir::new().unwrap();
+    let lock_dir = tempfile::TempDir::new().unwrap();
+    let mut config = WatchConfig::new(workspace.path().to_path_buf());
+    config.pid_lock_dir = Some(lock_dir.path().to_path_buf());
+    config.pid_lock_slot = None;
+
+    let err = match spawn_watch(config, ":memory:") {
+        Ok(_) => panic!("spawn_watch must reject misconfig pre-thread"),
+        Err(e) => e,
+    };
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("pid_lock_slot is None"),
+        "error should explain the misconfiguration, got: {msg}"
+    );
+}
+
+#[test]
+fn pid_file_dir_without_slot_is_rejected() {
+    // Regression: the half-configured state (lock_dir set, slot None) used
+    // to silently fall back to the global WATCH_LOCK_SLOT, letting an
+    // embedder collide with — or be hidden from — a CLI peer that derives a
+    // DB-scoped slot. Must surface as a hard error.
+    let workspace = tempfile::TempDir::new().unwrap();
+    let lock_dir = tempfile::TempDir::new().unwrap();
+    let mut config = WatchConfig::new(workspace.path().to_path_buf());
+    config.pid_lock_dir = Some(lock_dir.path().to_path_buf());
+    config.pid_lock_slot = None;
+
+    let err =
+        run_watch(config, ":memory:").expect_err("run_watch must reject lock_dir without slot");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("pid_lock_slot is None"),
+        "error should explain the misconfiguration, got: {msg}"
     );
 }
