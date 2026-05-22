@@ -190,6 +190,14 @@ Run these two commands **one at a time** in Claude Code:
 /plugin install cartog@cartog-plugins
 ```
 
+**First session**: if the cartog binary is not already on your PATH, the plugin starts a background install and prints a one-line notice. The cartog MCP server cannot start in this first session because the binary lands after Claude Code has already tried to spawn it.
+
+**Second session**: restart Claude Code. The MCP server starts, code-graph tools become available, and the SessionStart hook keeps the index fresh on every subsequent session.
+
+**Repair or upgrade**: type `/cartog-install` at any time to install the binary synchronously (e.g. to retry a failed background install), or to upgrade an existing install to match the plugin's pinned version. The skill at [`skills/cartog-install/`](skills/cartog-install/SKILL.md) handles both cases.
+
+**Offline / vetted install**: the manual fallback is the same one used by the curl one-liner at the top of this section: download [`scripts/install.sh`](scripts/install.sh) (mirrored at `https://jrollin.github.io/cartog/install.sh`), inspect it, then run it.
+
 ### Agent Skill (Cursor, Copilot, others)
 
 ```bash

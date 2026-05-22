@@ -654,10 +654,11 @@ Or install manually:
 cp -r skills/cartog ~/.claude/skills/
 ```
 
-The plugin wires two Claude Code hooks:
+The plugin wires two Claude Code hooks plus a user-typed skill:
 
-- **SessionStart** (`ensure_indexed.sh`): installs cartog if missing, runs `cartog index .` synchronously, then backgrounds rag setup + rag embedding. Prints a one-line warning if the installed binary version drifts from the plugin version.
-- **SessionEnd** (`update_on_exit.sh`): runs `cartog self update` after MCP shuts down to bring the binary in sync with the plugin's pinned version. Updates land on the *next* session — `cartog self update` refuses to swap the binary while a peer process is alive, so we defer until exit. Coordinates with the SessionStart RAG pipeline lock to avoid mid-pipeline binary swaps.
+- **SessionStart** (`ensure_indexed.sh`): non-blocking. If the binary is missing, forks a background pipeline (install.sh pinned to the plugin version → optionally `cartog index .` → `cartog rag setup` → `cartog rag index .`) and exits fast — MCP becomes available on the next session. If the binary is present, runs `cartog index .` foreground (incremental, typically <1s) and backgrounds rag setup + rag index. Prints a one-line drift warning if the installed binary doesn't match the plugin pin. Missing `.cartog.toml` on an interactive session prints a hint pointing at `cartog init`; on a non-interactive session it exits silently.
+- **SessionEnd** (`update_on_exit.sh`): *transitional* — only upgrades pre-0.14.0 binaries (which lack `cartog self update`) via `install.sh`. Modern binaries (>= 0.14.0) are a noop here; drift is the user's call via `/cartog-install`. Scheduled for removal in the release after the transition.
+- **`/cartog-install` skill** (`skills/cartog-install/SKILL.md`): user-typed verb. Installs the binary (when missing) or upgrades it (via `cartog self update` on >=0.14.0, or via `install.sh` on <0.14.0) to match the plugin's pinned version. Use this to repair a failed background install or to bring a drifted binary back in sync.
 
 To run the SessionStart steps manually:
 
