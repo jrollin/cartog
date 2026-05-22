@@ -25,6 +25,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SCRIPT_DIR="."
 LOCK_DIR="${CARTOG_LOCK_DIR:-/tmp/cartog-rag-index.lock}"
 
+# GIT_ROOT is needed for both the DB resolver below and the no-toml gate
+# in the foreground flow, so resolve it once up front, independent of
+# CARTOG_DB. (Setting CARTOG_DB used to bypass the resolver branch and
+# leave GIT_ROOT unset, causing the gate to miss a git-root .cartog.toml
+# when run from a subdirectory.)
+GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || true
+
 # Resolve the database path using the same priority as the Rust binary:
 #   1. CARTOG_DB env var (explicit override)
 #   2. .cartog.toml database.path (local project config)
@@ -34,7 +41,6 @@ if [ -n "${CARTOG_DB:-}" ]; then
     DB_FILE="$CARTOG_DB"
 else
     TOML_DB=""
-    GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || true
     for _dir in "." "$GIT_ROOT"; do
         [ -n "$_dir" ] && [ -f "$_dir/.cartog.toml" ] && {
             TOML_DB="$(sed -n '/^\[database\]/,/^\[/{s/^path[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p;}' "$_dir/.cartog.toml" 2>/dev/null)" || true
@@ -228,10 +234,13 @@ fork_background() {
 
 # Evaluate the no-toml gate first so we can decide whether the missing-binary
 # background pipeline should also index (it should NOT auto-index a project
-# the user hasn't opted into).
+# the user hasn't opted into). Check both cwd and the git root — matches
+# the DB resolver's search order above.
 _toml_root="${GIT_ROOT:-.}"
 _has_toml=0
-if [ -f "${_toml_root}/.cartog.toml" ] || [ -n "${CARTOG_AUTO_INIT:-}" ]; then
+if [ -n "${CARTOG_AUTO_INIT:-}" ] \
+   || [ -f "./.cartog.toml" ] \
+   || { [ -n "$GIT_ROOT" ] && [ -f "${GIT_ROOT}/.cartog.toml" ]; }; then
     _has_toml=1
 fi
 

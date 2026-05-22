@@ -183,6 +183,38 @@ MOCK
     teardown
 }
 
+test_unparseable_version_warns_then_proceeds() {
+    echo "TEST: cartog on PATH but --version yields nothing -> warn + proceed with fresh install (no silent re-download loop)"
+    setup
+    create_mock_curl
+    create_mock_tar
+    # Mock cartog whose --version exits non-zero AND prints nothing (e.g.,
+    # broken binary, wrong arch SIGILL/Exec format error). local_version
+    # parse must yield empty here — and install.sh should warn + proceed
+    # rather than silently printing 'Upgrading cartog from  to X'.
+    cat > "$TEST_DIR/bin/cartog" <<'MOCK'
+#!/usr/bin/env bash
+# Pretend the binary fails to even print its version.
+exit 132
+MOCK
+    chmod +x "$TEST_DIR/bin/cartog"
+
+    local output
+    output=$(run_install "0.17.1" || true)
+
+    assert_contains "warns about unparseable --version" \
+        "did not yield a parseable version string" "$output"
+    # Must NOT print the broken 'Upgrading cartog from  to X' line (empty
+    # source version sandwich) — that was the silent-breakage symptom.
+    assert_not_contains "no 'Upgrading from  to' line with empty source" \
+        "Upgrading cartog from  to" "$output"
+    # Must still announce the GitHub install attempt (we proceeded past the
+    # 'already installed' short-circuit instead of silently re-printing it).
+    assert_contains "proceeds to fresh install via GitHub" \
+        "Downloading cartog" "$output"
+    teardown
+}
+
 test_version_arg_different_version_reinstalls() {
     echo "TEST: version arg + different version → reinstalls"
     setup
@@ -603,6 +635,8 @@ echo ""
 test_version_arg_same_version_exits_early
 echo ""
 test_version_arg_same_version_with_multiline_output_exits_early
+echo ""
+test_unparseable_version_warns_then_proceeds
 echo ""
 test_version_arg_different_version_reinstalls
 echo ""

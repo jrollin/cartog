@@ -64,9 +64,22 @@ Expected:
 
 Goal: confirm the explicit upgrade verb works.
 
-1. Manually downgrade the binary:
+1. Manually downgrade the binary. Pick the target slug that matches your
+   platform from this table (the published artifact suffixes — adapt if
+   release.yml ever changes them):
+
+   | OS / arch | Target slug |
+   |---|---|
+   | macOS Apple Silicon | `aarch64-apple-darwin` |
+   | macOS Intel | `x86_64-apple-darwin` |
+   | Linux x86_64 (glibc) | `x86_64-unknown-linux-gnu` |
+   | Linux ARM64 (glibc) | `aarch64-unknown-linux-gnu` |
+
+   Then:
    ```bash
-   curl -fsSL https://github.com/jrollin/cartog/releases/download/v0.17.0/cartog-$(uname -m | sed 's/x86_64/x86_64-unknown-linux-gnu/;s/arm64/aarch64-apple-darwin/').tar.gz | tar xz -C "$(dirname "$(command -v cartog)")"
+   TARGET=<paste-slug-from-table>
+   curl -fsSL "https://github.com/jrollin/cartog/releases/download/v0.17.0/cartog-${TARGET}.tar.gz" \
+     | tar xz -C "$(dirname "$(command -v cartog)")"
    ```
 2. Confirm: `cartog --version` shows the older version.
 3. In Claude Code, type `/cartog-install`.
@@ -98,9 +111,11 @@ Expected:
 
 Goal: confirm the transitional SessionEnd hook still rescues legacy users.
 
-1. Install an old binary:
+1. Install an old binary. Use the target slug table from step 4 above:
    ```bash
-   curl -fsSL https://github.com/jrollin/cartog/releases/download/v0.13.5/cartog-$(uname -m | sed 's/x86_64/x86_64-unknown-linux-gnu/;s/arm64/aarch64-apple-darwin/').tar.gz | tar xz -C ~/.local/bin
+   TARGET=<paste-slug-from-table>
+   curl -fsSL "https://github.com/jrollin/cartog/releases/download/v0.13.5/cartog-${TARGET}.tar.gz" \
+     | tar xz -C ~/.local/bin
    ```
    Confirm: `cartog --version` shows `0.13.5`.
 2. Launch Claude Code.

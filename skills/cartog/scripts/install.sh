@@ -18,16 +18,27 @@ rm -f "$INSTALL_DIR_MARKER"
 if command -v cartog &>/dev/null; then
     # `cartog --version` prints multiple lines on >=0.14: version, build SHA,
     # features, rustc. Restrict to the first line and strip the build suffix.
-    local_version="$(cartog --version 2>/dev/null | head -n1 | sed -E 's/^cartog //' | awk '{print $1}')"
-    if [ -z "$REQUESTED_VERSION" ]; then
-        echo "cartog is already installed: cartog $local_version"
-        exit 0
+    # Tolerate non-zero exit from cartog --version (e.g. broken binary, wrong
+    # arch): treat as "version unknown" so the rest of the script can decide
+    # whether to install fresh. The trailing `|| true` shields the parse
+    # pipeline from `set -e` / `set -o pipefail`.
+    local_version="$( { cartog --version 2>/dev/null || true; } | head -n1 | sed -E 's/^cartog //' | awk '{print $1}')"
+    if [ -z "$local_version" ]; then
+        # Don't silently re-download or print "Upgrading from  to X". Surface
+        # the parser breakage so a future banner-format change is visible.
+        echo "Warning: cartog is on PATH but --version did not yield a parseable version string." >&2
+        echo "Proceeding with a fresh install (target: ${REQUESTED_VERSION:-latest})." >&2
+    else
+        if [ -z "$REQUESTED_VERSION" ]; then
+            echo "cartog is already installed: cartog $local_version"
+            exit 0
+        fi
+        if [ "$local_version" = "$REQUESTED_VERSION" ]; then
+            echo "cartog $REQUESTED_VERSION already installed."
+            exit 0
+        fi
+        echo "Upgrading cartog from $local_version to $REQUESTED_VERSION..."
     fi
-    if [ "$local_version" = "$REQUESTED_VERSION" ]; then
-        echo "cartog $REQUESTED_VERSION already installed."
-        exit 0
-    fi
-    echo "Upgrading cartog from $local_version to $REQUESTED_VERSION..."
 fi
 
 has_cmd() { command -v "$1" &>/dev/null; }

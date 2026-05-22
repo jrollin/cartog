@@ -1301,6 +1301,54 @@ MOCK
     teardown
 }
 
+# Regression guard for fix #8: setting CARTOG_DB used to skip the GIT_ROOT
+# resolver, so the no-toml gate run from a subdir would miss a git-root
+# .cartog.toml and exit silently on non-TTY sessions.
+test_cartog_db_set_does_not_skip_git_root_toml() {
+    echo "TEST: CARTOG_DB set + cwd in git subdir -> git-root .cartog.toml still satisfies the gate"
+    setup
+    create_mock_cartog "0.14.1"
+    local repo="$TEST_DIR/workdir"
+    local subdir="$repo/src"
+    mkdir -p "$subdir"
+    # Remove the default workdir toml — we want the toml ONLY at the git
+    # root, not at the cwd, to prove GIT_ROOT is resolved even with CARTOG_DB.
+    rm -f "$repo/.cartog.toml"
+    echo "# user config" > "$repo/.cartog.toml"
+
+    cat > "$TEST_DIR/bin/git" <<MOCK
+#!/usr/bin/env bash
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--show-toplevel" ]; then
+    echo "$repo"; exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    local output
+    output=$(
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"
+        export CARTOG_DB="/explicit/path.db"
+        mkdir -p "$HOME"
+        cd "$subdir"
+        bash "$ENSURE_SCRIPT" 2>&1
+    )
+    wait_for_rag_index
+
+    # Gate must NOT have fired: we should see indexing happen, not a silent exit.
+    assert_contains "indexing happened from subdir despite CARTOG_DB" \
+        "cartog index ready" "$output"
+    if echo "$output" | grep -q "Run \`cartog init\`"; then
+        echo "  FAIL: no-toml hint fired despite git-root toml present"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: no-toml hint did not fire (gate found git-root toml)"
+        PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
 # 7. .cartog/db.sqlite is a symlink to elsewhere. The "Updating cartog index"
 #    branch (not "Building") must fire — `[ -f ... ]` follows symlinks.
 test_symlinked_db_path() {
@@ -1400,9 +1448,13 @@ test_auto_init_env_bypasses_gate_with_tty() {
     echo "TEST: CARTOG_AUTO_INIT=1 bypasses defer gate even when stdin is a TTY"
     setup
     create_mock_cartog "0.14.1"
-    # No .cartog.toml, no git repo (so GIT_ROOT="").
+    # No .cartog.toml, no git repo (so GIT_ROOT=""). setup() seeds a default
+    # .cartog.toml in workdir — remove it so the gate condition is actually
+    # exercised; otherwise the test passes via the toml-present branch
+    # instead of via the AUTO_INIT bypass it claims to validate.
     local workdir="$TEST_DIR/workdir"
     mkdir -p "$workdir"
+    rm -f "$workdir/.cartog.toml"
     cat > "$TEST_DIR/bin/git" <<'MOCK'
 #!/usr/bin/env bash
 exit 1
@@ -1558,6 +1610,8 @@ echo ""
 test_cartog_db_env_vs_toml_priority
 echo ""
 test_no_git_repo_with_toml_in_cwd
+echo ""
+test_cartog_db_set_does_not_skip_git_root_toml
 echo ""
 test_symlinked_db_path
 echo ""
