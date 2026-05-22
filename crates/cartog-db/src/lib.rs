@@ -125,7 +125,8 @@ CREATE TABLE IF NOT EXISTS edges (
     file_path TEXT NOT NULL,
     line INTEGER,
     -- 0 = unresolved (heuristic + LSP not yet definitive), 1 = resolved,
-    -- 2 = unresolvable (LSP definitively returned no in-graph definition).
+    -- 2 = unresolvable (LSP definitively returned no definition: typo, dyn dispatch, macro),
+    -- 3 = external (LSP located the target outside the indexed root: stdlib, deps, node_modules).
     resolution_state INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (source_id) REFERENCES symbols(id)
 );
@@ -1971,14 +1972,32 @@ impl Database {
         let num_symbols: u32 = self
             .conn
             .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))?;
-        let num_edges: u32 = self
+        // Single GROUP BY over edges replaces what would otherwise be four
+        // sequential full table scans (one COUNT(*) per bucket). The partial
+        // index `idx_edges_unresolved` only covers state=0, so state=2 and
+        // state=3 counts can't use it — one scan + a 4-row Vec is cheaper.
+        let mut bucket_stmt = self
             .conn
-            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))?;
-        let num_resolved: u32 = self.conn.query_row(
-            "SELECT COUNT(*) FROM edges WHERE target_id IS NOT NULL",
-            [],
-            |row| row.get(0),
-        )?;
+            .prepare("SELECT resolution_state, COUNT(*) FROM edges GROUP BY resolution_state")?;
+        let mut num_resolved: u32 = 0;
+        let mut num_unresolvable: u32 = 0;
+        let mut num_external: u32 = 0;
+        let mut num_edges: u32 = 0;
+        let rows = bucket_stmt.query_map([], |row| {
+            let state: i64 = row.get(0)?;
+            let count: u32 = row.get(1)?;
+            Ok((state, count))
+        })?;
+        for row in rows {
+            let (state, count) = row?;
+            num_edges += count;
+            match state {
+                1 => num_resolved = count,
+                2 => num_unresolvable = count,
+                3 => num_external = count,
+                _ => {} // state=0 (unresolved) or any future state
+            }
+        }
 
         let mut lang_stmt = self.conn.prepare(
             "SELECT language, COUNT(*) FROM files GROUP BY language ORDER BY COUNT(*) DESC",
@@ -1999,6 +2018,8 @@ impl Database {
             num_symbols,
             num_edges,
             num_resolved,
+            num_unresolvable,
+            num_external,
             languages,
             symbol_kinds,
         })
@@ -2524,8 +2545,9 @@ impl Database {
 
     // ── LSP Resolution Helpers ──
     //
-    // These three helpers (`unresolved_edges`, `find_symbol_at_location`,
-    // `update_edge_target`) are called from `cartog-lsp::lsp_resolve_edges`,
+    // These helpers (`unresolved_edges`, `find_symbol_at_location`,
+    // `update_edge_target`, `mark_edge_unresolvable`, `mark_edge_external`,
+    // `edge_resolution_state`) are called from `cartog-lsp::lsp_resolve_edges`,
     // which itself runs inside `index_directory`'s outer indexing transaction
     // (see [`Self::begin_indexing_tx`]). They MUST remain transaction-free —
     // any future addition of `unchecked_transaction()` here would re-introduce
@@ -2534,10 +2556,12 @@ impl Database {
 
     /// Return edges still waiting for resolution (`resolution_state = 0`).
     ///
-    /// Edges marked `state = 2` (LSP definitively gave up) are excluded so a
-    /// dirty reindex doesn't re-query the language server for known-unresolvable
-    /// targets. They re-enter the unresolved set via
-    /// [`Self::reset_unresolvable_for_names`] when a matching symbol is added.
+    /// Edges marked `state = 2` (unresolvable) or `state = 3` (external) are
+    /// excluded so a dirty reindex doesn't re-query the language server for
+    /// edges it already classified. Both are sticky and re-enter the
+    /// unresolved set only via [`Self::reset_unresolvable_for_names`] when a
+    /// matching symbol is added, [`Self::reset_all_unresolvable`] on `--force`,
+    /// or [`Self::invalidate_edges_targeting`] when a resolved target is removed.
     ///
     /// tx-safe: read-only single statement — see note above the section header.
     pub fn unresolved_edges(&self) -> Result<Vec<UnresolvedEdge>> {
@@ -2598,29 +2622,36 @@ impl Database {
     /// integration tests (cartog-indexer) need a read-only way to assert the
     /// marker state without snapshotting raw SQL.
     pub fn is_edge_unresolvable(&self, edge_id: i64) -> Result<bool> {
+        Ok(self.edge_resolution_state(edge_id)? == 2)
+    }
+
+    /// Test-only inspector: returns the raw `resolution_state` value for an edge.
+    ///
+    /// 0=unresolved, 1=resolved, 2=unresolvable, 3=external.
+    pub fn edge_resolution_state(&self, edge_id: i64) -> Result<i64> {
         let state: i64 = self.conn.query_row(
             "SELECT resolution_state FROM edges WHERE id = ?1",
             params![edge_id],
             |row| row.get(0),
         )?;
-        Ok(state == 2)
+        Ok(state)
     }
 
-    /// Reset every `resolution_state = 2` edge back to `0`. Used by
+    /// Reset every edge at `resolution_state IN (2, 3)` back to `0`. Used by
     /// `cartog index --force` to honor the "retry everything" contract:
     /// without this, the heuristic + LSP would still skip permanently-marked
-    /// edges even on a forced re-index.
+    /// edges (both unresolvable and external) even on a forced re-index.
     ///
     /// tx-safe: single statement — see the LSP-section header note.
     pub fn reset_all_unresolvable(&self) -> Result<u32> {
         let n = self.conn.execute(
-            "UPDATE edges SET resolution_state = 0 WHERE resolution_state = 2",
+            "UPDATE edges SET resolution_state = 0 WHERE resolution_state IN (2, 3)",
             [],
         )?;
         Ok(n as u32)
     }
 
-    /// Mark a single edge as `resolution_state = 2` (LSP gave up).
+    /// Mark a single edge as `resolution_state = 2` (LSP definitively gave up).
     ///
     /// Callers MUST only invoke this after a definitive negative answer from
     /// the language server. Never call from a transient-error branch (server
@@ -2637,16 +2668,33 @@ impl Database {
         Ok(())
     }
 
-    /// Reset `resolution_state` from 2 → 0 for edges whose target_name is in `names`.
+    /// Mark a single edge as `resolution_state = 3` (LSP located the target
+    /// outside the indexed root — stdlib, third-party deps, node_modules).
+    ///
+    /// Same stickiness contract as [`Self::mark_edge_unresolvable`]: only call
+    /// after a definitive negative answer; reopened by the same name-keyed and
+    /// force-reset paths.
+    ///
+    /// tx-safe: single statement — see the LSP-section header note.
+    pub fn mark_edge_external(&self, edge_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE edges SET resolution_state = 3 WHERE id = ?1",
+            params![edge_id],
+        )?;
+        Ok(())
+    }
+
+    /// Reset `resolution_state` from {2, 3} → 0 for edges whose target_name is in `names`.
     ///
     /// Called from the indexer when new symbols are added: an edge that was
-    /// previously "unresolvable" (no symbol with this name existed) may now be
-    /// resolvable against the freshly-added target. Returns the number of edges
-    /// reopened. No-op when `names` is empty.
+    /// previously "unresolvable" (no symbol with this name existed) or
+    /// "external" (target lived outside the index — but the user just vendored
+    /// it in-tree) may now be resolvable against the freshly-added target.
+    /// Returns the number of edges reopened. No-op when `names` is empty.
     ///
     /// tx-safe: single statement. Names are batched to honor SQLite's default
-    /// 999-parameter limit; only resolution_state = 2 rows are touched so the
-    /// write set stays tiny even on a large rename.
+    /// 999-parameter limit; only rows at state 2 or 3 are touched so the write
+    /// set stays tiny even on a large rename.
     pub fn reset_unresolvable_for_names(&self, names: &[String]) -> Result<u32> {
         if names.is_empty() {
             return Ok(0);
@@ -2658,7 +2706,7 @@ impl Database {
             let sql = format!(
                 "UPDATE edges
                  SET resolution_state = 0
-                 WHERE resolution_state = 2
+                 WHERE resolution_state IN (2, 3)
                    AND target_name IN ({placeholders})"
             );
             let params: Vec<&dyn rusqlite::ToSql> =
@@ -2685,6 +2733,10 @@ pub struct IndexStats {
     pub num_symbols: u32,
     pub num_edges: u32,
     pub num_resolved: u32,
+    /// Edges at `resolution_state = 2` (LSP definitively gave up: typo, dyn dispatch, macro).
+    pub num_unresolvable: u32,
+    /// Edges at `resolution_state = 3` (LSP located the target outside the indexed root).
+    pub num_external: u32,
     pub languages: Vec<(String, u32)>,
     pub symbol_kinds: Vec<(String, u32)>,
 }
@@ -5496,7 +5548,7 @@ mod tests {
 
     #[test]
     fn test_reset_unresolvable_for_names_does_not_touch_state_zero_or_one() {
-        // The reset is purely state=2 → state=0. Resolved (state=1) and
+        // The reset reopens state {2, 3} → state=0. Resolved (state=1) and
         // already-open (state=0) edges with matching names must be left alone.
         let db = Database::open_memory().unwrap();
         let still_open = insert_test_edge(&db, "foo"); // state=0
@@ -5507,6 +5559,82 @@ mod tests {
             .unwrap();
         assert_eq!(resolution_state_of(&db, still_open), 0);
         assert_eq!(resolution_state_of(&db, already_resolved), 1);
+    }
+
+    #[test]
+    fn test_mark_edge_external_sets_state_to_three() {
+        let db = Database::open_memory().unwrap();
+        let id = insert_test_edge(&db, "anything");
+        db.mark_edge_external(id).unwrap();
+        assert_eq!(resolution_state_of(&db, id), 3);
+        assert_eq!(db.edge_resolution_state(id).unwrap(), 3);
+    }
+
+    #[test]
+    fn test_unresolved_edges_excludes_state_three() {
+        // External (state=3) edges must be skipped by the LSP retry loop, same
+        // as state=2 — otherwise we re-query dep targets on every dirty run.
+        let db = Database::open_memory().unwrap();
+        let _open = insert_test_edge(&db, "still_open");
+        let ext = insert_test_edge(&db, "external_dep");
+        db.mark_edge_external(ext).unwrap();
+
+        let edges = db.unresolved_edges().unwrap();
+        let names: Vec<&str> = edges.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(names.contains(&"still_open"));
+        assert!(!names.contains(&"external_dep"));
+    }
+
+    #[test]
+    fn test_reset_all_unresolvable_resets_state_two_and_three() {
+        // `cartog index --force` must clear BOTH definitive markers (2 and 3)
+        // so a forced re-index honors the "retry everything" contract.
+        let db = Database::open_memory().unwrap();
+        let burned = insert_test_edge(&db, "burned");
+        let external = insert_test_edge(&db, "external");
+        db.mark_edge_unresolvable(burned).unwrap();
+        db.mark_edge_external(external).unwrap();
+
+        let reset = db.reset_all_unresolvable().unwrap();
+        assert_eq!(reset, 2);
+        assert_eq!(resolution_state_of(&db, burned), 0);
+        assert_eq!(resolution_state_of(&db, external), 0);
+    }
+
+    #[test]
+    fn test_reset_unresolvable_for_names_reopens_state_three() {
+        // External edges must also reopen when a matching symbol is added —
+        // this is the "vendored dependency in-tree" path.
+        let db = Database::open_memory().unwrap();
+        let ext_foo = insert_test_edge(&db, "foo");
+        let ext_bar = insert_test_edge(&db, "bar");
+        db.mark_edge_external(ext_foo).unwrap();
+        db.mark_edge_external(ext_bar).unwrap();
+
+        let reopened = db
+            .reset_unresolvable_for_names(&["foo".to_string()])
+            .unwrap();
+        assert_eq!(reopened, 1);
+        assert_eq!(resolution_state_of(&db, ext_foo), 0);
+        assert_eq!(resolution_state_of(&db, ext_bar), 3);
+    }
+
+    #[test]
+    fn test_stats_surfaces_external_and_unresolvable_counts() {
+        let db = Database::open_memory().unwrap();
+        let resolved = insert_test_edge(&db, "resolved_target");
+        db.update_edge_target(resolved, "some:id").unwrap();
+        let burned = insert_test_edge(&db, "burned");
+        db.mark_edge_unresolvable(burned).unwrap();
+        let external = insert_test_edge(&db, "external");
+        db.mark_edge_external(external).unwrap();
+        let _open = insert_test_edge(&db, "open");
+
+        let stats = db.stats().unwrap();
+        assert_eq!(stats.num_resolved, 1);
+        assert_eq!(stats.num_unresolvable, 1);
+        assert_eq!(stats.num_external, 1);
+        assert_eq!(stats.num_edges, 4);
     }
 
     #[test]

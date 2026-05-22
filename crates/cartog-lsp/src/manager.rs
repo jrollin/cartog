@@ -134,14 +134,21 @@ impl LspManager {
         Ok(())
     }
 
-    /// Send textDocument/definition and return the target location.
+    /// Send textDocument/definition and return the target outcome.
+    ///
+    /// `Ok(None)` means the server gave no parseable answer (truly unresolvable —
+    /// typo, dyn dispatch, macro, or a non-`file://` URI like jdtls's `jdt://`).
+    /// `Ok(Some(InRoot(..)))` means the target lives inside the indexed root.
+    /// `Ok(Some(External))` means the target lives outside the root (stdlib,
+    /// deps, node_modules) — caller should mark `state=3`. See
+    /// [`DefinitionOutcome::External`].
     pub fn definition(
         &mut self,
         language: &str,
         file_path: &str,
         line: u32,
         character: u32,
-    ) -> Result<Option<DefinitionLocation>> {
+    ) -> Result<Option<DefinitionOutcome>> {
         let (client, _) = self
             .clients
             .get_mut(language)
@@ -388,12 +395,27 @@ impl Drop for LspManager {
 }
 
 /// Parsed definition location from an LSP response.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct DefinitionLocation {
     /// Relative file path within project root.
     pub file_path: String,
     /// 1-based line number.
     pub line: u32,
+}
+
+/// The shape of a successful LSP `textDocument/definition` answer.
+///
+/// Distinguishes "target inside the indexed root" (caller tries to map to a
+/// symbol) from "target outside the indexed root" (stdlib, third-party deps —
+/// caller marks the edge as `state=3` external without further lookup).
+#[derive(Debug, PartialEq, Eq)]
+pub enum DefinitionOutcome {
+    /// Definition lives inside the indexed root.
+    InRoot(DefinitionLocation),
+    /// Definition lives outside the indexed root (stdlib, deps, node_modules).
+    /// The URI is logged by `parse_definition_response` before returning; it
+    /// is not stored here to avoid per-call allocations on a hot path.
+    External,
 }
 
 fn path_to_uri(path: &Path) -> String {
@@ -408,9 +430,12 @@ fn uri_to_path(uri: &str) -> Option<PathBuf> {
         .and_then(|u| u.to_file_path().ok())
 }
 
-/// Parse a textDocument/definition response into a location.
-/// Handles both single Location and Location[] responses.
-fn parse_definition_response(result: &Value, root: &Path) -> Result<Option<DefinitionLocation>> {
+/// Parse a textDocument/definition response into a [`DefinitionOutcome`].
+///
+/// Handles both single `Location` and `Location[]` responses. Non-`file://`
+/// URIs (e.g. jdtls's `jdt://`) collapse to `Ok(None)` — cartog cannot index
+/// them and they should be treated as truly unresolvable, not external.
+fn parse_definition_response(result: &Value, root: &Path) -> Result<Option<DefinitionOutcome>> {
     let location = if result.is_array() {
         result.get(0)
     } else if result.get("uri").is_some() {
@@ -428,17 +453,28 @@ fn parse_definition_response(result: &Value, root: &Path) -> Result<Option<Defin
         .and_then(|u| u.as_str())
         .context("missing uri in Location")?;
 
-    let abs_path = match uri_to_path(uri) {
+    let raw_path = match uri_to_path(uri) {
         Some(p) => p,
         None => return Ok(None),
     };
 
-    // Must be within project root
-    let rel_path = match abs_path.strip_prefix(root) {
+    // Canonicalize both sides before the in-root check: language servers can
+    // emit non-canonical URIs (e.g. `/var/folders/...` on macOS where root
+    // canonical is `/private/var/...`), AND the caller may have passed a
+    // symlinked root (e.g. `/tmp/proj` → `/private/tmp/proj`). A lexical
+    // strip_prefix on either asymmetric pair would wrongly tag in-root edges
+    // as External and burn a sticky state=3 marker. Fall back to the raw
+    // path on either side when canonicalize fails (file may not exist on
+    // disk yet — generated code, race against an unsaved buffer).
+    let abs_path = std::fs::canonicalize(&raw_path).unwrap_or(raw_path);
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+
+    // Out-of-root targets (stdlib, deps, node_modules) become External.
+    let rel_path = match abs_path.strip_prefix(&canonical_root) {
         Ok(rel) => rel.to_string_lossy().to_string(),
         Err(_) => {
             tracing::debug!("definition outside root: {uri}");
-            return Ok(None);
+            return Ok(Some(DefinitionOutcome::External));
         }
     };
 
@@ -450,10 +486,10 @@ fn parse_definition_response(result: &Value, root: &Path) -> Result<Option<Defin
         .unwrap_or(0) as u32
         + 1; // LSP 0-based → cartog 1-based
 
-    Ok(Some(DefinitionLocation {
+    Ok(Some(DefinitionOutcome::InRoot(DefinitionLocation {
         file_path: rel_path,
         line,
-    }))
+    })))
 }
 
 #[cfg(test)]
@@ -479,6 +515,16 @@ mod tests {
         assert!(uri_to_path("https://example.com").is_none());
     }
 
+    fn assert_in_root(outcome: DefinitionOutcome, expected_path: &str, expected_line: u32) {
+        match outcome {
+            DefinitionOutcome::InRoot(loc) => {
+                assert_eq!(loc.file_path, expected_path);
+                assert_eq!(loc.line, expected_line);
+            }
+            DefinitionOutcome::External => panic!("expected InRoot, got External"),
+        }
+    }
+
     #[test]
     fn test_parse_definition_single_location() {
         let root = Path::new("/project");
@@ -487,9 +533,8 @@ mod tests {
             "range": { "start": { "line": 10, "character": 4 }, "end": { "line": 10, "character": 20 } },
         });
 
-        let loc = parse_definition_response(&result, root).unwrap().unwrap();
-        assert_eq!(loc.file_path, "src/auth.rs");
-        assert_eq!(loc.line, 11); // 0-based → 1-based
+        let outcome = parse_definition_response(&result, root).unwrap().unwrap();
+        assert_in_root(outcome, "src/auth.rs", 11); // 0-based → 1-based
     }
 
     #[test]
@@ -502,9 +547,8 @@ mod tests {
             }
         ]);
 
-        let loc = parse_definition_response(&result, root).unwrap().unwrap();
-        assert_eq!(loc.file_path, "src/auth.rs");
-        assert_eq!(loc.line, 6);
+        let outcome = parse_definition_response(&result, root).unwrap().unwrap();
+        assert_in_root(outcome, "src/auth.rs", 6);
     }
 
     #[test]
@@ -516,10 +560,73 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_definition_outside_root() {
+    fn test_parse_definition_outside_root_yields_external() {
         let root = Path::new("/project");
         let result = serde_json::json!({
             "uri": "file:///other/src/lib.rs",
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
+        });
+
+        let outcome = parse_definition_response(&result, root).unwrap().unwrap();
+        assert_eq!(outcome, DefinitionOutcome::External);
+    }
+
+    #[test]
+    fn test_parse_definition_external_per_language_uris() {
+        // Real-world out-of-root URI shapes emitted by each language server we
+        // support. All must collapse to `External` so the resolver tags them
+        // state=3. Stdlib/registry/node_modules paths use platform-typical
+        // locations — the strip_prefix test is purely lexical so they need not
+        // exist on disk.
+        let root = Path::new("/Users/dev/project");
+        let cases: &[(&str, &str)] = &[
+            // pyright → cpython stdlib
+            ("python", "file:///usr/lib/python3.11/json/decoder.py"),
+            // rust-analyzer → cargo registry
+            (
+                "rust",
+                "file:///Users/dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.0.0/src/lib.rs",
+            ),
+            // typescript-language-server → node_modules (still under HOME, just outside the project root)
+            (
+                "typescript",
+                "file:///Users/dev/other-project/node_modules/lodash/index.js",
+            ),
+            // gopls → GOROOT
+            (
+                "go",
+                "file:///opt/homebrew/Cellar/go/1.22.0/libexec/src/fmt/print.go",
+            ),
+            // intelephense (PHP) → vendor in a sibling repo
+            ("php", "file:///Users/dev/vendor-cache/symfony/console/Application.php"),
+            // ruby-lsp → bundle install path
+            ("ruby", "file:///Users/dev/.rbenv/gems/3.2.0/gems/rails-7.0.0/lib/rails.rb"),
+        ];
+
+        for (lang, uri) in cases {
+            let result = serde_json::json!({
+                "uri": uri,
+                "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
+            });
+            let outcome = parse_definition_response(&result, root)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{lang}: parse returned None for {uri}"));
+            assert_eq!(
+                outcome,
+                DefinitionOutcome::External,
+                "{lang}: expected External for {uri}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_definition_non_file_uri_yields_none() {
+        // jdtls returns `jdt://` URIs for JDK and Maven artifacts. Cartog
+        // cannot index them at all (no filesystem path), so they must collapse
+        // to `Ok(None)` — truly unresolvable rather than external.
+        let root = Path::new("/project");
+        let result = serde_json::json!({
+            "uri": "jdt://contents/java.base/java.lang/String.class",
             "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
         });
 

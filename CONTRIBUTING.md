@@ -108,9 +108,11 @@ the per-language wiring is shallow and the bulk of the work is the benchmark fix
     the priority order.
 12. Bench-validate the LSP integration: install the server, run `cartog index` with and
     without `--no-lsp` on your fixture, and capture `edges_resolved` vs
-    `edges_lsp_resolved` (and `edges_marked_unresolvable` for the LSP's negative
-    judgments) from `--json` output. If the LSP gain is meaningful, add a row
-    to the recall table in `README.md` and `site/usage.html`.
+    `edges_lsp_resolved`, plus `edges_marked_unresolvable` (true negatives:
+    typo, dyn dispatch, macro) and `edges_marked_external` (LSP located the
+    target outside the indexed root: stdlib, deps, node_modules) from `--json`
+    output. If the LSP gain is meaningful, add a row to the recall table in
+    `README.md` and `site/usage.html`.
 
 ### 4. Documentation
 

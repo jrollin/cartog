@@ -17,10 +17,14 @@ Resolves edges that the heuristic resolver in `cartog-db` left unresolved, by qu
    - Send `textDocument/didOpen` to the server
    - For each edge, find the target name's **column** in the source line
    - Send `textDocument/definition` request at that position
-   - If the server returns a location, look up the symbol in the DB at that file+line
-   - Update the edge's `target_id` (sets `resolution_state = 1`)
-   - On a definitive `Ok(None)`, buffer the edge to be marked `resolution_state = 2` *only if* the language proved healthy by resolving at least one edge this run (per-language success gate — protects against half-loaded LSP servers)
-   - Transient errors (`Err(_)`) never mark — the marker is sticky across runs
+   - The response collapses into `DefinitionOutcome::InRoot(loc)` (target lives inside the indexed root), `DefinitionOutcome::External` (target lives outside: stdlib, deps, node_modules), or `None` (server gave no answer)
+   - **InRoot** + symbol found at file+line → update `target_id` (sets `resolution_state = 1`)
+   - **InRoot** + no symbol → buffer as `resolution_state = 2` (cartog extraction gap — not external)
+   - **External** → buffer as `resolution_state = 3`
+   - **`Ok(None)`** → buffer as `resolution_state = 2` (truly unresolvable)
+   - Unresolvable marks (`state = 2`) are committed *only if* the language resolved at least one in-root edge this run (per-language success gate — protects against half-loaded servers that fabricate `Ok(None)`)
+   - External marks (`state = 3`) come from positive LSP answers and are committed whenever the server stayed alive (no gate)
+   - Transient errors (`Err(_)`) never mark — markers are sticky across runs
    - Send `textDocument/didClose`
 
 ### Column finding

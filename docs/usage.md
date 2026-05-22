@@ -160,7 +160,7 @@ cartog index src/           # index a subdirectory only
 cartog index . --force      # full re-index, bypassing change detection
 ```
 
-Incremental by default — skips unchanged files (git diff + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. Stable symbol IDs (`file:kind:qualified_name`) survive line movements, so edges from unchanged files remain valid. The LSP pass skips edges marked `resolution_state = 2` (LSP definitively gave up — e.g. stdlib calls, dyn dispatch); they auto-retry when a matching symbol is added. Use `--force` when results seem stale or after updating cartog itself — it also resets all `state=2` markers for a clean retry.
+Incremental by default — skips unchanged files (git diff + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. Stable symbol IDs (`file:kind:qualified_name`) survive line movements, so edges from unchanged files remain valid. The LSP pass skips edges already classified as `resolution_state = 2` (unresolvable: typo, dyn dispatch, macro) or `3` (external: stdlib, deps, node_modules); both auto-retry when a matching symbol is added in-tree. Use `--force` when results seem stale or after updating cartog itself — it also resets state-2 and state-3 markers for a clean retry.
 
 ### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N]`
 

@@ -16,7 +16,7 @@ use anyhow::Result;
 use cartog_core::detect_language;
 use cartog_db::{Database, UnresolvedEdge};
 
-use manager::LspManager;
+use manager::{DefinitionOutcome, LspManager};
 
 /// Summary of an LSP resolution pass.
 #[derive(Debug, Default, Clone, Copy)]
@@ -25,6 +25,9 @@ pub struct LspResolveStats {
     pub resolved: u32,
     /// Edges flipped from `resolution_state = 0` to `2` (LSP definitively gave up).
     pub marked_unresolvable: u32,
+    /// Edges flipped from `resolution_state = 0` to `3` (LSP located the
+    /// target outside the indexed root: stdlib, deps, node_modules).
+    pub marked_external: u32,
 }
 
 /// Resolve edges that heuristic resolution left unresolved, using LSP servers.
@@ -32,7 +35,9 @@ pub struct LspResolveStats {
 /// If `shared_manager` is provided, reuses existing LSP servers (warm start).
 /// Otherwise creates a temporary manager that is dropped after resolution.
 ///
-/// Returns counts for both `resolved` and `marked_unresolvable`.
+/// Returns counts for `resolved` (state=0 → 1), `marked_unresolvable`
+/// (state=0 → 2, definitive LSP negative), and `marked_external` (state=0 → 3,
+/// LSP located the target outside the indexed root).
 pub fn lsp_resolve_edges(
     db: &Database,
     root: &Path,
@@ -72,6 +77,7 @@ pub fn lsp_resolve_edges(
 
     let mut resolved = 0u32;
     let mut marked_unresolvable = 0u32;
+    let mut marked_external = 0u32;
     let mut any_server_started = false;
 
     for (language, edges) in &by_language {
@@ -97,12 +103,13 @@ pub fn lsp_resolve_edges(
             by_file.len()
         );
 
-        // Buffer "definitive Ok(None)" marks here and only commit them at the
+        // Buffer "definitive negative" marks here and only commit them at the
         // end of the language loop *if* the language proved healthy by resolving
         // at least one edge. Catches half-loaded rust-analyzer cases where the
-        // server returns Ok(None) before its index is ready — without this gate
-        // we would burn good edges with a sticky state=2 marker.
-        let mut pending_marks: Vec<i64> = Vec::new();
+        // server returns Ok(None) or out-of-root locations before its index is
+        // ready — without this gate we would burn good edges with sticky markers.
+        let mut pending_unresolvable: Vec<i64> = Vec::new();
+        let mut pending_external: Vec<i64> = Vec::new();
         let mut lang_resolved: u32 = 0;
         let mut server_died = false;
 
@@ -137,7 +144,7 @@ pub fn lsp_resolve_edges(
                 let lsp_line = edge.line.saturating_sub(1); // cartog 1-based → LSP 0-based
 
                 match manager.definition(language, file_path, lsp_line, col) {
-                    Ok(Some(loc)) => {
+                    Ok(Some(DefinitionOutcome::InRoot(loc))) => {
                         match db.find_symbol_at_location(&loc.file_path, loc.line) {
                             Ok(Some(symbol_id)) => {
                                 match db.update_edge_target(edge.edge_id, &symbol_id) {
@@ -152,23 +159,34 @@ pub fn lsp_resolve_edges(
                                 }
                             }
                             Ok(None) => {
-                                // LSP pointed outside the indexed root (stdlib, third-party).
-                                // Definitive negative: buffer for marking.
+                                // LSP located the target inside the root but
+                                // cartog has no extracted symbol covering that
+                                // line (cartog extraction gap, unindexed
+                                // language, top-level statement between
+                                // symbols). This is NOT external — the target
+                                // is in-root. Treat as unresolvable so the
+                                // state=3 "external" bucket stays semantically
+                                // clean (stdlib/deps only).
                                 tracing::debug!(
                                     "no cartog symbol at {}:{}",
                                     loc.file_path,
                                     loc.line
                                 );
-                                pending_marks.push(edge.edge_id);
+                                pending_unresolvable.push(edge.edge_id);
                             }
                             Err(e) => return Err(e), // DB errors propagate
                         }
+                    }
+                    Ok(Some(DefinitionOutcome::External)) => {
+                        // LSP located the target outside the indexed root
+                        // (stdlib, deps, node_modules). Buffer for state=3.
+                        pending_external.push(edge.edge_id);
                     }
                     Ok(None) => {
                         // LSP definitively answered "no definition". Buffer it
                         // until we know the language server resolved at least
                         // one edge this run (per-language success gate).
-                        pending_marks.push(edge.edge_id);
+                        pending_unresolvable.push(edge.edge_id);
                     }
                     Err(e) => {
                         // Transient: server crash, didOpen race, IO. NEVER mark
@@ -196,30 +214,54 @@ pub fn lsp_resolve_edges(
             }
         }
 
-        // Per-language success gate: only commit unresolvable markers if the
-        // server resolved at least one edge AND didn't crash mid-run.
+        // Unresolvable marks come from `Ok(None)` — an answer a half-loaded
+        // server can fabricate before its index is ready. Gate behind
+        // `lang_resolved > 0` to avoid burning good edges as sticky state=2
+        // when the server is unhealthy.
         if !server_died && lang_resolved > 0 {
-            for edge_id in &pending_marks {
+            for edge_id in &pending_unresolvable {
                 if let Err(e) = db.mark_edge_unresolvable(*edge_id) {
                     tracing::debug!("failed to mark edge {edge_id} unresolvable: {e:#}");
                     continue;
                 }
                 marked_unresolvable += 1;
             }
-        } else if !pending_marks.is_empty() {
+        } else if !pending_unresolvable.is_empty() {
             tracing::info!(
-                "LSP: {language} produced {} negative answers but no successes — \
-                 not marking unresolvable (server may be half-loaded or unhealthy)",
-                pending_marks.len()
+                "LSP: {language} produced {} unresolvable answers but no successes — \
+                 not marking (server may be half-loaded or unhealthy)",
+                pending_unresolvable.len(),
+            );
+        }
+
+        // External marks come from positive LSP answers (a concrete URI
+        // outside the indexed root). A half-loaded server cannot fabricate
+        // those, so the lang_resolved gate is unnecessary. Commit whenever
+        // the server stayed alive — a stdlib-only file would otherwise
+        // re-query the LSP forever.
+        if !server_died {
+            for edge_id in &pending_external {
+                if let Err(e) = db.mark_edge_external(*edge_id) {
+                    tracing::debug!("failed to mark edge {edge_id} external: {e:#}");
+                    continue;
+                }
+                marked_external += 1;
+            }
+        } else if !pending_external.is_empty() {
+            tracing::info!(
+                "LSP: {language} produced {} external answers but server died — \
+                 not marking",
+                pending_external.len(),
             );
         }
     }
 
     if !any_server_started {
         tracing::debug!("LSP: no servers found on PATH, skipping");
-    } else if resolved > 0 || marked_unresolvable > 0 {
+    } else if resolved > 0 || marked_unresolvable > 0 || marked_external > 0 {
         tracing::info!(
-            "LSP: resolved {resolved} additional edges, marked {marked_unresolvable} unresolvable"
+            "LSP: resolved {resolved} additional edges, \
+             marked {marked_unresolvable} unresolvable, {marked_external} external"
         );
     } else {
         tracing::info!("LSP: no additional edges resolved");
@@ -229,6 +271,7 @@ pub fn lsp_resolve_edges(
     Ok(LspResolveStats {
         resolved,
         marked_unresolvable,
+        marked_external,
     })
 }
 
@@ -349,11 +392,16 @@ mod tests {
         assert_eq!(stats.resolved, 0, "no servers must mean zero resolutions");
         assert_eq!(
             stats.marked_unresolvable, 0,
-            "no servers must mean zero marks"
+            "no servers must mean zero unresolvable marks"
         );
-        assert!(
-            !db.is_edge_unresolvable(edge_id).unwrap(),
-            "edge must not be marked unresolvable when no LSP ran"
+        assert_eq!(
+            stats.marked_external, 0,
+            "no servers must mean zero external marks"
+        );
+        assert_eq!(
+            db.edge_resolution_state(edge_id).unwrap(),
+            0,
+            "edge must stay at state=0 when no LSP ran"
         );
     }
 }

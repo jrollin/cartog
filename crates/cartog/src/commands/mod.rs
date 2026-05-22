@@ -147,7 +147,10 @@ pub fn cmd_index(
     let result = result?;
 
     output(&result, json, None, |r| {
-        let lsp_part = if r.edges_lsp_resolved > 0 || r.edges_marked_unresolvable > 0 {
+        let lsp_part = if r.edges_lsp_resolved > 0
+            || r.edges_marked_unresolvable > 0
+            || r.edges_marked_external > 0
+        {
             let mut s = format!(
                 " ({} heuristic + {} LSP",
                 r.edges_resolved, r.edges_lsp_resolved
@@ -157,6 +160,9 @@ pub fn cmd_index(
                     ", {} marked unresolvable",
                     r.edges_marked_unresolvable
                 ));
+            }
+            if r.edges_marked_external > 0 {
+                s.push_str(&format!(", {} external", r.edges_marked_external));
             }
             s.push(')');
             s
@@ -457,9 +463,17 @@ pub fn cmd_stats(db_path: &Path, json: bool, embedding_dim: usize) -> Result<()>
         let mut out = String::new();
         out.push_str(&format!("Files:    {}\n", stats.num_files));
         out.push_str(&format!("Symbols:  {}\n", stats.num_symbols));
+        let mut edge_parts = vec![format!("{} resolved", stats.num_resolved)];
+        if stats.num_external > 0 {
+            edge_parts.push(format!("{} external", stats.num_external));
+        }
+        if stats.num_unresolvable > 0 {
+            edge_parts.push(format!("{} unresolvable", stats.num_unresolvable));
+        }
         out.push_str(&format!(
-            "Edges:    {} ({} resolved)\n",
-            stats.num_edges, stats.num_resolved
+            "Edges:    {} ({})\n",
+            stats.num_edges,
+            edge_parts.join(", ")
         ));
         if !stats.languages.is_empty() {
             out.push_str("Languages:\n");
