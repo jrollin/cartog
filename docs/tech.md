@@ -25,7 +25,7 @@
 | `reqwest` | HTTP client for remote embedding providers (Ollama) | Optional via `provider-ollama` feature. Uses `blocking` + `rustls-tls` |
 | `sqlite-vec` | Vector similarity search (KNN) in SQLite | `vec0` virtual table, requires integer rowids (bridged via `symbol_embedding_map`) |
 | `criterion` (dev) | Micro-benchmarks | Query latency benchmarks (µs-level) |
-| `rust-s3` 0.35 (`tokio-rustls-tls`) | S3-compatible client for `cartog push` / `cartog pull` | Optional via `remote-s3` feature (default on). Chosen over `aws-sdk-s3` for size (~5 MB vs ~18 MB); supports AWS S3, MinIO, R2, floci |
+| `rust-s3` 0.37 (`tokio-rustls-tls`) | S3-compatible client for `cartog push` / `cartog pull` | Optional via `remote-s3` feature (default on). Chosen over `aws-sdk-s3` for size (~5 MB vs ~18 MB); supports AWS S3, MinIO, R2, floci |
 
 ## Build Profiles
 
