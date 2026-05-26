@@ -297,6 +297,13 @@ pub struct ActiveLock {
     pub start_time: Option<u64>,
 }
 
+/// Soft cap on the number of `*.pid` files inspected per scan. A heavy
+/// user with hundreds of cohabiting projects in the same state dir would
+/// otherwise pay a `kill(pid, 0)` syscall per file on every long-lived
+/// command launch; capping bounds the cost. Entries beyond the cap are
+/// reaped on a subsequent run.
+const SCAN_CAP: usize = 256;
+
 /// Scan `state_dir` for `*.pid` files. Returns one [`ActiveLock`] per file
 /// whose recorded PID is still alive on this machine. Stale files (process
 /// gone) are deleted as a side-effect so the directory stays clean.
@@ -304,17 +311,26 @@ pub struct ActiveLock {
 /// A missing or unreadable directory yields an empty vec — long-lived
 /// commands may not have run yet, which is the common case on a fresh
 /// install.
+///
+/// At most [`SCAN_CAP`] entries are inspected; pathological accumulation
+/// across many cohabiting projects is reaped progressively across multiple
+/// long-lived command launches rather than in one O(N) sweep.
 pub fn find_active_locks(state_dir: &Path) -> Vec<ActiveLock> {
     let entries = match fs::read_dir(state_dir) {
         Ok(e) => e,
         Err(_) => return Vec::new(),
     };
     let mut active = Vec::new();
+    let mut inspected: usize = 0;
     for entry in entries.flatten() {
+        if inspected >= SCAN_CAP {
+            break;
+        }
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) != Some(PID_EXTENSION) {
             continue;
         }
+        inspected += 1;
         let slot = match path.file_stem().and_then(|s| s.to_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => continue,
