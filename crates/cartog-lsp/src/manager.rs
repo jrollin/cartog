@@ -462,12 +462,22 @@ fn parse_definition_response(result: &Value, root: &Path) -> Result<Option<Defin
     // emit non-canonical URIs (e.g. `/var/folders/...` on macOS where root
     // canonical is `/private/var/...`), AND the caller may have passed a
     // symlinked root (e.g. `/tmp/proj` → `/private/tmp/proj`). A lexical
-    // strip_prefix on either asymmetric pair would wrongly tag in-root edges
-    // as External and burn a sticky state=3 marker. Fall back to the raw
-    // path on either side when canonicalize fails (file may not exist on
-    // disk yet — generated code, race against an unsaved buffer).
-    let abs_path = std::fs::canonicalize(&raw_path).unwrap_or(raw_path);
-    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    // strip_prefix on an asymmetric pair (one canonicalized, one not) would
+    // wrongly tag in-root edges as External and burn a sticky state=3
+    // marker — the exact regression the canonicalize was meant to close.
+    //
+    // Either side can fail to canonicalize: root may be missing in tests, or
+    // raw_path can point to a file not yet on disk (generated code, race
+    // against an unsaved buffer). To keep the strip_prefix symmetric, we
+    // fall back to comparing both RAW paths together — never mix canonical
+    // root with raw target (or vice versa).
+    let (canonical_root, abs_path) = match (
+        std::fs::canonicalize(root),
+        std::fs::canonicalize(&raw_path),
+    ) {
+        (Ok(r), Ok(p)) => (r, p),
+        _ => (root.to_path_buf(), raw_path),
+    };
 
     // Out-of-root targets (stdlib, deps, node_modules) become External.
     let rel_path = match abs_path.strip_prefix(&canonical_root) {
@@ -631,5 +641,37 @@ mod tests {
         });
 
         assert!(parse_definition_response(&result, root).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_parse_definition_symmetric_fallback_on_missing_target() {
+        // Regression: when root canonicalizes (`/tmp/proj` → `/private/tmp/proj`
+        // on macOS) but raw_path does NOT (file not yet on disk: generated
+        // code, race against an unsaved buffer), the asymmetric pair made
+        // strip_prefix fail and burned an in-root edge as sticky External.
+        // The fix uses RAW paths on both sides whenever either canonicalize
+        // fails, so the lexical strip_prefix matches symmetrically.
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path(); // exists and canonicalizes
+        let not_yet_on_disk = root.join("generated.rs");
+        // Build a file:// URI for the not-yet-existing path.
+        let uri = format!("file://{}", not_yet_on_disk.display());
+        let result = serde_json::json!({
+            "uri": uri,
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
+        });
+        let outcome = parse_definition_response(&result, root)
+            .unwrap()
+            .expect("expected Some outcome for in-root not-yet-existent target");
+        // Symmetric raw-vs-raw strip_prefix must classify this as InRoot, not
+        // External, so the resolver leaves it at state=0 for the next reindex.
+        match outcome {
+            DefinitionOutcome::InRoot(loc) => {
+                assert_eq!(loc.file_path, "generated.rs");
+            }
+            DefinitionOutcome::External => {
+                panic!("missing in-root target must not be marked External (sticky state=3)");
+            }
+        }
     }
 }
