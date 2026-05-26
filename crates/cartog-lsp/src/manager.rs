@@ -654,8 +654,9 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let root = dir.path(); // exists and canonicalizes
         let not_yet_on_disk = root.join("generated.rs");
-        // Build a file:// URI for the not-yet-existing path.
-        let uri = format!("file://{}", not_yet_on_disk.display());
+        // Use the same path_to_uri helper the rest of the codebase uses so
+        // the test stays correct on Windows (drive-letter / verbatim paths).
+        let uri = path_to_uri(&not_yet_on_disk);
         let result = serde_json::json!({
             "uri": uri,
             "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
