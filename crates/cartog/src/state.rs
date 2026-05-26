@@ -163,9 +163,20 @@ fn resolve_db_path_for_slot(db_path: &Path) -> PathBuf {
             break;
         }
     }
-    // Step 3: no ancestor canonicalized (path entirely missing). Hash
-    // the raw path verbatim. This branch is best-effort.
-    db_path.to_path_buf()
+    // Step 3: no ancestor canonicalized (path entirely missing). Walk
+    // components() to drop CurDir (`.`) and collapse redundant separators
+    // before hashing, so logically-equivalent inputs like `/x/y/db` and
+    // `/x/./y/db` still produce the same slot. The branch is still
+    // best-effort — components() does NOT resolve `..` or symlinks — but
+    // the most common drift (a stray `./`) is eliminated.
+    let mut normalized = PathBuf::new();
+    for component in db_path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 impl State {
@@ -556,6 +567,28 @@ mod tests {
         assert_eq!(
             slot_a, slot_b,
             "equivalent paths with missing parent must produce the same slot"
+        );
+    }
+
+    #[test]
+    fn slot_for_db_step3_normalizes_curdir_when_no_ancestor_exists() {
+        // When NO ancestor exists at all (every step-2 canonicalize fails),
+        // step 3 used to hash the raw path verbatim — so `/missing/x/db`
+        // and `/missing/./x/db` produced different slots and two peers
+        // racing to create the same logical DB could each win their own
+        // O_EXCL election. Components-level normalization fixes the common
+        // `./` drift without resolving symlinks or `..`.
+        let bare = slot_for_db(
+            "serve",
+            Path::new("/nonexistent-cartog-root/proj/db.sqlite"),
+        );
+        let dotted = slot_for_db(
+            "serve",
+            Path::new("/nonexistent-cartog-root/./proj/db.sqlite"),
+        );
+        assert_eq!(
+            bare, dotted,
+            "step-3 fallback must normalize CurDir to keep equivalent missing paths consistent"
         );
     }
 

@@ -167,7 +167,25 @@ impl WatchHandle {
 impl Drop for WatchHandle {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
-        // Don't join on drop — the thread will exit on next loop iteration.
+        // Best-effort join with a bounded deadline. Without this, the
+        // watcher thread keeps holding the PID `ProcessLock` until its
+        // next `recv_timeout` (~1s for idle, up to `config.debounce`
+        // worst case), so a fresh `cartog watch` started right after Drop
+        // would observe AcquireError::Held — confusing the user who saw
+        // the previous process exit. We try briefly (~1.5s) then return:
+        // we'd rather leak the thread than block shutdown for several
+        // seconds on a hung debouncer. Callers wanting deterministic
+        // cleanup should call `stop()` explicitly (it joins unbounded).
+        if let Some(handle) = self.thread.take() {
+            let deadline = std::time::Instant::now() + Duration::from_millis(1500);
+            while !handle.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            }
+            // else: leak the JoinHandle (process is shutting down anyway).
+        }
     }
 }
 

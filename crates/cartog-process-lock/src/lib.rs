@@ -297,6 +297,19 @@ pub struct ActiveLock {
     pub start_time: Option<u64>,
 }
 
+/// Soft cap on the number of `*.pid` files the opportunistic reaper
+/// inspects per call. A heavy user with hundreds of cohabiting projects
+/// in the same state dir would otherwise pay a `kill(pid, 0)` syscall
+/// per file on every long-lived command launch; capping bounds the
+/// reaper cost. Entries beyond the cap are reaped on a subsequent run.
+///
+/// The cap is ONLY applied to [`sweep_stale_locks`]. Live-peer detection
+/// via [`find_active_locks`] is uncapped: capping there would create
+/// false negatives (a real peer at index 257 would not be reported), and
+/// callers like `cartog self update` would then proceed to swap binaries
+/// while a live primary keeps writing.
+const REAPER_SCAN_CAP: usize = 256;
+
 /// Scan `state_dir` for `*.pid` files. Returns one [`ActiveLock`] per file
 /// whose recorded PID is still alive on this machine. Stale files (process
 /// gone) are deleted as a side-effect so the directory stays clean.
@@ -304,17 +317,35 @@ pub struct ActiveLock {
 /// A missing or unreadable directory yields an empty vec — long-lived
 /// commands may not have run yet, which is the common case on a fresh
 /// install.
+///
+/// Uncapped: this is the correctness path used by `cartog self update`,
+/// `cartog self migrate-db`, and the watch-slot promoter to decide whether
+/// a live peer exists. Missing a real peer here is unsafe.
 pub fn find_active_locks(state_dir: &Path) -> Vec<ActiveLock> {
+    scan_locks(state_dir, None)
+}
+
+/// Internal scan with an optional cap on entries inspected. `None` =
+/// uncapped (correctness); `Some(n)` = inspect at most `n` entries (used
+/// by the opportunistic reaper in [`sweep_stale_locks`]).
+fn scan_locks(state_dir: &Path, cap: Option<usize>) -> Vec<ActiveLock> {
     let entries = match fs::read_dir(state_dir) {
         Ok(e) => e,
         Err(_) => return Vec::new(),
     };
     let mut active = Vec::new();
+    let mut inspected: usize = 0;
     for entry in entries.flatten() {
+        if let Some(limit) = cap {
+            if inspected >= limit {
+                break;
+            }
+        }
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) != Some(PID_EXTENSION) {
             continue;
         }
+        inspected += 1;
         let slot = match path.file_stem().and_then(|s| s.to_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => continue,
@@ -356,26 +387,30 @@ pub fn find_active_locks(state_dir: &Path) -> Vec<ActiveLock> {
     active
 }
 
-/// Reap stale PID files in `state_dir`. Side-effect equivalent of
-/// [`find_active_locks`] without the return value.
+/// Reap stale PID files in `state_dir`. Opportunistic — capped at
+/// [`REAPER_SCAN_CAP`] entries per call to bound the cost on a state
+/// dir that has accumulated many cohabiting projects. Entries beyond
+/// the cap are reaped on a subsequent run.
 ///
-/// Each `*.pid` whose recorded PID is dead (or whose recorded start_time
-/// disagrees with the live PID, i.e. PID-reuse) is unlinked via
-/// [`unlink_if_unchanged`] so a concurrent writer landing fresh content in
-/// the TOCTOU window is preserved. Malformed files (unreadable on two
-/// consecutive reads) are removed unconditionally because there is no
-/// holder identity to protect.
+/// Each inspected `*.pid` whose recorded PID is dead (or whose recorded
+/// start_time disagrees with the live PID, i.e. PID-reuse) is unlinked
+/// via [`unlink_if_unchanged`] so a concurrent writer landing fresh
+/// content in the TOCTOU window is preserved. Malformed files
+/// (unreadable on two consecutive reads) are removed unconditionally
+/// because there is no holder identity to protect.
 ///
-/// Called from [`ProcessLock::acquire`] so every long-lived command launch
-/// (`cartog serve`, `cartog watch`, promoter handoff) reaps leftovers from
-/// crashed peers before claiming its own slot. Cost is one `read_dir` plus
-/// one `kill(pid, 0)` per file — sub-millisecond on a state dir with a
-/// handful of entries.
+/// Called from [`ProcessLock::acquire`] so every long-lived command
+/// launch (`cartog serve`, `cartog watch`, promoter handoff) reaps
+/// leftovers from crashed peers before claiming its own slot.
+///
+/// NOT a replacement for [`find_active_locks`]: this call is allowed to
+/// miss entries (they'll be reaped next time). Live-peer detection must
+/// use [`find_active_locks`] (uncapped) instead.
 ///
 /// A missing or unreadable `state_dir` is a no-op (the caller will create
 /// it during their own acquire).
 pub fn sweep_stale_locks(state_dir: &Path) {
-    let _ = find_active_locks(state_dir);
+    let _ = scan_locks(state_dir, Some(REAPER_SCAN_CAP));
 }
 
 /// Unlink the PID file at `path` only if its current contents still match
@@ -1122,6 +1157,43 @@ mod tests {
         let missing = parent.path().join("does-not-exist");
         sweep_stale_locks(&missing);
         // No assertion needed — absence of panic is the test.
+    }
+
+    #[test]
+    fn find_active_locks_is_uncapped_so_real_peers_are_never_missed() {
+        // Regression: an earlier version capped find_active_locks at 256
+        // entries to bound startup cost, but that made `cartog self
+        // update` proceed past a live peer hiding beyond the cap. The
+        // cap MUST only apply to the opportunistic reaper
+        // (sweep_stale_locks); the live-peer query must inspect every
+        // entry. We pad with REAPER_SCAN_CAP+1 stale files, place our
+        // own live PID at the end of read_dir order (by lexical sort:
+        // "zzz-live"), and assert it's returned.
+        let dir = TempDir::new().unwrap();
+        for i in 0..=REAPER_SCAN_CAP {
+            // Stale: PID well past Linux pid_max default.
+            fs::write(
+                dir.path().join(format!("aaa-stale-{i:04}.pid")),
+                "4194304\n0\n",
+            )
+            .unwrap();
+        }
+        let live_slot = "zzz-live";
+        let live_path = dir.path().join(format!("{live_slot}.pid"));
+        let pid = std::process::id();
+        let payload = match process_start_time(pid) {
+            Some(st) => format!("{pid}\n{st}\n"),
+            None => format!("{pid}\n"),
+        };
+        fs::write(&live_path, &payload).unwrap();
+
+        let active = find_active_locks(dir.path());
+        assert!(
+            active.iter().any(|a| a.slot == live_slot),
+            "find_active_locks must NOT miss a live peer beyond REAPER_SCAN_CAP \
+             (found slots: {slots:?})",
+            slots = active.iter().map(|a| &a.slot).collect::<Vec<_>>(),
+        );
     }
 
     #[test]

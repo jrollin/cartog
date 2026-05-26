@@ -1186,25 +1186,27 @@ pub const SERVE_LOCK_SLOT: &str = "serve";
 /// Anchored on the exact prefixes `"serve"` (literal, legacy) and
 /// `"serve-"` (DB-scoped, followed by the hex suffix). Inputs that
 /// happen to start with the four letters `serve` but are NOT a
-/// serve-family slot (`"server"`, `"serverless"`, `"servefoo"`, …) fall
-/// through to the global watch slot rather than silently producing a
-/// corrupted "watch{rest}" string.
-fn serve_to_watch_slot(serve_slot: &str) -> String {
+/// serve-family slot (`"server"`, `"serverless"`, `"servefoo"`, …) are
+/// rejected: silently folding them to the global watch slot would let
+/// distinct embedders collide on `watch.pid` while their serve slots
+/// stay distinct (same hazard as the pid_lock_dir/slot half-config).
+fn serve_to_watch_slot(serve_slot: &str) -> anyhow::Result<String> {
     if serve_slot == "serve" {
-        return watch::WATCH_LOCK_SLOT.to_string();
+        return Ok(watch::WATCH_LOCK_SLOT.to_string());
     }
     // strip_prefix + non-empty filter: `"serve-"` alone (trailing dash,
     // empty hex) is treated as off-pattern, not as the legitimate
     // serve-<hex> shape. Without the filter it would silently produce
     // the slot "watch-" which validates but encodes no DB scope.
     if let Some(rest) = serve_slot.strip_prefix("serve-").filter(|r| !r.is_empty()) {
-        return format!("watch-{rest}");
+        return Ok(format!("watch-{rest}"));
     }
-    // Unknown prefix or off-pattern input: fall back to the global watch
-    // slot so we don't emit a fabricated slot that no other process can
-    // reproduce. Should not happen for slots produced by
-    // `state::slot_for_db("serve", _)` but guards against caller mistakes.
-    watch::WATCH_LOCK_SLOT.to_string()
+    Err(anyhow::anyhow!(
+        "ServerOptions::pid_lock_slot {serve_slot:?} is not a serve-family slot; \
+         expected `serve` or `serve-<hex>`. Library embedders should derive the slot \
+         via `cartog::state::slot_for_db(\"serve\", db_path)` so the watcher's slot \
+         can be scoped to the same DB."
+    ))
 }
 
 /// Environment variable that, when set to `0`, disables single-writer
@@ -1349,8 +1351,13 @@ pub async fn run_server(
     // Derive the watcher's slot from the serve slot so per-DB scoping is
     // consistent across both PID files. When serve runs un-scoped (legacy /
     // tests), the watcher also runs un-scoped via the WATCH_LOCK_SLOT
-    // fallback inside `cartog-watch`.
-    let watch_slot: Option<String> = opts.pid_lock_slot.as_deref().map(serve_to_watch_slot);
+    // fallback inside `cartog-watch`. An off-pattern serve slot is a hard
+    // error here — silently using the global slot would let distinct
+    // embedders collide on `watch.pid`.
+    let watch_slot: Option<String> = match opts.pid_lock_slot.as_deref() {
+        Some(s) => Some(serve_to_watch_slot(s)?),
+        None => None,
+    };
     let initial_watch_handle: Option<WatchHandle> = if watch && role == Role::Primary {
         let cwd = std::env::current_dir()?;
         let mut config = WatchConfig::new(cwd);
@@ -1399,9 +1406,20 @@ pub async fn run_server(
     let lock_cell = Arc::new(Mutex::new(initial_lock));
     let watch_cell = Arc::new(Mutex::new(initial_watch_handle));
 
+    // The promoter requires all four of (held primary, state dir, serve
+    // slot, watch slot) to be present. The all-Some case is the production
+    // CLI path; partial-Some shapes occur only when a library embedder has
+    // an off-pattern config — we silently run without a promoter rather
+    // than panicking inside the spawned task, and `cartog_stats` keeps
+    // surfacing the ReadOnly role so the operator can debug.
     let promoter_handle: Option<tokio::task::JoinHandle<()>> = if role == Role::ReadOnly {
-        match (primary_to_watch, opts.pid_lock_dir.clone()) {
-            (Some(primary), Some(state_dir)) => {
+        match (
+            primary_to_watch,
+            opts.pid_lock_dir.clone(),
+            opts.pid_lock_slot.clone(),
+            watch_slot.clone(),
+        ) {
+            (Some(primary), Some(state_dir), Some(serve_slot), Some(watch_slot)) => {
                 let pinned = server
                     .db
                     .lock()
@@ -1414,20 +1432,11 @@ pub async fn run_server(
                     lock_cell: Arc::clone(&lock_cell),
                     watch_cell: Arc::clone(&watch_cell),
                     watcher_active: Arc::clone(&server.watcher_active),
+                    embedding_provider: Arc::clone(&server.embedding_provider),
                     db_path: db_path.to_path_buf(),
                     state_dir,
-                    // .expect documents the precondition: this branch
-                    // requires opts.pid_lock_dir.is_some() (see line above),
-                    // and acquire_serve_lock already hard-fails when dir is
-                    // Some but slot is None. A future refactor that loosens
-                    // either guard will trip this assertion loudly rather
-                    // than silently re-introducing global-slot peers.
-                    serve_slot: opts.pid_lock_slot.clone().expect(
-                        "precondition: acquire_serve_lock rejects pid_lock_dir without pid_lock_slot",
-                    ),
-                    watch_slot: watch_slot.clone().expect(
-                        "precondition: watch_slot is derived from opts.pid_lock_slot above",
-                    ),
+                    serve_slot,
+                    watch_slot,
                     cwd,
                     primary,
                     pinned,
@@ -1496,6 +1505,11 @@ struct PromoterArgs {
     /// on a successful post-promotion spawn, left false if the watcher
     /// failed to start (degraded Primary: surfaced in `cartog_stats`).
     watcher_active: Arc<std::sync::atomic::AtomicBool>,
+    /// Secondary's embedding provider. Used to reconcile the on-disk
+    /// embedding fingerprint against the secondary's actual provider when
+    /// we promote — CartogServer::new does this on first start, but
+    /// open_existing_ro deliberately skips it.
+    embedding_provider: Arc<Mutex<Box<dyn rag::provider::EmbeddingProvider>>>,
     db_path: std::path::PathBuf,
     state_dir: std::path::PathBuf,
     /// Slot to claim when the promoter wins election. Matches the slot the
@@ -1594,12 +1608,11 @@ async fn promoter_task(args: PromoterArgs) {
             return;
         }
 
-        // Swap the DB connection to read-write. We hold the Mutex for the
-        // entire swap, so no tool handler can be mid-query against the
-        // about-to-close read-only connection. On open_existing_rw
-        // failure (transient I/O, disk pressure), drop the lock and loop
-        // — a subsequent poll may succeed. Only a poisoned mutex is
-        // permanently fatal.
+        // Open a fresh RW Database. We DON'T install it into args.db yet —
+        // we first reconcile the embedding fingerprint and try to spawn
+        // the watcher (if requested), so a failure at either step rolls
+        // back cleanly (drop rw + lock, loop and retry next tick) without
+        // leaving the secondary with a half-promoted state.
         let rw = match Database::open_existing_rw(&args.db_path) {
             Ok(rw) => rw,
             Err(e) => {
@@ -1611,49 +1624,43 @@ async fn promoter_task(args: PromoterArgs) {
                 continue;
             }
         };
-        match args.db.lock() {
-            Ok(mut guard) => {
-                *guard = rw;
-            }
-            Err(_) => {
-                tracing::error!("db mutex poisoned; cannot promote, exiting promoter task");
-                drop(new_lock);
-                return;
-            }
-        }
 
-        // Install the lock so it lives until shutdown (Drop unlinks the
-        // PID file). Flip role to Primary BEFORE spawning the watcher so
-        // tool handlers that re-check `role.load()` immediately see the
-        // new state — and the write tools start accepting requests at
-        // the same moment the DB is RW (no window where role lags the
-        // swap).
-        //
-        // A poisoned lock_cell mutex is fatal in the same way args.db
-        // poison is (treated symmetrically above): if we let `new_lock`
-        // fall off the end of an `if let Ok(_)` arm, Drop unlinks the
-        // PID file, and then storing Role::Primary creates a "primary
-        // with no lock" state — a fresh `cartog serve` would win the
-        // next O_EXCL acquire and we'd have two Primaries. Instead, bail
-        // out cleanly: drop the lock, leave role as ReadOnly, exit the
-        // promoter task. The next-attempt path is now closed (caller
-        // would need to restart the process), but a poisoned mutex
-        // means the whole server is degraded anyway.
-        match args.lock_cell.lock() {
-            Ok(mut guard) => {
-                *guard = Some(new_lock);
-            }
+        // Reconcile the embedding fingerprint against the freshly-opened
+        // RW connection. CartogServer::new does this on first start, but
+        // a ReadOnly secondary skips it (open_existing_ro is a verbatim
+        // attach). Without this step, vectors written via cartog_rag_index
+        // after promotion would silently mismatch the fingerprint persisted
+        // by the previous primary.
+        let provider_fp = match args.embedding_provider.lock() {
+            Ok(guard) => rag::fingerprint_of(guard.as_ref()),
             Err(_) => {
                 tracing::error!(
-                    "lock_cell mutex poisoned; cannot install serve lock, exiting promoter task without flipping role"
+                    "embedding_provider mutex poisoned; cannot reconcile fingerprint, exiting promoter without promoting"
                 );
+                drop(rw);
                 drop(new_lock);
                 return;
             }
+        };
+        if let Err(e) = rw.reconcile_embedding_fingerprint(&provider_fp) {
+            tracing::warn!(
+                error = %e,
+                "embedding fingerprint reconcile failed during promotion; dropping lock and retrying"
+            );
+            drop(rw);
+            drop(new_lock);
+            continue;
         }
-        args.role.store(Role::Primary);
 
-        if args.watch_requested {
+        // Try to spawn the watcher BEFORE flipping role / installing the
+        // lock. If spawn fails (e.g. a separately-running `cartog watch`
+        // grabbed the watch slot in the gap between our serve-slot acquire
+        // and here), we drop both the rw handle and the new lock and loop
+        // — the next poll re-checks primary liveness and re-attempts. This
+        // keeps the invariant "Primary always owns its watcher when
+        // watch_requested" intact rather than leaving a degraded Primary
+        // with no watcher and only a stderr warning.
+        let new_watch_handle: Option<WatchHandle> = if args.watch_requested {
             // Reuse the cwd captured at server startup, not
             // std::env::current_dir() — the latter follows runtime
             // chdir() calls (rare in MCP children but possible in tests
@@ -1677,34 +1684,76 @@ async fn promoter_task(args: PromoterArgs) {
             config.skip_migrations = true;
             let db_path_str = args.db_path.to_string_lossy().into_owned();
             match watch::spawn_watch(config, &db_path_str) {
-                Ok(handle) => {
-                    // If watch_cell is poisoned, dropping `handle` here
-                    // signals shutdown to the watcher thread (its
-                    // shutdown flag flips in Drop). That's the best we
-                    // can do; the server stays Primary with no watcher
-                    // — degraded but not corrupt — and we leave
-                    // watcher_active = false so `cartog_stats` surfaces
-                    // the degradation.
-                    match args.watch_cell.lock() {
-                        Ok(mut guard) => {
-                            *guard = Some(handle);
-                            args.watcher_active
-                                .store(true, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        Err(_) => {
-                            tracing::error!(
-                                "watch_cell mutex poisoned; post-promotion watcher discarded — \
-                                 server is Primary but will not auto-reindex"
-                            );
-                            drop(handle);
-                        }
-                    }
-                }
+                Ok(handle) => Some(handle),
                 Err(e) => {
-                    tracing::warn!(error = %e, "post-promotion watcher failed to start");
+                    tracing::warn!(
+                        error = %e,
+                        "post-promotion watcher failed to start; rolling back promotion and retrying"
+                    );
+                    drop(rw);
+                    drop(new_lock);
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+
+        // From here on the commit is one-way: install RW DB, lock, watcher
+        // (if any), and flip role. A poisoned cell is fatal for symmetric
+        // reasons — letting the lock Drop unlink the PID file while role
+        // stays ReadOnly would let a fresh `cartog serve` win the next
+        // O_EXCL acquire alongside our still-running RW DB connection.
+        match args.db.lock() {
+            Ok(mut guard) => {
+                *guard = rw;
+            }
+            Err(_) => {
+                tracing::error!("db mutex poisoned; cannot promote, exiting promoter task");
+                drop(new_lock);
+                if let Some(h) = new_watch_handle {
+                    drop(h);
+                }
+                return;
+            }
+        }
+        match args.lock_cell.lock() {
+            Ok(mut guard) => {
+                *guard = Some(new_lock);
+            }
+            Err(_) => {
+                tracing::error!(
+                    "lock_cell mutex poisoned; cannot install serve lock, exiting promoter task without flipping role"
+                );
+                drop(new_lock);
+                if let Some(h) = new_watch_handle {
+                    drop(h);
+                }
+                return;
+            }
+        }
+        if let Some(handle) = new_watch_handle {
+            // If watch_cell is poisoned, dropping `handle` here signals
+            // shutdown to the watcher thread (its shutdown flag flips in
+            // Drop). We've already committed the lock and DB swap, so we
+            // can't roll back — proceed degraded with watcher_active=false
+            // so `cartog_stats` surfaces the missing watcher.
+            match args.watch_cell.lock() {
+                Ok(mut guard) => {
+                    *guard = Some(handle);
+                    args.watcher_active
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                Err(_) => {
+                    tracing::error!(
+                        "watch_cell mutex poisoned; post-promotion watcher discarded — \
+                         server is Primary but will not auto-reindex"
+                    );
+                    drop(handle);
                 }
             }
         }
+        args.role.store(Role::Primary);
 
         info!("promoted to primary for {}", args.db_path.display());
         return;
@@ -2167,20 +2216,26 @@ mod tests {
     fn serve_to_watch_slot_preserves_db_scope() {
         // The watcher slot is derived from the serve slot so both PID files
         // for the same DB share their scope suffix.
-        assert_eq!(serve_to_watch_slot("serve"), "watch");
-        assert_eq!(serve_to_watch_slot("serve-abc123"), "watch-abc123");
-        // Unknown prefix falls back to the global watch slot.
-        assert_eq!(serve_to_watch_slot("unknown-prefix"), "watch");
+        assert_eq!(serve_to_watch_slot("serve").unwrap(), "watch");
+        assert_eq!(serve_to_watch_slot("serve-abc123").unwrap(), "watch-abc123");
         // Off-pattern inputs that start with the bytes "serve" but are NOT
-        // a serve-family slot must fall back to the global slot rather than
-        // produce a silently-corrupted "watch{rest}" string.
-        assert_eq!(serve_to_watch_slot("server"), "watch");
-        assert_eq!(serve_to_watch_slot("serverless"), "watch");
-        assert_eq!(serve_to_watch_slot("servefoo"), "watch");
-        assert_eq!(serve_to_watch_slot("Serve"), "watch");
-        assert_eq!(serve_to_watch_slot(""), "watch");
-        // Trailing-dash with empty hex: must fall back, not emit "watch-".
-        assert_eq!(serve_to_watch_slot("serve-"), "watch");
+        // a serve-family slot must be REJECTED — silently folding them to
+        // the global watch slot would let distinct embedders collide on
+        // `watch.pid` while their serve slots stay distinct.
+        for bad in [
+            "unknown-prefix",
+            "server",
+            "serverless",
+            "servefoo",
+            "Serve",
+            "",
+            "serve-", // trailing-dash with empty hex
+        ] {
+            assert!(
+                serve_to_watch_slot(bad).is_err(),
+                "expected off-pattern slot {bad:?} to be rejected"
+            );
+        }
     }
 
     #[test]
@@ -2481,16 +2536,24 @@ mod tests {
         pinned: Option<PinnedAttach>,
         serve_slot: &str,
     ) -> PromoterArgs {
+        // Test embedding provider: the reconcile step on promotion needs
+        // SOMETHING to fingerprint, but the test paths never actually write
+        // embeddings — the default rag config matches the secondary's, so
+        // reconcile is a no-op.
+        let test_provider =
+            rag::create_embedding_provider(&rag::EmbeddingProviderConfig::default())
+                .expect("test embedding provider should construct");
         PromoterArgs {
             db,
             role,
             lock_cell: Arc::new(Mutex::new(None)),
             watch_cell: Arc::new(Mutex::new(None)),
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            embedding_provider: Arc::new(Mutex::new(test_provider)),
             db_path: db_path.clone(),
             state_dir,
             serve_slot: serve_slot.to_string(),
-            watch_slot: serve_to_watch_slot(serve_slot),
+            watch_slot: serve_to_watch_slot(serve_slot).expect("test slot must be valid"),
             cwd: std::env::current_dir().unwrap(),
             primary,
             pinned,
@@ -2770,14 +2833,21 @@ mod tests {
         let watch_cell = Arc::clone(&args.watch_cell);
 
         let handle = tokio::task::spawn(promoter_task(args));
-        // Give the promoter time to promote + spawn the watcher thread.
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
         // The expected watcher PID file uses the SCOPED watch slot derived
         // via `serve_to_watch_slot(scoped_slot)`.
-        let expected_watch_slot = serve_to_watch_slot(scoped_slot);
+        let expected_watch_slot = serve_to_watch_slot(scoped_slot).expect("scoped slot is valid");
         let expected_watch_pid = state_dir.join(format!("{expected_watch_slot}.pid"));
         let global_watch_pid = state_dir.join(format!("{}.pid", watch::WATCH_LOCK_SLOT));
+
+        // Poll for up to 5s in 50ms increments — the watcher startup walks
+        // the cwd, sweeps stale locks, and creates the debouncer; on a
+        // loaded CI machine the cumulative cost can exceed any small fixed
+        // sleep, so a fixed sleep here was a flake source.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !expected_watch_pid.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         assert!(
             expected_watch_pid.exists(),
             "watcher should have claimed the scoped slot at {expected_watch_pid:?}"

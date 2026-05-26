@@ -2560,8 +2560,10 @@ impl Database {
     /// excluded so a dirty reindex doesn't re-query the language server for
     /// edges it already classified. Both are sticky and re-enter the
     /// unresolved set only via [`Self::reset_unresolvable_for_names`] when a
-    /// matching symbol is added, [`Self::reset_all_unresolvable`] on `--force`,
-    /// or [`Self::invalidate_edges_targeting`] when a resolved target is removed.
+    /// matching symbol is added, or [`Self::reset_all_unresolvable`] on
+    /// `--force`. ([`Self::invalidate_edges_targeting`] only touches state=1
+    /// rows because it filters on `target_id IS NOT NULL`, and state {2, 3}
+    /// rows always have `target_id NULL`.)
     ///
     /// tx-safe: read-only single statement — see note above the section header.
     pub fn unresolved_edges(&self) -> Result<Vec<UnresolvedEdge>> {
@@ -2656,13 +2658,20 @@ impl Database {
     /// Callers MUST only invoke this after a definitive negative answer from
     /// the language server. Never call from a transient-error branch (server
     /// crash, didOpen failure, half-loaded warmup) — the marker is sticky
-    /// across runs until [`Self::reset_unresolvable_for_names`] or
-    /// [`Self::invalidate_edges_targeting`] reopens it.
+    /// across runs until [`Self::reset_unresolvable_for_names`] reopens it
+    /// (on a matching new symbol) or [`Self::reset_all_unresolvable`] runs
+    /// (`--force`).
+    ///
+    /// The `WHERE resolution_state = 0` guard preserves the invariant that
+    /// state {2, 3} rows have `target_id IS NULL` — without it an accidental
+    /// call on a state=1 (resolved) edge would silently flip the state while
+    /// keeping the stale target, hiding a corrupted edge from
+    /// [`Self::unresolved_edges`].
     ///
     /// tx-safe: single statement — see the LSP-section header note.
     pub fn mark_edge_unresolvable(&self, edge_id: i64) -> Result<()> {
         self.conn.execute(
-            "UPDATE edges SET resolution_state = 2 WHERE id = ?1",
+            "UPDATE edges SET resolution_state = 2 WHERE id = ?1 AND resolution_state = 0",
             params![edge_id],
         )?;
         Ok(())
@@ -2672,13 +2681,15 @@ impl Database {
     /// outside the indexed root — stdlib, third-party deps, node_modules).
     ///
     /// Same stickiness contract as [`Self::mark_edge_unresolvable`]: only call
-    /// after a definitive negative answer; reopened by the same name-keyed and
-    /// force-reset paths.
+    /// after a definitive positive answer naming an out-of-root URI;
+    /// reopened by the same name-keyed and force-reset paths. The
+    /// `WHERE resolution_state = 0` guard preserves the `target_id IS NULL`
+    /// invariant for state=3 rows.
     ///
     /// tx-safe: single statement — see the LSP-section header note.
     pub fn mark_edge_external(&self, edge_id: i64) -> Result<()> {
         self.conn.execute(
-            "UPDATE edges SET resolution_state = 3 WHERE id = ?1",
+            "UPDATE edges SET resolution_state = 3 WHERE id = ?1 AND resolution_state = 0",
             params![edge_id],
         )?;
         Ok(())
