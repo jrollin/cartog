@@ -498,14 +498,40 @@ fn pull_refuses_non_cartog_sqlite_with_valid_sha() {
     let work = tempfile::TempDir::new().unwrap();
 
     // Build a real SQLite file that is NOT a cartog DB.
+    //
+    // Force a fully self-contained on-disk image before we read+hash+upload:
+    //   * `journal_mode = DELETE` + `synchronous = FULL` keep all writes in
+    //     the main file (no `-wal`/`-shm` siblings) and fsync on commit.
+    //   * `PRAGMA wal_checkpoint(TRUNCATE)` defensively folds any pre-existing
+    //     WAL pages into the main file (harmless no-op for a fresh DB).
+    //   * `Connection::close()` (not just Drop) returns an error if SQLite
+    //     hasn't fully released the file — surfaces flush races immediately
+    //     instead of letting them race the upload.
+    //
+    // Without these, the file `aws s3 cp` reads can differ from what
+    // `std::fs::read` returned to us — yielding a flaky sha256 mismatch in CI.
     let foreign_db = work.path().join("foreign.sqlite");
     {
         let conn = rusqlite::Connection::open(&foreign_db).unwrap();
-        conn.execute("CREATE TABLE notes(content TEXT)", [])
-            .unwrap();
-        conn.execute("INSERT INTO notes VALUES ('hello')", [])
-            .unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode = DELETE; \
+             PRAGMA synchronous = FULL; \
+             CREATE TABLE notes(content TEXT); \
+             INSERT INTO notes VALUES ('hello'); \
+             PRAGMA wal_checkpoint(TRUNCATE);",
+        )
+        .unwrap();
+        conn.close().expect("close foreign.sqlite cleanly");
     }
+    // Belt-and-braces: ensure the OS page cache is flushed to disk before
+    // we hand the file to `aws s3 cp`. Without this we have observed sha256
+    // mismatches in CI where `aws` read stale bytes that didn't match what
+    // our subsequent `std::fs::read` returned. `fsync` on the file handle
+    // forces a durable write barrier.
+    std::fs::File::open(&foreign_db)
+        .unwrap()
+        .sync_all()
+        .expect("fsync foreign.sqlite");
     let bytes = std::fs::read(&foreign_db).unwrap();
     // Compute the matching sha256 so we attest the bytes correctly — the
     // guard must still refuse this on schema-version grounds.
