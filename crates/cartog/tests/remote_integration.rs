@@ -62,15 +62,38 @@ impl FlociContainer {
             return None;
         }
 
+        // From this point on, the container is running. Every early return
+        // path must kill it explicitly — `--rm` only fires on container exit,
+        // and a leaked container ties up a host port until the test process
+        // dies. A scope-guard would be tidier but adds a helper struct just
+        // for this 60-line function; an inline `kill` macro keeps it local.
+        macro_rules! abort {
+            () => {{
+                let _ = Command::new("docker")
+                    .args(["kill", &name])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                return None;
+            }};
+        }
+
         // Discover host port via `docker port`.
-        let out = Command::new("docker")
+        let out = match Command::new("docker")
             .args(["port", &name, FLOCI_PORT_INSIDE])
             .output()
-            .ok()?;
+        {
+            Ok(o) => o,
+            Err(_) => abort!(),
+        };
         let stdout = String::from_utf8_lossy(&out.stdout);
-        let port: u16 = stdout
+        let port: u16 = match stdout
             .lines()
-            .find_map(|l| l.rsplit(':').next()?.trim().parse().ok())?;
+            .find_map(|l| l.rsplit(':').next()?.trim().parse().ok())
+        {
+            Some(p) => p,
+            None => abort!(),
+        };
 
         // Wait for floci's HTTP listener.
         let endpoint = format!("http://localhost:{port}");
@@ -90,8 +113,7 @@ impl FlociContainer {
             }
             if Instant::now() > deadline {
                 // Container is up but listener never replied — kill and bail.
-                let _ = Command::new("docker").args(["kill", &name]).status();
-                return None;
+                abort!();
             }
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -498,10 +520,11 @@ fn pull_refuses_non_cartog_sqlite_with_valid_sha() {
 
     // Upload with sha256 + schema-version headers. Both are now required
     // by pull, so we set both to reach the "schema_version row missing in
-    // the file" code path. The `schema-version=4` value (today's
-    // CURRENT_SCHEMA_VERSION) is what the file *claims* to be; the in-
-    // file row is missing entirely (this is not a cartog DB), so the
-    // mismatch check fires too — either one is a valid refusal reason.
+    // the file" code path. The header claims the current schema version
+    // (referenced from the crate constant so this test doesn't break on a
+    // schema bump); the in-file row is missing entirely (this is not a
+    // cartog DB), so the "not a cartog database" check fires.
+    let claimed_v = cartog::db::CURRENT_SCHEMA_VERSION;
     let st = Command::new("aws")
         .args([
             "--endpoint-url",
@@ -511,7 +534,7 @@ fn pull_refuses_non_cartog_sqlite_with_valid_sha() {
             &foreign_db.to_string_lossy(),
             "s3://cartog-foreign-sqlite/index.sqlite",
             "--metadata",
-            &format!("sha256={sha},schema-version=4"),
+            &format!("sha256={sha},schema-version={claimed_v}"),
         ])
         .env("AWS_ACCESS_KEY_ID", "test")
         .env("AWS_SECRET_ACCESS_KEY", "test")

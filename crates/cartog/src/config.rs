@@ -344,7 +344,22 @@ fn local_config_path() -> Option<PathBuf> {
 }
 
 fn read_config(path: &Path) -> Option<CartogConfig> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        // NotFound is the only IO error we treat as "no config", silently.
+        // The normal caller (`local_config_path`) only hands us paths that
+        // exist; this branch covers races where the file disappears between
+        // `exists()` and `read_to_string`, and unit tests that probe missing
+        // paths directly. Permission denied, EIO, EACCES, etc. should be
+        // loud — silently swallowing them turned into a "no remote
+        // configured" downstream error with no hint that the user's file
+        // was just unreadable.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            eprintln!("cartog: error reading {}: {e}", path.display());
+            return None;
+        }
+    };
 
     // Security pre-check: scan the raw `[remote]` table for credential-shaped
     // keys before they have a chance to be deserialised or logged anywhere.
