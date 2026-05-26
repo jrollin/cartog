@@ -1445,8 +1445,14 @@ pub fn cmd_watch(
     config.rag_delay = Duration::from_secs(rag_delay);
     config.rag_config = provider_config;
     config.json_events = json;
+    // pid_lock_dir/slot must be both-or-neither: a sandboxed host with no
+    // resolvable state dir falls back to untracked mode rather than hard-
+    // failing on the inverse half-config check in validate_pid_lock_config.
     config.pid_lock_dir = crate::state::default_state_dir();
-    config.pid_lock_slot = Some(crate::state::slot_for_db("watch", db_path));
+    config.pid_lock_slot = config
+        .pid_lock_dir
+        .as_ref()
+        .map(|_| crate::state::slot_for_db("watch", db_path));
 
     let db_path_str = db_path.to_string_lossy();
     watch::run_watch(config, &db_path_str)

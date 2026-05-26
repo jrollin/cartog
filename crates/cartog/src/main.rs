@@ -211,9 +211,16 @@ fn main() -> Result<()> {
         } => commands::ide::cmd_ide(client, scope, yes, dry_run, no_watch, cli.json),
         Command::Serve { watch, rag } => {
             let runtime = tokio::runtime::Runtime::new()?;
+            // pid_lock_dir/slot must be both-or-neither: a sandboxed host with no
+            // resolvable state dir falls back to untracked mode rather than
+            // hard-failing on the inverse half-config check in acquire_serve_lock.
+            let pid_lock_dir = state::default_state_dir();
+            let pid_lock_slot = pid_lock_dir
+                .as_ref()
+                .map(|_| state::slot_for_db("serve", &db_path));
             let opts = mcp::ServerOptions {
-                pid_lock_dir: state::default_state_dir(),
-                pid_lock_slot: Some(state::slot_for_db("serve", &db_path)),
+                pid_lock_dir,
+                pid_lock_slot,
             };
             runtime.block_on(mcp::run_server(&db_path, watch, rag, provider_config, opts))
         }
