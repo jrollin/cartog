@@ -298,6 +298,99 @@ Symbols by kind:
   variable: 40
 ```
 
+### `cartog push [--remote <s3-url>]`
+
+Upload the local index DB to S3-compatible storage (AWS S3, MinIO, Cloudflare R2,
+floci). Built in by default (`remote-s3` feature, on); cartog still runs 100%
+local until you configure `[remote]` or pass `--remote`.
+
+```bash
+cartog push                                       # uses [remote].url
+cartog push --remote s3://team-bucket/main.sqlite # explicit override
+```
+
+What it does, in order:
+
+1. Refuses to push while `cartog serve` or `cartog watch` is using the DB.
+2. Runs `PRAGMA wal_checkpoint(TRUNCATE)` so the file is self-contained.
+3. Streams a SHA-256 hash of the DB.
+4. Uploads via multipart with object metadata: `x-amz-meta-sha256`,
+   `x-amz-meta-schema-version`, `x-amz-meta-cartog-version`.
+
+Credentials come from the AWS environment chain (env vars, `~/.aws/credentials`,
+IMDS) — **never from `.cartog.toml`**. Storing a credential-shaped key
+(`access_key`, `secret_key`, `aws_*`, etc.) in `[remote]` fails at config-load
+time with a security error.
+
+### `cartog pull [--remote <s3-url>] [--force] [--no-sign-request]`
+
+Download a prebuilt index from S3-compatible storage. Useful for CI warm-start
+and for sharing a team-wide index instead of every dev rebuilding from zero.
+
+```bash
+cartog pull                              # uses [remote].url
+cartog pull --remote s3://b/k.sqlite     # explicit override
+cartog pull --force                      # overwrite even while peer is using the DB
+cartog pull --no-sign-request            # anonymous (public-bucket) pull
+```
+
+Safety guarantees:
+
+- **Atomic install** — the file is downloaded to `<db>.partial`, verified,
+  then renamed; a mid-pull crash or network failure never leaves a torn DB.
+- **Checksum required** — refuses to install if the remote object has no
+  `x-amz-meta-sha256` metadata. Same for `x-amz-meta-schema-version`.
+- **Non-cartog files refused** — pulling a SQLite file that lacks cartog's
+  schema (e.g. an unrelated app's DB) is refused even when its sha256
+  matches; cartog cross-checks the `schema_version` row against the header.
+- **Schema-version guard** — refuses to install a DB produced by a newer
+  cartog, naming both the pulled and supported versions.
+- **WAL/SHM cleanup** — stale `db-wal` / `db-shm` siblings are deleted
+  before rename to prevent SQLite from replaying phantom WAL frames.
+- **Peer-process check** — best-effort refusal to overwrite the local DB
+  while a `cartog serve` or `cartog watch` is holding it open. cartog
+  checks for peer PID locks twice (at the start of pull and right before
+  the atomic rename), but a peer that wins the lock election in the few
+  syscalls between the second check and the rename can still be corrupted
+  by the swap (SQLite holds the file by inode; the rename divorces its
+  FD from on-disk state). The window is small but non-zero. `--force`
+  bypasses both checks. **Safest practice: stop `cartog serve` /
+  `cartog watch` on the project before pulling, and restart them after.**
+
+> **Trust boundary**: the `x-amz-meta-sha256` header is self-attested by
+> whoever pushed the object — it catches corruption and accidental swaps
+> but not a deliberate malicious push by someone with write access to the
+> bucket. Treat the bucket like a shared filesystem under the same
+> trust assumptions as your team's git remote.
+
+### Configuring `[remote]`
+
+In `.cartog.toml`:
+
+```toml
+[remote]
+url        = "s3://team-bucket/cartog/main.sqlite"
+region     = "us-east-1"
+endpoint   = "https://minio.example.com"   # only for MinIO / R2 / floci
+path_style = true                          # required for most non-AWS endpoints
+```
+
+Only those four keys are accepted. Credential-shaped keys (`access_key`,
+`secret_key`, `aws_*`, `token`, `password`, …) are rejected at parse time —
+configure credentials via the AWS environment chain instead.
+
+### Minimal build (no S3)
+
+Users who want the smallest possible binary, or who run in fully air-gapped
+environments, can disable the S3 feature:
+
+```bash
+cargo install cartog --no-default-features --features lsp
+```
+
+The minimal binary refuses `cartog push` and `cartog pull` with a clear error
+pointing at the reinstall command.
+
 ### `cartog map [--tokens N]`
 
 Token-budget-aware codebase summary — file tree + top symbols ranked by reference count (in-degree centrality).

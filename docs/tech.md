@@ -25,6 +25,7 @@
 | `reqwest` | HTTP client for remote embedding providers (Ollama) | Optional via `provider-ollama` feature. Uses `blocking` + `rustls-tls` |
 | `sqlite-vec` | Vector similarity search (KNN) in SQLite | `vec0` virtual table, requires integer rowids (bridged via `symbol_embedding_map`) |
 | `criterion` (dev) | Micro-benchmarks | Query latency benchmarks (µs-level) |
+| `rust-s3` 0.35 (`tokio-rustls-tls`) | S3-compatible client for `cartog push` / `cartog pull` | Optional via `remote-s3` feature (default on). Chosen over `aws-sdk-s3` for size (~5 MB vs ~18 MB); supports AWS S3, MinIO, R2, floci |
 
 ## Build Profiles
 
@@ -63,6 +64,7 @@
 | RAG tuning | `[rag]` section in `.cartog.toml` | `retrieval_multiplier`, `retrieval_floor`, `rerank_max`, `rerank_min` control FTS5/vector candidate pool size and cross-encoder cost. See [usage.md](usage.md#configuration) |
 | Workspace | Cargo workspace (10 crates) | Incremental compilation, explicit dependency boundaries, independent crate reuse. See [structure.md](structure.md) for layout and dependency graph |
 | Monorepo | Deferred | Index from CWD, user can `cd` into subproject |
+| Remote index sync | Opt-in S3-compatible push/pull (default-on feature, inert without config) | `remote-s3` feature ON by default — single distributable binary, no rebuild from source for teams. Inert until `[remote]` is set or `--remote` passed: no network traffic, no impact on air-gapped use. Credentials resolved from the AWS env chain only; `.cartog.toml` rejects credential-shaped keys at parse time. `rust-s3` (~5 MB) over `aws-sdk-s3` (~18 MB) for binary size. See [usage.md](usage.md#cartog-push---remote-s3-url) |
 
 ## RAG Pipeline Design
 

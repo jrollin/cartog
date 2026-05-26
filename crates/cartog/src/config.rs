@@ -15,6 +15,90 @@ pub struct CartogConfig {
     pub embedding: Option<EmbeddingConfig>,
     pub reranker: Option<RerankerConfig>,
     pub rag: Option<RagConfig>,
+    pub remote: Option<RemoteConfig>,
+}
+
+/// Optional S3-compatible remote for `cartog push` / `cartog pull`.
+///
+/// Credentials are resolved exclusively from the AWS environment chain (env
+/// vars, profile, IMDS). Storing any credential-shaped key here (`access_key`,
+/// `secret_key`, `credentials`, `token`, `aws_*`) is rejected at parse time —
+/// see [`RemoteConfig::validate_no_credentials`].
+///
+/// ```toml
+/// [remote]
+/// url        = "s3://my-team-bucket/cartog/main"
+/// region     = "us-east-1"
+/// endpoint   = "https://minio.example.com"   # MinIO / R2 / floci
+/// path_style = true                          # required for MinIO / floci
+/// ```
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+// `region`, `endpoint`, and `path_style` are unused in minimal builds (no
+// `remote-s3` feature). They still must be parsed and rejected on unknown
+// keys, so the struct itself stays defined — but the fields would warn as
+// unused. Silence that warning for the minimal build only.
+#[cfg_attr(not(feature = "remote-s3"), allow(dead_code))]
+pub struct RemoteConfig {
+    /// Default `s3://bucket/key` target. `--remote` on push/pull overrides.
+    pub url: Option<String>,
+    /// AWS region (e.g. `us-east-1`). Optional when `endpoint` is set.
+    pub region: Option<String>,
+    /// Custom endpoint URL for S3-compatible stores (MinIO, R2, floci).
+    pub endpoint: Option<String>,
+    /// Force path-style addressing (required for most non-AWS endpoints).
+    pub path_style: Option<bool>,
+}
+
+const CREDENTIAL_KEY_PREFIXES: &[&str] = &["aws_", "access_", "secret_"];
+const CREDENTIAL_KEYS: &[&str] = &[
+    "access_key",
+    "secret_key",
+    "credentials",
+    "token",
+    "session_token",
+    "password",
+];
+
+/// Recursively inspect the raw `[remote]` table for credential-shaped keys.
+///
+/// `RemoteConfig` already has `deny_unknown_fields`, but that's coincidental
+/// coverage that would silently regress the moment we accept a sub-table
+/// (e.g. a future `[remote.headers]`). This walk is the real security
+/// boundary: it traverses nested tables and arrays so `[remote.aws]
+/// access_key = "..."` is rejected with the same actionable error as a
+/// flat `[remote] access_key = "..."`.
+///
+/// Returned error contains a dotted path (e.g. `[remote].aws.access_key`)
+/// so the user knows which line to delete.
+fn validate_remote_no_credentials(table: &toml::value::Table) -> Result<(), String> {
+    fn walk(prefix: &str, val: &toml::Value) -> Result<(), String> {
+        match val {
+            toml::Value::Table(t) => {
+                for (k, v) in t {
+                    let lower = k.to_lowercase();
+                    if CREDENTIAL_KEYS.iter().any(|ck| lower == *ck)
+                        || CREDENTIAL_KEY_PREFIXES.iter().any(|p| lower.starts_with(p))
+                    {
+                        return Err(format!(
+                            "{prefix}.{k} looks like a credential — cartog does not read \
+                             credentials from .cartog.toml. Use the AWS environment chain \
+                             instead (AWS_ACCESS_KEY_ID / AWS_PROFILE / IMDS)."
+                        ));
+                    }
+                    walk(&format!("{prefix}.{k}"), v)?;
+                }
+            }
+            toml::Value::Array(arr) => {
+                for (i, v) in arr.iter().enumerate() {
+                    walk(&format!("{prefix}[{i}]"), v)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    walk("[remote]", &toml::Value::Table(table.clone()))
 }
 
 /// Tuning knobs for the hybrid search pipeline.
@@ -171,15 +255,71 @@ pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProvide
     }
 }
 
-/// Load the local project config from `.cartog.toml`.
-/// Returns the parsed config and the path it was loaded from (if any).
-pub fn load_config() -> (CartogConfig, Option<PathBuf>) {
+/// Outcome of [`load_config`]. Distinguishes three states the caller may need
+/// to react to differently:
+///
+/// - **`Loaded { config, path }`** — `.cartog.toml` parsed successfully.
+/// - **`Missing`** — no config file was found anywhere on the walk-up to
+///   git root; caller proceeds with defaults silently.
+/// - **`Rejected { path }`** — a config file was found but rejected (parse
+///   error, security pre-check, or `deny_unknown_fields` violation).
+///   `read_config` already printed the underlying reason to stderr. Callers
+///   that read `[remote]` (push/pull/doctor) must NOT silently fall back to
+///   defaults here, or the user's security-error message would be drowned
+///   by a misleading downstream "no remote configured" error.
+// `Loaded` carries the full `CartogConfig` (~344 B) while the other variants
+// are tiny. We accept the size disparity rather than box the payload: every
+// real call site moves the config back onto the stack immediately, so a
+// `Box` would just add one heap alloc + memcpy per invocation for no
+// benefit. The lint is correct in general; not correct here.
+#[allow(clippy::large_enum_variant)]
+pub enum ConfigLoad {
+    Loaded { config: CartogConfig, path: PathBuf },
+    Missing,
+    Rejected { path: PathBuf },
+}
+
+impl ConfigLoad {
+    /// Convenience: the parsed config when present, or a fresh default
+    /// otherwise. Use for commands that don't care about distinguishing
+    /// missing-vs-rejected (most read-only commands).
+    pub fn config_or_default(self) -> CartogConfig {
+        match self {
+            ConfigLoad::Loaded { config, .. } => config,
+            _ => CartogConfig::default(),
+        }
+    }
+
+    /// The path the config was loaded from (or attempted to load from when
+    /// `Rejected`). Used by `cartog doctor` and `cartog config` to display
+    /// the file under inspection.
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            ConfigLoad::Loaded { path, .. } | ConfigLoad::Rejected { path } => Some(path),
+            ConfigLoad::Missing => None,
+        }
+    }
+
+    /// True when a `.cartog.toml` was found but failed validation. Callers
+    /// that depend on `[remote]` (push, pull, doctor, config) use this to
+    /// distinguish "no config" from "broken config" and surface a clear
+    /// rejection rather than silently falling back to defaults.
+    pub fn is_rejected(&self) -> bool {
+        matches!(self, ConfigLoad::Rejected { .. })
+    }
+}
+
+/// Load the local project config from `.cartog.toml`. See [`ConfigLoad`]
+/// for the three possible outcomes; existing commands that don't care
+/// about the rejected-vs-missing distinction can wrap this with
+/// [`ConfigLoad::config_or_default`].
+pub fn load_config() -> ConfigLoad {
     match local_config_path() {
         Some(p) => match read_config(&p) {
-            Some(cfg) => (cfg, Some(p)),
-            None => (CartogConfig::default(), None),
+            Some(config) => ConfigLoad::Loaded { config, path: p },
+            None => ConfigLoad::Rejected { path: p },
         },
-        None => (CartogConfig::default(), None),
+        None => ConfigLoad::Missing,
     }
 }
 
@@ -205,6 +345,18 @@ fn local_config_path() -> Option<PathBuf> {
 
 fn read_config(path: &Path) -> Option<CartogConfig> {
     let text = std::fs::read_to_string(path).ok()?;
+
+    // Security pre-check: scan the raw `[remote]` table for credential-shaped
+    // keys before they have a chance to be deserialised or logged anywhere.
+    if let Ok(raw) = toml::from_str::<toml::value::Table>(&text) {
+        if let Some(toml::Value::Table(remote)) = raw.get("remote") {
+            if let Err(msg) = validate_remote_no_credentials(remote) {
+                eprintln!("cartog: error in {}: {msg}", path.display());
+                return None;
+            }
+        }
+    }
+
     match toml::from_str::<CartogConfig>(&text) {
         Ok(cfg) => Some(cfg),
         Err(e) => {
@@ -357,6 +509,133 @@ mod tests {
         fs::write(&cfg_path, "").unwrap();
         let cfg = read_config(&cfg_path).expect("empty toml is valid");
         assert!(cfg.database.is_none());
+    }
+
+    #[test]
+    fn test_remote_config_valid_minimal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join(".cartog.toml");
+        fs::write(
+            &cfg_path,
+            r#"[remote]
+url = "s3://team-bucket/cartog/main"
+region = "us-east-1"
+"#,
+        )
+        .unwrap();
+        let cfg = read_config(&cfg_path).expect("should parse");
+        let remote = cfg.remote.expect("remote section parsed");
+        assert_eq!(remote.url.as_deref(), Some("s3://team-bucket/cartog/main"));
+        assert_eq!(remote.region.as_deref(), Some("us-east-1"));
+        assert_eq!(remote.path_style, None);
+    }
+
+    #[test]
+    fn test_remote_config_full_minio_shape() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join(".cartog.toml");
+        fs::write(
+            &cfg_path,
+            r#"[remote]
+url = "s3://b/k"
+region = "us-east-1"
+endpoint = "https://minio.local"
+path_style = true
+"#,
+        )
+        .unwrap();
+        let cfg = read_config(&cfg_path).expect("should parse");
+        let r = cfg.remote.unwrap();
+        assert_eq!(r.endpoint.as_deref(), Some("https://minio.local"));
+        assert_eq!(r.path_style, Some(true));
+    }
+
+    /// `deny_unknown_fields` plus the credential pre-check together guarantee
+    /// no rogue key sneaks through. This test exercises each named credential
+    /// key and the `aws_*` prefix.
+    #[test]
+    fn test_remote_config_rejects_credential_keys() {
+        for bad in [
+            "access_key = \"AKIA...\"",
+            "secret_key = \"...\"",
+            "credentials = \"...\"",
+            "token = \"...\"",
+            "session_token = \"...\"",
+            "password = \"...\"",
+            "aws_access_key_id = \"...\"",
+            "AWS_SECRET = \"...\"",
+        ] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let cfg_path = dir.path().join(".cartog.toml");
+            fs::write(&cfg_path, format!("[remote]\nurl = \"s3://b/k\"\n{bad}\n")).unwrap();
+            assert!(
+                read_config(&cfg_path).is_none(),
+                "should reject credential key: {bad}"
+            );
+        }
+    }
+
+    /// Credentials hidden one level deeper in `[remote.aws]` / `[remote.creds]`
+    /// must not slip past the security pre-check. `deny_unknown_fields` would
+    /// already reject the nested table itself, but the user-visible error
+    /// would say "unknown field `aws`" rather than the security-specific
+    /// message — which is the whole point of having this pre-check.
+    #[test]
+    fn test_remote_config_rejects_nested_credential_keys() {
+        for bad_section in [
+            "[remote.aws]\naccess_key = \"AKIA...\"\n",
+            "[remote.creds]\nsecret_key = \"...\"\n",
+            "[remote.minio]\naws_session_token = \"...\"\n",
+        ] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let cfg_path = dir.path().join(".cartog.toml");
+            fs::write(
+                &cfg_path,
+                format!("[remote]\nurl = \"s3://b/k\"\n{bad_section}"),
+            )
+            .unwrap();
+            assert!(
+                read_config(&cfg_path).is_none(),
+                "should reject nested credential: {bad_section}"
+            );
+        }
+    }
+
+    /// The prefix list (`aws_`, `access_`, `secret_`) is the second arm of the
+    /// detector and only had implicit coverage before this test (the named
+    /// keys mostly happen to match prefixes too). Exercise it directly so a
+    /// future refactor that loses the prefix arm fails loudly.
+    #[test]
+    fn test_remote_config_rejects_credential_prefixes() {
+        for bad in [
+            // Names not in CREDENTIAL_KEYS but caught by prefix.
+            "access_token_v2 = \"...\"",
+            "secret_value = \"...\"",
+            "aws_role_arn = \"...\"",
+        ] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let cfg_path = dir.path().join(".cartog.toml");
+            fs::write(&cfg_path, format!("[remote]\nurl = \"s3://b/k\"\n{bad}\n")).unwrap();
+            assert!(
+                read_config(&cfg_path).is_none(),
+                "should reject prefix-matched credential key: {bad}"
+            );
+        }
+    }
+
+    /// `deny_unknown_fields` should also reject anything else that's not a
+    /// known field — this is a forward-compatibility guard so typos like
+    /// `pathstyle` fail loudly instead of silently doing nothing.
+    #[test]
+    fn test_remote_config_rejects_unknown_field() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join(".cartog.toml");
+        fs::write(
+            &cfg_path,
+            "[remote]\nurl = \"s3://b/k\"\npathstyle = true\n",
+        )
+        .unwrap();
+        assert!(read_config(&cfg_path).is_none());
     }
 
     #[test]
