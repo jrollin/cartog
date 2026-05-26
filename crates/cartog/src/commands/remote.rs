@@ -121,6 +121,22 @@ mod imp {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
+    /// True when `err` is a cross-device-link error from `std::fs::rename`.
+    ///
+    /// `io::ErrorKind::CrossesDevices` is still unstable, so we match on the
+    /// raw OS error code: `EXDEV` is 18 on Linux and macOS;
+    /// `ERROR_NOT_SAME_DEVICE` is 17 on Windows. Anything else is a genuine
+    /// failure the caller should surface, not silently fall back on.
+    fn is_cross_device_error(err: &std::io::Error) -> bool {
+        match err.raw_os_error() {
+            #[cfg(unix)]
+            Some(code) => code == 18, // EXDEV
+            #[cfg(windows)]
+            Some(code) => code == 17, // ERROR_NOT_SAME_DEVICE
+            _ => false,
+        }
+    }
+
     /// RAII guard for the `.partial` download file.
     ///
     /// Deletes the file on Drop unless [`PartialGuard::disarm`] is called.
@@ -419,9 +435,22 @@ mod imp {
             }
             let md: HashMap<String, String> = head.metadata.unwrap_or_default();
             let sha = md.get(META_SHA256).cloned();
-            let schema = md
-                .get(META_SCHEMA_VERSION)
-                .and_then(|s| s.parse::<u32>().ok());
+            // Distinguish "header absent" (None) from "header present but not
+            // a u32" (a hard error). Collapsing both into None made a corrupt
+            // or hand-edited `x-amz-meta-schema-version: abc` masquerade as a
+            // missing header, sending users to the wrong fix ("re-push") when
+            // the real problem is bad metadata they need to clear.
+            let schema = match md.get(META_SCHEMA_VERSION) {
+                None => None,
+                Some(raw) => Some(raw.parse::<u32>().map_err(|_| {
+                    anyhow!(
+                        "remote object has a malformed `x-amz-meta-{META_SCHEMA_VERSION}` \
+                         header ({raw:?}, not an integer). Clear or correct the object \
+                         metadata (e.g. via `aws s3api copy-object`) or re-push from a \
+                         healthy cartog run."
+                    )
+                })?),
+            };
             Ok::<_, anyhow::Error>((sha, schema))
         })?;
 
@@ -533,12 +562,36 @@ mod imp {
             }
         }
 
-        // 9) Atomic rename — no torn DB on a mid-step crash. Disarm the
-        //    guard immediately before rename: after this point the file
-        //    lives at `db_path`, not `.partial`, so Drop must not touch it.
+        // 9) Install the verified file at `db_path`. Prefer an atomic rename
+        //    (no torn DB on a mid-step crash). If `.partial` and `db_path`
+        //    landed on different filesystems — e.g. the project dir is a bind
+        //    mount or `db_path` is symlinked across a tmpfs boundary — rename
+        //    fails with EXDEV (`CrossesDevices`). Fall back to copy + remove.
+        //    The copy is not atomic, but at this point the bytes are fully
+        //    verified and any live peer was already refused (steps 1 + 7), so
+        //    a non-atomic write is acceptable for this rare cross-FS case.
+        //
+        //    The guard stays armed until install succeeds: if both the rename
+        //    and the copy fail, Drop wipes `.partial` so we don't leak a
+        //    half-installed file.
+        if let Err(rename_err) = std::fs::rename(&partial, db_path) {
+            if is_cross_device_error(&rename_err) {
+                std::fs::copy(&partial, db_path).with_context(|| {
+                    format!(
+                        "cross-filesystem install (copy {} → {})",
+                        partial.display(),
+                        db_path.display()
+                    )
+                })?;
+                let _ = std::fs::remove_file(&partial);
+            } else {
+                return Err(rename_err).with_context(|| {
+                    format!("install {} → {}", partial.display(), db_path.display())
+                });
+            }
+        }
+        // Installed — the file now lives at `db_path`, not `.partial`.
         guard.disarm();
-        std::fs::rename(&partial, db_path)
-            .with_context(|| format!("install {} → {}", partial.display(), db_path.display()))?;
 
         let size = std::fs::metadata(db_path)?.len();
         if json {

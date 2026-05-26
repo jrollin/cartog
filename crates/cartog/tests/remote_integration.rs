@@ -924,3 +924,103 @@ fn pull_refuses_header_vs_file_mismatch() {
     );
     assert!(!dst_db.exists(), "destination must not be created");
 }
+
+/// A non-numeric `x-amz-meta-schema-version` header (corruption, or a
+/// hand-edit in the S3 console) must be reported as a *malformed* header,
+/// not masquerade as a *missing* one. The earlier `.parse().ok()` collapsed
+/// both into None and sent users to the wrong fix ("re-push").
+#[test]
+fn pull_reports_malformed_schema_version_header() {
+    if skip_unless_deps_present() {
+        return;
+    }
+    let floci = match FlociContainer::start() {
+        Some(f) => f,
+        None => {
+            eprintln!("SKIP: could not start floci container");
+            return;
+        }
+    };
+    let endpoint = floci.endpoint();
+    create_bucket(&endpoint, "cartog-bad-schema-header");
+
+    let work = tempfile::TempDir::new().unwrap();
+    let repo = work.path().join("repo");
+    let src_db = work.path().join("src.sqlite");
+    build_minimal_index(&repo, &src_db);
+
+    // Hash the real DB so the sha check passes and we reach the schema-header
+    // parse. The header value is deliberately not a u32.
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(&src_db).unwrap();
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    let sha = h
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+
+    let st = Command::new("aws")
+        .args([
+            "--endpoint-url",
+            &endpoint,
+            "s3",
+            "cp",
+            &src_db.to_string_lossy(),
+            "s3://cartog-bad-schema-header/index.sqlite",
+            "--metadata",
+            &format!("sha256={sha},schema-version=notanumber"),
+        ])
+        .env("AWS_ACCESS_KEY_ID", "test")
+        .env("AWS_SECRET_ACCESS_KEY", "test")
+        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .status()
+        .unwrap();
+    assert!(st.success(), "aws s3 cp failed");
+
+    let cfg_dir = work.path().join("cfg");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    std::fs::write(
+        cfg_dir.join(".cartog.toml"),
+        format!(
+            r#"[remote]
+url = "s3://cartog-bad-schema-header/index.sqlite"
+region = "us-east-1"
+endpoint = "{endpoint}"
+path_style = true
+"#
+        ),
+    )
+    .unwrap();
+    let _ = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&cfg_dir)
+        .status();
+
+    let dst_db = work.path().join("dst.sqlite");
+    let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
+        .args(["--db", &dst_db.to_string_lossy(), "pull"])
+        .current_dir(&cfg_dir)
+        .env("AWS_ACCESS_KEY_ID", "test")
+        .env("AWS_SECRET_ACCESS_KEY", "test")
+        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "pull with malformed schema-version header must fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // The new message names it as malformed; it must NOT claim the header is
+    // missing (the old, misleading behavior).
+    assert!(
+        stderr.contains("malformed"),
+        "expected 'malformed' refusal, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("has no"),
+        "must not report a present-but-bad header as missing: {stderr}"
+    );
+    assert!(!dst_db.exists(), "destination must not be created");
+}
