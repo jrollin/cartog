@@ -692,3 +692,186 @@ endpoint = "{endpoint}"
         std::fs::read(&dst_db).unwrap()
     );
 }
+
+/// Helper: tampered upload setup. Builds a real cartog DB, mutates its
+/// `schema_version` row to `file_v`, re-hashes, and uploads with the given
+/// `header_v` metadata + a matching sha (so the integrity check passes and
+/// pull reaches the schema-version logic). Returns the working directory
+/// the caller should use as `current_dir` for `cartog pull`.
+fn upload_with_schema_version(
+    floci_endpoint: &str,
+    bucket: &str,
+    key: &str,
+    file_v: u32,
+    header_v: u32,
+) -> tempfile::TempDir {
+    let work = tempfile::TempDir::new().unwrap();
+    let repo = work.path().join("repo");
+    let src_db = work.path().join("src.sqlite");
+    build_minimal_index(&repo, &src_db);
+
+    // Mutate the schema_version row directly. This requires the DB to have
+    // no live writers, which is true because build_minimal_index finishes
+    // before this runs.
+    {
+        let conn = rusqlite::Connection::open(&src_db).unwrap();
+        conn.execute(
+            "UPDATE metadata SET value = ?1 WHERE key = 'schema_version'",
+            [&file_v.to_string()],
+        )
+        .unwrap();
+    }
+
+    // Recompute sha256 of the mutated file so the header matches the body.
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(&src_db).unwrap();
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    let sha = h
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+
+    let st = Command::new("aws")
+        .args([
+            "--endpoint-url",
+            floci_endpoint,
+            "s3",
+            "cp",
+            &src_db.to_string_lossy(),
+            &format!("s3://{bucket}/{key}"),
+            "--metadata",
+            &format!("sha256={sha},schema-version={header_v},cartog-version=test"),
+        ])
+        .env("AWS_ACCESS_KEY_ID", "test")
+        .env("AWS_SECRET_ACCESS_KEY", "test")
+        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .status()
+        .unwrap();
+    assert!(st.success(), "aws s3 cp failed");
+
+    let cfg_dir = work.path().join("cfg");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    std::fs::write(
+        cfg_dir.join(".cartog.toml"),
+        format!(
+            r#"[remote]
+url = "s3://{bucket}/{key}"
+region = "us-east-1"
+endpoint = "{floci_endpoint}"
+path_style = true
+"#
+        ),
+    )
+    .unwrap();
+    let _ = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&cfg_dir)
+        .status();
+
+    work
+}
+
+/// A DB whose `schema_version` row is greater than this cartog supports must
+/// be refused with the "upgrade cartog" message — even when the metadata
+/// header agrees (so the cross-check arm doesn't fire first).
+#[test]
+fn pull_refuses_future_schema_version() {
+    if skip_unless_deps_present() {
+        return;
+    }
+    let floci = match FlociContainer::start() {
+        Some(f) => f,
+        None => {
+            eprintln!("SKIP: could not start floci container");
+            return;
+        }
+    };
+    let endpoint = floci.endpoint();
+    create_bucket(&endpoint, "cartog-future");
+
+    // Pick a version that's plausibly future (current is 4 today; pick
+    // CURRENT + a wide margin so this test stays valid as the schema
+    // evolves without forcing test updates on every migration).
+    let future_v = cartog::db::CURRENT_SCHEMA_VERSION + 100;
+    let work = upload_with_schema_version(
+        &endpoint,
+        "cartog-future",
+        "index.sqlite",
+        future_v,
+        future_v,
+    );
+    let cfg_dir = work.path().join("cfg");
+
+    let dst_db = work.path().join("dst.sqlite");
+    let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
+        .args(["--db", &dst_db.to_string_lossy(), "pull"])
+        .current_dir(&cfg_dir)
+        .env("AWS_ACCESS_KEY_ID", "test")
+        .env("AWS_SECRET_ACCESS_KEY", "test")
+        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "pull of a future-version DB must fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Upgrade cartog") || stderr.contains("supports up to"),
+        "expected future-version refusal, got: {stderr}"
+    );
+    assert!(!dst_db.exists(), "destination must not be created");
+}
+
+/// When the object's `x-amz-meta-schema-version` header disagrees with the
+/// file's `schema_version` row, pull must refuse. This catches partial
+/// uploads and hand-edited S3 metadata. The fix in round 2 made both signals
+/// required and cross-checked; this test pins the behavior so a future
+/// patch can't quietly drop one of them.
+#[test]
+fn pull_refuses_header_vs_file_mismatch() {
+    if skip_unless_deps_present() {
+        return;
+    }
+    let floci = match FlociContainer::start() {
+        Some(f) => f,
+        None => {
+            eprintln!("SKIP: could not start floci container");
+            return;
+        }
+    };
+    let endpoint = floci.endpoint();
+    create_bucket(&endpoint, "cartog-version-skew");
+
+    // File says v4 (or whatever CURRENT is), header lies and says v3.
+    let work = upload_with_schema_version(
+        &endpoint,
+        "cartog-version-skew",
+        "index.sqlite",
+        cartog::db::CURRENT_SCHEMA_VERSION,
+        cartog::db::CURRENT_SCHEMA_VERSION.saturating_sub(1).max(1),
+    );
+    let cfg_dir = work.path().join("cfg");
+
+    let dst_db = work.path().join("dst.sqlite");
+    let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
+        .args(["--db", &dst_db.to_string_lossy(), "pull"])
+        .current_dir(&cfg_dir)
+        .env("AWS_ACCESS_KEY_ID", "test")
+        .env("AWS_SECRET_ACCESS_KEY", "test")
+        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "pull with header/file schema mismatch must fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("schema-version mismatch"),
+        "expected mismatch refusal, got: {stderr}"
+    );
+    assert!(!dst_db.exists(), "destination must not be created");
+}

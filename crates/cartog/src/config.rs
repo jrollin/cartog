@@ -357,14 +357,61 @@ fn read_config(path: &Path) -> Option<CartogConfig> {
         }
     }
 
-    match toml::from_str::<CartogConfig>(&text) {
-        Ok(cfg) => Some(cfg),
+    let parsed = match toml::from_str::<CartogConfig>(&text) {
+        Ok(cfg) => cfg,
         Err(e) => {
             // Use eprintln rather than tracing — tracing may not be initialised yet.
             eprintln!("cartog: warning: failed to parse {}: {e}", path.display());
-            None
+            return None;
+        }
+    };
+
+    // Post-parse security check on `[remote].endpoint`. `parse_s3_url` already
+    // refuses `s3://user:pass@bucket/key`, but `endpoint` accepts an arbitrary
+    // URL — a value like `http://AKIA:secret@minio.local` would silently leak
+    // credentials into the underlying S3 client's URL builder, bypassing the
+    // "credentials only via AWS env chain" guarantee. Refuse explicitly.
+    if let Some(remote) = parsed.remote.as_ref() {
+        if let Err(msg) = validate_endpoint(remote.endpoint.as_deref()) {
+            eprintln!("cartog: error in {}: {msg}", path.display());
+            return None;
         }
     }
+
+    Some(parsed)
+}
+
+/// Reject a `[remote].endpoint` value that embeds credentials via the
+/// `user:pass@host` URL form. None / empty endpoint is fine — both mean
+/// "fall back to the default AWS host".
+fn validate_endpoint(endpoint: Option<&str>) -> Result<(), String> {
+    let ep = match endpoint {
+        Some(s) if !s.is_empty() => s,
+        _ => return Ok(()),
+    };
+
+    // Trim the scheme so `s3://user@host` is detected too.
+    let after_scheme = ep.split_once("://").map(|x| x.1).unwrap_or(ep);
+    // Userinfo lives before the first `/` of the path and before any `?` or `#`.
+    let authority = after_scheme
+        .split('/')
+        .next()
+        .unwrap_or(after_scheme)
+        .split('?')
+        .next()
+        .unwrap_or(after_scheme)
+        .split('#')
+        .next()
+        .unwrap_or(after_scheme);
+    if authority.contains('@') {
+        return Err(format!(
+            "[remote].endpoint embeds credentials in its URL ({ep:?}) — cartog \
+             does not accept credentials in config. Move them to the AWS \
+             environment chain (AWS_ACCESS_KEY_ID / AWS_PROFILE / IMDS) and \
+             use a plain endpoint URL."
+        ));
+    }
+    Ok(())
 }
 
 /// Resolve the database path using the following priority:
@@ -636,6 +683,56 @@ path_style = true
         )
         .unwrap();
         assert!(read_config(&cfg_path).is_none());
+    }
+
+    /// `[remote].endpoint` must not embed credentials via the `user:pass@host`
+    /// URL form. `parse_s3_url` rejects this for `url`; the symmetric check
+    /// on `endpoint` closes the matching gap.
+    #[test]
+    fn test_remote_config_rejects_endpoint_with_userinfo() {
+        for bad in [
+            "http://AKIA:secret@minio.local",
+            "https://user@s3.example.com",
+            // No scheme — still parseable as userinfo + host.
+            "AKIA:secret@host:9000",
+            "https://user:pass@host/path",
+        ] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let cfg_path = dir.path().join(".cartog.toml");
+            fs::write(
+                &cfg_path,
+                format!("[remote]\nurl = \"s3://b/k\"\nendpoint = \"{bad}\"\n"),
+            )
+            .unwrap();
+            assert!(
+                read_config(&cfg_path).is_none(),
+                "should reject endpoint with userinfo: {bad}"
+            );
+        }
+    }
+
+    /// Common legitimate endpoint shapes must still parse. Belt-and-braces
+    /// guard against an overly-aggressive `validate_endpoint` regex.
+    #[test]
+    fn test_remote_config_accepts_clean_endpoints() {
+        for ok in [
+            "https://s3.us-east-1.amazonaws.com",
+            "https://minio.example.com:9000",
+            "https://r2.cloudflarestorage.com/path",
+            "http://localhost:4566",
+        ] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let cfg_path = dir.path().join(".cartog.toml");
+            fs::write(
+                &cfg_path,
+                format!("[remote]\nurl = \"s3://b/k\"\nendpoint = \"{ok}\"\n"),
+            )
+            .unwrap();
+            assert!(
+                read_config(&cfg_path).is_some(),
+                "should accept clean endpoint: {ok}"
+            );
+        }
     }
 
     #[test]
