@@ -219,6 +219,28 @@ fn empty_index_hint(db: &Database) -> &'static str {
     }
 }
 
+/// Suggestion suffix for "no result" messages: when a navigation command
+/// (refs/callees/impact/hierarchy) finds no exact match but the fuzzy search
+/// surfaces similarly-named symbols, list them so the user can correct a typo
+/// or partial name. Returns `""` when the index is empty (the empty-index hint
+/// covers that) or when there are no near matches.
+fn did_you_mean(db: &Database, name: &str) -> String {
+    if name.is_empty() || matches!(db.is_empty(), Ok(true)) {
+        return String::new();
+    }
+    let candidates = match db.search(name, None, None, 5) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    // An exact match means the symbol exists but genuinely has no edges/results;
+    // suggesting it would be noise.
+    if candidates.iter().any(|s| s.name == name) || candidates.is_empty() {
+        return String::new();
+    }
+    let names: Vec<&str> = candidates.iter().map(|s| s.name.as_str()).collect();
+    format!(" — did you mean: {}?", names.join(", "))
+}
+
 /// Build or rebuild the code graph index.
 pub fn cmd_index(
     db_path: &Path,
@@ -359,7 +381,11 @@ pub fn cmd_callees(
     let name = name.to_string();
     output(&edges, json, token_budget, |edges| {
         if edges.is_empty() {
-            return format!("No callees found for '{name}'{}\n", empty_index_hint(&db));
+            return format!(
+                "No callees found for '{name}'{}{}\n",
+                empty_index_hint(&db),
+                did_you_mean(&db, &name)
+            );
         }
         let mut out = String::new();
         for edge in edges {
@@ -400,7 +426,11 @@ pub fn cmd_impact(
 
     output(&items, json, token_budget, |items| {
         if items.is_empty() {
-            return format!("No impact found for '{name}'{}\n", empty_index_hint(&db));
+            return format!(
+                "No impact found for '{name}'{}{}\n",
+                empty_index_hint(&db),
+                did_you_mean(&db, &name)
+            );
         }
         let mut out = String::new();
         for entry in items {
@@ -445,8 +475,9 @@ pub fn cmd_refs(
     output(&items, json, token_budget, |items| {
         if items.is_empty() {
             return format!(
-                "No references found for '{name}'{}\n",
-                empty_index_hint(&db)
+                "No references found for '{name}'{}{}\n",
+                empty_index_hint(&db),
+                did_you_mean(&db, &name)
             );
         }
         let mut out = String::new();
@@ -493,7 +524,11 @@ pub fn cmd_hierarchy(
 
     output(&items, json, token_budget, |items| {
         if items.is_empty() {
-            return format!("No hierarchy found for '{name}'{}\n", empty_index_hint(&db));
+            return format!(
+                "No hierarchy found for '{name}'{}{}\n",
+                empty_index_hint(&db),
+                did_you_mean(&db, &name)
+            );
         }
         let mut out = String::new();
         for entry in items {
@@ -1752,6 +1787,49 @@ mod tests {
         // Non-empty case is covered by cartog-db's is_empty_reflects_symbol_presence.
         let db = Database::open_memory().unwrap();
         assert!(empty_index_hint(&db).contains("cartog index"));
+    }
+
+    fn db_with_symbol(name: &str) -> Database {
+        use cartog_core::{FileInfo, Symbol};
+        let db = Database::open_memory().unwrap();
+        db.upsert_file(&FileInfo {
+            path: "a.rs".into(),
+            last_modified: 0.0,
+            hash: "h".into(),
+            language: "rust".into(),
+            num_symbols: 1,
+        })
+        .unwrap();
+        let sym = Symbol::new(name, SymbolKind::Class, "a.rs", 1, 2, 0, 10, None);
+        db.insert_symbols(&[sym]).unwrap();
+        db
+    }
+
+    #[test]
+    fn did_you_mean_suggests_near_matches() {
+        let db = db_with_symbol("ReviewResult");
+        let hint = did_you_mean(&db, "Revie");
+        assert!(hint.contains("did you mean"), "got: {hint}");
+        assert!(hint.contains("ReviewResult"), "got: {hint}");
+    }
+
+    #[test]
+    fn did_you_mean_silent_on_exact_match() {
+        // An exact match means the symbol exists but has no edges — no suggestion.
+        let db = db_with_symbol("ReviewResult");
+        assert_eq!(did_you_mean(&db, "ReviewResult"), "");
+    }
+
+    #[test]
+    fn did_you_mean_silent_on_empty_index() {
+        let db = Database::open_memory().unwrap();
+        assert_eq!(did_you_mean(&db, "Whatever"), "");
+    }
+
+    #[test]
+    fn did_you_mean_silent_when_no_candidates() {
+        let db = db_with_symbol("ReviewResult");
+        assert_eq!(did_you_mean(&db, "ZZZnomatch"), "");
     }
 
     #[test]
