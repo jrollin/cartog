@@ -117,7 +117,7 @@ base_url = "http://localhost:11434"
 | Provider | Config | Setup | Notes |
 |----------|--------|-------|-------|
 | `local` (default) | No config needed | `cartog rag setup` to download models | ONNX Runtime via fastembed, ~1.2GB models |
-| `ollama` | `provider = "ollama"` | Ollama server running with model pulled | No model download needed, dimension auto-detected |
+| `ollama` | `provider = "ollama"` | Ollama server running with model pulled | No model download needed, dimension auto-detected. **Not in the prebuilt binary** — requires `cargo install cartog --features ollama-embedding`. |
 
 **Advanced local configuration:**
 

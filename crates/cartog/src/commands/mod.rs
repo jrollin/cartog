@@ -1,7 +1,7 @@
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -19,43 +19,93 @@ pub mod ide;
 pub mod init;
 pub mod remote;
 
-/// Stderr spinner for long-running CLI commands.
+/// Stderr progress reporter for long-running CLI commands.
 ///
-/// No-op in non-TTY contexts (piped output, CI logs) so logs stay clean.
+/// On a TTY it renders an animated spinner whose label tracks the current
+/// phase. On a non-TTY (the Claude Code SessionStart hook, CI, piped output)
+/// it prints a plain line on each phase change plus a periodic heartbeat, so a
+/// multi-minute first index is never silent. Use [`Spinner::set_phase`] from a
+/// progress callback to update the label/heartbeat.
 struct Spinner {
     stop: Arc<AtomicBool>,
+    phase: Arc<Mutex<String>>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Spinner {
     fn start(label: &'static str) -> Option<Self> {
-        if !std::io::stderr().is_terminal() {
+        let is_tty = std::io::stderr().is_terminal();
+        // Non-TTY callers (CI, pipes, scripts capturing stderr) stay silent by
+        // default — only opt in via CARTOG_PROGRESS=1, which the Claude Code
+        // SessionStart hook sets so its long first index isn't a silent wait.
+        if !is_tty && std::env::var_os("CARTOG_PROGRESS").is_none() {
             return None;
         }
         let stop = Arc::new(AtomicBool::new(false));
+        let phase = Arc::new(Mutex::new(label.to_string()));
         let stop_clone = Arc::clone(&stop);
+        let phase_clone = Arc::clone(&phase);
         let handle = std::thread::spawn(move || {
-            const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-            let mut i = 0usize;
-            let start = std::time::Instant::now();
-            while !stop_clone.load(Ordering::Relaxed) {
-                let elapsed = start.elapsed().as_secs();
-                let mut err = std::io::stderr().lock();
-                // \r + clear-to-eol + frame + label + elapsed
-                let _ = write!(err, "\r\x1b[K{} {} ({elapsed}s)", FRAMES[i], label);
-                let _ = err.flush();
-                i = (i + 1) % FRAMES.len();
-                std::thread::sleep(Duration::from_millis(100));
+            if is_tty {
+                Self::run_tty(&stop_clone, &phase_clone);
+            } else {
+                Self::run_plain(&stop_clone, &phase_clone);
             }
-            // Clear the spinner line on exit.
-            let mut err = std::io::stderr().lock();
-            let _ = write!(err, "\r\x1b[K");
-            let _ = err.flush();
         });
         Some(Self {
             stop,
+            phase,
             handle: Some(handle),
         })
+    }
+
+    /// Update the displayed phase. On a non-TTY this prints a new line
+    /// immediately so each phase boundary is visible in the hook log.
+    fn set_phase(&self, phase: impl Into<String>) {
+        if let Ok(mut p) = self.phase.lock() {
+            *p = phase.into();
+        }
+    }
+
+    fn run_tty(stop: &AtomicBool, phase: &Mutex<String>) {
+        const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let mut i = 0usize;
+        let start = std::time::Instant::now();
+        while !stop.load(Ordering::Relaxed) {
+            let elapsed = start.elapsed().as_secs();
+            let label = phase.lock().map(|p| p.clone()).unwrap_or_default();
+            let mut err = std::io::stderr().lock();
+            // \r + clear-to-eol + frame + label + elapsed
+            let _ = write!(err, "\r\x1b[K{} {label} ({elapsed}s)", FRAMES[i]);
+            let _ = err.flush();
+            drop(err);
+            i = (i + 1) % FRAMES.len();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // Clear the spinner line on exit.
+        let mut err = std::io::stderr().lock();
+        let _ = write!(err, "\r\x1b[K");
+        let _ = err.flush();
+    }
+
+    /// Non-TTY heartbeat: emit a line whenever the phase changes, plus one
+    /// every 5s while a phase is still running, so the hook output is never
+    /// silent for minutes. No carriage returns or escape codes — plain log.
+    fn run_plain(stop: &AtomicBool, phase: &Mutex<String>) {
+        let start = std::time::Instant::now();
+        let mut last_label = String::new();
+        let mut last_emit = std::time::Instant::now();
+        while !stop.load(Ordering::Relaxed) {
+            let label = phase.lock().map(|p| p.clone()).unwrap_or_default();
+            let changed = label != last_label;
+            if changed || last_emit.elapsed() >= Duration::from_secs(5) {
+                let elapsed = start.elapsed().as_secs();
+                eprintln!("  {label}… ({elapsed}s)");
+                last_label = label;
+                last_emit = std::time::Instant::now();
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
 
     fn stop(mut self) {
@@ -72,6 +122,41 @@ impl Drop for Spinner {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
+    }
+}
+
+/// Capitalize the first character of a phase label for CLI display. Phase
+/// wording itself is owned by `ProgressUpdate::label()` in the indexer/rag
+/// crates; the spinner only adjusts presentation.
+fn capitalize_phase(label: String) -> String {
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => label,
+    }
+}
+
+/// Build a progress callback that drives `spinner`'s phase label from a
+/// `label_of` projection. Returns the callback plus the `Arc<Spinner>` the
+/// caller must keep alive for the duration of the work, then pass to
+/// [`stop_spinner`]. Centralizes the Arc lifecycle so the explicit
+/// `Arc::into_inner` stop is reliable (no stray clone keeps the count above 1).
+fn spinner_callback<U>(
+    spinner: &Option<Arc<Spinner>>,
+    label_of: fn(&U) -> String,
+) -> Option<impl Fn(U)> {
+    spinner.as_ref().map(|s| {
+        let s = Arc::clone(s);
+        move |u: U| s.set_phase(capitalize_phase(label_of(&u)))
+    })
+}
+
+/// Stop and join a spinner created via [`Spinner::start`] + `Arc::new`. The
+/// callback built by [`spinner_callback`] must already be dropped so the Arc
+/// strong count is 1 and `Arc::into_inner` succeeds.
+fn stop_spinner(spinner: Option<Arc<Spinner>>) {
+    if let Some(s) = spinner.and_then(Arc::into_inner) {
+        s.stop();
     }
 }
 
@@ -124,6 +209,16 @@ fn output<T: Serialize>(
     Ok(())
 }
 
+/// Hint suffix appended to "no result" messages when the index is empty, so a
+/// fresh user can tell "you haven't indexed yet" from a genuine no-match.
+/// Returns `""` when the index has symbols (the common case).
+fn empty_index_hint(db: &Database) -> &'static str {
+    match db.is_empty() {
+        Ok(true) => " (index is empty — run 'cartog index .' first)",
+        _ => "",
+    }
+}
+
 /// Build or rebuild the code graph index.
 pub fn cmd_index(
     db_path: &Path,
@@ -139,13 +234,32 @@ pub fn cmd_index(
     let spinner = if json {
         None
     } else {
-        Spinner::start("Indexing")
+        Spinner::start("Indexing").map(Arc::new)
     };
-    let result = indexer::index_directory(&db, root, force, lsp, None, None);
-    if let Some(s) = spinner {
-        s.stop();
-    }
+    let cb = spinner_callback(&spinner, indexer::ProgressUpdate::label);
+    let cb_ref: Option<indexer::ProgressCallback<'_>> =
+        cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
+    let result = indexer::index_directory(&db, root, force, lsp, cb_ref, None);
+    drop(cb);
+    stop_spinner(spinner);
     let result = result?;
+
+    // No-op run: nothing was added or removed this pass. The delta counters
+    // are all zero, so the standard "0 symbols, 0 edges" line reads like a
+    // failure. Report DB state instead — "up to date" when the index has
+    // content, or "no indexable files" for an empty/unsupported tree.
+    if !json && result.files_indexed == 0 && result.files_removed == 0 {
+        let s = db.stats()?;
+        if s.num_symbols == 0 {
+            println!("No indexable files found under '{path}'.");
+        } else {
+            println!(
+                "Index up to date ({} files, {} symbols unchanged)",
+                s.num_files, s.num_symbols
+            );
+        }
+        return Ok(());
+    }
 
     output(&result, json, None, |r| {
         let lsp_part = if r.edges_lsp_resolved > 0
@@ -203,10 +317,9 @@ pub fn cmd_outline(
     let db = open_db(db_path, embedding_dim)?;
     let symbols = db.outline(file)?;
     let file = file.to_string();
-
     output(&symbols, json, token_budget, |syms| {
         if syms.is_empty() {
-            return format!("No symbols found in {file}\n");
+            return format!("No symbols found in {file}{}\n", empty_index_hint(&db));
         }
         let mut out = String::new();
         for sym in syms {
@@ -244,10 +357,9 @@ pub fn cmd_callees(
     let db = open_db(db_path, embedding_dim)?;
     let edges = db.callees(name)?;
     let name = name.to_string();
-
     output(&edges, json, token_budget, |edges| {
         if edges.is_empty() {
-            return format!("No callees found for '{name}'\n");
+            return format!("No callees found for '{name}'{}\n", empty_index_hint(&db));
         }
         let mut out = String::new();
         for edge in edges {
@@ -288,7 +400,7 @@ pub fn cmd_impact(
 
     output(&items, json, token_budget, |items| {
         if items.is_empty() {
-            return format!("No impact found for '{name}'\n");
+            return format!("No impact found for '{name}'{}\n", empty_index_hint(&db));
         }
         let mut out = String::new();
         for entry in items {
@@ -332,7 +444,10 @@ pub fn cmd_refs(
 
     output(&items, json, token_budget, |items| {
         if items.is_empty() {
-            return format!("No references found for '{name}'\n");
+            return format!(
+                "No references found for '{name}'{}\n",
+                empty_index_hint(&db)
+            );
         }
         let mut out = String::new();
         for entry in items {
@@ -378,7 +493,7 @@ pub fn cmd_hierarchy(
 
     output(&items, json, token_budget, |items| {
         if items.is_empty() {
-            return format!("No hierarchy found for '{name}'\n");
+            return format!("No hierarchy found for '{name}'{}\n", empty_index_hint(&db));
         }
         let mut out = String::new();
         for entry in items {
@@ -402,7 +517,10 @@ pub fn cmd_deps(
 
     output(&edges, json, token_budget, |edges| {
         if edges.is_empty() {
-            return format!("No dependencies found for '{file}'\n");
+            return format!(
+                "No dependencies found for '{file}'{}\n",
+                empty_index_hint(&db)
+            );
         }
         let mut out = String::new();
         for edge in edges {
@@ -439,7 +557,10 @@ pub fn cmd_search(
 
     output(&symbols, json, token_budget, |syms| {
         if syms.is_empty() {
-            return format!("No symbols found matching '{query}'\n");
+            return format!(
+                "No symbols found matching '{query}'{}\n",
+                empty_index_hint(&db)
+            );
         }
         let mut out = String::new();
         for sym in syms {
@@ -687,6 +808,9 @@ pub fn cmd_rag_setup(json: bool) -> Result<()> {
     let spinner = if json {
         None
     } else {
+        // One-time notice so the multi-hundred-MB download isn't a silent wait.
+        // Size matches docs/usage.md (embedding ~80MB + reranker ~1.1GB).
+        eprintln!("Downloading embedding + re-ranker models (~1.2GB, one-time)…");
         Spinner::start("Downloading models")
     };
     // Download bi-encoder (embeddings)
@@ -735,23 +859,27 @@ pub fn cmd_rag_index(
     let spinner = if json {
         None
     } else {
-        Spinner::start("Indexing code graph")
+        Spinner::start("Indexing code graph").map(Arc::new)
     };
-    let index_res = indexer::index_directory(&db, root, false, false, None, None);
-    if let Some(s) = spinner {
-        s.stop();
-    }
+    let ix_cb = spinner_callback(&spinner, indexer::ProgressUpdate::label);
+    let ix_cb_ref: Option<indexer::ProgressCallback<'_>> =
+        ix_cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
+    let index_res = indexer::index_directory(&db, root, false, false, ix_cb_ref, None);
+    drop(ix_cb);
+    stop_spinner(spinner);
     let _index_result = index_res?;
 
     let spinner = if json {
         None
     } else {
-        Spinner::start("Embedding symbols")
+        Spinner::start("Embedding symbols").map(Arc::new)
     };
-    let embed_res = rag::indexer::index_embeddings(&db, provider.as_mut(), force, None, None);
-    if let Some(s) = spinner {
-        s.stop();
-    }
+    let rag_cb = spinner_callback(&spinner, rag::indexer::ProgressUpdate::label);
+    let rag_cb_ref: Option<rag::indexer::ProgressCallback<'_>> =
+        rag_cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
+    let embed_res = rag::indexer::index_embeddings(&db, provider.as_mut(), force, rag_cb_ref, None);
+    drop(rag_cb);
+    stop_spinner(spinner);
     let result = embed_res?;
 
     output(&result, json, None, |r| {
@@ -1588,6 +1716,43 @@ pub use self_cmd::{cmd_self_migrate_db, cmd_self_rollback, cmd_self_update, cmd_
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn capitalized_index_phase_labels() {
+        use indexer::ProgressUpdate as U;
+        let cap = |u: &U| capitalize_phase(u.label());
+        assert_eq!(cap(&U::Walking), "Scanning files");
+        assert_eq!(cap(&U::Parsing { total: 12 }), "Parsing 12 files");
+        assert_eq!(cap(&U::Storing { total: 5 }), "Storing 5 files");
+        assert_eq!(cap(&U::ResolvingLsp), "Resolving edges with LSP");
+    }
+
+    #[test]
+    fn capitalized_rag_phase_labels() {
+        use rag::indexer::ProgressUpdate as U;
+        let cap = |u: &U| capitalize_phase(u.label());
+        assert_eq!(cap(&U::Preparing), "Preparing");
+        assert_eq!(
+            cap(&U::Embedding {
+                processed: 64,
+                total: 256
+            }),
+            "Embedding 64/256"
+        );
+        assert_eq!(cap(&U::Storing), "Storing embeddings");
+    }
+
+    #[test]
+    fn capitalize_phase_handles_empty() {
+        assert_eq!(capitalize_phase(String::new()), "");
+    }
+
+    #[test]
+    fn empty_index_hint_present_on_fresh_db() {
+        // Non-empty case is covered by cartog-db's is_empty_reflects_symbol_presence.
+        let db = Database::open_memory().unwrap();
+        assert!(empty_index_hint(&db).contains("cartog index"));
+    }
 
     #[test]
     fn test_estimate_tokens() {

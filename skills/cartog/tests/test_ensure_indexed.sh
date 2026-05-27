@@ -838,14 +838,18 @@ run_ensure_indexed_print_db() {
         "$@"
         cd "$workdir"
         # Patch: insert echo just before phase 1. The real line is
-        # `cartog index . || index_rc=$?`; legacy form was `cartog index .`.
+        # `CARTOG_PROGRESS=1 cartog index . || index_rc=$?` (the env prefix
+        # opts into the non-TTY progress heartbeat); earlier forms were
+        # `cartog index . || index_rc=$?` and bare `cartog index .`. The
+        # optional `(CARTOG_PROGRESS=1 )?` prefix keeps the patch matching
+        # across all of them.
         # The replacement needs a literal newline — `\n` in a sed RHS is a
         # GNU extension and is taken literally by BSD/macOS sed. Use a
         # backslash-continued newline inside the -e argument, which is POSIX.
         sed \
-            -e 's#^cartog index \. || index_rc=\$?$#echo "DB_FILE=$DB_FILE"\
+            -e 's#^\(CARTOG_PROGRESS=1 \)\{0,1\}cartog index \. || index_rc=\$?$#echo "DB_FILE=$DB_FILE"\
 exit 0#' \
-            -e 's#^cartog index \.$#echo "DB_FILE=$DB_FILE"\
+            -e 's#^\(CARTOG_PROGRESS=1 \)\{0,1\}cartog index \.$#echo "DB_FILE=$DB_FILE"\
 exit 0#' \
             "$ENSURE_SCRIPT" | bash 2>&1
     )

@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 /// Top-level cartog configuration, loaded from `.cartog.toml`.
@@ -343,6 +344,41 @@ fn local_config_path() -> Option<PathBuf> {
     None
 }
 
+/// Known top-level sections of `.cartog.toml`. Kept in sync with the fields of
+/// [`CartogConfig`]. Unknown keys are warned about (non-fatal) so a typo like
+/// `[embeddings]` is visible instead of silently ignored.
+const KNOWN_CONFIG_SECTIONS: &[&str] = &["database", "embedding", "reranker", "rag", "remote"];
+
+/// Collect top-level keys that are not a recognized config section.
+fn unknown_sections(raw: &toml::value::Table) -> Vec<&str> {
+    raw.keys()
+        .map(String::as_str)
+        .filter(|k| !KNOWN_CONFIG_SECTIONS.contains(k))
+        .collect()
+}
+
+/// Config-load diagnostics run before the tracing subscriber is initialised
+/// (db-path resolution happens early in `main`), so they use `eprintln!`
+/// rather than `tracing`. To avoid polluting the stderr of non-interactive
+/// consumers — the MCP `serve` child, `--json` queries, CI pipes — they are
+/// emitted only when stderr is a terminal (an interactive human is watching).
+fn config_diagnostics_visible() -> bool {
+    std::io::stderr().is_terminal()
+}
+
+/// Emit a one-line stderr warning for each unrecognized top-level config key.
+fn warn_unknown_sections(raw: &toml::value::Table, path: &Path) {
+    if !config_diagnostics_visible() {
+        return;
+    }
+    for key in unknown_sections(raw) {
+        eprintln!(
+            "cartog: warning: unknown config key '{key}' in {} (ignored)",
+            path.display()
+        );
+    }
+}
+
 fn read_config(path: &Path) -> Option<CartogConfig> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -363,6 +399,8 @@ fn read_config(path: &Path) -> Option<CartogConfig> {
 
     // Security pre-check: scan the raw `[remote]` table for credential-shaped
     // keys before they have a chance to be deserialised or logged anywhere.
+    // Also warn (non-fatal) about unknown top-level sections so a typo like
+    // `[embeddings]` doesn't silently leave the user on defaults.
     if let Ok(raw) = toml::from_str::<toml::value::Table>(&text) {
         if let Some(toml::Value::Table(remote)) = raw.get("remote") {
             if let Err(msg) = validate_remote_no_credentials(remote) {
@@ -370,6 +408,7 @@ fn read_config(path: &Path) -> Option<CartogConfig> {
                 return None;
             }
         }
+        warn_unknown_sections(&raw, path);
     }
 
     let parsed = match toml::from_str::<CartogConfig>(&text) {
@@ -488,9 +527,15 @@ fn warn_legacy_db_once(path: &Path) {
     if WARNED.swap(true, Ordering::Relaxed) {
         return;
     }
-    tracing::warn!(
-        path = %path.display(),
-        "using legacy database location; run `cartog self migrate-db` to move it into .cartog/"
+    // eprintln, not tracing: db-path resolution runs before the tracing
+    // subscriber is initialised in main, so a `tracing::warn!` here is dropped.
+    // TTY-gated so it doesn't pollute MCP serve / --json / piped stderr.
+    if !config_diagnostics_visible() {
+        return;
+    }
+    eprintln!(
+        "cartog: using legacy database at {}; run `cartog self migrate-db` to move it into .cartog/",
+        path.display()
     );
 }
 
@@ -500,9 +545,12 @@ fn warn_orphan_legacy_once(path: &Path) {
     if WARNED.swap(true, Ordering::Relaxed) {
         return;
     }
-    tracing::warn!(
-        path = %path.display(),
-        "found legacy database alongside the new layout; the legacy file is being ignored"
+    if !config_diagnostics_visible() {
+        return;
+    }
+    eprintln!(
+        "cartog: found legacy database at {} alongside the new layout; the legacy file is ignored",
+        path.display()
     );
 }
 
@@ -530,6 +578,23 @@ mod tests {
             .unwrap_or_else(|_| "/tmp".into());
         let expanded = expand_tilde(PathBuf::from("~/foo/bar"));
         assert_eq!(expanded, PathBuf::from(home).join("foo/bar"));
+    }
+
+    #[test]
+    fn unknown_sections_flags_typos_but_not_known_keys() {
+        let raw: toml::value::Table =
+            toml::from_str("[embeddings]\nprovider = \"ollama\"\n[database]\npath = \"x\"\n")
+                .unwrap();
+        let unknown = unknown_sections(&raw);
+        assert_eq!(unknown, vec!["embeddings"]);
+    }
+
+    #[test]
+    fn unknown_sections_empty_for_all_known() {
+        let raw: toml::value::Table =
+            toml::from_str("[database]\npath = \"x\"\n[embedding]\nprovider = \"local\"\n")
+                .unwrap();
+        assert!(unknown_sections(&raw).is_empty());
     }
 
     #[test]

@@ -37,19 +37,15 @@ impl Phase {
     pub fn into_message_and_total(self) -> (String, Option<f64>) {
         use cartog_indexer::ProgressUpdate as IxU;
         use cartog_rag::indexer::ProgressUpdate as RgU;
+        // Labels come from `ProgressUpdate::label()` (single source of truth in
+        // cartog-indexer / cartog-rag); only the `total` for the MCP progress
+        // bar is computed here.
         match self {
-            Phase::Indexer(IxU::Walking) => ("walking".into(), None),
-            Phase::Indexer(IxU::Parsing { total }) => {
-                (format!("parsing {total} files"), Some(total as f64))
-            }
-            Phase::Indexer(IxU::Storing { total }) => {
-                (format!("storing {total} files"), Some(total as f64))
-            }
-            Phase::Rag(RgU::Preparing) => ("preparing".into(), None),
-            Phase::Rag(RgU::Embedding { processed, total }) => {
-                (format!("embedding {processed}/{total}"), Some(total as f64))
-            }
-            Phase::Rag(RgU::Storing) => ("storing".into(), None),
+            Phase::Indexer(u @ IxU::Parsing { total }) => (u.label(), Some(total as f64)),
+            Phase::Indexer(u @ IxU::Storing { total }) => (u.label(), Some(total as f64)),
+            Phase::Indexer(u) => (u.label(), None),
+            Phase::Rag(u @ RgU::Embedding { total, .. }) => (u.label(), Some(total as f64)),
+            Phase::Rag(u) => (u.label(), None),
             Phase::Custom(s) => (s.into(), None),
         }
     }
@@ -182,12 +178,19 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert!(events[0].progress < events[1].progress);
         assert!(events[1].progress < events[2].progress);
-        assert_eq!(events[0].message.as_deref(), Some("walking"));
+        assert_eq!(events[0].message.as_deref(), Some("scanning files"));
         assert_eq!(events[1].message.as_deref(), Some("parsing 7 files"));
         assert_eq!(events[2].message.as_deref(), Some("storing 5 files"));
         assert_eq!(events[0].total, None);
         assert_eq!(events[1].total, Some(7.0));
         assert_eq!(events[2].total, Some(5.0));
+    }
+
+    #[test]
+    fn resolving_lsp_phase_maps_to_message() {
+        let (msg, total) = Phase::Indexer(IxU::ResolvingLsp).into_message_and_total();
+        assert_eq!(msg, "resolving edges with LSP");
+        assert_eq!(total, None);
     }
 
     #[tokio::test]
@@ -212,7 +215,7 @@ mod tests {
         assert_eq!(events[0].message.as_deref(), Some("preparing"));
         assert_eq!(events[1].message.as_deref(), Some("embedding 512/1024"));
         assert_eq!(events[1].total, Some(1024.0));
-        assert_eq!(events[2].message.as_deref(), Some("storing"));
+        assert_eq!(events[2].message.as_deref(), Some("storing embeddings"));
     }
 
     #[tokio::test]

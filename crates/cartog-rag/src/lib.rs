@@ -99,10 +99,21 @@ pub fn create_embedding_provider(
             )?;
             Ok(Box::new(provider))
         }
-        other => anyhow::bail!(
-            "Unknown or disabled embedding provider: '{other}'. Supported: {}",
-            supported_providers()
-        ),
+        other => {
+            // `ollama` is a valid provider name but only compiled in with the
+            // `ollama-embedding` feature; the prebuilt/install.sh binary omits
+            // it. Point the user at the rebuild instead of a bare "unknown".
+            let remediation = if other == "ollama" && !cfg!(feature = "provider-ollama") {
+                " — the ollama provider is not in this build; install with \
+                 `cargo install cartog --features ollama-embedding`"
+            } else {
+                ""
+            };
+            anyhow::bail!(
+                "Unknown or disabled embedding provider: '{other}'. Supported: {}{remediation}",
+                supported_providers()
+            )
+        }
     }
 }
 

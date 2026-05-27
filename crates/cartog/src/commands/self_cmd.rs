@@ -902,20 +902,32 @@ fn peer_lock_check_skipped() -> bool {
     false
 }
 
+/// Peer-lock guard decision for `migrate-db`, factored out so it can be unit
+/// tested without touching the filesystem or process state. A dry-run mutates
+/// nothing, so it never blocks on a live peer; a real migration bails if any
+/// peer holds a lock.
+fn migrate_peer_guard(dry_run: bool, active: &[cartog_process_lock::ActiveLock]) -> Result<()> {
+    if dry_run {
+        return Ok(());
+    }
+    if let Some(peer) = active.first() {
+        anyhow::bail!(
+            "another cartog process is running ({slot}, PID {pid}); stop it before migrating",
+            slot = peer.slot,
+            pid = peer.pid,
+        );
+    }
+    Ok(())
+}
+
 /// `cartog self migrate-db [--dry-run]`. Moves legacy DB files into `.cartog/`.
 /// Refuses to run while another cartog peer holds the lock.
 pub fn cmd_self_migrate_db(root: &Path, dry_run: bool, json: bool) -> Result<()> {
     if !peer_lock_check_skipped() {
-        if let Some(dir) = state::default_state_dir() {
-            let active = cartog_process_lock::find_active_locks(&dir);
-            if let Some(peer) = active.first() {
-                anyhow::bail!(
-                    "another cartog process is running ({slot}, PID {pid}); stop it before migrating",
-                    slot = peer.slot,
-                    pid = peer.pid,
-                );
-            }
-        }
+        let active = state::default_state_dir()
+            .map(|dir| cartog_process_lock::find_active_locks(&dir))
+            .unwrap_or_default();
+        migrate_peer_guard(dry_run, &active)?;
     }
 
     let preview = plan_migration(root)?;
@@ -1595,6 +1607,35 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
 
         assert!(legacy.exists(), "dry run must not touch the filesystem");
         assert!(!dir.path().join(".cartog").exists());
+    }
+
+    #[test]
+    fn migrate_peer_guard_bails_for_real_run_when_peer_present() {
+        let active = vec![cartog_process_lock::ActiveLock {
+            slot: "serve-abc".to_string(),
+            pid: 4242,
+            start_time: None,
+        }];
+        let err = migrate_peer_guard(false, &active).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("serve-abc"), "names the slot: {msg}");
+        assert!(msg.contains("4242"), "names the pid: {msg}");
+    }
+
+    #[test]
+    fn migrate_peer_guard_allows_dry_run_despite_live_peer() {
+        // Same live peer as above, but dry_run=true must bypass the guard.
+        let active = vec![cartog_process_lock::ActiveLock {
+            slot: "serve-abc".to_string(),
+            pid: 4242,
+            start_time: None,
+        }];
+        migrate_peer_guard(true, &active).expect("dry-run ignores the peer lock");
+    }
+
+    #[test]
+    fn migrate_peer_guard_allows_real_run_when_no_peer() {
+        migrate_peer_guard(false, &[]).expect("no peer → real run proceeds");
     }
 
     #[test]

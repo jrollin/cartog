@@ -285,7 +285,9 @@ else
     echo "Updating cartog index..."
 fi
 index_rc=0
-cartog index . || index_rc=$?
+# CARTOG_PROGRESS=1 opts into the non-TTY phase heartbeat so the first (cold)
+# index isn't a silent multi-minute wait in this hook. Other callers stay quiet.
+CARTOG_PROGRESS=1 cartog index . || index_rc=$?
 if [ "$index_rc" -ne 0 ]; then
     echo "cartog index failed (exit $index_rc) — continuing to background pipeline." >&2
     printf 'cartog index . failed (exit %d). See terminal output above.\n' "$index_rc" > "$LAST_ERROR_FILE"
