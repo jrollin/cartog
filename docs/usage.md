@@ -162,6 +162,8 @@ cartog index . --force      # full re-index, bypassing change detection
 
 Incremental by default — skips unchanged files (git diff + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. Stable symbol IDs (`file:kind:qualified_name`) survive line movements, so edges from unchanged files remain valid. The LSP pass skips edges already classified as `resolution_state = 2` (unresolvable: typo, dyn dispatch, macro) or `3` (external: stdlib, deps, node_modules); both auto-retry when a matching symbol is added in-tree. Use `--force` when results seem stale or after updating cartog itself — it also resets state-2 and state-3 markers for a clean retry.
 
+Files whose language cartog doesn't support are reported, not silently dropped: on a mixed repo the summary adds a line like `12 files in unsupported languages not indexed (8 .dart, 4 .swift)`. The `--json` output carries the same data as `files_unsupported` (count) and `unsupported_by_ext` (`[ext, count]`, descending). cartog's own database sidecars (`.cartog.db*`, `db.sqlite*`) are excluded from the tally.
+
 ### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N]`
 
 Find symbols by partial name — use this when you know roughly what you're looking for but need the exact name before calling `refs`, `callees`, or `impact`.
@@ -297,6 +299,9 @@ Symbols by kind:
   import: 62
   variable: 40
 ```
+
+On an unindexed repo all counts are `0` and the output ends with
+`Index is empty — run \`cartog index .\` to build the code graph.`
 
 ### `cartog push [--remote <s3-url>]`
 
@@ -610,7 +615,7 @@ cartog self migrate-db --dry-run  # preview the planned moves without touching t
 
 `cartog self update` refuses to overwrite a `cargo install cartog` binary (exit 3) and points at `cargo install cartog --force` instead. See [updates.md](updates.md) for the full exit-code matrix, env vars (`CARTOG_NO_UPDATE_CHECK`, `CARTOG_UPDATE_CHECK`), platform-specific state file location, and rollback contract.
 
-`cartog self migrate-db` refuses to overwrite an existing `.cartog/db.sqlite`, refuses to run while a peer cartog process (`serve` / `watch`) holds the lock, and refuses to migrate a symlinked `.cartog.db`.
+`cartog self migrate-db` refuses to overwrite an existing `.cartog/db.sqlite`, refuses to run while a peer cartog process (`serve` / `watch`) holds the lock **for this project's database** (a peer serving an unrelated project does not block it), and refuses to migrate a symlinked `.cartog.db`.
 
 ### `cartog rag setup`
 
@@ -761,7 +766,7 @@ The plugin wires two Claude Code hooks plus a user-typed skill:
 To run the SessionStart steps manually:
 
 ```bash
-bash scripts/ensure_indexed.sh
+bash skills/cartog/scripts/ensure_indexed.sh
 ```
 
 ### Skill Contents

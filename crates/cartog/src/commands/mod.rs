@@ -161,7 +161,30 @@ fn stop_spinner(spinner: Option<Arc<Spinner>>) {
 }
 
 fn open_db(path: &Path, embedding_dim: usize) -> Result<Database> {
-    Database::open(path, embedding_dim).context("Failed to open cartog database")
+    Database::open(path, embedding_dim).map_err(|e| open_db_error(path, e.into()))
+}
+
+/// Map a database-open failure to an actionable message naming the path and the
+/// fix. Corruption ("not a database") and read-only mounts produce the most
+/// confusing raw SQLite errors, so they get specific remediation; anything else
+/// keeps a generic wrapper with the path. The original error is the cause.
+fn open_db_error(path: &Path, err: anyhow::Error) -> anyhow::Error {
+    let raw = err.to_string().to_ascii_lowercase();
+    let p = path.display();
+    let hint = if raw.contains("not a database") {
+        format!(
+            "database at {p} is corrupt or not a cartog database — \
+             delete it and run `cartog index .` to rebuild"
+        )
+    } else if raw.contains("readonly") || raw.contains("read-only") {
+        format!(
+            "database at {p} is not writable — check the file and directory \
+             permissions, or set [database].path to a writable location"
+        )
+    } else {
+        format!("failed to open cartog database at {p}")
+    };
+    err.context(hint)
 }
 
 /// Estimate token count from a string using chars/4 approximation.
@@ -217,6 +240,28 @@ fn empty_index_hint(db: &Database) -> &'static str {
         Ok(true) => " (index is empty — run 'cartog index .' first)",
         _ => "",
     }
+}
+
+/// Suggestion suffix for "no result" messages: when a navigation command
+/// (refs/callees/impact/hierarchy) finds no exact match but the fuzzy search
+/// surfaces similarly-named symbols, list them so the user can correct a typo
+/// or partial name. Returns `""` when the index is empty (the empty-index hint
+/// covers that) or when there are no near matches.
+fn did_you_mean(db: &Database, name: &str) -> String {
+    if name.is_empty() || matches!(db.is_empty(), Ok(true)) {
+        return String::new();
+    }
+    let candidates = match db.search(name, None, None, 5) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    // An exact match means the symbol exists but genuinely has no edges/results;
+    // suggesting it would be noise.
+    if candidates.iter().any(|s| s.name == name) || candidates.is_empty() {
+        return String::new();
+    }
+    let names: Vec<&str> = candidates.iter().map(|s| s.name.as_str()).collect();
+    format!(" — did you mean: {}?", names.join(", "))
 }
 
 /// Build or rebuild the code graph index.
@@ -292,8 +337,23 @@ pub fn cmd_index(
         } else {
             String::new()
         };
+        let unsupported = if r.files_unsupported > 0 {
+            let breakdown = r
+                .unsupported_by_ext
+                .iter()
+                .take(5)
+                .map(|(ext, n)| format!("{n} .{ext}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "\n  {} files in unsupported languages not indexed ({breakdown})",
+                r.files_unsupported
+            )
+        } else {
+            String::new()
+        };
         format!(
-            "Indexed {} files ({} skipped, {} removed)\n  {} symbols{}, {} edges ({} resolved{})\n",
+            "Indexed {} files ({} skipped, {} removed)\n  {} symbols{}, {} edges ({} resolved{}){}\n",
             r.files_indexed,
             r.files_skipped,
             r.files_removed,
@@ -302,6 +362,7 @@ pub fn cmd_index(
             r.edges_added,
             r.edges_resolved + r.edges_lsp_resolved,
             lsp_part,
+            unsupported,
         )
     })
 }
@@ -359,7 +420,11 @@ pub fn cmd_callees(
     let name = name.to_string();
     output(&edges, json, token_budget, |edges| {
         if edges.is_empty() {
-            return format!("No callees found for '{name}'{}\n", empty_index_hint(&db));
+            return format!(
+                "No callees found for '{name}'{}{}\n",
+                empty_index_hint(&db),
+                did_you_mean(&db, &name)
+            );
         }
         let mut out = String::new();
         for edge in edges {
@@ -400,7 +465,11 @@ pub fn cmd_impact(
 
     output(&items, json, token_budget, |items| {
         if items.is_empty() {
-            return format!("No impact found for '{name}'{}\n", empty_index_hint(&db));
+            return format!(
+                "No impact found for '{name}'{}{}\n",
+                empty_index_hint(&db),
+                did_you_mean(&db, &name)
+            );
         }
         let mut out = String::new();
         for entry in items {
@@ -445,8 +514,9 @@ pub fn cmd_refs(
     output(&items, json, token_budget, |items| {
         if items.is_empty() {
             return format!(
-                "No references found for '{name}'{}\n",
-                empty_index_hint(&db)
+                "No references found for '{name}'{}{}\n",
+                empty_index_hint(&db),
+                did_you_mean(&db, &name)
             );
         }
         let mut out = String::new();
@@ -493,7 +563,11 @@ pub fn cmd_hierarchy(
 
     output(&items, json, token_budget, |items| {
         if items.is_empty() {
-            return format!("No hierarchy found for '{name}'{}\n", empty_index_hint(&db));
+            return format!(
+                "No hierarchy found for '{name}'{}{}\n",
+                empty_index_hint(&db),
+                did_you_mean(&db, &name)
+            );
         }
         let mut out = String::new();
         for entry in items {
@@ -630,6 +704,9 @@ pub fn cmd_stats(db_path: &Path, json: bool, embedding_dim: usize) -> Result<()>
             for (kind, count) in &stats.symbol_kinds {
                 out.push_str(&format!("  {kind}: {count}\n"));
             }
+        }
+        if stats.num_files == 0 {
+            out.push_str("\nIndex is empty — run `cartog index .` to build the code graph.\n");
         }
         out
     })
@@ -1752,6 +1829,73 @@ mod tests {
         // Non-empty case is covered by cartog-db's is_empty_reflects_symbol_presence.
         let db = Database::open_memory().unwrap();
         assert!(empty_index_hint(&db).contains("cartog index"));
+    }
+
+    fn db_with_symbol(name: &str) -> Database {
+        use cartog_core::{FileInfo, Symbol};
+        let db = Database::open_memory().unwrap();
+        db.upsert_file(&FileInfo {
+            path: "a.rs".into(),
+            last_modified: 0.0,
+            hash: "h".into(),
+            language: "rust".into(),
+            num_symbols: 1,
+        })
+        .unwrap();
+        let sym = Symbol::new(name, SymbolKind::Class, "a.rs", 1, 2, 0, 10, None);
+        db.insert_symbols(&[sym]).unwrap();
+        db
+    }
+
+    #[test]
+    fn open_db_error_corrupt_names_path_and_rebuild() {
+        let e = anyhow::anyhow!("file is not a database");
+        let msg = open_db_error(Path::new("/p/.cartog/db.sqlite"), e).to_string();
+        assert!(msg.contains("/p/.cartog/db.sqlite"), "names path: {msg}");
+        assert!(msg.contains("corrupt"), "{msg}");
+        assert!(msg.contains("cartog index"), "{msg}");
+    }
+
+    #[test]
+    fn open_db_error_readonly_names_path_and_permissions() {
+        let e = anyhow::anyhow!("attempt to write a readonly database");
+        let msg = open_db_error(Path::new("/p/db.sqlite"), e).to_string();
+        assert!(msg.contains("/p/db.sqlite"), "{msg}");
+        assert!(msg.contains("permission"), "{msg}");
+    }
+
+    #[test]
+    fn open_db_error_generic_keeps_path() {
+        let e = anyhow::anyhow!("disk full");
+        let msg = open_db_error(Path::new("/p/db.sqlite"), e).to_string();
+        assert!(msg.contains("/p/db.sqlite"), "{msg}");
+    }
+
+    #[test]
+    fn did_you_mean_suggests_near_matches() {
+        let db = db_with_symbol("ReviewResult");
+        let hint = did_you_mean(&db, "Revie");
+        assert!(hint.contains("did you mean"), "got: {hint}");
+        assert!(hint.contains("ReviewResult"), "got: {hint}");
+    }
+
+    #[test]
+    fn did_you_mean_silent_on_exact_match() {
+        // An exact match means the symbol exists but has no edges — no suggestion.
+        let db = db_with_symbol("ReviewResult");
+        assert_eq!(did_you_mean(&db, "ReviewResult"), "");
+    }
+
+    #[test]
+    fn did_you_mean_silent_on_empty_index() {
+        let db = Database::open_memory().unwrap();
+        assert_eq!(did_you_mean(&db, "Whatever"), "");
+    }
+
+    #[test]
+    fn did_you_mean_silent_when_no_candidates() {
+        let db = db_with_symbol("ReviewResult");
+        assert_eq!(did_you_mean(&db, "ZZZnomatch"), "");
     }
 
     #[test]

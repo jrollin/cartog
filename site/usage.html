@@ -285,6 +285,7 @@ cartog index src/           <span class="comment"># index a subdirectory</span>
 cartog index . --force      <span class="comment"># full re-index</span>
 cartog index . --no-lsp     <span class="comment"># heuristic-only (~1-4s)</span></pre>
       <p>Incremental by default — skips unchanged files (git + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. The LSP pass skips edges already classified as unresolvable (typo, dyn dispatch, macro) or external (stdlib, deps, node_modules); both auto-retry when a matching symbol is added in-tree. <code>--force</code> resets those markers for a clean retry.</p>
+      <p>Files in unsupported languages are reported, not silently dropped: on a mixed repo the summary adds a line like <code>12 files in unsupported languages not indexed (8 .dart, 4 .swift)</code> (also as <code>files_unsupported</code> / <code>unsupported_by_ext</code> under <code>--json</code>).</p>
 
       <h2 id="cmd-search"><code>cartog search &lt;query&gt;</code></h2>
       <p>Find symbols by partial name. Results ranked: exact match → prefix → substring.</p>
@@ -322,7 +323,7 @@ cartog refs validate_token --kind calls  <span class="comment"># only call sites
       <pre>cartog deps src/routes/auth.py</pre>
 
       <h2 id="cmd-stats"><code>cartog stats</code></h2>
-      <p>Summary of the index — file count, symbol count, edge resolution rate.</p>
+      <p>Summary of the index — file count, symbol count, edge resolution rate. On an unindexed repo all counts are <code>0</code> and the output ends with a hint to run <code>cartog index .</code>.</p>
       <pre>cartog stats</pre>
 
       <h2 id="cmd-doctor"><code>cartog doctor</code></h2>
@@ -387,7 +388,7 @@ cartog self version             <span class="comment"># target + install source 
 cartog self rollback            <span class="comment"># restore the previous binary</span>
 cartog self migrate-db          <span class="comment"># move legacy .cartog.db into .cartog/db.sqlite</span>
 cartog self migrate-db --dry-run <span class="comment"># preview the move without touching disk</span></pre>
-      <p>Auto-check runs at most once per 24h on interactive sessions; suppressed under <code>CARTOG_NO_UPDATE_CHECK=1</code>, non-TTY stdout, and inside <code>cartog serve</code>/<code>watch</code>. <code>migrate-db</code> refuses to overwrite an existing <code>.cartog/db.sqlite</code>, refuses to run while a peer process holds the DB lock, and refuses symlinked sources. See <a href="https://github.com/jrollin/cartog/blob/main/docs/updates.md">docs/updates.md</a> for the full exit-code matrix and state file location.</p>
+      <p>Auto-check runs at most once per 24h on interactive sessions; suppressed under <code>CARTOG_NO_UPDATE_CHECK=1</code>, non-TTY stdout, and inside <code>cartog serve</code>/<code>watch</code>. <code>migrate-db</code> refuses to overwrite an existing <code>.cartog/db.sqlite</code>, refuses to run while a peer process holds the lock <strong>for this project's database</strong> (a peer on an unrelated project does not block it), and refuses symlinked sources. See <a href="https://github.com/jrollin/cartog/blob/main/docs/updates.md">docs/updates.md</a> for the full exit-code matrix and state file location.</p>
 
       <h2 id="cmd-completions"><code>cartog completions &lt;shell&gt;</code></h2>
       <p>Generate shell completion scripts for <code>bash</code>, <code>zsh</code>, <code>fish</code>, <code>powershell</code>, or <code>elvish</code>.</p>

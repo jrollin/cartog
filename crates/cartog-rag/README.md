@@ -51,6 +51,8 @@ Over-retrieves `(limit * 3).max(20)` candidates from each source to improve fusi
 
 Providers are created per-command invocation via `create_embedding_provider(config)`. The caller passes an `EmbeddingProviderConfig` (from `.cartog.toml`) and receives a boxed `EmbeddingProvider` trait object. Reranker providers follow the same pattern with `create_reranker_provider(config)`.
 
+The Ollama provider maps transport failures to actionable errors instead of raw reqwest chains: a refused connection points at `ollama serve` and `[embedding.ollama].base_url`, and an HTTP 404 from `/api/embed` tells the user to run `ollama pull <model>`. The original error is preserved as the cause.
+
 ## Public API
 
 | Export | Description |

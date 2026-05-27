@@ -46,7 +46,7 @@ Edges that LSP classifies are persisted to `resolution_state` so future runs ski
 | Export | Description |
 |--------|-------------|
 | `index_directory()` | Main entry point — index a directory into the database. Optional `progress: Option<ProgressCallback>` fires at coarse phase boundaries (`Walking`, `Parsing`, `Storing`); pass `None` for the no-op default. |
-| `IndexResult` | Summary: files indexed/skipped/removed, symbols added/modified, edges resolved |
+| `IndexResult` | Summary: files indexed/skipped/removed, symbols added/modified, edges resolved, plus `files_unsupported` + `unsupported_by_ext` (files whose language isn't supported; cartog's own `.cartog.db*` / `db.sqlite*` sidecars are excluded from this tally) |
 | `ProgressUpdate` / `ProgressCallback` | Plain-data callback types for in-flight phase reporting (transport-agnostic) |
 | `is_ignored_dirname()` | Check if a directory name should be skipped (`.git`, `node_modules`, `target`, etc.) |
 | `git_recently_changed_files()` | List files changed in the last N git commits |

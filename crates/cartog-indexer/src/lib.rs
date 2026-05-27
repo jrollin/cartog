@@ -135,6 +135,15 @@ pub struct IndexResult {
     /// Files added, modified, or removed this run. Callers gate post-index passes (e.g. LSP) on this.
     #[serde(skip)]
     pub dirty_files: u32,
+    /// Files seen during the walk whose extension maps to no supported language
+    /// (e.g. `.dart`, `.swift`). Surfaced so a user on a mixed/monorepo isn't
+    /// misled into thinking an unsupported subtree was indexed.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub files_unsupported: u32,
+    /// Per-extension breakdown of `files_unsupported`, descending by count.
+    /// Each entry is `(extension_without_dot, count)`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_by_ext: Vec<(String, u32)>,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -253,6 +262,8 @@ pub fn index_directory(
     check_cancel()?;
     emit(ProgressUpdate::Walking);
     let mut candidates: Vec<(PathBuf, String, &'static str)> = Vec::new();
+    let mut unsupported_ext: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
     for entry in WalkDir::new(&root)
         .follow_links(true)
         .max_depth(50)
@@ -276,7 +287,18 @@ pub fn index_directory(
         };
         let lang = match detect_language(Path::new(&rel_path)) {
             Some(l) => l,
-            None => continue,
+            None => {
+                // Tally genuine source files in unsupported languages, but skip
+                // cartog's own database sidecars (.cartog.db, -wal, -shm) — they
+                // aren't user code and would be noise in the breakdown.
+                if let Some(ext) = Path::new(&rel_path).extension().and_then(|e| e.to_str()) {
+                    if !is_db_sidecar(&rel_path) {
+                        result.files_unsupported += 1;
+                        *unsupported_ext.entry(ext.to_ascii_lowercase()).or_insert(0) += 1;
+                    }
+                }
+                continue;
+            }
         };
         current_files.insert(rel_path.clone());
 
@@ -292,6 +314,10 @@ pub fn index_directory(
 
         candidates.push((path.to_path_buf(), rel_path, lang));
     }
+
+    let mut by_ext: Vec<(String, u32)> = unsupported_ext.into_iter().collect();
+    by_ext.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    result.unsupported_by_ext = by_ext;
 
     // ── Phase 2: parallel parse + extract (CPU-bound, rayon-worker pool) ──
     check_cancel()?;
@@ -525,6 +551,20 @@ pub fn index_directory(
     result.dirty_files = dirty_files.len() as u32;
     tx.commit()?;
     Ok(result)
+}
+
+/// True for cartog's own SQLite database files and their WAL/SHM sidecars,
+/// at either the legacy root (`.cartog.db*`) or the new layout
+/// (`db.sqlite*`). These are excluded from the unsupported-language tally.
+fn is_db_sidecar(rel_path: &str) -> bool {
+    let name = Path::new(rel_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let stems = [cartog_db::LEGACY_DB_FILE, cartog_db::DB_FILENAME];
+    stems
+        .iter()
+        .any(|stem| name == *stem || name.starts_with(&format!("{stem}-")))
 }
 
 /// Decides whether a walkdir entry should be excluded from indexing.
@@ -1114,6 +1154,48 @@ mod tests {
             // Should return Some (valid commit), though the set may contain untracked/modified files
             assert!(result.is_some());
         }
+    }
+
+    #[test]
+    fn db_sidecars_are_recognized() {
+        assert!(is_db_sidecar(".cartog.db"));
+        assert!(is_db_sidecar(".cartog.db-wal"));
+        assert!(is_db_sidecar(".cartog.db-shm"));
+        assert!(is_db_sidecar("sub/db.sqlite"));
+        assert!(is_db_sidecar("db.sqlite-wal"));
+        assert!(!is_db_sidecar("main.rs"));
+        assert!(!is_db_sidecar("app.dart"));
+    }
+
+    #[test]
+    fn unsupported_files_are_counted_not_silently_dropped() {
+        use cartog_db::Database;
+        // TempDir names start with '.', which the walker treats as hidden and
+        // prunes — nest a non-dot project dir so the walk descends into it.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("proj");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(dir.join("b.dart"), "void main() {}\n").unwrap();
+        std::fs::write(dir.join("c.dart"), "void main() {}\n").unwrap();
+        std::fs::write(dir.join("d.swift"), "print(1)\n").unwrap();
+        // cartog's own DB sidecars must NOT count as unsupported languages.
+        std::fs::write(dir.join(".cartog.db"), "x").unwrap();
+        std::fs::write(dir.join(".cartog.db-wal"), "x").unwrap();
+
+        let db = Database::open_memory().unwrap();
+        let r = index_directory(&db, &dir, true, false, None, None).unwrap();
+
+        assert_eq!(r.files_indexed, 1, "only a.rs is supported");
+        assert_eq!(
+            r.files_unsupported, 3,
+            "2 dart + 1 swift, db sidecars excluded"
+        );
+        // Descending by count, ties broken alphabetically.
+        assert_eq!(
+            r.unsupported_by_ext,
+            vec![("dart".to_string(), 2), ("swift".to_string(), 1)]
+        );
     }
 
     #[test]

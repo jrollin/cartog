@@ -1,6 +1,6 @@
 //! MCP server for the cartog code graph.
 //!
-//! Exposes cartog's graph queries, indexing, and semantic search as 12 MCP tools
+//! Exposes cartog's graph queries, indexing, and semantic search as 13 MCP tools
 //! over stdio transport. Designed for Claude Code, Cursor, and other MCP clients.
 
 use std::path::{Path, PathBuf};
@@ -348,9 +348,55 @@ fn narrowing_hint_for(tool: &str) -> &'static str {
 /// at a safe char boundary and an overflow notice pointing at a narrower
 /// tool is appended.
 fn tool_response(db: &Database, json: String, tool: &str) -> Result<CallToolResult, McpError> {
+    tool_response_named(db, json, tool, None)
+}
+
+/// Build the "did you mean" suffix for an empty navigation result. Returns
+/// `None` when there are no candidates or one is an exact match (the symbol
+/// exists but genuinely has no edges, so suggesting it would be noise).
+/// Pure function, factored out so the suggestion logic is unit-testable
+/// without constructing an `rmcp` `CallToolResult`.
+fn did_you_mean_suffix(name: &str, candidates: &[String]) -> Option<String> {
+    if candidates.is_empty() || candidates.iter().any(|c| c == name) {
+        return None;
+    }
+    Some(format!(
+        "\n\nNo symbol named '{name}' had results. Did you mean: {}? \
+         Use cartog_search to confirm the exact name.",
+        candidates.join(", ")
+    ))
+}
+
+/// Like [`tool_response`], but for name-based navigation tools (refs, callees,
+/// impact, hierarchy): when the result is an empty array and the index is not
+/// empty, appends a "did you mean" line listing similarly-named symbols so the
+/// agent can recover from a typo or partial name instead of seeing a bare `[]`.
+fn tool_response_named(
+    db: &Database,
+    json: String,
+    tool: &str,
+    queried_name: Option<&str>,
+) -> Result<CallToolResult, McpError> {
     let is_empty = !db
         .has_indexed_files()
         .map_err(|e| mcp_err(format!("stats check failed: {e}")))?;
+
+    // Empty navigation result on a populated index → suggest near matches.
+    if !is_empty {
+        if let Some(name) = queried_name {
+            if json.trim() == "[]" && !name.is_empty() {
+                let candidates = db
+                    .search(name, None, None, 5)
+                    .map(|c| c.into_iter().map(|s| s.name).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if let Some(suffix) = did_you_mean_suffix(name, &candidates) {
+                    let mut text = json;
+                    text.push_str(&suffix);
+                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                }
+            }
+        }
+    }
 
     let budget = mcp_max_bytes();
     let (mut text, truncated_bytes) = if json.len() > budget {
@@ -704,7 +750,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response(&db, json, "cartog_refs")
+            tool_response_named(&db, json, "cartog_refs", Some(&name))
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -732,7 +778,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&edges)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response(&db, json, "cartog_callees")
+            tool_response_named(&db, json, "cartog_callees", Some(&name))
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -766,7 +812,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response(&db, json, "cartog_impact")
+            tool_response_named(&db, json, "cartog_impact", Some(&name))
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -799,7 +845,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response(&db, json, "cartog_hierarchy")
+            tool_response_named(&db, json, "cartog_hierarchy", Some(&name))
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -2046,6 +2092,25 @@ mod tests {
         let db = Database::open_memory().expect("in-memory DB");
         let result = db.search("foo", None, None, 20).expect("query");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn did_you_mean_suffix_lists_candidates() {
+        let cands = vec!["ReviewResult".to_string(), "ReviewComment".to_string()];
+        let suffix = did_you_mean_suffix("Revie", &cands).expect("suffix");
+        assert!(suffix.contains("Did you mean: ReviewResult, ReviewComment"));
+        assert!(suffix.contains("cartog_search"));
+    }
+
+    #[test]
+    fn did_you_mean_suffix_none_on_exact_match() {
+        let cands = vec!["ReviewResult".to_string()];
+        assert!(did_you_mean_suffix("ReviewResult", &cands).is_none());
+    }
+
+    #[test]
+    fn did_you_mean_suffix_none_without_candidates() {
+        assert!(did_you_mean_suffix("Whatever", &[]).is_none());
     }
 
     #[test]

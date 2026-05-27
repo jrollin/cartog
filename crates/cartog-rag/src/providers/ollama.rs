@@ -23,6 +23,36 @@ struct EmbedResponse {
     embeddings: Vec<Vec<f32>>,
 }
 
+fn connect_hint(base_url: &str) -> String {
+    format!(
+        "cannot reach Ollama at {base_url}. Is `ollama serve` running? \
+         Check [embedding.ollama].base_url in .cartog.toml"
+    )
+}
+
+/// Remediation text for an HTTP error status. A 404 from `/api/embed` means the
+/// requested model has not been pulled; everything else stays generic.
+fn status_hint(model: &str, status: Option<reqwest::StatusCode>) -> String {
+    if status == Some(reqwest::StatusCode::NOT_FOUND) {
+        format!("Ollama has no model '{model}'. Run `ollama pull {model}`")
+    } else {
+        "Ollama returned an error".to_string()
+    }
+}
+
+/// Turn a connection-level reqwest failure into actionable guidance: a refused
+/// connection almost always means the Ollama server isn't running or the
+/// configured `base_url` is wrong.
+fn connect_err(base_url: &str, e: reqwest::Error) -> anyhow::Error {
+    anyhow::anyhow!(e).context(connect_hint(base_url))
+}
+
+/// Turn an HTTP error status into actionable guidance (see [`status_hint`]).
+fn status_err(model: &str, e: reqwest::Error) -> anyhow::Error {
+    let hint = status_hint(model, e.status());
+    anyhow::anyhow!(e).context(hint)
+}
+
 impl OllamaEmbeddingProvider {
     pub fn new(
         base_url: Option<&str>,
@@ -53,9 +83,9 @@ impl OllamaEmbeddingProvider {
                         input: vec!["dimension probe"],
                     })
                     .send()
-                    .context("Failed to connect to Ollama server")?
+                    .map_err(|e| connect_err(base_url, e))?
                     .error_for_status()
-                    .context("Ollama returned an error")?
+                    .map_err(|e| status_err(model, e))?
                     .json::<EmbedResponse>()
                     .context("Failed to parse Ollama response")?;
 
@@ -91,9 +121,9 @@ impl OllamaEmbeddingProvider {
                 input: texts.to_vec(),
             })
             .send()
-            .context("Ollama embed request failed")?
+            .map_err(|e| connect_err(&self.base_url, e))?
             .error_for_status()
-            .context("Ollama returned an error")?
+            .map_err(|e| status_err(&self.model, e))?
             .json::<EmbedResponse>()
             .context("Failed to parse Ollama embed response")?;
 
@@ -171,5 +201,25 @@ mod tests {
         let resp: EmbedResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.embeddings.len(), 2);
         assert_eq!(resp.embeddings[0], vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn connect_hint_points_at_server_and_config() {
+        let h = connect_hint("http://localhost:11434");
+        assert!(h.contains("http://localhost:11434"));
+        assert!(h.contains("ollama serve"));
+        assert!(h.contains("base_url"));
+    }
+
+    #[test]
+    fn status_hint_404_says_pull_the_model() {
+        let h = status_hint("nomic-embed-text", Some(reqwest::StatusCode::NOT_FOUND));
+        assert!(h.contains("ollama pull nomic-embed-text"), "got: {h}");
+    }
+
+    #[test]
+    fn status_hint_other_status_stays_generic() {
+        let h = status_hint("m", Some(reqwest::StatusCode::INTERNAL_SERVER_ERROR));
+        assert_eq!(h, "Ollama returned an error");
     }
 }

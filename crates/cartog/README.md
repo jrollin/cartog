@@ -4,12 +4,14 @@ Code graph indexer for LLM coding agents. Map your codebase, navigate by graph.
 
 ## Overview
 
-Binary crate and library facade. Provides the `cartog` CLI with 16 commands for code graph indexing, querying, and semantic search. Also re-exports all workspace crates under the `cartog::` namespace for use by benches and integration tests.
+Binary crate and library facade. Provides the `cartog` CLI with 23 top-level commands for code graph indexing, querying, and semantic search. Also re-exports workspace crates under the `cartog::` namespace for use by benches and integration tests.
 
 ## CLI commands
 
 | Command | Description |
 |---------|-------------|
+| `init` | Scaffold a `.cartog.toml` config |
+| `ide` | Wire `cartog serve` into MCP-compatible editors |
 | `index [PATH]` | Build or rebuild the code graph (`--force`, `--no-lsp`) |
 | `outline FILE` | Show symbols and structure of a file |
 | `callees NAME` | Find what a symbol calls |
@@ -23,9 +25,14 @@ Binary crate and library facade. Provides the `cartog` CLI with 16 commands for 
 | `changes` | Symbols affected by recent git changes (`--commits`, `--kind`) |
 | `watch [PATH]` | Auto-re-index on file changes (`--rag`, `--debounce`) |
 | `serve` | Start MCP server over stdio (`--watch`, `--rag`) |
+| `push` / `pull` | Sync the index to/from an S3-compatible remote (opt-in) |
+| `config` | Print the active resolved configuration |
+| `doctor` | Diagnose setup (git, config, DB, models) |
+| `completions` / `manpage` | Generate shell completions / man page |
 | `rag setup` | Download embedding and reranker models |
 | `rag index` | Build embedding index for semantic search |
 | `rag search` | Semantic search over code symbols |
+| `self update/version/rollback/migrate-db` | Manage the installed binary and migrate a legacy DB |
 
 ## How it works
 

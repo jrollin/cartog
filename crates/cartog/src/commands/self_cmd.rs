@@ -902,17 +902,44 @@ fn peer_lock_check_skipped() -> bool {
     false
 }
 
+/// Serve/watch lock slots a peer would hold if it were operating on this
+/// project's database — both the legacy `.cartog.db` and the new
+/// `.cartog/db.sqlite` under `root`, since a serve started before migration is
+/// holding the legacy path's slot. Used to scope the migrate-db peer check to
+/// this DB instead of every cartog process on the machine.
+fn target_db_slots(root: &Path) -> Vec<String> {
+    let paths = [
+        root.join(cartog_db::LEGACY_DB_FILE),
+        root.join(cartog_db::DB_DIR).join(cartog_db::DB_FILENAME),
+    ];
+    let mut slots = Vec::with_capacity(paths.len() * 2);
+    for p in &paths {
+        slots.push(state::slot_for_db("serve", p));
+        slots.push(state::slot_for_db("watch", p));
+    }
+    slots
+}
+
 /// Peer-lock guard decision for `migrate-db`, factored out so it can be unit
 /// tested without touching the filesystem or process state. A dry-run mutates
-/// nothing, so it never blocks on a live peer; a real migration bails if any
-/// peer holds a lock.
-fn migrate_peer_guard(dry_run: bool, active: &[cartog_process_lock::ActiveLock]) -> Result<()> {
+/// nothing, so it never blocks on a live peer; a real migration bails only if a
+/// peer holds a lock for *this* project's DB (`relevant_slots`) — a serve in an
+/// unrelated project must not block the migration.
+fn migrate_peer_guard(
+    dry_run: bool,
+    active: &[cartog_process_lock::ActiveLock],
+    relevant_slots: &[String],
+) -> Result<()> {
     if dry_run {
         return Ok(());
     }
-    if let Some(peer) = active.first() {
+    if let Some(peer) = active
+        .iter()
+        .find(|p| relevant_slots.iter().any(|s| s == &p.slot))
+    {
         anyhow::bail!(
-            "another cartog process is running ({slot}, PID {pid}); stop it before migrating",
+            "another cartog process is running on this database ({slot}, PID {pid}); \
+             stop it before migrating",
             slot = peer.slot,
             pid = peer.pid,
         );
@@ -927,7 +954,7 @@ pub fn cmd_self_migrate_db(root: &Path, dry_run: bool, json: bool) -> Result<()>
         let active = state::default_state_dir()
             .map(|dir| cartog_process_lock::find_active_locks(&dir))
             .unwrap_or_default();
-        migrate_peer_guard(dry_run, &active)?;
+        migrate_peer_guard(dry_run, &active, &target_db_slots(root))?;
     }
 
     let preview = plan_migration(root)?;
@@ -1616,7 +1643,8 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
             pid: 4242,
             start_time: None,
         }];
-        let err = migrate_peer_guard(false, &active).unwrap_err();
+        let slots = vec!["serve-abc".to_string()];
+        let err = migrate_peer_guard(false, &active, &slots).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("serve-abc"), "names the slot: {msg}");
         assert!(msg.contains("4242"), "names the pid: {msg}");
@@ -1630,12 +1658,44 @@ deadbeef *cartog-x86_64-unknown-linux-gnu.tar.gz
             pid: 4242,
             start_time: None,
         }];
-        migrate_peer_guard(true, &active).expect("dry-run ignores the peer lock");
+        let slots = vec!["serve-abc".to_string()];
+        migrate_peer_guard(true, &active, &slots).expect("dry-run ignores the peer lock");
     }
 
     #[test]
     fn migrate_peer_guard_allows_real_run_when_no_peer() {
-        migrate_peer_guard(false, &[]).expect("no peer → real run proceeds");
+        migrate_peer_guard(false, &[], &["serve-abc".to_string()])
+            .expect("no peer → real run proceeds");
+    }
+
+    #[test]
+    fn migrate_peer_guard_ignores_peer_on_unrelated_db() {
+        // A serve running for a different project (different slot) must not
+        // block this migration.
+        let active = vec![cartog_process_lock::ActiveLock {
+            slot: "serve-otherproject".to_string(),
+            pid: 4242,
+            start_time: None,
+        }];
+        let slots = vec![
+            "serve-thisproject".to_string(),
+            "watch-thisproject".to_string(),
+        ];
+        migrate_peer_guard(false, &active, &slots)
+            .expect("a peer on an unrelated DB must not block migration");
+    }
+
+    #[test]
+    fn target_db_slots_covers_legacy_and_new_paths() {
+        let root = Path::new("/tmp/some-project");
+        let slots = target_db_slots(root);
+        // serve+watch for both legacy and new paths.
+        assert_eq!(slots.len(), 4);
+        assert!(slots.iter().any(|s| s.starts_with("serve-")));
+        assert!(slots.iter().any(|s| s.starts_with("watch-")));
+        // The legacy and new paths differ, so their slots differ.
+        let unique: std::collections::HashSet<_> = slots.iter().collect();
+        assert_eq!(unique.len(), 4, "all four slots are distinct");
     }
 
     #[test]
