@@ -10,7 +10,7 @@ Watches a directory for source file changes and triggers incremental re-indexing
 
 ### Debounced file watching
 
-Uses `notify-debouncer-mini` to batch rapid filesystem events into a single re-index call. Default debounce window is 2 seconds.
+Uses `notify-debouncer-mini` to batch rapid filesystem events into a single re-index call. Default debounce window is 5 seconds.
 
 Events are filtered to **relevant paths only**: the file must have a supported extension (code or Markdown, via `detect_language`) and not be under an ignored directory (`.git`, `node_modules`, `target`, etc.).
 
@@ -27,8 +27,8 @@ The delay avoids re-embedding after every single file save during active editing
 
 ### Execution modes
 
-- **`spawn_watch()`** — runs the watch loop on a background thread, returns a `WatchHandle` for stop/drop
-- **`run_watch()`** — runs the watch loop in the foreground (blocking), with Ctrl+C handler for graceful shutdown
+- **`spawn_watch(config, db_path)`** — runs the watch loop on a background thread, returns a `WatchHandle` for stop/drop
+- **`run_watch(config, db_path)`** — runs the watch loop in the foreground (blocking), with Ctrl+C handler for graceful shutdown
 
 Both modes open their own `Database` connection (SQLite WAL allows concurrent readers).
 
@@ -36,11 +36,12 @@ Both modes open their own `Database` connection (SQLite WAL allows concurrent re
 
 | Export | Description |
 |--------|-------------|
-| `WatchConfig` | Configuration: root path, debounce window, RAG toggle, RAG delay, `rag_config` (RAG provider configuration for embedding + reranker, threaded from `.cartog.toml`) |
+| `WatchConfig` | Configuration: `root`, `debounce`, `rag` toggle, `rag_delay`, `rag_config` (provider config for embedding + reranker, threaded from `.cartog.toml`), `json_events` (emit machine-readable event lines), `pid_lock_dir` + `pid_lock_slot` (PID-lock tracking; both must be set together or neither), `skip_migrations` |
 | `WatchHandle` | Handle to stop a background watcher (via `stop()` or `Drop`) |
-| `spawn_watch()` | Start watching on a background thread |
-| `run_watch()` | Start watching in the foreground (blocking) |
+| `WATCH_LOCK_SLOT` | Conventional PID-lock slot name (`"watch"`) |
+| `spawn_watch(config, db_path)` | Start watching on a background thread |
+| `run_watch(config, db_path)` | Start watching in the foreground (blocking) |
 
 ## Crate dependencies
 
-`cartog-core`, `cartog-db`, `cartog-indexer`, `cartog-rag`
+`cartog-core`, `cartog-db`, `cartog-indexer`, `cartog-rag`, `cartog-process-lock`
