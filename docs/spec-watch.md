@@ -159,12 +159,6 @@ Then an initial incremental index runs before entering watch mode
 | Embedding model not found (--rag) | Log warning, skip RAG embedding, continue code graph indexing |
 | ONNX inference error on symbol | Log warning, skip symbol (existing fallback) |
 
-## Status
-
-Implemented — see the [`cartog-watch`](../crates/cartog-watch/README.md) crate
-(`WatchConfig`, `WatchHandle`, `run_watch`, `spawn_watch`) and `cartog serve
---watch [--rag]`.
-
 ## Out of Scope
 
 - **Git hook integration**: Could be added separately as `cartog hook install`.

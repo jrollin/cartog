@@ -16,7 +16,7 @@ the next reader cleans up after verifying the recorded PID is gone.
 
 Each slot maps to `<state_dir>/<slot>.pid`. The file holds two lines:
 
-```
+```text
 <pid>
 <os-native-start-time>
 ```
