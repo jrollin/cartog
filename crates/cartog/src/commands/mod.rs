@@ -314,8 +314,23 @@ pub fn cmd_index(
         } else {
             String::new()
         };
+        let unsupported = if r.files_unsupported > 0 {
+            let breakdown = r
+                .unsupported_by_ext
+                .iter()
+                .take(5)
+                .map(|(ext, n)| format!("{n} .{ext}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "\n  {} files in unsupported languages not indexed ({breakdown})",
+                r.files_unsupported
+            )
+        } else {
+            String::new()
+        };
         format!(
-            "Indexed {} files ({} skipped, {} removed)\n  {} symbols{}, {} edges ({} resolved{})\n",
+            "Indexed {} files ({} skipped, {} removed)\n  {} symbols{}, {} edges ({} resolved{}){}\n",
             r.files_indexed,
             r.files_skipped,
             r.files_removed,
@@ -324,6 +339,7 @@ pub fn cmd_index(
             r.edges_added,
             r.edges_resolved + r.edges_lsp_resolved,
             lsp_part,
+            unsupported,
         )
     })
 }
