@@ -132,9 +132,9 @@ version with `CARTOG_VERSION=<version>` (e.g. the tag from [Releases](https://gi
 ### From crates.io (Rust toolchain required)
 
 ```bash
-cargo install cartog                                  # default (includes LSP)
-cargo install cartog --no-default-features            # minimal, no LSP
-cargo install cartog --features ollama-embedding      # + Ollama support
+cargo install cartog                                  # default: LSP + S3 sync + Ollama provider
+cargo install cartog --no-default-features            # minimal: drops LSP, S3, Ollama
+cargo install cartog --no-default-features --features lsp  # LSP only
 ```
 
 ### Pre-built binaries (manual)

@@ -168,11 +168,12 @@ confirm `[embedding.ollama].base_url` in `.cartog.toml` matches it (default
 The configured embedding model isn't pulled. Run `ollama pull <model>` (e.g.
 `ollama pull nomic-embed-text`), then re-run `cartog rag index`.
 
-### "the ollama provider is not in this build"
+### "this build was compiled with `--no-default-features`"
 
-Prebuilt binaries (install.sh / GitHub Releases) omit the Ollama provider to
-keep size down. Install with the feature:
-`cargo install cartog --features ollama-embedding`.
+The Ollama provider ships in every default build (install.sh, GitHub Releases,
+`cargo install cartog`). You only see this if you rebuilt with
+`--no-default-features`. Rebuild with default features, or add
+`--features ollama-embedding`.
 
 ## Queries
 

@@ -22,7 +22,7 @@
 | `tokio` (rt-multi-thread) | Async runtime for MCP server only | Multi-thread for `spawn_blocking` throughput. Runtime created on-demand — sync commands skip it entirely |
 | `tracing` + `tracing-subscriber` | Structured logging to stderr | Logs to stderr so stdout stays clean for output and MCP protocol |
 | `fastembed` | ONNX Runtime inference for embeddings + re-ranking (local provider) | Optional via `provider-local` feature (default on). `default-features = false` drops image models (CLIP etc.). `rustls-tls` avoids OpenSSL system dependency |
-| `reqwest` | HTTP client for remote embedding providers (Ollama) | Optional via `provider-ollama` feature. Uses `blocking` + `rustls-tls` |
+| `reqwest` | HTTP client for self-update + remote embedding providers (Ollama) | Non-optional in the `cartog` binary (self-update). The Ollama provider in `cartog-rag` is gated by `provider-ollama`, which the binary enables by default (`ollama-embedding`). Uses `blocking` + `rustls-tls` |
 | `sqlite-vec` | Vector similarity search (KNN) in SQLite | `vec0` virtual table, requires integer rowids (bridged via `symbol_embedding_map`) |
 | `criterion` (dev) | Micro-benchmarks | Query latency benchmarks (µs-level) |
 | `rust-s3` 0.37 (`tokio-rustls-tls`) | S3-compatible client for `cartog push` / `cartog pull` | Optional via `remote-s3` feature (default on). Chosen over `aws-sdk-s3` for size (~5 MB vs ~18 MB); supports AWS S3, MinIO, R2, floci |
@@ -155,7 +155,7 @@ Returns the first non-empty result. Only FTS5 syntax errors trigger fallback —
 
 ### Provider architecture
 
-Embedding providers implement the `EmbeddingProvider` trait with `embed_query()`/`embed_document()` separation for asymmetric models. Providers are selected at runtime via `.cartog.toml` and gated behind Cargo feature flags (`provider-local`, `provider-ollama`).
+Embedding providers implement the `EmbeddingProvider` trait with `embed_query()`/`embed_document()` separation for asymmetric models. Providers are selected at runtime via `.cartog.toml` (default `provider = "local"`) and gated behind Cargo feature flags (`provider-local`, `provider-ollama`). The `cartog` binary compiles both in by default; selecting Ollama is a config choice, not a rebuild.
 
 ## SQLite Tuning
 

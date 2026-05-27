@@ -144,5 +144,5 @@ A spec stays as a design record after implementation. Do **not** leave a complet
 - **Embedding format versioning**: auto-detects embedding strategy changes, triggers re-embed on next `rag index`
 - **Schema versioning**: metadata-based migration system for DB schema evolution
 - **Pluggable embedding providers**: local ONNX (default) and Ollama, configured via `.cartog.toml`
-- **Feature flags**: binary `cartog` — `lsp` (default, on), `ollama-embedding` (off). Crate `cartog-rag` — `provider-local` (default), `provider-ollama`
+- **Feature flags**: binary `cartog` default = `lsp` + `remote-s3` + `ollama-embedding` (all on); advanced users strip via `--no-default-features`. Runtime embedding default stays local ONNX (`provider = "local"`); Ollama is opt-in via `.cartog.toml`. Crate `cartog-rag` — `provider-local` (default), `provider-ollama`
 - **Pending**: Java extractor improvements
