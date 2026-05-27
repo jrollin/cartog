@@ -62,6 +62,8 @@ pub use cartog_languages as languages;
 pub use cartog_rag as rag;
 pub use cartog_core as types;
 pub use cartog_watch as watch;
+pub use cartog_lsp as lsp; // gated on the `lsp` feature (on by default)
+pub use cartog_process_lock as process_lock; // hidden from rustdoc
 ```
 
 This allows benches and integration tests to use `cartog::db::Database`, `cartog::indexer::index_directory`, etc.

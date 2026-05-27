@@ -39,7 +39,7 @@ tempfile = { workspace = true }
 rust-s3 = { workspace = true, optional = true }
 
 [features]
-default = ["lsp", "remote-s3"]
+default = ["lsp", "remote-s3", "ollama-embedding"]
 lsp = ["dep:cartog-lsp", "cartog-indexer/lsp", "cartog-mcp/lsp"]
 ollama-embedding = ["cartog-rag/provider-ollama"]
 remote-s3 = ["dep:rust-s3"]

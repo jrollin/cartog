@@ -103,23 +103,29 @@ The script bumps `Cargo.toml`, commits, tags `vX.Y.Z`, and pushes. The release w
 
 ## Documentation Convention
 
-All documentation lives in `docs/`. No per-tool or per-client separate doc files — consolidate into the canonical files below.
+All documentation lives in `docs/`. Consolidate into the canonical files below — do not add a new file when an existing one fits. `docs/README.md` is the index; keep it in sync when adding or moving a doc.
 
 | File | Scope |
 |------|-------|
 | `docs/product.md` | Product context, target users, differentiation |
-| `docs/tech.md` | Technology stack, architecture decisions |
+| `docs/tech.md` | Technology stack, architecture decisions, RAG design |
 | `docs/structure.md` | Directory layout, module responsibilities, conventions |
-| `docs/usage.md` | CLI commands, agent skill setup, MCP server setup (all clients) |
+| `docs/usage.md` | CLI commands, agent skill setup, configuration |
+| `docs/mcp-setup.md` | Per-client MCP wiring (Cursor, VS Code, Claude Desktop, …) |
+| `docs/editor-integration.md` | Non-MCP editor CLI recipes (Neovim, Emacs, …) |
+| `docs/updates.md` | `cartog self update`: exit codes, env vars, state file |
+| `docs/troubleshooting.md` | Common errors and fixes (the single home for these) |
 | `docs/spec-*.md` | Feature specs (design records, kept after implementation) |
+| `docs/architecture/*.md` | Cross-cutting subsystem deep-dives (e.g. incremental indexing) |
 
-### Feature Specs (`docs/spec-*.md`)
+The MCP config JSON has one canonical copy in `docs/mcp-setup.md`; other docs link to it rather than re-embedding it. Release runbooks (e.g. `scripts/release-smoke.md`) live with the release scripts, not in `docs/`.
 
-Create a spec for new features with 3+ functional requirements or cross-cutting concerns. Follow the pattern in `docs/spec-watch.md`: overview, architecture, FRs, NFRs, acceptance criteria, implementation checklist.
+### Specs vs. architecture deep-dives
 
-Do **not** create specs for bug fixes, small enhancements, or docs-only changes.
+- `docs/spec-*.md` — a **feature** design record: overview, architecture, FRs, NFRs, acceptance criteria. Create one for new features with 3+ functional requirements or cross-cutting concerns. Do **not** create specs for bug fixes, small enhancements, or docs-only changes.
+- `docs/architecture/*.md` — a **subsystem** explainer that spans features (the indexing pipeline, edge resolution). Use when the topic is too detailed for `tech.md` but not tied to one feature.
 
-After implementation, mark checklist items complete — the spec stays as a design record.
+A spec stays as a design record after implementation. Do **not** leave a completed "implementation checklist / TODO" section in it — once shipped, replace it with a one-line Status note pointing at the crate/code; the durable value is the architecture and rationale, not the done checkboxes.
 
 ## Current State
 
@@ -138,5 +144,5 @@ After implementation, mark checklist items complete — the spec stays as a desi
 - **Embedding format versioning**: auto-detects embedding strategy changes, triggers re-embed on next `rag index`
 - **Schema versioning**: metadata-based migration system for DB schema evolution
 - **Pluggable embedding providers**: local ONNX (default) and Ollama, configured via `.cartog.toml`
-- **Feature flags**: binary `cartog` — `lsp` (default, on), `ollama-embedding` (off). Crate `cartog-rag` — `provider-local` (default), `provider-ollama`
+- **Feature flags**: binary `cartog` default = `lsp` + `remote-s3` + `ollama-embedding` (all on); advanced users strip via `--no-default-features`. Runtime embedding default stays local ONNX (`provider = "local"`); Ollama is opt-in via `.cartog.toml`. Crate `cartog-rag` — `provider-local` (default), `provider-ollama`
 - **Pending**: Java extractor improvements

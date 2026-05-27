@@ -12,7 +12,7 @@ Three install paths, pick whichever matches your environment:
 #    /usr/local/bin or ~/.local/bin.
 curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
 
-# 2. Cargo (Rust 1.77+; gives you crate features like ollama-embedding).
+# 2. Cargo (Rust 1.77+; lets advanced users strip features, e.g. --no-default-features).
 cargo install cartog
 
 # 3. Build from source.
@@ -117,7 +117,7 @@ base_url = "http://localhost:11434"
 | Provider | Config | Setup | Notes |
 |----------|--------|-------|-------|
 | `local` (default) | No config needed | `cartog rag setup` to download models | ONNX Runtime via fastembed, ~1.2GB models |
-| `ollama` | `provider = "ollama"` | Ollama server running with model pulled | No model download needed, dimension auto-detected. **Not in the prebuilt binary** — requires `cargo install cartog --features ollama-embedding`. |
+| `ollama` | `provider = "ollama"` | Ollama server running with model pulled | No model download needed, dimension auto-detected. Compiled into every default build; **local ONNX stays the default provider** — set `provider = "ollama"` to use it. |
 
 **Advanced local configuration:**
 
@@ -141,9 +141,9 @@ provider = "none"
 **Compile-time feature flags**:
 
 ```bash
-cargo install cartog                                    # default: LSP + local ONNX provider
-cargo install cartog --no-default-features              # minimal: no LSP dependency
-cargo install cartog --features ollama-embedding        # + Ollama embedding provider
+cargo install cartog                                    # default: LSP + S3 sync + Ollama provider (local ONNX is the runtime default)
+cargo install cartog --no-default-features              # minimal: drops LSP, S3 sync, and Ollama
+cargo install cartog --no-default-features --features lsp  # selective: LSP only
 ```
 
 ---
@@ -384,17 +384,18 @@ Only those four keys are accepted. Credential-shaped keys (`access_key`,
 `secret_key`, `aws_*`, `token`, `password`, …) are rejected at parse time —
 configure credentials via the AWS environment chain instead.
 
-### Minimal build (no S3)
+### Minimal build (drop default features)
 
 Users who want the smallest possible binary, or who run in fully air-gapped
-environments, can disable the S3 feature:
+environments, can drop the default features and add back only what they need:
 
 ```bash
-cargo install cartog --no-default-features --features lsp
+cargo install cartog --no-default-features                 # drops LSP, S3, Ollama
+cargo install cartog --no-default-features --features lsp   # keep LSP only
 ```
 
-The minimal binary refuses `cartog push` and `cartog pull` with a clear error
-pointing at the reinstall command.
+A binary built without `remote-s3` refuses `cartog push` and `cartog pull` with
+a clear error pointing at the reinstall command.
 
 ### `cartog map [--tokens N]`
 

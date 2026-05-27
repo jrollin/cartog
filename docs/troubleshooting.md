@@ -79,14 +79,14 @@ backfill without wiping.
 ### `MCP error -32000: Connection closed` when opening a second Claude Code window
 
 This was the pre-Phase-2 symptom of two cartog processes racing on the
-embedding-dimension migration. As of v0.18 cartog uses single-writer
+embedding-dimension migration. As of v0.17 cartog uses single-writer
 election: the first `cartog serve` is the primary, the second attaches
 read-only and exposes 11 of 13 MCP tools (`cartog_index` and
 `cartog_rag_index` return a clear refusal pointing at the primary). If the
 primary process dies, the secondary takes over within ~10s. See
 [spec-mcp-sharing.md](spec-mcp-sharing.md).
 
-If you still see the error, check that the cartog binary is at v0.18 or
+If you still see the error, check that the cartog binary is at v0.17 or
 newer (`cartog --version`) and that you haven't set `CARTOG_SINGLE_WRITER=0`.
 
 ### `cartog watch` refuses to start with "another cartog process holds the watch lock"
@@ -118,7 +118,7 @@ from crashed peers disappear automatically — no manual action needed.
 
 ### MCP stderr is full of `[ERROR]` lines that look like info-level messages
 
-Fixed in v0.18. When `cartog serve` runs as an MCP child (stderr not a
+Fixed in v0.17. When `cartog serve` runs as an MCP child (stderr not a
 TTY), the default tracing level is now `warn` so info-level progress lines
 no longer surface as `[ERROR]` in the parent's debug log. Set
 `RUST_LOG=info` to opt back in.
@@ -168,11 +168,12 @@ confirm `[embedding.ollama].base_url` in `.cartog.toml` matches it (default
 The configured embedding model isn't pulled. Run `ollama pull <model>` (e.g.
 `ollama pull nomic-embed-text`), then re-run `cartog rag index`.
 
-### "the ollama provider is not in this build"
+### "this build was compiled with `--no-default-features`"
 
-Prebuilt binaries (install.sh / GitHub Releases) omit the Ollama provider to
-keep size down. Install with the feature:
-`cargo install cartog --features ollama-embedding`.
+The Ollama provider ships in every default build (install.sh, GitHub Releases,
+`cargo install cartog`). You only see this if you rebuilt with
+`--no-default-features`. Rebuild with default features, or add
+`--features ollama-embedding`.
 
 ## Queries
 

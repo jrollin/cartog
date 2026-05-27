@@ -51,7 +51,9 @@ All user-supplied paths are validated against the project root:
 
 | Export | Description |
 |--------|-------------|
-| `run_server()` | Start the MCP server over stdio (async). Accepts `EmbeddingProviderConfig` and threads it through to all RAG operations (indexing and search). |
+| `run_server(db_path, watch, rag, rag_config, opts)` | Start the MCP server over stdio (async). `rag_config: EmbeddingProviderConfig` threads through to all RAG operations; `opts: ServerOptions` configures PID-lock tracking. |
+| `ServerOptions` | `pid_lock_dir` + `pid_lock_slot` for single-writer election (both set together, or neither for untracked mode). |
+| `SINGLE_WRITER_ENV` | Name of the env var (`CARTOG_SINGLE_WRITER`) that disables single-writer election when set to `0`. |
 
 ## Crate dependencies
 

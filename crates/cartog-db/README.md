@@ -32,6 +32,8 @@ When edges are first inserted, `target_id` is `NULL`. The resolution algorithm r
 5. **Project-wide unique** — exactly one match globally
 6. **Class over constructor** — when 2 matches remain, prefer `Class` kind
 
+Tiers 5 and 6 are evaluated together in a single project-wide query (capped at 3 candidates): a lone match resolves via tier 5, exactly two resolve via the tier-6 class preference, and 3+ stay unresolved.
+
 ### Search ranking
 
 Symbol search uses a composite score:
@@ -54,6 +56,10 @@ rank = match_tier + kind_penalty
 | `MAX_SEARCH_LIMIT` | Maximum results for search queries (100) |
 | `UnresolvedEdge` | Edge pending LSP resolution |
 | `IndexStats` | Aggregate statistics (files, symbols, edges, languages) |
+| `DbError` / `DbResult` | Crate error type and result alias |
+| `EmbeddingFingerprint` | Records the embedding strategy so a format change triggers re-embed |
+| `checkpoint_wal()` | Force a WAL checkpoint (used before backups / handoff) |
+| `CURRENT_SCHEMA_VERSION` / `DEFAULT_EMBEDDING_DIM` | Schema migration target and default vector dimension |
 
 ## Crate dependencies
 

@@ -64,8 +64,8 @@ The Ollama provider maps transport failures to actionable errors instead of raw 
 | `provider::RerankerProvider` | Trait for reranker backends |
 | `search::hybrid_search()` | Run the full hybrid search pipeline |
 | `indexer::index_embeddings()` | Embed symbols and write vectors to DB. Optional `progress: Option<ProgressCallback>` fires per batch (`Preparing`, `Embedding{processed,total}`, `Storing`); pass `None` for no-op. |
-| `indexer::ProgressUpdate` / `indexer::ProgressCallback` | Plain-data callback types for in-flight phase reporting (transport-agnostic) |
-| `setup::download_model()` | Download the embedding model (local provider) |
+| `indexer::ProgressUpdate` / `indexer::ProgressCallback` | Phase enum + `Fn` trait-object type alias for in-flight reporting (transport-agnostic) |
+| `setup::download_model()` | Download the embedding model (requires the `provider-local` feature) |
 | `EMBEDDING_DIM` | Default vector dimension (384) |
 
 ## Crate dependencies

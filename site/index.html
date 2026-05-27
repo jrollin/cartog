@@ -162,7 +162,7 @@
       </div>
       <div class="feature-card">
         <h3><span class="feature-icon">🛠️</span> <code>cartog ide</code> <span style="font-size: 11px; color: var(--text-tertiary); font-weight: 500;">(optional)</span></h3>
-        <p>Skip this if you only use the CLI. Need MCP in Claude Code, Cursor, VS Code, Codex CLI, Gemini CLI, Windsurf, Zed, or Claude Desktop? Run it once per machine.</p>
+        <p>Skip this if you only use the CLI. Need MCP in Claude Code, Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, or Claude Desktop? Run it once per machine.</p>
       </div>
     </div>
 
@@ -227,7 +227,7 @@
       </div>
       <div class="feature-card">
         <h3><span class="feature-icon">🔬</span> LSP precision, built in</h3>
-        <p>Auto-detects language servers on PATH. Boosts edge resolution from ~25% to ~42-81%. Works without them, better with them.</p>
+        <p>Auto-detects language servers on PATH. Boosts edge resolution from ~25% to ~44–81%. Works without them, better with them.</p>
       </div>
       <div class="feature-card">
         <h3><span class="feature-icon">🔒</span> 100% local</h3>
@@ -535,10 +535,10 @@
       </div>
       <div class="install-card">
         <h3>② From crates.io <span style="font-size: 12px; color: var(--text-tertiary); font-weight: 500;">— Rust toolchain required</span></h3>
-        <pre>cargo install cartog                              <span class="comment"># default (includes LSP)</span>
-cargo install cartog --no-default-features        <span class="comment"># minimal, no LSP</span>
-cargo install cartog --features ollama-embedding  <span class="comment"># + Ollama support</span></pre>
-        <p>LSP auto-detects language servers on PATH and is enabled by default. Disable at runtime with <code>--no-lsp</code>, or omit at build time with <code>--no-default-features</code>. The <code>ollama-embedding</code> feature enables Ollama as an embedding provider.</p>
+        <pre>cargo install cartog                              <span class="comment"># default: LSP + S3 sync + Ollama</span>
+cargo install cartog --no-default-features        <span class="comment"># minimal: drops LSP, S3, Ollama</span>
+cargo install cartog --no-default-features --features lsp  <span class="comment"># LSP only</span></pre>
+        <p>LSP, S3 index sync, and the Ollama provider are all enabled by default. Local ONNX stays the default embedding provider; set <code>provider = "ollama"</code> in <code>.cartog.toml</code> to use Ollama. Disable LSP at runtime with <code>--no-lsp</code>, or strip features at build time with <code>--no-default-features</code>.</p>
       </div>
       <div class="install-card">
         <h3>③ Pre-built binaries <span style="font-size: 12px; color: var(--text-tertiary); font-weight: 500;">— manual download</span></h3>

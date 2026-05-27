@@ -163,8 +163,8 @@ Ollama manages only the embedding model. The reranker (~100MB cross-encoder) is 
 
 #### Troubleshooting
 
-- **"Unknown or disabled embedding provider: 'ollama'"** — Install with `cargo install cartog --features ollama-embedding`.
-- **"Failed to connect to Ollama server"** — Ensure Ollama is running (`ollama serve`). For non-default hosts, set `OLLAMA_HOST=host:port` before launching cartog.
+- **"Unknown or disabled embedding provider: 'ollama'"** — Only happens on a `--no-default-features` build; the Ollama provider ships by default. Reinstall with `cargo install cartog` (or add `--features ollama-embedding`).
+- **"Failed to connect to Ollama server"** — Ensure Ollama is running (`ollama serve`). For non-default hosts, set `base_url` under `[embedding.ollama]` in `.cartog.toml`.
 - **"Embedding dimension changed"** — Provider switch detected. Run `cartog rag index` to re-embed.
 
 ### "Find code related to a concept"
