@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.17.2] - 2026-05-27
+## [0.18.0] - 2026-05-27
 
 ### Bug Fixes
 
@@ -125,6 +125,9 @@
 - Trim verbosity and split MCP per-client setup out of usage.md ([`dbc2fe0`](https://github.com/jrollin/cartog/commit/dbc2fe053d154cfd3a7374debcaa8ed3a5985d16))
 - Sync with UX changes and fix stale command/tool counts ([`1f68cd1`](https://github.com/jrollin/cartog/commit/1f68cd119cd16d4d770483d5b253a2537ca6367c))
 - **site**: Sync usage.html with UX changes; fix ensure_indexed.sh path ([`26ac1a9`](https://github.com/jrollin/cartog/commit/26ac1a996ff7438335824aec6ab062d1b428cab6))
+- **crates**: Add cartog-process-lock README; sync crate READMEs with code ([`ce111e7`](https://github.com/jrollin/cartog/commit/ce111e719c7e71c06516324efab1d36d0df62f49))
+- Reorganize docs/, amend convention, fix stale site/docs facts ([`e74523c`](https://github.com/jrollin/cartog/commit/e74523c18ff14bc092dd8ef02c8fcbb4a83b9fd6))
+- Fix PID-file fence lang, drop duplicate watch Status, en-dash range ([`2b2cfef`](https://github.com/jrollin/cartog/commit/2b2cfef7a85e9798a0cabcaccb278ebe48a51de9))
 
 ### Features
 
@@ -208,6 +211,7 @@
 - **cli,mcp**: Suggest near-miss symbol names on empty navigation results ([`d14e67b`](https://github.com/jrollin/cartog/commit/d14e67bd644da3cb07d8862c098486e130191bac))
 - **indexer**: Report files skipped for unsupported languages ([`455bfd3`](https://github.com/jrollin/cartog/commit/455bfd370448cd210a112279b86d931b358b1a5f))
 - **cli**: Hint to run index when stats shows an empty database ([`a253478`](https://github.com/jrollin/cartog/commit/a2534786232d2afa51bcf897d899a2b3e73d0bd6))
+- **build**: Include Ollama embedding provider in default features ([`5413379`](https://github.com/jrollin/cartog/commit/5413379b6e3037c7872e4650706a7ea7915fff0c))
 
 ### Miscellaneous
 
