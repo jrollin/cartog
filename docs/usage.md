@@ -766,7 +766,7 @@ The plugin wires two Claude Code hooks plus a user-typed skill:
 To run the SessionStart steps manually:
 
 ```bash
-bash scripts/ensure_indexed.sh
+bash skills/cartog/scripts/ensure_indexed.sh
 ```
 
 ### Skill Contents
