@@ -121,6 +121,16 @@ mod imp {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
+    /// Actionable suffix for an S3 HTTP error status. 401/403 almost always
+    /// mean credentials or bucket policy, not a cartog bug — say so.
+    fn http_status_hint(status: u16) -> &'static str {
+        match status {
+            401 | 403 => " (check AWS credentials and bucket permissions)",
+            404 => " (bucket or key not found — check the remote URL)",
+            _ => "",
+        }
+    }
+
     /// True when `err` is a cross-device-link error from `std::fs::rename`.
     ///
     /// `io::ErrorKind::CrossesDevices` is still unstable, so we match on the
@@ -345,7 +355,11 @@ mod imp {
                 .await
                 .context("S3 upload failed")?;
             if !(200..300).contains(&resp.status_code()) {
-                bail!("S3 upload returned HTTP {}", resp.status_code());
+                bail!(
+                    "S3 upload returned HTTP {}{}",
+                    resp.status_code(),
+                    http_status_hint(resp.status_code())
+                );
             }
             Ok::<_, anyhow::Error>(())
         })?;
@@ -422,7 +436,10 @@ mod imp {
                 .await
                 .context("S3 download failed")?;
             if !(200..300).contains(&status) {
-                bail!("S3 download returned HTTP {status}");
+                bail!(
+                    "S3 download returned HTTP {status}{}",
+                    http_status_hint(status)
+                );
             }
 
             // 4) HEAD to read metadata (sha256 + schema_version).

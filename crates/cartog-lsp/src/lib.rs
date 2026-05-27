@@ -126,7 +126,10 @@ pub fn lsp_resolve_edges(
             if let Err(e) = manager.open_file(language, file_path, &content) {
                 tracing::debug!("didOpen failed for {file_path}: {e:#}");
                 if !manager.is_alive(language) {
-                    tracing::warn!("{language} server died during didOpen");
+                    tracing::warn!(
+                        "{language} LSP server died during didOpen — remaining {language} edges \
+                         resolved via heuristics only. Rerun with --no-lsp to skip LSP entirely."
+                    );
                     server_died = true;
                     break;
                 }
@@ -198,7 +201,10 @@ pub fn lsp_resolve_edges(
                             edge.line
                         );
                         if !manager.is_alive(language) {
-                            tracing::warn!("{language} server died, skipping remaining edges");
+                            tracing::warn!(
+                                "{language} LSP server died — remaining {language} edges resolved \
+                                 via heuristics only. Rerun with --no-lsp to skip LSP entirely."
+                            );
                             server_died = true;
                             break;
                         }

@@ -174,6 +174,20 @@ pub enum ProgressUpdate {
     Storing,
 }
 
+impl ProgressUpdate {
+    /// Lower-case, transport-neutral phase label — single source of truth for
+    /// RAG phase wording shared by CLI spinners and the MCP forwarder.
+    pub fn label(&self) -> String {
+        match self {
+            ProgressUpdate::Preparing => "preparing".to_string(),
+            ProgressUpdate::Embedding { processed, total } => {
+                format!("embedding {processed}/{total}")
+            }
+            ProgressUpdate::Storing => "storing embeddings".to_string(),
+        }
+    }
+}
+
 /// Optional progress callback type accepted by [`index_embeddings`].
 ///
 /// Called synchronously from inside the indexer (never on an async runtime).

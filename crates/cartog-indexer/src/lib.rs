@@ -154,6 +154,24 @@ pub enum ProgressUpdate {
     /// Phase 3 starting: `total` parsed files about to be written in the
     /// indexing transaction.
     Storing { total: u32 },
+    /// Phase 4 starting: LSP-based edge resolution. Slowest phase on large
+    /// repos and the one most likely to look "stuck", so it gets its own event.
+    ResolvingLsp,
+}
+
+impl ProgressUpdate {
+    /// Lower-case, transport-neutral phase label. The single source of truth
+    /// for phase wording — CLI spinners and the MCP progress forwarder both
+    /// render this (applying their own casing/format), so the strings can't
+    /// drift between crates.
+    pub fn label(&self) -> String {
+        match self {
+            ProgressUpdate::Walking => "scanning files".to_string(),
+            ProgressUpdate::Parsing { total } => format!("parsing {total} files"),
+            ProgressUpdate::Storing { total } => format!("storing {total} files"),
+            ProgressUpdate::ResolvingLsp => "resolving edges with LSP".to_string(),
+        }
+    }
 }
 
 /// Optional progress callback type accepted by [`index_directory`].
@@ -490,6 +508,7 @@ pub fn index_directory(
     // re-querying the LSP repeats work. Use `--force` to retry.
     #[cfg(feature = "lsp")]
     if lsp && !dirty_files.is_empty() {
+        emit(ProgressUpdate::ResolvingLsp);
         let stats = cartog_lsp::lsp_resolve_edges(db, &root, None)?;
         result.edges_lsp_resolved = stats.resolved;
         result.edges_marked_unresolvable = stats.marked_unresolvable;

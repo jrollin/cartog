@@ -1988,6 +1988,16 @@ impl Database {
         Ok(rows)
     }
 
+    /// True when no symbols have been indexed yet (fresh/empty DB). Cheap —
+    /// a single `EXISTS(SELECT 1 FROM symbols)` that stops at the first row.
+    /// Used by query commands to distinguish "no index yet" from a no-match.
+    pub fn is_empty(&self) -> Result<bool> {
+        let exists: bool =
+            self.conn
+                .query_row("SELECT EXISTS(SELECT 1 FROM symbols)", [], |row| row.get(0))?;
+        Ok(!exists)
+    }
+
     /// Index statistics.
     pub fn stats(&self) -> Result<IndexStats> {
         let num_files: u32 = self
@@ -2930,6 +2940,15 @@ mod tests {
         let outline = db.outline("test.py").unwrap();
         assert_eq!(outline.len(), 1);
         assert_eq!(outline[0].name, "my_func");
+    }
+
+    #[test]
+    fn is_empty_reflects_symbol_presence() {
+        let db = Database::open_memory().unwrap();
+        assert!(db.is_empty().unwrap(), "fresh DB should be empty");
+        db.insert_symbol(&test_symbol("f", SymbolKind::Function, "a.py", 1))
+            .unwrap();
+        assert!(!db.is_empty().unwrap(), "DB with a symbol is not empty");
     }
 
     #[test]
