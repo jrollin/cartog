@@ -109,18 +109,6 @@ PID files for `cartog serve` and `cartog watch` live in the same directory. Slot
 
 ## Troubleshooting
 
-### "another cartog process is running"
-
-The upgrade refused because a peer `cartog serve` or `cartog watch` is holding the binary open. Stop the named process and re-run `cartog self update`. The error message includes the slot (`serve-<hash>` / `watch-<hash>`, where `<hash>` is a SHA-256 prefix of the peer's DB path) and PID.
-
-### Stale PID files
-
-If a `cartog serve`/`watch` was killed with `SIGKILL` (or the machine crashed), the PID file may remain after the process is gone. Cartog reaps stale entries automatically: every `cartog serve` / `cartog watch` startup runs a sweep that unlinks every `.pid` file whose recorded process has exited (not just the slot being claimed), and `cartog self update` also clears them. Manual cleanup is rarely needed; to clear by hand: `rm $XDG_STATE_HOME/cartog/{serve,watch}-*.pid` (Linux paths; substitute the platform-specific state dir).
-
-### "checksum mismatch"
-
-Exit `4` means the downloaded tarball's SHA256 did not match the release's `SHA256SUMS`. cartog aborts before touching any files. Common causes: a captive-portal proxy modifying the response, a corrupted CDN cache. Retry; if it persists, [open an issue](https://github.com/jrollin/cartog/issues).
-
-### `cargo install cartog` users
-
-`cartog self update` refuses to overwrite cargo-managed binaries on purpose — `cargo install` expects to be the only writer of files in `$CARGO_HOME/bin`. Use `cargo install cartog --force`.
+Update failures map to the exit codes above. For peer-lock refusals ("another
+cartog process is running"), stale PID files, checksum mismatches, and
+`cargo install` users, see [troubleshooting.md](troubleshooting.md).

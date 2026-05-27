@@ -25,7 +25,7 @@ Start here: the root [README](../README.md) for install and quick start.
 
 ## Release
 
-- [release-smoke.md](release-smoke.md) — manual smoke checklist run before tagging
+- [scripts/release-smoke.md](../scripts/release-smoke.md) — manual smoke checklist run before tagging
 
 ## Assets
 

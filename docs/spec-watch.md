@@ -159,51 +159,11 @@ Then an initial incremental index runs before entering watch mode
 | Embedding model not found (--rag) | Log warning, skip RAG embedding, continue code graph indexing |
 | ONNX inference error on symbol | Log warning, skip symbol (existing fallback) |
 
-## Implementation TODO
+## Status
 
-All items completed.
-
-### Dependencies
-- [x] Add `notify = "8"` to `Cargo.toml` (debounced file watcher)
-- [x] Add `notify-debouncer-mini = "0.7"` to `Cargo.toml` (debounce layer)
-- [x] Add `ctrlc = "3"` to `Cargo.toml` (graceful Ctrl+C handling)
-- [x] ~~`humantime`~~ — dropped in favor of `u64` seconds args (simpler, no extra dep)
-
-### CLI
-- [x] Add `Watch` variant to `Command` enum in `cli.rs`
-- [x] Add `--watch` and `--rag` flags to `Serve` variant in `cli.rs`
-- [x] Wire up both in `main.rs` match arm
-
-### Core: `crates/cartog-watch/src/lib.rs`
-- [x] Create `watch.rs` module with `WatchConfig`, `WatchHandle`, `run_watch()`, `spawn_watch()`
-- [x] `notify_debouncer_mini` for debounced file events
-- [x] `is_relevant_path()` filter using `detect_language()` + `is_ignored_dirname()`
-- [x] On debounce fire: `indexer::index_directory(&db, root, false)`
-- [x] RAG deferred timer: checks `symbols_needing_embeddings()`, fires after `rag_delay`
-- [x] Ctrl+C handler via `ctrlc` crate: flush pending RAG, exit cleanly
-
-### MCP Server Integration
-- [x] `cartog serve --watch` spawns background watcher via `spawn_watch()`
-- [x] `cartog serve --watch --rag` also enables deferred RAG embedding
-- [x] `WatchHandle` dropped on server shutdown, signaling watcher thread to stop
-- [x] Watcher opens its own DB connection (SQLite WAL allows concurrent readers)
-
-### Commands
-- [x] `cmd_watch()` in `commands.rs`
-- [x] `run_server(watch, rag)` updated in `mcp.rs`
-
-### Public API for reuse
-- [x] `indexer::is_ignored_dirname()` — extracted from private `is_ignored()` for sharing
-
-### Testing (44 tests)
-- [x] 12 language coverage tests (Python, TS, TSX, JS, JSX, MJS, CJS, Rust, Go, Ruby, Java, `.pyi`)
-- [x] 5 irrelevant file type tests (JSON, Markdown, TOML, YAML, no extension)
-- [x] 10 ignored directory tests (node_modules, .git, target, __pycache__, vendor, venv, dist, .next, .mypy_cache, .hg/.svn)
-- [x] 4 path boundary tests (hidden dirs, root level, deeply nested, outside root)
-- [x] 4 `is_ignored_dirname()` direct tests (known dirs, hidden dirs, allowed dirs, case sensitivity)
-- [x] 2 `WatchConfig` tests (defaults, custom values)
-- [x] 2 `spawn_watch` error path tests (nonexistent dir, file-not-dir)
-- [x] 2 `WatchHandle` lifecycle tests (drop signals shutdown, stop signals and joins)
+Implemented — see the [`cartog-watch`](../crates/cartog-watch/README.md) crate
+(`WatchConfig`, `WatchHandle`, `run_watch`, `spawn_watch`) and `cartog serve
+--watch [--rag]`.
 
 ## Out of Scope
 
