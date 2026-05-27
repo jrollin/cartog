@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.17.1] - 2026-05-20
+## [0.17.2] - 2026-05-27
 
 ### Bug Fixes
 
@@ -68,6 +68,26 @@
 - **mcp**: Harden promotion ordering, retry, validation, and cancellation ([`9e59f5b`](https://github.com/jrollin/cartog/commit/9e59f5baa5bdbc2bd2dda505e21cf49721b52884))
 - Address inline review findings on PR #55 fixes ([`081cdfc`](https://github.com/jrollin/cartog/commit/081cdfc20b816c45e932cb7766e754627966bcc4))
 - **mcp**: Poison-safe promotion + surface watcher_active in cartog_stats ([`9f157fe`](https://github.com/jrollin/cartog/commit/9f157fe87dba19f55262c2c7fac98de3bacbefc2))
+- **rag**: Always emit Storing and use post-filter total for embedding progress ([`4c86815`](https://github.com/jrollin/cartog/commit/4c8681598b9a96f7b17d56da24493dfb2b393dca))
+- **mcp**: Drain progress forwarder on tool error paths ([`41474b9`](https://github.com/jrollin/cartog/commit/41474b99173dc8291018dcb0015258c0862a5030))
+- **mcp**: Allow(dead_code) on Phase::Custom for --no-default-features builds ([`43bb565`](https://github.com/jrollin/cartog/commit/43bb565c50b9183cbcd217b891cd6a6dfc862718))
+- **progress**: Correct Storing semantics for both indexers ([`7286878`](https://github.com/jrollin/cartog/commit/7286878d21f6994913cdd89b968d0048f2471400))
+- **tests**: Close ETXTBSY race in self_update_test binary copy ([`6d3757b`](https://github.com/jrollin/cartog/commit/6d3757ba31d4e820d921bda4851ea2bf3874cccc))
+- **lsp**: Canonicalize root in parse_definition_response, refresh doc ([`c2daed7`](https://github.com/jrollin/cartog/commit/c2daed7d112a6dfa3f9d243e40d8071bb54f009a))
+- **serve,watch**: Reject inverse half-config + cwd-anchor bare relative slots ([`39c8865`](https://github.com/jrollin/cartog/commit/39c886599859ae466d8aa709c6118fa06fa79af9))
+- **cli**: Gate pid_lock_slot on default_state_dir presence ([`451b8e8`](https://github.com/jrollin/cartog/commit/451b8e832dab1b48a803a398cd68b7b378135e07))
+- **lsp**: Use symmetric raw paths in parse_definition_response fallback ([`d4e7a66`](https://github.com/jrollin/cartog/commit/d4e7a66257c6ec9b2c5d0cdca5e01592fb1147a9))
+- **mcp**: Harden promoter handoff against partial promotion ([`d155058`](https://github.com/jrollin/cartog/commit/d155058cb426459454de1a03992c794e36d66a25))
+- **watch,db,process-lock**: Bounded Drop join, state-guarded edge marks, capped sweep ([`7510634`](https://github.com/jrollin/cartog/commit/7510634f5112927b99e1a9d9e681357d5ea2e6dd))
+- **state**: Normalize CurDir in slot_for_db step-3 fallback ([`a3c54ed`](https://github.com/jrollin/cartog/commit/a3c54edc99f461183181c16dd2495f867e79f2b5))
+- **lsp,process-lock**: Address PR review comments ([`7b59e4e`](https://github.com/jrollin/cartog/commit/7b59e4e7e64cb87b0f20d5b9a605c1d469228c9e))
+- **deps**: Bump rust-s3 0.35 → 0.37 to clear RUSTSEC vulns ([`9ad590f`](https://github.com/jrollin/cartog/commit/9ad590f87eb9065719059608e6deb4e96ef9a754))
+- **remote**: Surface read_config IO errors, close floci container leak, dehardcode schema version ([`d7b8805`](https://github.com/jrollin/cartog/commit/d7b8805686e47bc973f59f352652e6a97efc65b4))
+- **test**: Stop flaky sha256 mismatch in pull_refuses_non_cartog_sqlite ([`015ec6c`](https://github.com/jrollin/cartog/commit/015ec6c4296ae0ba257141d245ceec67abcc9343))
+- **remote**: Distinguish malformed schema-version header, add EXDEV install fallback ([`ca5ba2d`](https://github.com/jrollin/cartog/commit/ca5ba2dbe1aed04d79f6e90aac36536c37662898))
+- **self**: Scope migrate-db peer check to the target database ([`d84b3b9`](https://github.com/jrollin/cartog/commit/d84b3b900b30baab88f4825aae90acc671359c85))
+- **rag**: Actionable errors when Ollama is unreachable or model is missing ([`99d7283`](https://github.com/jrollin/cartog/commit/99d72833f38cd581037ec5d44f3839331736529d))
+- **cli**: Actionable errors for corrupt or read-only database ([`3bc5800`](https://github.com/jrollin/cartog/commit/3bc58002bff3c341325d7488881605b04ba9db3f))
 
 ### Documentation
 
@@ -100,6 +120,11 @@
 - Spec + sync for single-writer MCP ([`bc2a747`](https://github.com/jrollin/cartog/commit/bc2a7470a460d8b1456700f54f91de1e9c1b2b86))
 - Drop unsafe manual lock deletion + fix log copy + state_dir path ([`4d876b1`](https://github.com/jrollin/cartog/commit/4d876b1eda51765da28b49821745036acb4532b1))
 - **spec**: Record review fixes + correct cartog rag search reconcile claim ([`8c01bde`](https://github.com/jrollin/cartog/commit/8c01bded3a33369b15925eda58a8f75d23ffea43))
+- Document MCP progress notifications for index tools ([`5113a74`](https://github.com/jrollin/cartog/commit/5113a742a90e6ffab2f08edcb32b41b037a6f699))
+- **site,usage**: Expand progress-notification description and add to site ([`a13f39f`](https://github.com/jrollin/cartog/commit/a13f39f89207564a3cb204496639cb61f892820f))
+- Trim verbosity and split MCP per-client setup out of usage.md ([`dbc2fe0`](https://github.com/jrollin/cartog/commit/dbc2fe053d154cfd3a7374debcaa8ed3a5985d16))
+- Sync with UX changes and fix stale command/tool counts ([`1f68cd1`](https://github.com/jrollin/cartog/commit/1f68cd119cd16d4d770483d5b253a2537ca6367c))
+- **site**: Sync usage.html with UX changes; fix ensure_indexed.sh path ([`26ac1a9`](https://github.com/jrollin/cartog/commit/26ac1a996ff7438335824aec6ab062d1b428cab6))
 
 ### Features
 
@@ -172,6 +197,17 @@
 - **mcp**: Attach read-only when another cartog process is primary ([`82c6f24`](https://github.com/jrollin/cartog/commit/82c6f24b2292313a1c94ca81a3c885f887df57cc))
 - **db,watch**: Open_existing_rw + watcher skip flags for promotion ([`5d8fe84`](https://github.com/jrollin/cartog/commit/5d8fe84545cbad8afb323fd1534b95a7018c93f4))
 - **mcp**: Promote secondary to primary when watched holder dies ([`24c5c70`](https://github.com/jrollin/cartog/commit/24c5c70b54976ea791facfcfa5eaa9e31b309aff))
+- **indexer**: Add optional progress callback to index_directory ([`6c43a23`](https://github.com/jrollin/cartog/commit/6c43a233133093abf6de89b90f19c02ee8b64bec))
+- **rag**: Add optional progress callback to index_embeddings ([`480e8b8`](https://github.com/jrollin/cartog/commit/480e8b82b9f6730b8b0e8dc4cddf674a611d1e0c))
+- **mcp**: Emit notifications/progress for cartog_index and cartog_rag_index ([`efe82c4`](https://github.com/jrollin/cartog/commit/efe82c4512ff02d5c829777152a021204f1dd99b))
+- **mcp**: Honor notifications/cancelled in cartog_index and cartog_rag_index ([`22ab398`](https://github.com/jrollin/cartog/commit/22ab398078566e96deabd38ffe6ffcdb8f9e12d0))
+- **db**: Split resolution_state=3 for edges with external targets ([`f1286e3`](https://github.com/jrollin/cartog/commit/f1286e3dc22bbcb91366c2689b98fcd745e896a6))
+- **serve,watch**: DB-scoped PID lock slots + stale-file sweep ([`d382de9`](https://github.com/jrollin/cartog/commit/d382de98a16a66fad6e36f6c40651e8f7528d2bc))
+- **remote**: Add opt-in S3 index sync via `cartog push` / `cartog pull` ([`22ee0a5`](https://github.com/jrollin/cartog/commit/22ee0a594729820bf52222b4361c617b68078891))
+- **cli**: Improve index UX — progress, clear messaging, actionable errors ([`404075f`](https://github.com/jrollin/cartog/commit/404075feedaad3bb35d2bdc49b3e32977aeb5267))
+- **cli,mcp**: Suggest near-miss symbol names on empty navigation results ([`d14e67b`](https://github.com/jrollin/cartog/commit/d14e67bd644da3cb07d8862c098486e130191bac))
+- **indexer**: Report files skipped for unsupported languages ([`455bfd3`](https://github.com/jrollin/cartog/commit/455bfd370448cd210a112279b86d931b358b1a5f))
+- **cli**: Hint to run index when stats shows an empty database ([`a253478`](https://github.com/jrollin/cartog/commit/a2534786232d2afa51bcf897d899a2b3e73d0bd6))
 
 ### Miscellaneous
 
@@ -188,6 +224,10 @@
 - PHP doc alignment + webapp_php benchmark fixture (#38) ([`d54561e`](https://github.com/jrollin/cartog/commit/d54561eec44362522624bf48e1ff366a60e4d752))
 - Add CODEOWNERS file ([`3969d6b`](https://github.com/jrollin/cartog/commit/3969d6b99e90e63efa66d97c24dc43d92090d802))
 - De-pin versions, add Code of Conduct + site hygiene ([`603f401`](https://github.com/jrollin/cartog/commit/603f401e1459a9e8f5815908adb458e40e7a5503))
+- **tests**: Tighten PR #55 review follow-ups ([`769eab2`](https://github.com/jrollin/cartog/commit/769eab2a4c5ff1af049732720776d27328d9326f))
+- **tests**: Address /code-review findings on PR #55 follow-ups ([`6111b8f`](https://github.com/jrollin/cartog/commit/6111b8f99dcb1b0996bf27df158a0d14cee4d21f))
+- **plugin**: Non-blocking onboarding with /cartog-install repair verb ([`f498e80`](https://github.com/jrollin/cartog/commit/f498e80f6e662343a518e0d512b58da1a443e07f))
+- **plugin**: Address remaining /code-review findings (#8, #12, #13, #14) ([`eab61ef`](https://github.com/jrollin/cartog/commit/eab61efd5765d1c52a81d95a385c1ca294e701ae))
 
 ### Performance
 
@@ -214,6 +254,8 @@
 - **agents**: Add behavioral eval framework with golden examples ([`05056fe`](https://github.com/jrollin/cartog/commit/05056fe27771cb7348e412963d13472a7483d429))
 - **self-update**: Pinpoint coverage for spec rules in Phase 7 ([`3b93053`](https://github.com/jrollin/cartog/commit/3b930538bac1d56e7977582e63d72f300e287af6))
 - **self-update**: Unit-test pure helpers for in-process coverage ([`63d1b9d`](https://github.com/jrollin/cartog/commit/63d1b9d1cbb279846da32c763b2a8f28aa152aa1))
+- **remote**: Close deferred gaps from round-3 review ([`5e17ce9`](https://github.com/jrollin/cartog/commit/5e17ce9e52c0877c6335375cc8e4d539ca1ac562))
+- **skill**: Match optional CARTOG_PROGRESS=1 prefix in DB-path patch ([`629d420`](https://github.com/jrollin/cartog/commit/629d42067e5a706ae010d341a37cca4465562ac1))
 
 ## [0.3.1] - 2026-02-26
 
