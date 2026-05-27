@@ -380,6 +380,30 @@ pub fn register_sqlite_vec() {
 /// Current schema version. Increment when adding migrations.
 const SCHEMA_VERSION: u32 = 4;
 
+/// Public mirror of [`SCHEMA_VERSION`] for callers outside this crate
+/// (e.g. `cartog pull` needs it to compare against a pulled DB and refuse
+/// to load a future-versioned file). Kept in sync by construction.
+pub const CURRENT_SCHEMA_VERSION: u32 = SCHEMA_VERSION;
+
+/// Read the `schema_version` recorded in a cartog SQLite file at `path`,
+/// without going through the full [`Database::open`] machinery (no
+/// migrations, no fingerprint reconciliation). Used by `cartog pull` to
+/// guard against pulling a future-versioned DB before clobbering the
+/// local one.
+///
+/// Returns `Ok(0)` when the file exists but is not a cartog DB (no
+/// `metadata` table, or no `schema_version` row). Returns `Err` only on
+/// genuine SQLite errors (corrupt file, permission denied, etc.).
+pub fn read_schema_version_at(path: &std::path::Path) -> anyhow::Result<u32> {
+    use anyhow::Context;
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .with_context(|| format!("open {} read-only for schema check", path.display()))?;
+    Ok(read_schema_version(&conn)?)
+}
+
 /// True when the `symbol_vec` virtual table exists in the open DB. Used by
 /// the fast-path early returns in [`handle_embedding_dimension`] and
 /// [`Database::reconcile_embedding_fingerprint`] so a previously-corrupted

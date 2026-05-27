@@ -61,6 +61,31 @@ jobs:
       - run: cargo test
       - run: cargo test --no-default-features
 
+  test-remote:
+    name: Test Remote (S3/floci)
+    runs-on: ubuntu-latest
+    # Drives `cartog push` / `cartog pull` against a floci container
+    # (AWS-local-emulator) over docker. Separate from the main `test` job
+    # so failures are unambiguous: this one is about S3 plumbing, not the
+    # core indexer.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Ensure AWS CLI is available
+        # AWS CLI is preinstalled on ubuntu-latest runners; this is a
+        # defensive check that prints the version, not an install step.
+        run: aws --version
+      - name: Pre-pull floci image
+        # Pre-pulling avoids each test paying the pull latency in its own
+        # wait loop and keeps test runtime under ~30 s for the whole file.
+        run: docker pull floci/floci
+      - name: Run remote integration tests
+        # `--test-threads=1` because each test claims a floci container
+        # on a random host port; running in parallel needs no further
+        # coordination, but serial output is easier to read on failure.
+        run: cargo test --test remote_integration -- --test-threads=1 --nocapture
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

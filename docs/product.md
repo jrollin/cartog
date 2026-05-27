@@ -27,7 +27,7 @@ Measured across 13 scenarios, 5 languages. Best gains on call chain tracing (88%
 
 - **LLM coding agents** — Claude Code, Cursor, Aider, Copilot, or any LLM with bash/MCP access.
 - **Developers** who want fast structural navigation without running a language server.
-- **Privacy-conscious teams** — fully local, no API calls, works in air-gapped environments.
+- **Privacy-conscious teams** — local by default, no API calls, works in air-gapped environments. Opt-in S3-compatible index sync is available for teams that explicitly want to share a prebuilt index (see [usage.md](usage.md#cartog-push---remote-s3-url)).
 
 ## Differentiation
 

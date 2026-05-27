@@ -18,6 +18,20 @@ use cli::{Cli, Command, RagCommand, SelfCommand};
 const DEFAULT_GITHUB_LATEST_URL: &str =
     "https://api.github.com/repos/jrollin/cartog/releases/latest";
 
+/// If `cmd` is a subcommand that depends on a successfully-parsed
+/// `[remote]` (and therefore must not run against a rejected config),
+/// return its short verb for the user-facing error message. Returns
+/// `None` for every other command. Centralising this here keeps the
+/// "list of remote commands" in one place — adding a future
+/// `cartog mirror` only requires extending this match.
+fn remote_command_label(cmd: &Command) -> Option<&'static str> {
+    match cmd {
+        Command::Push { .. } => Some("push"),
+        Command::Pull { .. } => Some("pull"),
+        _ => None,
+    }
+}
+
 /// Long-lived commands (`serve`, `watch`) skip the auto-check — they run
 /// for hours and the user never sees a hint printed at the *start* anyway.
 fn classify_command(cmd: &Command) -> CommandKind {
@@ -67,8 +81,38 @@ fn run_auto_check_epilogue(command_kind: CommandKind) {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Resolve database path: --db / CARTOG_DB > .cartog.toml > git root > cwd
-    let (cartog_config, config_path) = config::load_config();
+    // Resolve database path: --db / CARTOG_DB > .cartog.toml > git root > cwd.
+    //
+    // `config_load` may be `Rejected` when `.cartog.toml` exists but failed
+    // its security pre-check or schema validation. We surface that as a hard
+    // error before dispatching push/pull/doctor — silently falling back to
+    // defaults would mask the user's security-relevant config error with a
+    // downstream "no remote configured" message.
+    let config_load = config::load_config();
+
+    // Refuse commands that depend on a successfully-parsed `[remote]`
+    // (`push`, `pull`) when the config was rejected. Doctor and config
+    // are NOT in this set: they're the commands users run to *diagnose*
+    // a broken config, so they need to keep running — they just receive
+    // a `config_rejected` signal so they can show an explicit "rejected"
+    // status instead of silently reporting defaults.
+    if config_load.is_rejected() {
+        if let Some(verb) = remote_command_label(&cli.command) {
+            anyhow::bail!(
+                "refusing to run `cartog {verb}`: configuration file {} was rejected \
+                 (see earlier stderr for details). Fix the config before retrying.",
+                config_load
+                    .path()
+                    .expect("Rejected variant always has a path")
+                    .display(),
+            );
+        }
+    }
+
+    let config_rejected = config_load.is_rejected();
+    let config_path = config_load.path().map(|p| p.to_path_buf());
+    let cartog_config = config_load.config_or_default();
+
     let db_path = config::resolve_db_path(cli.db.clone(), &cartog_config);
     let provider_config = config::to_provider_config(&cartog_config);
     let embedding_dim = provider_config.resolved_dimension();
@@ -152,12 +196,32 @@ fn main() -> Result<()> {
             commands::cmd_deps(&db_path, &file, cli.json, token_budget, embedding_dim)
         }
         Command::Stats => commands::cmd_stats(&db_path, cli.json, embedding_dim),
-        Command::Config => {
-            commands::cmd_config(&cartog_config, config_path.as_deref(), &db_path, cli.json)
+        Command::Push { remote } => {
+            commands::cmd_push(&db_path, &cartog_config, remote.as_deref(), cli.json)
         }
+        Command::Pull {
+            remote,
+            force,
+            no_sign_request,
+        } => commands::cmd_pull(
+            &db_path,
+            &cartog_config,
+            remote.as_deref(),
+            force,
+            no_sign_request,
+            cli.json,
+        ),
+        Command::Config => commands::cmd_config(
+            &cartog_config,
+            config_path.as_deref(),
+            config_rejected,
+            &db_path,
+            cli.json,
+        ),
         Command::Doctor => commands::cmd_doctor(
             &cartog_config,
             config_path.as_deref(),
+            config_rejected,
             &db_path,
             cli.json,
             embedding_dim,

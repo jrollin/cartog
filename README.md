@@ -9,7 +9,7 @@
 
 **Map your codebase. Navigate by graph, not grep.**
 
-Single binary. Microsecond queries. 100% local.
+Single binary. Microsecond queries. 100% local by default.
 
 Cartog pre-computes a code graph — symbols, calls, imports, inheritance — and lets you query it instantly. Use it from the CLI for day-to-day navigation, as an MCP server for AI agents, or both. No Python, no pip, no Docker. One binary, one SQLite file, zero cloud dependencies.
 
@@ -412,7 +412,9 @@ provider = "none"            # "local" (default) or "none"
 - **MCP server**: stdio only, no network sockets
 - **No telemetry**, no analytics, no phone-home
 
-Your code never leaves your machine.
+Your code never leaves your machine — unless you explicitly opt in to
+[S3-compatible index sync](docs/usage.md#cartog-push---remote-s3-url)
+(`cartog push` / `cartog pull`), which is inert until you configure a remote.
 
 ## Documentation
 

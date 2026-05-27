@@ -17,6 +17,7 @@ use cartog_watch::{self as watch, WatchConfig};
 
 pub mod ide;
 pub mod init;
+pub mod remote;
 
 /// Stderr spinner for long-running CLI commands.
 ///
@@ -454,6 +455,28 @@ pub fn cmd_search(
     })
 }
 
+/// Upload the local index DB to S3-compatible storage.
+pub fn cmd_push(
+    db_path: &Path,
+    config: &CartogConfig,
+    cli_remote: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    remote::push_index(db_path, config, cli_remote, json)
+}
+
+/// Download an index DB from S3-compatible storage into the local project.
+pub fn cmd_pull(
+    db_path: &Path,
+    config: &CartogConfig,
+    cli_remote: Option<&str>,
+    force: bool,
+    no_sign_request: bool,
+    json: bool,
+) -> Result<()> {
+    remote::pull_index(db_path, config, cli_remote, force, no_sign_request, json)
+}
+
 /// Index statistics summary.
 pub fn cmd_stats(db_path: &Path, json: bool, embedding_dim: usize) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
@@ -838,9 +861,27 @@ pub fn cmd_rag_search(
 pub fn cmd_config(
     config: &CartogConfig,
     config_path: Option<&Path>,
+    config_rejected: bool,
     db_path: &Path,
     json: bool,
 ) -> Result<()> {
+    // When the config file was found but rejected at parse time, `config`
+    // is the empty default — displaying it as the active config would
+    // silently lie. Show an explicit error and bail with the path so the
+    // user knows which file to fix.
+    if config_rejected {
+        // Invariant: ConfigLoad::Rejected always carries a path, and main
+        // propagates it as `config_path`. Bail explicitly so this surfaces
+        // even if the invariant ever changes.
+        let p = config_path
+            .ok_or_else(|| anyhow::anyhow!("config rejected but path missing — invariant break"))?;
+        anyhow::bail!(
+            "configuration file {} was rejected (see earlier stderr for the \
+             underlying reason). `cartog config` cannot display a meaningful \
+             view until the file is fixed.",
+            p.display()
+        );
+    }
     use crate::config::{
         DEFAULT_EMBEDDING_PROVIDER, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL,
         DEFAULT_RERANKER_PROVIDER,
@@ -1159,14 +1200,24 @@ fn check_git_repo() -> CheckResult {
     }
 }
 
-fn check_config(config_path: Option<&Path>) -> CheckResult {
-    match config_path {
-        Some(p) => CheckResult {
+fn check_config(config_path: Option<&Path>, rejected: bool) -> CheckResult {
+    match (config_path, rejected) {
+        (Some(p), true) => CheckResult {
+            name: "config".into(),
+            status: CheckStatus::Error,
+            message: format!(
+                "{} was REJECTED (see stderr at startup for the reason). \
+                 cartog is running with defaults; other check rows below \
+                 reflect defaults, not your config file.",
+                p.display()
+            ),
+        },
+        (Some(p), false) => CheckResult {
             name: "config".into(),
             status: CheckStatus::Ok,
             message: format!("loaded from {}", p.display()),
         },
-        None => CheckResult {
+        (None, _) => CheckResult {
             name: "config".into(),
             status: CheckStatus::Warn,
             message: "no .cartog.toml found (using defaults)".into(),
@@ -1336,6 +1387,78 @@ fn check_reranker(config: &rag::EmbeddingProviderConfig) -> CheckResult {
     }
 }
 
+/// Doctor check for the optional `[remote]` S3-compatible sync.
+///
+/// Status semantics:
+/// - **Ok** when `[remote]` is unset (the default — feature is inert; no
+///   network traffic happens unless the user opts in). We do not warn here:
+///   the absence of remote config is the expected baseline.
+/// - **Ok** when `[remote].url` resolves and a HEAD against the configured
+///   object succeeds (200 or 404 — both prove the bucket + creds work).
+/// - **Warn** for any reachability failure (creds missing, wrong region,
+///   network unreachable, 403). Push/pull would fail with the same error;
+///   doctor surfaces it before the user discovers it the hard way.
+/// - **Error** only when the feature was disabled at build time but a
+///   `[remote]` section exists — config will be silently ignored otherwise.
+fn check_remote(config: &CartogConfig, config_rejected: bool) -> CheckResult {
+    // When the config file itself was rejected, the `config.remote` view is
+    // always None (default). Reporting "not configured" here would be
+    // misleading — the user might have had a perfectly valid [remote]
+    // section before some other unrelated key got rejected. Surface this
+    // explicitly so doctor doesn't lie.
+    if config_rejected {
+        return CheckResult {
+            name: "remote".into(),
+            status: CheckStatus::Warn,
+            message: "[remote] status unknown — config file was rejected; \
+                      fix the config and re-run doctor"
+                .into(),
+        };
+    }
+    let remote = match config.remote.as_ref() {
+        Some(r) => r,
+        None => {
+            return CheckResult {
+                name: "remote".into(),
+                status: CheckStatus::Ok,
+                message: "not configured (local-only)".into(),
+            }
+        }
+    };
+
+    if remote.url.as_deref().unwrap_or("").is_empty() {
+        return CheckResult {
+            name: "remote".into(),
+            status: CheckStatus::Warn,
+            message: "[remote] section present but `url` is empty".into(),
+        };
+    }
+
+    #[cfg(not(feature = "remote-s3"))]
+    {
+        let _ = remote; // url presence already checked above
+        CheckResult {
+            name: "remote".into(),
+            status: CheckStatus::Error,
+            message: "[remote] configured but cartog was built without `remote-s3` feature".into(),
+        }
+    }
+
+    #[cfg(feature = "remote-s3")]
+    match remote::check_remote_reachable(remote) {
+        Ok(()) => CheckResult {
+            name: "remote".into(),
+            status: CheckStatus::Ok,
+            message: format!("{} reachable", remote.url.as_deref().unwrap_or("<unset>")),
+        },
+        Err(e) => CheckResult {
+            name: "remote".into(),
+            status: CheckStatus::Warn,
+            message: format!("unreachable: {e}"),
+        },
+    }
+}
+
 fn build_report(checks: Vec<CheckResult>) -> DoctorReport {
     let ok = checks
         .iter()
@@ -1398,19 +1521,19 @@ fn format_report_human(report: &DoctorReport) -> String {
 pub fn cmd_doctor(
     config: &CartogConfig,
     config_path: Option<&Path>,
+    config_rejected: bool,
     db_path: &Path,
     json: bool,
     embedding_dim: usize,
     provider_config: &rag::EmbeddingProviderConfig,
 ) -> Result<()> {
-    let _ = config; // config is read indirectly via provider_config
-
     let checks = vec![
         check_git_repo(),
-        check_config(config_path),
+        check_config(config_path, config_rejected),
         check_database(db_path, embedding_dim),
         check_embedding_provider(provider_config),
         check_reranker(provider_config),
+        check_remote(config, config_rejected),
     ];
 
     let report = build_report(checks);
@@ -1673,16 +1796,23 @@ mod tests {
 
     #[test]
     fn test_check_config_present() {
-        let result = check_config(Some(Path::new("/project/.cartog.toml")));
+        let result = check_config(Some(Path::new("/project/.cartog.toml")), false);
         assert_eq!(result.status, CheckStatus::Ok);
         assert!(result.message.contains(".cartog.toml"));
     }
 
     #[test]
     fn test_check_config_absent() {
-        let result = check_config(None);
+        let result = check_config(None, false);
         assert_eq!(result.status, CheckStatus::Warn);
         assert!(result.message.contains("defaults"));
+    }
+
+    #[test]
+    fn test_check_config_rejected_reports_error() {
+        let result = check_config(Some(Path::new("/project/.cartog.toml")), true);
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(result.message.contains("REJECTED"));
     }
 
     #[test]

@@ -192,6 +192,36 @@ pub enum Command {
     /// Index statistics summary
     Stats,
 
+    /// Upload the local index to an S3-compatible remote (opt-in feature).
+    ///
+    /// Reads `[remote].url` from `.cartog.toml` unless `--remote` is given.
+    /// Credentials come from the AWS environment chain (env vars / profile /
+    /// IMDS); cartog never reads credentials from `.cartog.toml`.
+    Push {
+        /// Override `s3://bucket/key` target.
+        #[arg(long)]
+        remote: Option<String>,
+    },
+
+    /// Download an index from an S3-compatible remote (opt-in feature).
+    ///
+    /// Refuses to overwrite the local DB while a peer (`cartog serve` /
+    /// `cartog watch`) holds it open, unless `--force` is given. Verifies a
+    /// SHA-256 checksum and schema version before atomic rename.
+    Pull {
+        /// Override `s3://bucket/key` target.
+        #[arg(long)]
+        remote: Option<String>,
+
+        /// Overwrite the local DB even if a peer process is currently using it.
+        #[arg(long)]
+        force: bool,
+
+        /// Skip credential resolution and pull anonymously (public buckets).
+        #[arg(long)]
+        no_sign_request: bool,
+    },
+
     /// Display the current configuration
     Config,
 
