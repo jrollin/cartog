@@ -1,6 +1,6 @@
 //! MCP server for the cartog code graph.
 //!
-//! Exposes cartog's graph queries, indexing, and semantic search as 12 MCP tools
+//! Exposes cartog's graph queries, indexing, and semantic search as 13 MCP tools
 //! over stdio transport. Designed for Claude Code, Cursor, and other MCP clients.
 
 use std::path::{Path, PathBuf};

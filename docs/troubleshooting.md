@@ -142,6 +142,38 @@ Only the nearest one is used. There is no merging.
 See [`.cartog.toml.example`](../.cartog.toml.example) at the repo root for a
 fully commented template.
 
+## Database
+
+### "database at `<path>` is corrupt or not a cartog database"
+
+The SQLite file is truncated or not a cartog DB (a stray `.cartog/db.sqlite`,
+an interrupted copy, etc.). Delete the named file and run `cartog index .` to
+rebuild from scratch.
+
+### "database at `<path>` is not writable"
+
+The DB file or its directory is read-only. Fix the filesystem permissions, or
+point `[database].path` (or `--db` / `CARTOG_DB`) at a writable location.
+
+## RAG / embeddings
+
+### "cannot reach Ollama at `<url>`"
+
+The Ollama provider couldn't connect. Start the server (`ollama serve`) and
+confirm `[embedding.ollama].base_url` in `.cartog.toml` matches it (default
+`http://localhost:11434`).
+
+### "Ollama has no model `<model>`"
+
+The configured embedding model isn't pulled. Run `ollama pull <model>` (e.g.
+`ollama pull nomic-embed-text`), then re-run `cartog rag index`.
+
+### "the ollama provider is not in this build"
+
+Prebuilt binaries (install.sh / GitHub Releases) omit the Ollama provider to
+keep size down. Install with the feature:
+`cargo install cartog --features ollama-embedding`.
+
 ## Queries
 
 ### `cartog refs X` returns fewer hits than I expect
@@ -156,6 +188,13 @@ depending on language.
 The recursive CTE is fast, but SQLite may still need to populate the page
 cache. A second call should drop back to sub-ms. If it doesn't, please attach
 the output of `cartog stats` to your issue.
+
+### `cartog refs/callees/impact/hierarchy X` returns nothing
+
+These commands match an **exact** symbol name. When there's no exact match but
+similar names exist, cartog appends `— did you mean: A, B, C?`. Use one of the
+suggestions, or run `cartog search X` (fuzzy: prefix + substring) to find the
+exact name first. The MCP tools surface the same suggestion in their response.
 
 ## Logging and signals
 

@@ -10,10 +10,11 @@ Exposes cartog's graph queries, indexing, and semantic search as MCP tools over 
 
 ### MCP tools
 
-12 tools are exposed via rmcp's `#[tool_router]` macro with auto-generated JSON Schema parameters:
+13 tools are exposed via rmcp's `#[tool_router]` macro with auto-generated JSON Schema parameters:
 
 | Tool | Description |
 |------|-------------|
+| `cartog_map` | Orient in a repo: file list + top symbols by centrality |
 | `cartog_index` | Build or rebuild the code graph index |
 | `cartog_outline` | Show symbols and structure of a file |
 | `cartog_refs` | All references to a symbol |
