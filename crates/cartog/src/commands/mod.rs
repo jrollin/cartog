@@ -705,6 +705,9 @@ pub fn cmd_stats(db_path: &Path, json: bool, embedding_dim: usize) -> Result<()>
                 out.push_str(&format!("  {kind}: {count}\n"));
             }
         }
+        if stats.num_files == 0 {
+            out.push_str("\nIndex is empty — run `cartog index .` to build the code graph.\n");
+        }
         out
     })
 }
