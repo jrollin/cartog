@@ -161,7 +161,30 @@ fn stop_spinner(spinner: Option<Arc<Spinner>>) {
 }
 
 fn open_db(path: &Path, embedding_dim: usize) -> Result<Database> {
-    Database::open(path, embedding_dim).context("Failed to open cartog database")
+    Database::open(path, embedding_dim).map_err(|e| open_db_error(path, e.into()))
+}
+
+/// Map a database-open failure to an actionable message naming the path and the
+/// fix. Corruption ("not a database") and read-only mounts produce the most
+/// confusing raw SQLite errors, so they get specific remediation; anything else
+/// keeps a generic wrapper with the path. The original error is the cause.
+fn open_db_error(path: &Path, err: anyhow::Error) -> anyhow::Error {
+    let raw = err.to_string().to_ascii_lowercase();
+    let p = path.display();
+    let hint = if raw.contains("not a database") {
+        format!(
+            "database at {p} is corrupt or not a cartog database — \
+             delete it and run `cartog index .` to rebuild"
+        )
+    } else if raw.contains("readonly") || raw.contains("read-only") {
+        format!(
+            "database at {p} is not writable — check the file and directory \
+             permissions, or set [database].path to a writable location"
+        )
+    } else {
+        format!("failed to open cartog database at {p}")
+    };
+    err.context(hint)
 }
 
 /// Estimate token count from a string using chars/4 approximation.
@@ -1819,6 +1842,30 @@ mod tests {
         let sym = Symbol::new(name, SymbolKind::Class, "a.rs", 1, 2, 0, 10, None);
         db.insert_symbols(&[sym]).unwrap();
         db
+    }
+
+    #[test]
+    fn open_db_error_corrupt_names_path_and_rebuild() {
+        let e = anyhow::anyhow!("file is not a database");
+        let msg = open_db_error(Path::new("/p/.cartog/db.sqlite"), e).to_string();
+        assert!(msg.contains("/p/.cartog/db.sqlite"), "names path: {msg}");
+        assert!(msg.contains("corrupt"), "{msg}");
+        assert!(msg.contains("cartog index"), "{msg}");
+    }
+
+    #[test]
+    fn open_db_error_readonly_names_path_and_permissions() {
+        let e = anyhow::anyhow!("attempt to write a readonly database");
+        let msg = open_db_error(Path::new("/p/db.sqlite"), e).to_string();
+        assert!(msg.contains("/p/db.sqlite"), "{msg}");
+        assert!(msg.contains("permission"), "{msg}");
+    }
+
+    #[test]
+    fn open_db_error_generic_keeps_path() {
+        let e = anyhow::anyhow!("disk full");
+        let msg = open_db_error(Path::new("/p/db.sqlite"), e).to_string();
+        assert!(msg.contains("/p/db.sqlite"), "{msg}");
     }
 
     #[test]
