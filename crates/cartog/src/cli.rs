@@ -328,9 +328,8 @@ pub enum Command {
     /// OpenCode, Windsurf, Zed. User-scope clients whose config directory does not
     /// exist are skipped (not installed).
     ///
-    /// Aliased as `cartog install` for discoverability — both verbs run the same
-    /// handler.
-    #[command(visible_alias = "install")]
+    /// See also `cartog install <client>...` for a positional shorthand that
+    /// matches the brew/npm/pip convention.
     Ide {
         /// Target a single client. Default: configure all clients in scope.
         #[arg(long, value_enum)]
@@ -344,6 +343,34 @@ pub enum Command {
         /// Accept all prompts (non-interactive). Implied by --dry-run, --json, --client, or a non-TTY stdin.
         #[arg(long, short = 'y')]
         yes: bool,
+
+        /// Print planned changes without writing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Omit `--watch` from Claude Code's serve args.
+        #[arg(long)]
+        no_watch: bool,
+    },
+
+    /// Install cartog MCP config into one or more editors.
+    ///
+    /// Friendlier shape of `cartog ide`: takes editors as positional arguments
+    /// (`cartog install cursor`, `cartog install cursor zed codex`) so it
+    /// matches the brew/npm/pip/cargo convention. No positional clients =
+    /// install into every detected editor non-interactively.
+    ///
+    /// Positional mode is always non-interactive (`--yes` implied). For the
+    /// interactive picker, use `cartog ide` directly.
+    Install {
+        /// One or more editors to wire up. Omit to install into every
+        /// detected editor non-interactively. Repeatable.
+        clients: Vec<ClientKind>,
+
+        /// Filter by scope. `project` writes only .mcp.json / .cursor/mcp.json;
+        /// `user` writes only user-scope configs; `all` writes both.
+        #[arg(long, value_enum, default_value_t = IdeScope::All)]
+        scope: IdeScope,
 
         /// Print planned changes without writing.
         #[arg(long)]

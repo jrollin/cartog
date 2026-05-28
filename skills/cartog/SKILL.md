@@ -108,10 +108,11 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | `cartog hierarchy <class>` | `cartog_hierarchy` | `name` |
 | `cartog deps <file>` | `cartog_deps` | `file` |
 | `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
-| `cartog stats` | `cartog_stats` | — |
+| `cartog stats [--savings]` | `cartog_stats` | — |
+| `cartog savings` | — (CLI only — alias for `cartog stats --savings`) | — |
 | `cartog doctor` | — (CLI only) | — |
 | `cartog init` | — (CLI only) | — |
-| `cartog ide` | — (CLI only) | — |
+| `cartog ide` (interactive picker) / `cartog install <client>...` (positional) | — (CLI only) | — |
 | `cartog config` | — (CLI only) | — |
 
 ## Setup
@@ -328,10 +329,14 @@ cartog --json doctor                     # structured JSON output
 ```
 Validates git repo, config, database, embedding provider, and reranker. Returns OK / Warn / Error per check and exits with code 1 if any error. Run this when commands fail unexpectedly or after first setup to verify everything is working.
 
-### Stats (index summary)
+### Stats (index summary, savings retention hook)
 ```bash
-cartog stats
+cartog stats                # files, symbols, edges, languages
+cartog stats --savings      # per-tool query counts + tokens saved vs grep+read
+cartog savings              # alias for `cartog stats --savings`
 ```
+
+`cartog savings` is the retention hook: it surfaces ongoing ROI in one keystroke. Only counts queries that returned a non-empty result (empty-index calls and typo'd names are skipped, so the number reflects real work).
 
 ### Watch (auto re-index on file changes)
 ```bash
@@ -373,17 +378,26 @@ cartog init --dry-run           # preview without writing
 
 **When to suggest it**: the user is starting cartog on a fresh repo (no `.cartog.toml` at the git root). The agent should mention it once, then continue with `cartog index` to build the graph. CLI-only users stop there; users on Claude Code / Cursor / VS Code / etc. can then run `cartog ide`.
 
-### Ide (wire cartog into editors — user-facing, interactive)
+### Wire cartog into editors
+
+Two shapes for the same operation:
+
 ```bash
-cartog ide --yes                              # configure all detected clients, non-interactive
-cartog ide --client cursor --yes              # one specific client
+# `cartog install` — positional, brew/npm/pip convention. Always non-interactive.
+cartog install cursor                         # one editor
+cartog install cursor vscode codex            # several editors at once
+cartog install                                # all detected editors (no positional = "all")
+cartog install cursor --dry-run               # preview without writing
+cartog install claude-code --no-watch         # drop --watch from Claude Code args
+
+# `cartog ide` — original, supports the interactive multi-select picker.
+cartog ide --yes                              # all detected clients, non-interactive
+cartog ide --client cursor --yes              # one client (long-form)
 cartog ide --scope project --yes              # only .mcp.json / .cursor/mcp.json / .vscode/mcp.json
-cartog ide --client claude-code --no-watch --yes  # wire Claude Code without --watch
-cartog ide --scope user --yes                 # only user-scope clients
 cartog ide --dry-run                          # preview without writing
 ```
 
-**Agent gotcha**: `cartog ide` runs an interactive multi-select picker by default. **An agent calling it via Bash MUST pass `--yes` (or `--client X` / `--dry-run`), otherwise the command will block waiting for user input.** Non-TTY stdin is also treated as non-interactive.
+**Agent gotcha**: `cartog ide` (bare) runs an interactive multi-select picker. **An agent calling it via Bash MUST pass `--yes` (or `--client X` / `--dry-run`)**, otherwise the command blocks waiting for input. `cartog install` is always non-interactive, so it's the safe default for agents.
 
 Supported clients: `claude-code`, `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`. User-scope clients whose config dir is missing are reported as "not installed" and skipped. Existing MCP entries for other servers are preserved (idempotent merge).
 

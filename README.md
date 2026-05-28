@@ -233,8 +233,17 @@ cartog ide --client cursor                  # one client
 cartog ide --client claude-desktop --dry-run  # preview without writing
 ```
 
-Idempotent. Existing servers in each file are preserved. `cartog install` is a
-visible alias of `cartog ide` if that name feels more natural.
+Idempotent. Existing servers in each file are preserved.
+
+Prefer the brew/npm shape? `cartog install` takes editors as positional args
+and is always non-interactive — safer than `cartog ide` for scripts and agents:
+
+```bash
+cartog install cursor                 # one editor
+cartog install cursor vscode codex    # several at once
+cartog install                        # all detected editors
+cartog install cursor --dry-run       # preview
+```
 
 Prefer to wire it yourself? Pick your client below.
 

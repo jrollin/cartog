@@ -629,18 +629,71 @@ cartog init --dry-run        # preview without writing
 
 Wire `cartog serve` into one or all MCP-compatible editors. This is the only verb that touches editor configs.
 
-`cartog install` is a visible alias — same flags, same behavior, just a more
-discoverable name for newcomers.
-
 ```bash
-cartog ide                          # all installed clients, all scopes
+cartog ide                          # all installed clients, all scopes (interactive picker)
 cartog ide --client cursor          # one client
 cartog ide --scope project          # only project-scoped (.mcp.json, .cursor/, .vscode/)
 cartog ide --scope user             # only user-scope clients
 cartog ide --dry-run                # preview with before/after diff
 ```
 
+Example output (`cartog ide --client cursor --dry-run`):
+
+```text
++ cursor (project, /your/repo/.cursor/mcp.json): would create
+  --- after ---
+    {
+      "mcpServers": {
+        "cartog": { "command": "cartog", "args": ["serve"] }
+      }
+    }
+
+1 clients: 1 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+Dry run only. Re-run without --dry-run to apply.
+```
+
+For `cartog ide --client claude-code --dry-run`, both project (`.mcp.json`) and user (`~/.claude/settings.json`) entries are previewed, and `args` includes `--watch` by default ([see why](#claude-code-watch-default)).
+
 Supported clients: `claude-code` (project + user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`. User-scope clients whose config dir is missing are skipped. See [Per-editor wiring: `cartog ide`](#per-editor-wiring-cartog-ide) for the flag and troubleshooting tables.
+
+### `cartog install [client ...] [--scope ...] [--dry-run] [--no-watch]`
+
+Friendlier shape of `cartog ide` — takes editors as positional args
+(brew/npm/pip/cargo convention) and is always non-interactive. Safe to call
+from scripts and agents (no picker, no `--yes` required).
+
+```bash
+cartog install cursor                 # one editor
+cartog install cursor vscode codex    # several editors at once
+cartog install                        # all detected editors
+cartog install cursor --dry-run       # preview without writing
+cartog install claude-code --no-watch # wire Claude Code without --watch
+```
+
+Example output (`cartog install cursor vscode --dry-run`):
+
+```text
++ cursor (project, /your/repo/.cursor/mcp.json): would create
+  --- after ---
+    {
+      "mcpServers": {
+        "cartog": { "command": "cartog", "args": ["serve"] }
+      }
+    }
++ vscode (project, /your/repo/.vscode/mcp.json): would create
+  --- after ---
+    {
+      "servers": {
+        "cartog": { "type": "stdio", "command": "cartog", "args": ["serve"] }
+      }
+    }
+
+2 clients: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+Dry run only. Re-run without --dry-run to apply.
+```
+
+Same supported-client list as `cartog ide`. For the interactive multi-select
+picker (useful at a fresh-machine setup), use `cartog ide` directly.
 
 ### `cartog config`
 

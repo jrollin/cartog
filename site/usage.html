@@ -525,16 +525,23 @@ cartog init --dry-run        <span class="comment"># preview without writing</sp
 Dry run only. Re-run without --dry-run to apply.</pre>
       <p>Never overwrites an existing <code>.cartog.toml</code>. Re-running is a no-op (still prints the next-steps hint).</p>
 
-      <h2 id="cmd-ide"><code>cartog ide</code></h2>
-      <p>Wire <code>cartog serve</code> into one or all MCP-compatible editors. The only verb that writes editor configs.</p>
-      <p style="font-size: 13px; color: var(--text-tertiary);"><code>cartog install</code> is a visible alias — same flags, same behavior, just a more discoverable name.</p>
-      <pre>cartog ide                          <span class="comment"># all installed clients, all scopes</span>
-cartog ide --client cursor          <span class="comment"># one client</span>
-cartog ide --scope user             <span class="comment"># only user-scope clients</span>
-cartog ide --scope project          <span class="comment"># only project-scoped clients (.mcp.json, .cursor/, .vscode/)</span>
-cartog ide --dry-run                <span class="comment"># preview with before/after diff</span>
-cartog ide --no-watch               <span class="comment"># drop --watch from Claude Code args</span></pre>
-      <p class="example-label">Example output (<code>--dry-run --client cursor</code>)</p>
+      <h2 id="cmd-ide"><code>cartog ide</code> / <code>cartog install</code></h2>
+      <p>Wire <code>cartog serve</code> into one or all MCP-compatible editors. Two shapes:</p>
+      <ul>
+        <li><strong><code>cartog install &lt;client&gt;...</code></strong> — positional, brew/npm/pip convention, always non-interactive. Safe for scripts and agents.</li>
+        <li><strong><code>cartog ide</code></strong> — original, supports an interactive multi-select picker (bare) and the long-form flags below.</li>
+      </ul>
+      <pre>cartog install cursor                 <span class="comment"># one editor</span>
+cartog install cursor vscode codex    <span class="comment"># several at once</span>
+cartog install                        <span class="comment"># all detected editors</span>
+cartog install cursor --dry-run       <span class="comment"># preview</span>
+
+cartog ide                            <span class="comment"># interactive picker (TTY only)</span>
+cartog ide --client cursor            <span class="comment"># single client via flag</span>
+cartog ide --scope project            <span class="comment"># only project-scoped (.mcp.json, .cursor/, .vscode/)</span>
+cartog ide --dry-run                  <span class="comment"># preview with before/after diff</span>
+cartog ide --no-watch                 <span class="comment"># drop --watch from Claude Code args</span></pre>
+      <p class="example-label">Example output (<code>cartog ide --client cursor --dry-run</code>)</p>
       <pre class="example-output">+ cursor (project, /your/repo/.cursor/mcp.json): would create
   --- after ---
     {
@@ -547,6 +554,24 @@ cartog ide --no-watch               <span class="comment"># drop --watch from Cl
     }
 
 1 clients: 1 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+Dry run only. Re-run without --dry-run to apply.</pre>
+      <p class="example-label">Example output (<code>cartog install cursor vscode --dry-run</code>)</p>
+      <pre class="example-output">+ cursor (project, /your/repo/.cursor/mcp.json): would create
+  --- after ---
+    {
+      "mcpServers": {
+        "cartog": { "command": "cartog", "args": ["serve"] }
+      }
+    }
++ vscode (project, /your/repo/.vscode/mcp.json): would create
+  --- after ---
+    {
+      "servers": {
+        "cartog": { "type": "stdio", "command": "cartog", "args": ["serve"] }
+      }
+    }
+
+2 clients: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
 Dry run only. Re-run without --dry-run to apply.</pre>
       <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. See the <a href="#mcp-ide">Bootstrap sequence</a> for the recommended verb order.</p>
 

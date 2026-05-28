@@ -368,3 +368,62 @@
     - cat src/auth/tokens.py
     - Reading the full file when only structure is needed
   tags: [outline]
+
+# ============================================================
+# Savings retention hook
+# ============================================================
+
+- id: savings_for_token_report
+  description: Use cartog savings to surface tokens saved vs grep+read
+  user_query: "How many tokens has cartog saved me so far in this project?"
+  context: "cartog has been used for several days; the user wants a usage summary."
+  expected:
+    tool_calls:
+      - "cartog savings"
+    reasoning: >
+      cartog savings (or `cartog stats --savings`) reads the local query_log
+      and prints per-tool counts plus an estimated token-savings figure vs a
+      grep+read baseline. No network calls; nothing leaves the machine.
+  anti_patterns:
+    - Manually counting prior tool calls from conversation history
+    - Running cartog stats (without --savings) which only shows index totals
+
+# ============================================================
+# Editor MCP install via the friendlier alias
+# ============================================================
+
+- id: install_positional_for_editor_setup
+  description: Use `cartog install <client>` for the brew/npm-style shape
+  user_query: "Set up cartog for Cursor in this project."
+  context: "A .cartog.toml exists; no .cursor/mcp.json yet."
+  expected:
+    tool_calls:
+      - "cartog install cursor"
+    reasoning: >
+      `cartog install` takes editors as positional args (brew/npm/pip
+      convention) and is always non-interactive — safe for agents to call
+      via Bash. `cartog ide` (bare) would block on the interactive picker.
+  anti_patterns:
+    - cartog ide (bare; interactive picker blocks the agent)
+    - cartog ide --client cursor --yes (still works but more verbose than the install shape)
+    - Hand-editing .cursor/mcp.json
+
+# ============================================================
+# Mermaid diagram for PRs / docs
+# ============================================================
+
+- id: mermaid_for_pr_diagram
+  description: Use --mermaid to produce paste-into-PR diagrams
+  user_query: "Give me a Mermaid diagram of the AuthService inheritance tree to paste into the PR."
+  context: "AuthService exists in the indexed code."
+  expected:
+    tool_calls:
+      - "cartog hierarchy AuthService --mermaid"
+    reasoning: >
+      --mermaid emits a graph TD on stdout that pastes directly into GitHub
+      markdown, mermaid.live, or any docs site. Same flag is available on
+      cartog deps and cartog map.
+  anti_patterns:
+    - cartog hierarchy AuthService (plain text — not paste-ready)
+    - Building the diagram by hand from the plain output
+  tags: [outline]

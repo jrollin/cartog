@@ -718,6 +718,65 @@ pub fn cmd_ide(
     Ok(())
 }
 
+/// Filter the static `CLIENT_CATALOGUE` by a positional `clients` list and a
+/// scope. Returns `(ClientKind, Scope)` pairs in catalogue order. Pulled out
+/// of `cmd_install` so the selection logic is unit-testable without spinning
+/// up the filesystem-touching dispatch.
+fn filter_catalogue_by_clients(
+    clients: &[ClientKind],
+    scope: IdeScope,
+) -> Vec<(ClientKind, Scope)> {
+    CLIENT_CATALOGUE
+        .iter()
+        .filter(|e| match scope {
+            IdeScope::Project => e.scope == Scope::Project,
+            IdeScope::User => e.scope == Scope::User,
+            IdeScope::All => true,
+        })
+        .filter(|e| clients.contains(&e.kind))
+        .map(|e| (e.kind, e.scope))
+        .collect()
+}
+
+/// `cartog install [client ...]` — friendlier shape of `cmd_ide` that takes
+/// editors as positional args (matches brew/npm/pip convention). Always
+/// non-interactive. Empty `clients` = install into every detected editor in
+/// scope. Multiple positional clients = install each.
+pub fn cmd_install(
+    clients: Vec<ClientKind>,
+    scope: IdeScope,
+    dry_run: bool,
+    no_watch: bool,
+    json: bool,
+) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let homes = HomeDirs::detect();
+
+    let report = if clients.is_empty() {
+        // No positional clients → install into every detected editor in scope,
+        // exactly like `cartog ide --yes`. The picker is skipped (yes implied).
+        run_ide(None, scope, false, dry_run, no_watch, &cwd, &homes)?
+    } else {
+        // Build the (kind, scope) pairs from the catalogue, filtered by the
+        // requested clients + scope. Reuses the picker's aggregation path so
+        // multiple positional clients produce a single combined report.
+        let chosen = filter_catalogue_by_clients(&clients, scope);
+        run_ide_for_clients(&chosen, dry_run, no_watch, &cwd, &homes)?
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print!("{}", report.render_human());
+        print_next_steps(&report, dry_run);
+    }
+
+    if report.has_errors() {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 /// Per-scope detection state, attached to a `PickerItem`.
 #[derive(Debug, Clone)]
 pub struct ScopeOption {
@@ -1536,6 +1595,61 @@ mod tests {
         let specs = build_specs(Some(ClientKind::Cursor), IdeScope::All, false, &tmp, &homes);
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].kind, ClientKind::Cursor);
+    }
+
+    // ── cartog install positional dispatch ─────────────────────────────
+
+    #[test]
+    fn install_filter_single_client_returns_only_that_kind() {
+        let chosen = filter_catalogue_by_clients(&[ClientKind::Cursor], IdeScope::All);
+        assert_eq!(chosen.len(), 1);
+        assert_eq!(chosen[0].0, ClientKind::Cursor);
+    }
+
+    #[test]
+    fn install_filter_multiple_clients_returns_each_in_catalogue_order() {
+        let chosen = filter_catalogue_by_clients(
+            &[ClientKind::Cursor, ClientKind::Vscode, ClientKind::Codex],
+            IdeScope::All,
+        );
+        // All three requested clients are present.
+        let kinds: Vec<_> = chosen.iter().map(|(k, _)| *k).collect();
+        assert!(kinds.contains(&ClientKind::Cursor));
+        assert!(kinds.contains(&ClientKind::Vscode));
+        assert!(kinds.contains(&ClientKind::Codex));
+        assert_eq!(chosen.len(), 3);
+    }
+
+    #[test]
+    fn install_filter_claude_code_returns_both_project_and_user_scopes() {
+        let chosen = filter_catalogue_by_clients(&[ClientKind::ClaudeCode], IdeScope::All);
+        // Claude Code is the only client with both Project and User entries
+        // in CLIENT_CATALOGUE — `cartog install claude-code` must wire both.
+        assert_eq!(chosen.len(), 2);
+        let scopes: Vec<_> = chosen.iter().map(|(_, s)| *s).collect();
+        assert!(scopes.contains(&Scope::Project));
+        assert!(scopes.contains(&Scope::User));
+    }
+
+    #[test]
+    fn install_filter_respects_project_scope() {
+        // Cursor exists only at project scope; codex only at user scope.
+        // --scope project must drop the user-only entry.
+        let chosen = filter_catalogue_by_clients(
+            &[ClientKind::Cursor, ClientKind::Codex],
+            IdeScope::Project,
+        );
+        assert_eq!(chosen.len(), 1);
+        assert_eq!(chosen[0].0, ClientKind::Cursor);
+        assert_eq!(chosen[0].1, Scope::Project);
+    }
+
+    #[test]
+    fn install_filter_empty_clients_returns_empty() {
+        // Empty positional list is handled by the caller (falls back to
+        // `run_ide(None, ...)`); the filter helper itself returns nothing.
+        let chosen = filter_catalogue_by_clients(&[], IdeScope::All);
+        assert!(chosen.is_empty());
     }
 
     #[test]

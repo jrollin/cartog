@@ -290,6 +290,12 @@ fn main() -> Result<()> {
             dry_run,
             no_watch,
         } => commands::ide::cmd_ide(client, scope, yes, dry_run, no_watch, cli.json),
+        Command::Install {
+            clients,
+            scope,
+            dry_run,
+            no_watch,
+        } => commands::ide::cmd_install(clients, scope, dry_run, no_watch, cli.json),
         Command::Serve { watch, rag } => {
             let runtime = tokio::runtime::Runtime::new()?;
             // pid_lock_dir/slot must be both-or-neither: a sandboxed host with no
