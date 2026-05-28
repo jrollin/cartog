@@ -731,6 +731,111 @@ pub fn cmd_pull(
     remote::pull_index(db_path, config, cli_remote, force, no_sign_request, json)
 }
 
+/// Project label shown above the savings report. Strips the SQLite filename
+/// and walks up to the closest meaningful directory (typically the git root)
+/// so users see `cartog · my-project · 5 queries` rather than the full path.
+/// Falls back to `cartog` when nothing recognizable can be extracted.
+fn savings_scope_label(db_path: &Path) -> String {
+    db_path
+        .parent()
+        .and_then(|p| {
+            // `.../<project>/.cartog/db.sqlite` → walk past `.cartog` to the
+            // project dir. `.../<project>/.cartog.db` → just take the parent.
+            if p.file_name().is_some_and(|n| n == ".cartog") {
+                p.parent()
+            } else {
+                Some(p)
+            }
+        })
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .map(|n| n.to_string())
+        .unwrap_or_default()
+}
+
+/// Format a token count as `~1.4k`, `~28.5k`, etc. Matches the CCE-style
+/// compact display so the table stays narrow. Counts under 1,000 render as
+/// the raw integer.
+fn fmt_tokens(n: u64) -> String {
+    if n < 1_000 {
+        format!("{n}")
+    } else if n < 1_000_000 {
+        format!("~{:.1}k", n as f64 / 1_000.0)
+    } else {
+        format!("~{:.1}M", n as f64 / 1_000_000.0)
+    }
+}
+
+/// Render the savings report — header / bar / with-vs-without table / per-tool
+/// breakdown / footer. Pulled out of `cmd_stats` so the formatter is unit-
+/// testable independent of the DB.
+fn render_savings(scope: &str, r: &cartog_db::SavingsReport) -> String {
+    use cartog_db::{TOKENS_PER_QUERY_CARTOG, TOKENS_PER_QUERY_GREP};
+
+    let mut out = String::new();
+    if r.total_queries == 0 {
+        out.push_str(
+            "No queries logged yet. Run `cartog search`, `cartog refs`, … or \
+             point an MCP-aware editor at this index, then re-run.\n",
+        );
+        return out;
+    }
+
+    // Header: `cartog · my-project · N queries`
+    if scope.is_empty() {
+        out.push_str(&format!("cartog · {} queries\n\n", r.total_queries));
+    } else {
+        out.push_str(&format!(
+            "cartog · {scope} · {} queries\n\n",
+            r.total_queries
+        ));
+    }
+
+    // 10-cell bar. `r.percent_saved` is 0-99 so divide by 10 rounded down.
+    let filled = (r.percent_saved as usize / 10).min(10);
+    let bar: String = "█".repeat(filled) + &"░".repeat(10 - filled);
+    out.push_str(&format!("{bar}  ~{}% tokens saved\n\n", r.percent_saved));
+
+    // With/without/saved table. Column widths chosen so the numbers line up
+    // for any plausible value: `Without cartog  ~999.9k tokens   (~1,700 / query)`.
+    let with = fmt_tokens(r.tokens_used_cartog);
+    let without = fmt_tokens(r.tokens_used_grep);
+    let saved = fmt_tokens(r.estimated_tokens_saved);
+    out.push_str(&format!(
+        "Without cartog  {without:>7} tokens   (~{TOKENS_PER_QUERY_GREP} / query)\n"
+    ));
+    out.push_str(&format!(
+        "With cartog     {with:>7} tokens   (~{TOKENS_PER_QUERY_CARTOG} / query)\n"
+    ));
+    out.push_str("──────────────────────────────────────────────\n");
+    out.push_str(&format!(
+        "Saved           {saved:>7} tokens   (~{} / query)\n\n",
+        r.baseline_delta
+    ));
+
+    // Per-tool counts with annotation so the reader knows the numbers are
+    // call counts, not per-tool token savings (the multiplier is flat).
+    out.push_str("By tool (call counts):\n");
+    for (tool, count) in &r.by_tool {
+        out.push_str(&format!("  {count:>4}  {tool}\n"));
+    }
+
+    if r.by_source.len() > 1 {
+        out.push_str("\nBy source:\n");
+        for (source, count) in &r.by_source {
+            out.push_str(&format!("  {count:>4}  {source}\n"));
+        }
+    }
+
+    out.push_str(&format!(
+        "\nBaseline: ~{TOKENS_PER_QUERY_GREP} tokens for an equivalent grep+read sweep \
+         vs cartog's ~{TOKENS_PER_QUERY_CARTOG}.\n\
+         Measured across 13 benchmark scenarios (see crates/cartog/benches/queries.rs).\n"
+    ));
+
+    out
+}
+
 /// Index statistics summary.
 pub fn cmd_stats(
     db_path: &Path,
@@ -743,31 +848,8 @@ pub fn cmd_stats(
 
     if savings {
         let report = db.savings_breakdown()?;
-        return output(&report, json, token_budget, |r| {
-            let mut out = String::new();
-            if r.total_queries == 0 {
-                out.push_str(
-                    "No queries logged yet. Run `cartog search`, `cartog refs`, … or \
-                     point an MCP-aware editor at this index, then re-run.\n",
-                );
-                return out;
-            }
-            out.push_str(&format!(
-                "Total queries: {}  (~{} tokens saved vs grep+read baseline, at {} tokens/query)\n\n",
-                r.total_queries, r.estimated_tokens_saved, r.baseline_delta
-            ));
-            out.push_str("By tool:\n");
-            for (tool, count) in &r.by_tool {
-                out.push_str(&format!("  {count:>6}  {tool}\n"));
-            }
-            if r.by_source.len() > 1 {
-                out.push_str("\nBy source:\n");
-                for (source, count) in &r.by_source {
-                    out.push_str(&format!("  {count:>6}  {source}\n"));
-                }
-            }
-            out
-        });
+        let scope = savings_scope_label(db_path);
+        return output(&report, json, token_budget, |r| render_savings(&scope, r));
     }
 
     let stats = db.stats()?;

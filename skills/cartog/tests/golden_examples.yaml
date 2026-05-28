@@ -382,11 +382,13 @@
       - "cartog savings"
     reasoning: >
       cartog savings (or `cartog stats --savings`) reads the local query_log
-      and prints per-tool counts plus an estimated token-savings figure vs a
-      grep+read baseline. No network calls; nothing leaves the machine.
+      and prints a with/without/saved breakdown plus a per-tool call-count
+      list. By-tool counts are call counts, not token totals — the multiplier
+      is flat. No network calls; nothing leaves the machine.
   anti_patterns:
     - Manually counting prior tool calls from conversation history
     - Running cartog stats (without --savings) which only shows index totals
+    - Treating the "By tool" rows as per-tool token figures
 
 # ============================================================
 # Editor MCP install via the friendlier alias

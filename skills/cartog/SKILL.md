@@ -332,11 +332,35 @@ Validates git repo, config, database, embedding provider, and reranker. Returns 
 ### Stats (index summary, savings retention hook)
 ```bash
 cartog stats                # files, symbols, edges, languages
-cartog stats --savings      # per-tool query counts + tokens saved vs grep+read
+cartog stats --savings      # tokens-saved breakdown (see below)
 cartog savings              # alias for `cartog stats --savings`
 ```
 
-`cartog savings` is the retention hook: it surfaces ongoing ROI in one keystroke. Only counts queries that returned a non-empty result (empty-index calls and typo'd names are skipped, so the number reflects real work).
+`cartog savings` is the retention hook. Output shape:
+
+```
+cartog · my-project · 5 queries
+
+████████░░  ~83% tokens saved
+
+Without cartog    ~8.5k tokens   (~1700 / query)
+With cartog       ~1.4k tokens   (~280 / query)
+──────────────────────────────────────────────
+Saved             ~7.1k tokens   (~1420 / query)
+
+By tool (call counts):
+     2  search
+     1  impact
+     1  map
+     1  refs
+```
+
+Key facts an agent should know:
+
+- **With vs without** — `Without cartog` is an equivalent grep+read flow, baselined at ~1,700 tokens/query. `With cartog` uses the measured ~280 tokens/query.
+- **By tool** = **call counts**, not per-tool token savings (the multiplier is flat across all tools). The breakdown shows which navigation patterns the user actually relies on.
+- **Empty-result queries don't count.** A `cartog search nonexistent` that returns `[]` is not logged — savings reflect real work, not exploratory pings.
+- Only writable databases can log. Secondary read-only MCP attaches skip the write, so multi-MCP setups under-report secondary traffic rather than double-counting it.
 
 ### Watch (auto re-index on file changes)
 ```bash

@@ -2157,13 +2157,7 @@ impl Database {
         // still propagate to the caller.
         if let Err(e) = self.conn.prepare("SELECT 1 FROM query_log LIMIT 0") {
             if is_no_such_table(&e) {
-                return Ok(SavingsReport {
-                    by_tool: Vec::new(),
-                    by_source: Vec::new(),
-                    total_queries: 0,
-                    estimated_tokens_saved: 0,
-                    baseline_delta: TOKENS_SAVED_PER_QUERY,
-                });
+                return Ok(empty_savings_report());
             }
             return Err(e.into());
         }
@@ -2183,13 +2177,24 @@ impl Database {
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         let total_queries: u64 = by_tool.iter().map(|(_, c)| c).sum();
-        let estimated_tokens_saved = total_queries.saturating_mul(TOKENS_SAVED_PER_QUERY as u64);
+        let tokens_used_cartog = total_queries.saturating_mul(TOKENS_PER_QUERY_CARTOG as u64);
+        let tokens_used_grep = total_queries.saturating_mul(TOKENS_PER_QUERY_GREP as u64);
+        let estimated_tokens_saved = tokens_used_grep.saturating_sub(tokens_used_cartog);
+        // 0–99 to keep the visual bar from flat-topping at 100% on degenerate
+        // data and to leave room for "less than 1% rounding" cases.
+        let percent_saved = (estimated_tokens_saved * 100)
+            .checked_div(tokens_used_grep)
+            .unwrap_or(0)
+            .min(99) as u8;
 
         Ok(SavingsReport {
             by_tool,
             by_source,
             total_queries,
+            tokens_used_cartog,
+            tokens_used_grep,
             estimated_tokens_saved,
+            percent_saved,
             baseline_delta: TOKENS_SAVED_PER_QUERY,
         })
     }
@@ -2922,6 +2927,10 @@ pub struct IndexStats {
 }
 
 /// Per-tool query counts + token-savings estimate for `cartog stats --savings`.
+///
+/// Carries both sides of the comparison (cartog vs grep+read) so the CLI can
+/// render a "with / without / saved" breakdown that's actually informative —
+/// the flat delta on its own under-explains where the number comes from.
 #[derive(Debug, Clone, Serialize)]
 pub struct SavingsReport {
     /// `(tool_name, count)` sorted by count descending, then tool name.
@@ -2930,21 +2939,35 @@ pub struct SavingsReport {
     pub by_source: Vec<(String, u64)>,
     /// Sum of all per-tool counts.
     pub total_queries: u64,
-    /// Estimated tokens saved versus a grep+read baseline.
-    /// Uses [`TOKENS_SAVED_PER_QUERY`] as a flat multiplier — coarse on purpose;
-    /// per-tool token accounting is a future refinement.
+    /// Estimated tokens cartog used for `total_queries` reads.
+    pub tokens_used_cartog: u64,
+    /// Estimated tokens an equivalent grep+read flow would have used.
+    pub tokens_used_grep: u64,
+    /// `tokens_used_grep - tokens_used_cartog`. Same as the old
+    /// `estimated_tokens_saved` field; kept for JSON back-compat.
     pub estimated_tokens_saved: u64,
-    /// Baseline token delta used. Exposed so the CLI can name the figure.
+    /// Integer percent of `tokens_used_grep` saved (0–99). Caps at 99 so
+    /// the bar never visually flat-tops at 100% on degenerate data.
+    pub percent_saved: u8,
+    /// Per-query baseline token delta (grep − cartog). Exposed so the CLI
+    /// can name the figure in the footer.
     pub baseline_delta: u32,
 }
 
-/// Token delta per cartog query versus a `grep + Read` baseline.
-///
-/// Sources: the benchmark suite measures ~1,700 tokens for a grep+read sweep
-/// answering "where is X used?" against cartog's ~280 tokens. The difference
-/// (~1,420) is taken as the per-query savings. Coarse but defensible; refining
-/// per-tool would require a richer per-call metric and isn't worth it pre-v1.
-pub const TOKENS_SAVED_PER_QUERY: u32 = 1_420;
+/// Per-query token cost for cartog. Measured: ~280 tokens for a typical
+/// navigation query (`where is X used?`, `what does X call?`) including the
+/// structured response payload.
+pub const TOKENS_PER_QUERY_CARTOG: u32 = 280;
+
+/// Per-query token cost for an equivalent grep + read flow. Measured: a
+/// grep sweep plus reading the surrounding ~50 lines of each hit averages
+/// ~1,700 tokens to answer the same navigation question.
+pub const TOKENS_PER_QUERY_GREP: u32 = 1_700;
+
+/// Per-query token delta (`grep − cartog`). Coarse on purpose; refining
+/// per-tool would require richer per-call accounting and isn't worth it
+/// pre-v1. Sources: benchmarks/queries.rs (see `crates/cartog/benches/`).
+pub const TOKENS_SAVED_PER_QUERY: u32 = TOKENS_PER_QUERY_GREP - TOKENS_PER_QUERY_CARTOG;
 
 /// One-shot flag flipped the first time `log_query` fails. Surfaces a loud
 /// error so a persistently-broken `query_log` (SQLITE_FULL, missing table)
@@ -2952,6 +2975,21 @@ pub const TOKENS_SAVED_PER_QUERY: u32 = 1_420;
 /// goal is one user-visible message per cartog invocation, not per row.
 static LOG_QUERY_FAILURE_REPORTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+/// Zero-state [`SavingsReport`] used when no queries have been logged yet
+/// (or when the `query_log` table is missing on a read-only attach).
+fn empty_savings_report() -> SavingsReport {
+    SavingsReport {
+        by_tool: Vec::new(),
+        by_source: Vec::new(),
+        total_queries: 0,
+        tokens_used_cartog: 0,
+        tokens_used_grep: 0,
+        estimated_tokens_saved: 0,
+        percent_saved: 0,
+        baseline_delta: TOKENS_SAVED_PER_QUERY,
+    }
+}
 
 /// Returns true when a rusqlite error specifically indicates a missing table,
 /// not any other prepare failure. Used by `savings_breakdown` to distinguish
@@ -3198,7 +3236,10 @@ mod tests {
         let db = Database::open_memory().unwrap();
         let r = db.savings_breakdown().unwrap();
         assert_eq!(r.total_queries, 0);
+        assert_eq!(r.tokens_used_cartog, 0);
+        assert_eq!(r.tokens_used_grep, 0);
         assert_eq!(r.estimated_tokens_saved, 0);
+        assert_eq!(r.percent_saved, 0);
         assert!(r.by_tool.is_empty());
         assert!(r.by_source.is_empty());
         assert_eq!(r.baseline_delta, TOKENS_SAVED_PER_QUERY);
@@ -3215,7 +3256,12 @@ mod tests {
 
         let r = db.savings_breakdown().unwrap();
         assert_eq!(r.total_queries, 5);
+        // With/without/saved derived from the per-query constants.
+        assert_eq!(r.tokens_used_cartog, 5 * TOKENS_PER_QUERY_CARTOG as u64);
+        assert_eq!(r.tokens_used_grep, 5 * TOKENS_PER_QUERY_GREP as u64);
         assert_eq!(r.estimated_tokens_saved, 5 * TOKENS_SAVED_PER_QUERY as u64);
+        // ~83% saved given 280 vs 1700 baseline.
+        assert_eq!(r.percent_saved, 83);
 
         // by_tool sorted by count desc, then name
         let tool_counts: Vec<_> = r.by_tool.iter().map(|(t, c)| (t.as_str(), *c)).collect();

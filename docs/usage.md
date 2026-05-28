@@ -342,19 +342,40 @@ cartog --json savings
 ```
 
 ```text
-Total queries: 5  (~7100 tokens saved vs grep+read baseline, at 1420 tokens/query)
+cartog · my-project · 5 queries
 
-By tool:
-       2  search
-       1  impact
-       1  map
-       1  refs
+████████░░  ~83% tokens saved
+
+Without cartog    ~8.5k tokens   (~1700 / query)
+With cartog       ~1.4k tokens   (~280 / query)
+──────────────────────────────────────────────
+Saved             ~7.1k tokens   (~1420 / query)
+
+By tool (call counts):
+     2  search
+     1  impact
+     1  map
+     1  refs
+
+Baseline: ~1700 tokens for an equivalent grep+read sweep vs cartog's ~280.
+Measured across 13 benchmark scenarios (see crates/cartog/benches/queries.rs).
 ```
+
+The header line is `cartog · <project> · <N> queries`, where `<project>` is
+the directory holding `.cartog/`. **By tool** lists *call counts*, not per-tool
+token savings — every tool uses the same baseline (1,420 tokens saved per
+call), so the breakdown shows which navigation patterns the user actually
+relies on, not which one saved the most.
+
+Only queries that returned a non-empty result count toward the totals.
+Empty-index calls, typo'd symbol names, and "no such file" outline calls are
+skipped so the figure reflects real work, not zero-value pings.
 
 Data comes from a local `query_log` table inside `.cartog/db.sqlite`. Nothing
 leaves the machine; no query payloads are recorded — only the tool name, call
 surface (`cli` / `mcp`), and a timestamp. Secondary read-only MCP attaches
-skip the write to avoid double-counting from the primary.
+skip the write (they can't write at all), so multi-MCP-server setups *under-*
+report secondary traffic rather than double-counting it.
 
 ### `cartog push [--remote <s3-url>]`
 

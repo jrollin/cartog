@@ -410,18 +410,30 @@ Symbols by kind:
   class: 52</pre>
 
       <h2 id="cmd-savings"><code>cartog savings</code></h2>
-      <p>Per-tool query counts + estimated tokens saved versus a grep+read baseline (~1,420 tokens/query). Visible alias of <code>cartog stats --savings</code>, shipped as a top-level verb so the retention hook is one keystroke away.</p>
+      <p>Shows tokens used by cartog vs an equivalent grep+read flow, plus the saved delta and a per-tool call-count breakdown. Visible alias of <code>cartog stats --savings</code>; shipped as a top-level verb so the retention hook is one keystroke away.</p>
       <pre>cartog savings
 cartog --json savings</pre>
       <p class="example-label">Example output</p>
-      <pre class="example-output">Total queries: 5  (~7100 tokens saved vs grep+read baseline, at 1420 tokens/query)
+      <pre class="example-output">cartog · my-project · 5 queries
 
-By tool:
-       2  search
-       1  impact
-       1  map
-       1  refs</pre>
-      <p>Data comes from a local <code>query_log</code> table inside <code>.cartog/db.sqlite</code>. Nothing leaves the machine; no query payloads are recorded — only the tool name, call surface (<code>cli</code> / <code>mcp</code>), and a timestamp. Secondary read-only MCP attaches skip the write to avoid double-counting from the primary.</p>
+████████░░  ~83% tokens saved
+
+Without cartog    ~8.5k tokens   (~1700 / query)
+With cartog       ~1.4k tokens   (~280 / query)
+──────────────────────────────────────────────
+Saved             ~7.1k tokens   (~1420 / query)
+
+By tool (call counts):
+     2  search
+     1  impact
+     1  map
+     1  refs
+
+Baseline: ~1700 tokens for an equivalent grep+read sweep vs cartog's ~280.
+Measured across 13 benchmark scenarios (see crates/cartog/benches/queries.rs).</pre>
+      <p>The header reads <code>cartog · &lt;project&gt; · &lt;N&gt; queries</code>. <strong>By tool</strong> lists <em>call counts</em> — every tool uses the same flat baseline (1,420 tokens saved per call), so the breakdown shows which navigation patterns you rely on, not which tool saved the most.</p>
+      <p>Only queries returning a non-empty result count toward the totals. Empty-index calls, typo'd symbol names, and outline against missing files are skipped so the figure reflects real work.</p>
+      <p>Data comes from a local <code>query_log</code> table inside <code>.cartog/db.sqlite</code>. Nothing leaves the machine; no query payloads are recorded — only the tool name, call surface (<code>cli</code> / <code>mcp</code>), and a timestamp. Secondary read-only MCP attaches can't write, so multi-MCP-server setups under-report secondary traffic rather than double-counting it.</p>
 
       <h2 id="cmd-doctor"><code>cartog doctor</code></h2>
       <p>Validate that all requirements are met and everything is working. Checks git repo, config, database, embedding provider, and reranker.</p>
