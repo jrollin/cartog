@@ -2,10 +2,13 @@ name: Deploy Pages
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy (defaults to latest tag)"
+        required: false
+        type: string
   push:
-    branches: [main]
-    paths:
-      - "site/**"
+    tags: ["v*"]
 
 permissions:
   pages: write
@@ -24,6 +27,24 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve deploy ref
+        id: ref
+        run: |
+          if [ -n "${{ inputs.ref }}" ]; then
+            target="${{ inputs.ref }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            target="${{ github.ref }}"
+          else
+            target=$(git describe --tags --abbrev=0)
+          fi
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "Deploying site from $target"
+
+      - name: Checkout deploy ref
+        run: git checkout "${{ steps.ref.outputs.target }}" -- site
 
       - uses: actions/configure-pages@v6
 
