@@ -108,10 +108,11 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | `cartog hierarchy <class>` | `cartog_hierarchy` | `name` |
 | `cartog deps <file>` | `cartog_deps` | `file` |
 | `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
-| `cartog stats` | `cartog_stats` | — |
+| `cartog stats [--savings]` | `cartog_stats` | — |
+| `cartog savings` | — (CLI only — alias for `cartog stats --savings`) | — |
 | `cartog doctor` | — (CLI only) | — |
 | `cartog init` | — (CLI only) | — |
-| `cartog ide` | — (CLI only) | — |
+| `cartog ide` (interactive picker) / `cartog install <client>...` (positional) | — (CLI only) | — |
 | `cartog config` | — (CLI only) | — |
 
 ## Setup
@@ -295,11 +296,13 @@ Shows everything that transitively depends on a symbol up to N hops.
 ### Hierarchy (inheritance tree)
 ```bash
 cartog hierarchy BaseService
+cartog hierarchy BaseService --mermaid   # paste-into-PR diagram
 ```
 
 ### Deps (file imports)
 ```bash
 cartog deps src/routes/auth.py
+cartog deps src/routes/auth.py --mermaid # graph LR with file as root
 ```
 
 ### Map (codebase overview)
@@ -307,8 +310,9 @@ cartog deps src/routes/auth.py
 cartog map                               # default 4000 tokens
 cartog map --tokens 2000                 # compact
 cartog map --tokens 8000                 # detailed
+cartog map --mermaid                     # graph TD rooted at "Repo"
 ```
-File tree + top symbols ranked by reference count (centrality). Use at the start of a session for context loading.
+File tree + top symbols ranked by reference count (centrality). Use at the start of a session for context loading. `--mermaid` honors the token budget by stopping before it overflows.
 
 ### Changes (recently modified symbols)
 ```bash
@@ -325,10 +329,38 @@ cartog --json doctor                     # structured JSON output
 ```
 Validates git repo, config, database, embedding provider, and reranker. Returns OK / Warn / Error per check and exits with code 1 if any error. Run this when commands fail unexpectedly or after first setup to verify everything is working.
 
-### Stats (index summary)
+### Stats (index summary, savings retention hook)
 ```bash
-cartog stats
+cartog stats                # files, symbols, edges, languages
+cartog stats --savings      # tokens-saved breakdown (see below)
+cartog savings              # alias for `cartog stats --savings`
 ```
+
+`cartog savings` is the retention hook. Output shape:
+
+```
+cartog · my-project · 5 queries
+
+████████░░  ~83% tokens saved
+
+Without cartog    ~8.5k tokens   (~1700 / query)
+With cartog       ~1.4k tokens   (~280 / query)
+──────────────────────────────────────────────
+Saved             ~7.1k tokens   (~1420 / query)
+
+By tool (call counts):
+     2  search
+     1  impact
+     1  map
+     1  refs
+```
+
+Key facts an agent should know:
+
+- **With vs without** — `Without cartog` is an equivalent grep+read flow, baselined at ~1,700 tokens/query. `With cartog` uses the measured ~280 tokens/query.
+- **By tool** = **call counts**, not per-tool token savings (the multiplier is flat across all tools). The breakdown shows which navigation patterns the user actually relies on.
+- **Empty-result queries don't count.** A `cartog search nonexistent` that returns `[]` is not logged — savings reflect real work, not exploratory pings.
+- Only writable databases can log. Secondary read-only MCP attaches skip the write, so multi-MCP setups under-report secondary traffic rather than double-counting it.
 
 ### Watch (auto re-index on file changes)
 ```bash
@@ -370,17 +402,26 @@ cartog init --dry-run           # preview without writing
 
 **When to suggest it**: the user is starting cartog on a fresh repo (no `.cartog.toml` at the git root). The agent should mention it once, then continue with `cartog index` to build the graph. CLI-only users stop there; users on Claude Code / Cursor / VS Code / etc. can then run `cartog ide`.
 
-### Ide (wire cartog into editors — user-facing, interactive)
+### Wire cartog into editors
+
+Two shapes for the same operation:
+
 ```bash
-cartog ide --yes                              # configure all detected clients, non-interactive
-cartog ide --client cursor --yes              # one specific client
+# `cartog install` — positional, brew/npm/pip convention. Always non-interactive.
+cartog install cursor                         # one editor
+cartog install cursor vscode codex            # several editors at once
+cartog install                                # all detected editors (no positional = "all")
+cartog install cursor --dry-run               # preview without writing
+cartog install claude-code --no-watch         # drop --watch from Claude Code args
+
+# `cartog ide` — original, supports the interactive multi-select picker.
+cartog ide --yes                              # all detected clients, non-interactive
+cartog ide --client cursor --yes              # one client (long-form)
 cartog ide --scope project --yes              # only .mcp.json / .cursor/mcp.json / .vscode/mcp.json
-cartog ide --client claude-code --no-watch --yes  # wire Claude Code without --watch
-cartog ide --scope user --yes                 # only user-scope clients
 cartog ide --dry-run                          # preview without writing
 ```
 
-**Agent gotcha**: `cartog ide` runs an interactive multi-select picker by default. **An agent calling it via Bash MUST pass `--yes` (or `--client X` / `--dry-run`), otherwise the command will block waiting for user input.** Non-TTY stdin is also treated as non-interactive.
+**Agent gotcha**: `cartog ide` (bare) runs an interactive multi-select picker. **An agent calling it via Bash MUST pass `--yes` (or `--client X` / `--dry-run`)**, otherwise the command blocks waiting for input. `cartog install` is always non-interactive, so it's the safe default for agents.
 
 Supported clients: `claude-code`, `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`. User-scope clients whose config dir is missing are reported as "not installed" and skipped. Existing MCP entries for other servers are preserved (idempotent merge).
 
@@ -445,6 +486,7 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 | Check if a change is safe | `cartog impact <name> --depth 3` |
 | Understand class hierarchy | `cartog hierarchy <class>` |
 | See file dependencies | `cartog deps <file>` |
+| Render a diagram to paste into a PR / doc | append `--mermaid` to `hierarchy`, `deps`, or `map` |
 | See what changed recently | `cartog changes` (`--commits N` for more history) |
 | Improve graph precision for a refactoring | `cartog index .` (with LSP auto-detected) |
 | Fast re-index after code changes | `cartog index . --no-lsp` |

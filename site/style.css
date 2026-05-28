@@ -1187,6 +1187,63 @@ td .badge {
   margin-bottom: 16px;
 }
 
+.mcp-client {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  background: var(--bg-tertiary);
+}
+
+.mcp-client > summary {
+  cursor: pointer;
+  font-size: 14px;
+  user-select: none;
+  list-style: none;
+}
+
+.mcp-client > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mcp-client > summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 14px;
+  color: var(--accent);
+  transition: transform 0.15s ease;
+}
+
+.mcp-client[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.mcp-client[open] {
+  padding-bottom: 4px;
+}
+
+.mcp-client > *:not(summary) {
+  margin-top: 12px;
+}
+
+.example-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+pre.example-output {
+  background: var(--bg-secondary);
+  border-left: 3px solid var(--accent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
 @media (max-width: 768px) {
   .docs-layout {
     grid-template-columns: 1fr;

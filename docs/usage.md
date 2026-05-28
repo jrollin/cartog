@@ -175,7 +175,7 @@ cartog search config --file src/db.rs        # scoped to one file
 cartog search parse --limit 5               # cap results
 ```
 
-```
+```text
 function  validate_token    auth/tokens.py:30
 function  validate_session  auth/tokens.py:68
 function  validate_user     services/user.py:12
@@ -193,7 +193,7 @@ Show all symbols in a file with their types, signatures, and line ranges. Use th
 cartog outline src/db.rs
 ```
 
-```
+```text
 use anyhow  L1
 use rusqlite  L2
 class Database  L62-500
@@ -210,7 +210,7 @@ Find what a function calls — answers "what does this depend on?".
 cartog callees validate_token
 ```
 
-```
+```text
 lookup_session  auth/tokens.py:37
 TokenError      auth/tokens.py:39
 ExpiredTokenError  auth/tokens.py:42
@@ -224,7 +224,7 @@ Transitive impact analysis — follows the caller chain up to N hops (default 3)
 cartog impact validate_token --depth 3
 ```
 
-```
+```text
   calls  get_current_user  auth/service.py:40
   calls  refresh_token  auth/tokens.py:54
     calls  impersonate  auth/service.py:52
@@ -241,7 +241,7 @@ cartog refs UserService                  # all reference types
 cartog refs validate_token --kind calls  # only call sites
 ```
 
-```
+```text
 imports  ./service  routes/auth.py:3
 calls    login  routes/auth.py:15
 inherits AdminService  auth/service.py:47
@@ -250,42 +250,68 @@ references  process  routes/auth.py:22
 
 Available `--kind` values: `calls`, `imports`, `inherits`, `references`, `raises`, `implements`, `type-of`.
 
-### `cartog hierarchy <class>`
+### `cartog hierarchy <class> [--mermaid]`
 
 Show inheritance relationships involving a class — both parents and children.
+Add `--mermaid` for a `graph TD` diagram you can paste into a PR or doc.
 
 ```bash
 cartog hierarchy AuthService
+cartog hierarchy AuthService --mermaid
 ```
 
-```
+```text
 AuthService -> BaseService
 AdminService -> AuthService
 ```
 
-### `cartog deps <file>`
+With `--mermaid`:
+
+```text
+graph TD
+    AuthService["AuthService"] --> BaseService["BaseService"]
+    AdminService["AdminService"] --> AuthService["AuthService"]
+```
+
+### `cartog deps <file> [--mermaid]`
 
 List symbols imported by a file — answers "what does this file depend on?".
+Add `--mermaid` for a `graph LR` diagram rooted at the file.
 
 ```bash
-cartog deps src/routes/auth.py
+cartog deps auth/service.py
+cartog deps auth/service.py --mermaid
 ```
 
-```
+```text
 validate_token  L5
 generate_token  L5
 User            L6
 ```
 
-### `cartog stats`
+With `--mermaid`:
 
-Summary of the index — file count, symbol count, edge resolution rate.
+```text
+graph LR
+    auth_service_py["auth/service.py"]
+    auth_service_py --> validate_token["validate_token (L5)"]
+    auth_service_py --> generate_token["generate_token (L5)"]
+    auth_service_py --> User["User (L6)"]
+```
+
+### `cartog stats [--savings]`
+
+Summary of the index — file count, symbol count, edge resolution rate. Pass
+`--savings` to instead show per-tool query counts and estimated tokens saved
+versus a grep+read baseline (or use the [`cartog savings`](#cartog-savings)
+top-level alias).
 
 ```bash
 cartog stats
+cartog stats --savings
 ```
 
-```
+```text
 Files:    42
 Symbols:  387
 Edges:    1204 (891 resolved)
@@ -302,6 +328,60 @@ Symbols by kind:
 
 On an unindexed repo all counts are `0` and the output ends with
 `Index is empty — run \`cartog index .\` to build the code graph.`
+
+### `cartog savings`
+
+Per-tool query counts + an estimated tokens-saved figure versus a grep+read
+baseline (~1,420 tokens/query, drawn from the benchmark suite). Visible alias
+of `cartog stats --savings`; shipped as a top-level verb because it's the
+retention hook — surfaces ongoing ROI in one keystroke.
+
+```bash
+cartog savings
+cartog --json savings
+```
+
+```text
+cartog · my-project · 5 queries
+
+████████░░  ~83% tokens saved
+
+Without cartog    ~8.5k tokens   (~1700 / query)
+With cartog       ~1.4k tokens   (~280 / query)
+──────────────────────────────────────────────
+Saved             ~7.1k tokens   (~1420 / query)
+
+By tool (call counts):
+     2  search
+     1  impact
+     1  map
+     1  refs
+
+Baseline: ~1700 tokens for an equivalent grep+read sweep vs cartog's ~280.
+Measured across 13 benchmark scenarios (see crates/cartog/benches/queries.rs).
+```
+
+The header line is `cartog · <project> · <N> queries`, where `<project>` is
+the directory holding `.cartog/`. **By tool** lists *call counts*, not per-tool
+token savings — every tool uses the same baseline (1,420 tokens saved per
+call), so the breakdown shows which navigation patterns the user actually
+relies on, not which one saved the most.
+
+Only queries that returned a non-empty result count toward the totals.
+Empty-index calls, typo'd symbol names, and "no such file" outline calls are
+skipped so the figure reflects real work, not zero-value pings.
+
+Data comes from a local `query_log` table inside `.cartog/db.sqlite`. Nothing
+leaves the machine; no query payloads are recorded — only the tool name, call
+surface (`cli` / `mcp`), and a timestamp. Secondary read-only MCP attaches
+skip the write (they can't write at all), so multi-MCP-server setups *under-*
+report secondary traffic rather than double-counting it.
+
+**JSON schema** (`cartog --json savings`): v0.18+ adds `tokens_used_cartog`,
+`tokens_used_grep`, and `percent_saved` to the existing
+`{by_tool, by_source, total_queries, estimated_tokens_saved, baseline_delta}`.
+Consumers must not parse with `deny_unknown_fields` — additive fields are
+expected as the metric evolves.
 
 ### `cartog push [--remote <s3-url>]`
 
@@ -397,17 +477,18 @@ cargo install cartog --no-default-features --features lsp   # keep LSP only
 A binary built without `remote-s3` refuses `cartog push` and `cartog pull` with
 a clear error pointing at the reinstall command.
 
-### `cartog map [--tokens N]`
+### `cartog map [--tokens N] [--mermaid]`
 
-Token-budget-aware codebase summary — file tree + top symbols ranked by reference count (in-degree centrality).
+Token-budget-aware codebase summary — file tree + top symbols ranked by reference count (in-degree centrality). Add `--mermaid` for a `graph TD` rooted at "Repo"; the token budget still applies (the renderer stops adding nodes before it overflows).
 
 ```bash
 cartog map                    # default 4000 tokens
 cartog map --tokens 2000      # compact summary
 cartog map --tokens 8000      # detailed summary
+cartog map --mermaid          # paste-into-PR diagram
 ```
 
-```
+```text
 # Codebase Map (42 files)
 
   src/auth/tokens.py
@@ -426,6 +507,20 @@ src/auth/service.py:
 
 Phase 1 shows the file tree; phase 2 fills remaining budget with symbols ordered by centrality (most-referenced first). Use `--json` for structured output.
 
+With `--mermaid`:
+
+```text
+graph TD
+    repo["Repo"]
+    repo --> auth_service_py["auth/service.py"]
+    repo --> auth_tokens_py["auth/tokens.py"]
+    auth_tokens_py --> auth_tokens_py__validate_token["validate_token (function)"]
+    auth_tokens_py --> auth_tokens_py__generate_token["generate_token (function)"]
+    ...
+```
+
+`--json` wins over `--mermaid` when both are set.
+
 ### `cartog changes [--commits N] [--kind <kind>]`
 
 Show symbols affected by recent git changes — answers "what code changed recently?".
@@ -436,7 +531,7 @@ cartog changes --commits 10           # last 10 commits
 cartog changes --kind function        # only functions that changed
 ```
 
-```
+```text
 27 files changed in last 5 commits, 158 symbols affected
 
 src/commands.rs:
@@ -459,7 +554,7 @@ Check that all requirements are met and everything is working. Validates the env
 cartog doctor
 ```
 
-```
+```text
   [+] git: git repository at /home/user/project
   [+] config: loaded from /home/user/project/.cartog.toml
   [+] database: 42 files, 387 symbols at /home/user/project/.cartog/db.sqlite
@@ -562,14 +657,70 @@ cartog init --dry-run        # preview without writing
 Wire `cartog serve` into one or all MCP-compatible editors. This is the only verb that touches editor configs.
 
 ```bash
-cartog ide                          # all installed clients, all scopes
+cartog ide                          # all installed clients, all scopes (interactive picker)
 cartog ide --client cursor          # one client
 cartog ide --scope project          # only project-scoped (.mcp.json, .cursor/, .vscode/)
 cartog ide --scope user             # only user-scope clients
 cartog ide --dry-run                # preview with before/after diff
 ```
 
+Example output (`cartog ide --client cursor --dry-run`):
+
+```text
++ cursor (project, /your/repo/.cursor/mcp.json): would create
+  --- after ---
+    {
+      "mcpServers": {
+        "cartog": { "command": "cartog", "args": ["serve"] }
+      }
+    }
+
+1 clients: 1 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+Dry run only. Re-run without --dry-run to apply.
+```
+
+For `cartog ide --client claude-code --dry-run`, both project (`.mcp.json`) and user (`~/.claude/settings.json`) entries are previewed, and `args` includes `--watch` by default ([see why](#claude-code-watch-default)).
+
 Supported clients: `claude-code` (project + user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`. User-scope clients whose config dir is missing are skipped. See [Per-editor wiring: `cartog ide`](#per-editor-wiring-cartog-ide) for the flag and troubleshooting tables.
+
+### `cartog install [client ...] [--scope ...] [--dry-run] [--no-watch]`
+
+Friendlier shape of `cartog ide` — takes editors as positional args
+(brew/npm/pip/cargo convention) and is always non-interactive. Safe to call
+from scripts and agents (no picker, no `--yes` required).
+
+```bash
+cartog install cursor                 # one editor
+cartog install cursor vscode codex    # several editors at once
+cartog install                        # all detected editors
+cartog install cursor --dry-run       # preview without writing
+cartog install claude-code --no-watch # wire Claude Code without --watch
+```
+
+Example output (`cartog install cursor vscode --dry-run`):
+
+```text
++ cursor (project, /your/repo/.cursor/mcp.json): would create
+  --- after ---
+    {
+      "mcpServers": {
+        "cartog": { "command": "cartog", "args": ["serve"] }
+      }
+    }
++ vscode (project, /your/repo/.vscode/mcp.json): would create
+  --- after ---
+    {
+      "servers": {
+        "cartog": { "type": "stdio", "command": "cartog", "args": ["serve"] }
+      }
+    }
+
+2 clients: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+Dry run only. Re-run without --dry-run to apply.
+```
+
+Same supported-client list as `cartog ide`. For the interactive multi-select
+picker (useful at a fresh-machine setup), use `cartog ide` directly.
 
 ### `cartog config`
 
@@ -596,10 +747,17 @@ cartog completions fish  > ~/.config/fish/completions/cartog.fish
 
 Emit a `roff` man page on stdout. Intended for packagers and distro maintainers.
 
+The output filename **must** end in `.1` (the section-1 extension `man` looks
+for) and the target directory must exist:
+
 ```bash
-cartog manpage > /usr/local/share/man/man1/cartog.1
+sudo mkdir -p /usr/local/share/man/man1
+cartog manpage | sudo tee /usr/local/share/man/man1/cartog.1 > /dev/null
 man cartog
 ```
+
+On macOS the path is the same. On Linux distros some packagers prefer
+`/usr/share/man/man1/`; either works as long as it is on `MANPATH`.
 
 ### `cartog self <update|version|rollback|migrate-db>`
 
@@ -659,7 +817,7 @@ Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, 
 
 ## Recommended Workflow
 
-```
+```text
 cartog index .          # 1. build the graph
 cartog search foo       # 2. discover exact symbol names
 cartog refs foo         # 3. find all usages
@@ -670,7 +828,7 @@ cartog index .          # 6. re-index after code changes
 
 For semantic search, add the RAG pipeline:
 
-```
+```text
 cartog rag setup        # one-time model download (~1.2GB, may take a few minutes)
 cartog rag index        # embed symbols
 cartog rag search "..."  # natural language queries
@@ -731,7 +889,7 @@ This installs the plugin from GitHub, which includes:
 
 ### Plugin Structure
 
-```
+```text
 .claude-plugin/
 └── plugin.json          # Plugin manifest
 skills/
@@ -954,7 +1112,7 @@ Produces a structured onboarding report for an unfamiliar codebase. The agent ad
 Output: a structured markdown report. Sections that don't apply are omitted.
 
 **Usage:**
-```
+```text
 @codebase-onboarding
 # or
 "Use the codebase-onboarding agent to analyze this project"
@@ -973,7 +1131,7 @@ Pre-flight analysis before changing a symbol, module, or file. Maps the full bla
 4. **Report** — affected files, risk warnings, and a concrete update checklist
 
 **Usage:**
-```
+```text
 @refactoring-scout "rename TrackerRepository"
 # or
 "Is it safe to delete the UtilsHelper class?"

@@ -181,16 +181,38 @@ pub enum Command {
     Hierarchy {
         /// Class name
         name: String,
+
+        /// Render the hierarchy as a Mermaid `graph TD` diagram instead of
+        /// plain text. Paste the output into any Mermaid renderer (GitHub,
+        /// mermaid.live, ...). Ignored when `--json` is also set.
+        #[arg(long)]
+        mermaid: bool,
     },
 
     /// File-level import dependencies
     Deps {
         /// File path
         file: String,
+
+        /// Render the imports as a Mermaid `graph LR` diagram instead of
+        /// plain text. Ignored when `--json` is also set.
+        #[arg(long)]
+        mermaid: bool,
     },
 
     /// Index statistics summary
-    Stats,
+    Stats {
+        /// Show per-tool query counts and estimated tokens saved vs grep+read.
+        /// Reads the local query log; no network calls.
+        #[arg(long)]
+        savings: bool,
+    },
+
+    /// Per-tool query counts + estimated tokens saved.
+    ///
+    /// Alias for `cartog stats --savings`. Shipped as a top-level verb because
+    /// it's the retention hook — surfaces ongoing ROI in one keystroke.
+    Savings,
 
     /// Upload the local index to an S3-compatible remote (opt-in feature).
     ///
@@ -251,6 +273,12 @@ pub enum Command {
         /// Approximate token budget for the output (default: 4000)
         #[arg(long, default_value = "4000")]
         tokens: u32,
+
+        /// Render the file tree as a Mermaid `graph TD` diagram instead of
+        /// indented text. Token budget still applies. Ignored when `--json`
+        /// is also set.
+        #[arg(long)]
+        mermaid: bool,
     },
 
     /// Show symbols affected by recent git changes
@@ -299,6 +327,9 @@ pub enum Command {
     /// Supports Claude Code, Claude Desktop, Cursor, VS Code, Codex CLI, Gemini CLI,
     /// OpenCode, Windsurf, Zed. User-scope clients whose config directory does not
     /// exist are skipped (not installed).
+    ///
+    /// See also `cartog install <client>...` for a positional shorthand that
+    /// matches the brew/npm/pip convention.
     Ide {
         /// Target a single client. Default: configure all clients in scope.
         #[arg(long, value_enum)]
@@ -312,6 +343,34 @@ pub enum Command {
         /// Accept all prompts (non-interactive). Implied by --dry-run, --json, --client, or a non-TTY stdin.
         #[arg(long, short = 'y')]
         yes: bool,
+
+        /// Print planned changes without writing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Omit `--watch` from Claude Code's serve args.
+        #[arg(long)]
+        no_watch: bool,
+    },
+
+    /// Install cartog MCP config into one or more editors.
+    ///
+    /// Friendlier shape of `cartog ide`: takes editors as positional arguments
+    /// (`cartog install cursor`, `cartog install cursor zed codex`) so it
+    /// matches the brew/npm/pip/cargo convention. No positional clients =
+    /// install into every detected editor non-interactively.
+    ///
+    /// Positional mode is always non-interactive (`--yes` implied). For the
+    /// interactive picker, use `cartog ide` directly.
+    Install {
+        /// One or more editors to wire up. Omit to install into every
+        /// detected editor non-interactively. Repeatable.
+        clients: Vec<ClientKind>,
+
+        /// Filter by scope. `project` writes only .mcp.json / .cursor/mcp.json;
+        /// `user` writes only user-scope configs; `all` writes both.
+        #[arg(long, value_enum, default_value_t = IdeScope::All)]
+        scope: IdeScope,
 
         /// Print planned changes without writing.
         #[arg(long)]

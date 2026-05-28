@@ -189,13 +189,28 @@ fn main() -> Result<()> {
         Command::Refs { name, kind } => {
             commands::cmd_refs(&db_path, &name, kind, cli.json, token_budget, embedding_dim)
         }
-        Command::Hierarchy { name } => {
-            commands::cmd_hierarchy(&db_path, &name, cli.json, token_budget, embedding_dim)
+        Command::Hierarchy { name, mermaid } => commands::cmd_hierarchy(
+            &db_path,
+            &name,
+            cli.json,
+            mermaid,
+            token_budget,
+            embedding_dim,
+        ),
+        Command::Deps { file, mermaid } => commands::cmd_deps(
+            &db_path,
+            &file,
+            cli.json,
+            mermaid,
+            token_budget,
+            embedding_dim,
+        ),
+        Command::Stats { savings } => {
+            commands::cmd_stats(&db_path, cli.json, token_budget, embedding_dim, savings)
         }
-        Command::Deps { file } => {
-            commands::cmd_deps(&db_path, &file, cli.json, token_budget, embedding_dim)
+        Command::Savings => {
+            commands::cmd_stats(&db_path, cli.json, token_budget, embedding_dim, true)
         }
-        Command::Stats => commands::cmd_stats(&db_path, cli.json, embedding_dim),
         Command::Push { remote } => {
             commands::cmd_push(&db_path, &cartog_config, remote.as_deref(), cli.json)
         }
@@ -242,7 +257,9 @@ fn main() -> Result<()> {
             token_budget,
             embedding_dim,
         ),
-        Command::Map { tokens } => commands::cmd_map(&db_path, tokens, cli.json, embedding_dim),
+        Command::Map { tokens, mermaid } => {
+            commands::cmd_map(&db_path, tokens, cli.json, mermaid, embedding_dim)
+        }
         Command::Changes { commits, kind } => commands::cmd_changes(
             &db_path,
             commits,
@@ -273,6 +290,12 @@ fn main() -> Result<()> {
             dry_run,
             no_watch,
         } => commands::ide::cmd_ide(client, scope, yes, dry_run, no_watch, cli.json),
+        Command::Install {
+            clients,
+            scope,
+            dry_run,
+            no_watch,
+        } => commands::ide::cmd_install(clients, scope, dry_run, no_watch, cli.json),
         Command::Serve { watch, rag } => {
             let runtime = tokio::runtime::Runtime::new()?;
             // pid_lock_dir/slot must be both-or-neither: a sandboxed host with no
