@@ -1226,6 +1226,24 @@ td .badge {
   margin-top: 12px;
 }
 
+.example-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+pre.example-output {
+  background: var(--bg-secondary);
+  border-left: 3px solid var(--accent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
 @media (max-width: 768px) {
   .docs-layout {
     grid-template-columns: 1fr;

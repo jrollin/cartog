@@ -285,6 +285,10 @@ cartog rag setup     <span class="comment"># only downloads embedding model (~80
 cartog index src/           <span class="comment"># index a subdirectory</span>
 cartog index . --force      <span class="comment"># full re-index</span>
 cartog index . --no-lsp     <span class="comment"># heuristic-only (~1-4s)</span></pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">Indexed 70 files (0 skipped, 0 removed)
+  697 symbols, 1921 edges (1019 resolved)
+  1 files in unsupported languages not indexed (1 .toml)</pre>
       <p>Incremental by default — skips unchanged files (git + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. The LSP pass skips edges already classified as unresolvable (typo, dyn dispatch, macro) or external (stdlib, deps, node_modules); both auto-retry when a matching symbol is added in-tree. <code>--force</code> resets those markers for a clean retry.</p>
       <p>Files in unsupported languages are reported, not silently dropped: on a mixed repo the summary adds a line like <code>12 files in unsupported languages not indexed (8 .dart, 4 .swift)</code> (also as <code>files_unsupported</code> / <code>unsupported_by_ext</code> under <code>--json</code>).</p>
 
@@ -294,43 +298,116 @@ cartog index . --no-lsp     <span class="comment"># heuristic-only (~1-4s)</span
 cartog search validate --kind function   <span class="comment"># functions only</span>
 cartog search config --file src/db.rs    <span class="comment"># scoped to one file</span>
 cartog search parse --limit 5            <span class="comment"># cap results</span></pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">function  validate           api/v1/auth.py:16
+function  validate_token     auth/tokens.py:38
+function  validate_request   utils/helpers.py:16
+function  validate_login     validators/user.py:41
+function  validate_email     validators/common.py:15
+method    _validate_payment  services/payment/processor.py:122
+document  Validate           README.md:8</pre>
       <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>.</p>
 
       <h2 id="cmd-outline"><code>cartog outline &lt;file&gt;</code></h2>
       <p>Show all symbols in a file with types, signatures, and line ranges. Use this instead of reading a file when you need structure.</p>
-      <pre>cartog outline src/db.rs</pre>
+      <pre>cartog outline auth/tokens.py</pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">from datetime import datetime, timedelta  L3
+from typing import Optional  L4
+from models.user import User  L7
+from config import SECRET_KEY, TOKEN_EXPIRY  L9
+class TokenError  L12-15
+class ExpiredTokenError  L18-21
+function generate_token(user: User, expires_in: int = TOKEN_EXPIRY) -&gt; str  L30-35
+function validate_token(token: str) -&gt; Optional[User]  L38-52
+function refresh_token(old_token: str) -&gt; str  L60-64
+function revoke_token(token: str) -&gt; bool  L67-73</pre>
 
       <h2 id="cmd-refs"><code>cartog refs &lt;name&gt;</code></h2>
       <p>All references to a symbol — calls, imports, inherits, type references.</p>
       <pre>cartog refs UserService                  <span class="comment"># all reference types</span>
 cartog refs validate_token --kind calls  <span class="comment"># only call sites</span></pre>
+      <p class="example-label">Example output (<code>cartog refs validate_token</code>)</p>
+      <pre class="example-output">imports  ..auth.tokens     middleware/auth_mw.py:7
+calls    auth_middleware   middleware/auth_mw.py:28
+imports  auth.tokens       auth/service.py:5
+calls    get_current_user  auth/service.py:44
+calls    change_password   auth/service.py:52
+imports  .tokens           auth/__init__.py:4
+calls    refresh_token     auth/tokens.py:62</pre>
       <p>Available <code>--kind</code> values: <code>calls</code>, <code>imports</code>, <code>inherits</code>, <code>references</code>, <code>raises</code>, <code>implements</code>, <code>type-of</code>.</p>
 
       <h2 id="cmd-callees"><code>cartog callees &lt;name&gt;</code></h2>
       <p>Find what a function calls — answers "what does this depend on?".</p>
       <pre>cartog callees validate_token</pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">lookup_session    auth/tokens.py:45
+TokenError        auth/tokens.py:47
+datetime.utcnow   auth/tokens.py:49
+ExpiredTokenError auth/tokens.py:50</pre>
 
       <h2 id="cmd-impact"><code>cartog impact &lt;name&gt;</code></h2>
       <p>Transitive impact analysis — follows the caller chain up to N hops (default 3).</p>
       <pre>cartog impact validate_token --depth 3</pre>
-      <p>Indentation shows depth. Answers "what breaks if I change this?".</p>
+      <p class="example-label">Example output (indentation shows hop depth)</p>
+      <pre class="example-output">  imports  middleware/auth_mw.py:7
+  calls    auth_middleware           middleware/auth_mw.py:28
+  imports  auth/service.py:5
+  calls    AuthService.get_current_user  auth/service.py:44
+  calls    AuthService.change_password   auth/service.py:52
+  calls    refresh_token             auth/tokens.py:62
+    calls  auth_required.wrapper     auth/middleware.py:21
+    calls  get_current_user          auth/middleware.py:61</pre>
+      <p>Answers "what breaks if I change this?".</p>
 
       <h2 id="cmd-hierarchy"><code>cartog hierarchy &lt;class&gt;</code></h2>
       <p>Show inheritance relationships — both parents and children.</p>
       <pre>cartog hierarchy AuthService</pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">AuthService -&gt; BaseService
+AdminService -&gt; AuthService</pre>
 
       <h2 id="cmd-deps"><code>cartog deps &lt;file&gt;</code></h2>
       <p>List symbols imported by a file — answers "what does this file depend on?".</p>
-      <pre>cartog deps src/routes/auth.py</pre>
+      <pre>cartog deps auth/service.py</pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">Optional         L3
+validate_token   L5
+generate_token   L5
+revoke_token     L5
+User             L6
+get_logger       L7</pre>
 
       <h2 id="cmd-stats"><code>cartog stats</code></h2>
       <p>Summary of the index — file count, symbol count, edge resolution rate. On an unindexed repo all counts are <code>0</code> and the output ends with a hint to run <code>cartog index .</code>.</p>
       <pre>cartog stats</pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">Files:    70
+Symbols:  697
+Edges:    1921 (1019 resolved)
+Languages:
+  python: 69 files
+  markdown: 1 files
+Symbols by kind:
+  import: 256
+  method: 217
+  function: 90
+  variable: 80
+  class: 52</pre>
 
       <h2 id="cmd-doctor"><code>cartog doctor</code></h2>
       <p>Validate that all requirements are met and everything is working. Checks git repo, config, database, embedding provider, and reranker.</p>
       <pre>cartog doctor                 <span class="comment"># check all requirements</span>
 cartog --json doctor          <span class="comment"># structured JSON output</span></pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">  [+] git: git repository at /your/repo
+  [+] config: loaded from /your/repo/.cartog.toml
+  [+] database: 70 files, 697 symbols at .cartog/db.sqlite
+  [+] embedding: local model cached
+  [+] reranker: local model cached
+  [+] remote: not configured (local-only)
+
+All 6 checks passed</pre>
       <p>Each check reports <strong>OK</strong>, <strong>Warn</strong>, or <strong>Error</strong>. Exits with code 1 if any check is an error. Run this when commands fail unexpectedly or after first setup.</p>
 
       <h2 id="cmd-map"><code>cartog map</code></h2>
@@ -338,17 +415,48 @@ cartog --json doctor          <span class="comment"># structured JSON output</sp
       <pre>cartog map                    <span class="comment"># default 4000 tokens</span>
 cartog map --tokens 2000      <span class="comment"># compact</span>
 cartog map --tokens 8000      <span class="comment"># detailed</span></pre>
+      <p class="example-label">Example output (truncated)</p>
+      <pre class="example-output"># Codebase Map (70 files)
+
+  README.md
+  api/v1/auth.py
+  api/v1/payments.py
+  api/v2/auth.py
+  app.py
+  auth/middleware.py
+  auth/service.py
+  auth/tokens.py
+  ...</pre>
 
       <h2 id="cmd-changes"><code>cartog changes</code></h2>
       <p>Show symbols affected by recent git changes.</p>
       <pre>cartog changes                    <span class="comment"># last 5 commits + working tree</span>
 cartog changes --commits 10       <span class="comment"># last 10 commits</span>
 cartog changes --kind function    <span class="comment"># only functions</span></pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">20 files changed in last 5 commits, 2 symbols affected
+
+README.md:
+  document webapp_py# webapp_py       L1-7
+  document Validate## Validate        L8-13</pre>
 
       <h2 id="cmd-config"><code>cartog config</code></h2>
       <p>Print the resolved configuration (merged defaults, <code>.cartog.toml</code>, and env overrides). Useful for verifying <code>[rag]</code> tuning, watch debounce, and provider selection.</p>
       <pre>cartog config              <span class="comment"># human-readable</span>
 cartog config --json       <span class="comment"># JSON for scripts</span></pre>
+      <p class="example-label">Example output (truncated)</p>
+      <pre class="example-output">Config file: /your/repo/.cartog.toml
+Database:    /your/repo/.cartog/db.sqlite
+
+[embedding]
+  provider:          local (default)
+  model:             -
+  dimension:         -
+
+[embedding.ollama]
+  base_url:          http://localhost:11434 (default)
+  model:             nomic-embed-text (default)
+  ...</pre>
 
       <h2 id="cmd-watch"><code>cartog watch</code></h2>
       <p>Watch for file changes and auto-re-index. Keeps the graph fresh during development.</p>
@@ -358,9 +466,12 @@ cartog watch --rag                 <span class="comment"># also auto-embed</span
 cartog watch --rag --rag-delay 60  <span class="comment"># embed after 60s idle</span>
 cartog watch --debounce 10         <span class="comment"># 10s debounce window</span>
 cartog watch --json                <span class="comment"># NDJSON event stream</span></pre>
+      <p>Refuses to start if another watch holds the lock for this database — fail-fast prevents two writers stomping each other:</p>
+      <pre class="example-output">Error: another cartog process holds the watch lock for this database
+       (slot watch-a902bb89f9a6b484, PID 64311); stop it before running `cartog watch`</pre>
 
       <h2 id="cmd-serve"><code>cartog serve</code></h2>
-      <p>Start cartog as an MCP server over stdio.</p>
+      <p>Start cartog as an MCP server over stdio. No banner — stdio is reserved for JSON-RPC traffic between the client and the server. Run <code>cartog stats</code> in another shell to confirm it's up; <code>role: primary</code> means the writer, <code>role: read-only</code> means an attached secondary.</p>
       <pre>cartog serve                  <span class="comment"># MCP server only</span>
 cartog serve --watch          <span class="comment"># + background file watcher</span>
 cartog serve --watch --rag    <span class="comment"># + watcher + auto RAG</span></pre>
@@ -369,6 +480,10 @@ cartog serve --watch --rag    <span class="comment"># + watcher + auto RAG</span
       <p>Scaffold a <code>.cartog.toml</code> template in the current project. That's all it does — config only, no editor wiring, no indexing. The next-steps hint points at <code>cartog ide</code> and <code>cartog index</code>.</p>
       <pre>cartog init                  <span class="comment"># scaffold .cartog.toml</span>
 cartog init --dry-run        <span class="comment"># preview without writing</span></pre>
+      <p class="example-label">Example output (already-initialized project, <code>--dry-run</code>)</p>
+      <pre class="example-output">+ .cartog.toml (/your/repo/.cartog.toml): already present, left untouched
+
+Dry run only. Re-run without --dry-run to apply.</pre>
       <p>Never overwrites an existing <code>.cartog.toml</code>. Re-running is a no-op (still prints the next-steps hint).</p>
 
       <h2 id="cmd-ide"><code>cartog ide</code></h2>
@@ -379,6 +494,20 @@ cartog ide --scope user             <span class="comment"># only user-scope clie
 cartog ide --scope project          <span class="comment"># only project-scoped clients (.mcp.json, .cursor/, .vscode/)</span>
 cartog ide --dry-run                <span class="comment"># preview with before/after diff</span>
 cartog ide --no-watch               <span class="comment"># drop --watch from Claude Code args</span></pre>
+      <p class="example-label">Example output (<code>--dry-run --client cursor</code>)</p>
+      <pre class="example-output">+ cursor (project, /your/repo/.cursor/mcp.json): would create
+  --- after ---
+    {
+      "mcpServers": {
+        "cartog": {
+          "command": "cartog",
+          "args": ["serve"]
+        }
+      }
+    }
+
+1 clients: 1 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+Dry run only. Re-run without --dry-run to apply.</pre>
       <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. See the <a href="#mcp-ide">Bootstrap sequence</a> for the recommended verb order.</p>
 
       <h2 id="cmd-self"><code>cartog self &lt;update|version|rollback|migrate-db&gt;</code></h2>
@@ -389,6 +518,11 @@ cartog self version             <span class="comment"># target + install source 
 cartog self rollback            <span class="comment"># restore the previous binary</span>
 cartog self migrate-db          <span class="comment"># move legacy .cartog.db into .cartog/db.sqlite</span>
 cartog self migrate-db --dry-run <span class="comment"># preview the move without touching disk</span></pre>
+      <p class="example-label">Example output (<code>cartog self version</code>)</p>
+      <pre class="example-output">cartog 0.18.0
+  target:            aarch64-apple-darwin
+  install source:    release-tarball
+  last update check: 2026-05-27T14:50:47Z</pre>
       <p>Auto-check runs at most once per 24h on interactive sessions; suppressed under <code>CARTOG_NO_UPDATE_CHECK=1</code>, non-TTY stdout, and inside <code>cartog serve</code>/<code>watch</code>. <code>migrate-db</code> refuses to overwrite an existing <code>.cartog/db.sqlite</code>, refuses to run while a peer process holds the lock <strong>for this project's database</strong> (a peer on an unrelated project does not block it), and refuses symlinked sources. See <a href="https://github.com/jrollin/cartog/blob/main/docs/updates.md">docs/updates.md</a> for the full exit-code matrix and state file location.</p>
 
       <h2 id="cmd-completions"><code>cartog completions &lt;shell&gt;</code></h2>
@@ -396,6 +530,13 @@ cartog self migrate-db --dry-run <span class="comment"># preview the move withou
       <pre>cartog completions zsh   &gt; ~/.zfunc/_cartog
 cartog completions bash  &gt; /usr/local/etc/bash_completion.d/cartog
 cartog completions fish  &gt; ~/.config/fish/completions/cartog.fish</pre>
+      <p class="example-label">Example output (first lines of <code>cartog completions zsh</code>)</p>
+      <pre class="example-output">#compdef cartog
+
+autoload -U is-at-least
+
+_cartog() {
+  ...</pre>
 
       <h2 id="cmd-manpage"><code>cartog manpage</code></h2>
       <p>Emit a <code>roff</code>-formatted man page on stdout. Intended for packagers and distro maintainers.</p>
@@ -403,6 +544,13 @@ cartog completions fish  &gt; ~/.config/fish/completions/cartog.fish</pre>
       <pre>sudo mkdir -p /usr/local/share/man/man1
 cartog manpage | sudo tee /usr/local/share/man/man1/cartog.1 &gt; /dev/null
 man cartog</pre>
+      <p class="example-label">Example output (first lines)</p>
+      <pre class="example-output">.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH cartog 1  "cartog 0.18.0"
+.SH NAME
+cartog \- Map your codebase. Navigate by graph, not grep.
+  ...</pre>
 
       <!-- ── Semantic Search ───────────────────── -->
 
@@ -420,6 +568,9 @@ provider = "none"</pre>
       <pre>cartog rag index              <span class="comment"># embed all symbols + documents</span>
 cartog rag index src/         <span class="comment"># embed subdirectory</span>
 cartog rag index --force      <span class="comment"># re-embed all</span></pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">Embedded 697 symbols in 3.1s (224/s)
+RAG index ready: 697 vectors, 384 dimensions, sqlite-vec</pre>
 
       <h2 id="rag-search"><code>cartog rag search &lt;query&gt;</code></h2>
       <p>Semantic search — use natural language to find code by behavior or concept. Returns code only by default; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
@@ -427,6 +578,13 @@ cartog rag index --force      <span class="comment"># re-embed all</span></pre>
 cartog rag search "error handling" --kind function
 cartog rag search "database connection" --limit 5
 cartog rag search "deployment architecture" --kind document</pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">Found 1 results (FTS: 1, vector: 0, merged: 1)
+
+1. function auth_middleware  middleware/auth_mw.py:15-37  [fts5] score=0.0164
+    def auth_middleware(request: Dict[str, Any]) -&gt; Dict[str, Any]:
+        """Verify authentication token and attach user context."""
+        validate_request(request)</pre>
       <p>Combines keyword (BM25/FTS5) and vector similarity, merged via RRF, then re-ranked by a cross-encoder. By default, returns code only; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
       <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>, <code>all</code>.</p>
 
