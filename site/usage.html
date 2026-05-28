@@ -55,6 +55,26 @@
           <a href="#workflow">Recommended Workflow</a>
         </div>
         <div class="sidebar-group">
+          <div class="sidebar-label">Configuration</div>
+          <a href="#config">Config File</a>
+          <a href="#config-providers">Embedding Providers</a>
+        </div>
+        <div class="sidebar-group">
+          <div class="sidebar-label">Semantic Search</div>
+          <a href="#rag-setup">rag setup</a>
+          <a href="#rag-index">rag index</a>
+          <a href="#rag-search">rag search</a>
+        </div>
+        <div class="sidebar-group">
+          <div class="sidebar-label">Integration</div>
+          <a href="#agent-skill">Agent Skill</a>
+          <a href="#mcp-server">MCP Server</a>
+          <a href="#mcp-quickstart">Wiring editors: cartog ide</a>
+          <a href="#mcp-ide">Bootstrap sequence</a>
+          <a href="#mcp-clients">Manual setup</a>
+          <a href="#teach-agent">Teach your agent</a>
+        </div>
+        <div class="sidebar-group">
           <div class="sidebar-label">CLI Reference</div>
           <a href="#cmd-callees">cartog callees</a>
           <a href="#cmd-changes">cartog changes</a>
@@ -77,26 +97,6 @@
           <a href="#cmd-stats">cartog stats</a>
           <a href="#cmd-savings">cartog savings</a>
           <a href="#cmd-watch">cartog watch</a>
-        </div>
-        <div class="sidebar-group">
-          <div class="sidebar-label">Configuration</div>
-          <a href="#config">Config File</a>
-          <a href="#config-providers">Embedding Providers</a>
-        </div>
-        <div class="sidebar-group">
-          <div class="sidebar-label">Semantic Search</div>
-          <a href="#rag-setup">rag setup</a>
-          <a href="#rag-index">rag index</a>
-          <a href="#rag-search">rag search</a>
-        </div>
-        <div class="sidebar-group">
-          <div class="sidebar-label">Integration</div>
-          <a href="#agent-skill">Agent Skill</a>
-          <a href="#mcp-server">MCP Server</a>
-          <a href="#mcp-quickstart">Wiring editors: cartog ide</a>
-          <a href="#mcp-ide">Bootstrap sequence</a>
-          <a href="#mcp-clients">Manual setup</a>
-          <a href="#teach-agent">Teach your agent</a>
         </div>
         <div class="sidebar-group">
           <div class="sidebar-label">Reference</div>
@@ -277,6 +277,222 @@ provider = "none"
 EOF
 
 cartog rag setup     <span class="comment"># only downloads embedding model (~80MB)</span></pre>
+
+      <!-- ── Semantic Search ───────────────────── -->
+
+      <h2 id="rag-setup"><code>cartog rag setup</code></h2>
+      <p>Download embedding and re-ranker models from HuggingFace. Run once before using semantic search with the <strong>local</strong> provider.</p>
+      <pre>cartog rag setup</pre>
+      <p>Downloads ~1.2GB of ONNX models (embedding ~80MB + reranker ~1.1GB). Cached in <code>~/.cache/cartog/models/</code>.</p>
+      <p><strong>Note:</strong> When using Ollama, skip this — models are managed by the Ollama server.</p>
+      <pre><span class="comment"># To also skip the reranker download:</span>
+[reranker]
+provider = "none"</pre>
+
+      <h2 id="rag-index"><code>cartog rag index</code></h2>
+      <p>Build the embedding index for semantic search. Indexes both code symbols and Markdown documents (<code>.md</code> files). Requires <code>cartog index</code> first. For the local provider, also requires <code>cartog rag setup</code>.</p>
+      <pre>cartog rag index              <span class="comment"># embed all symbols + documents</span>
+cartog rag index src/         <span class="comment"># embed subdirectory</span>
+cartog rag index --force      <span class="comment"># re-embed all</span></pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">Embedded 697 symbols in 3.1s (224/s)
+RAG index ready: 697 vectors, 384 dimensions, sqlite-vec</pre>
+
+      <h2 id="rag-search"><code>cartog rag search &lt;query&gt;</code></h2>
+      <p>Semantic search — use natural language to find code by behavior or concept. Returns code only by default; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
+      <pre>cartog rag search "validate authentication tokens"
+cartog rag search "error handling" --kind function
+cartog rag search "database connection" --limit 5
+cartog rag search "deployment architecture" --kind document</pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">Found 1 results (FTS: 1, vector: 0, merged: 1)
+
+1. function auth_middleware  middleware/auth_mw.py:15-37  [fts5] score=0.0164
+    def auth_middleware(request: Dict[str, Any]) -&gt; Dict[str, Any]:
+        """Verify authentication token and attach user context."""
+        validate_request(request)</pre>
+      <p>Combines keyword (BM25/FTS5) and vector similarity, merged via RRF, then re-ranked by a cross-encoder. By default, returns code only; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
+      <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>, <code>all</code>.</p>
+
+      <!-- ── Integration ───────────────────────── -->
+
+      <h2 id="agent-skill">Agent Skill</h2>
+      <p>Install cartog as an agent skill for Claude Code, Cursor, Copilot, and other compatible agents:</p>
+      <pre>npx skills add jrollin/cartog</pre>
+      <p>Or install manually:</p>
+      <pre>cp -r skills/cartog ~/.claude/skills/</pre>
+      <p>The skill teaches your AI agent when and how to use cartog — including search routing, refactoring workflows, and fallback heuristics.</p>
+
+      <h3>Claude Plugin</h3>
+      <p>For Claude Code users, the simplest setup. Run each command separately:</p>
+      <pre>/plugin marketplace add jrollin/cartog</pre>
+      <pre>/plugin install cartog@cartog-plugins</pre>
+
+      <h2 id="mcp-server">MCP Server</h2>
+      <p><code>cartog serve</code> exposes 13 tools over stdio for MCP-compatible clients.</p>
+
+      <table>
+        <thead>
+          <tr><th>Tool</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>cartog_index</code></td><td>Build/update the code graph</td></tr>
+          <tr><td><code>cartog_map</code></td><td>Codebase orientation: file list + top symbols (call first in a new repo)</td></tr>
+          <tr><td><code>cartog_search</code></td><td>Find symbols by partial name</td></tr>
+          <tr><td><code>cartog_outline</code></td><td>File structure (symbols, line ranges)</td></tr>
+          <tr><td><code>cartog_refs</code></td><td>All references to a symbol</td></tr>
+          <tr><td><code>cartog_callees</code></td><td>What a symbol calls</td></tr>
+          <tr><td><code>cartog_impact</code></td><td>Transitive impact analysis</td></tr>
+          <tr><td><code>cartog_hierarchy</code></td><td>Inheritance tree</td></tr>
+          <tr><td><code>cartog_deps</code></td><td>File-level imports</td></tr>
+          <tr><td><code>cartog_stats</code></td><td>Index summary</td></tr>
+          <tr><td><code>cartog_changes</code></td><td>Symbols affected by recent git changes</td></tr>
+          <tr><td><code>cartog_rag_index</code></td><td>Build embedding index</td></tr>
+          <tr><td><code>cartog_rag_search</code></td><td>Semantic search</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>Progress notifications:</strong> <code>cartog_index</code> and <code>cartog_rag_index</code> emit standard MCP <code>notifications/progress</code> when the client includes a <code>progressToken</code> in the request's <code>_meta</code>. <code>cartog_index</code> emits 3 phase events (<code>walking</code>, <code>parsing N files</code>, <code>storing N files</code>) plus an optional fourth (<code>resolving with LSP</code>) when the LSP pass runs. <code>cartog_rag_index</code> emits <code>preparing</code>, one <code>embedding processed/total</code> per ~512-symbol batch, then <code>storing</code>. The <code>message</code> field is human-readable, not a contract. Clients that don't supply a <code>progressToken</code> see no notifications.</p>
+
+      <h3 id="mcp-quickstart">Wiring cartog into editors: <code>cartog ide</code></h3>
+      <p><code>cartog ide</code> is the only verb that writes MCP configs. Run it once per machine, plus any time you install a new editor.</p>
+      <pre>cartog ide                          <span class="comment"># all installed clients, all scopes</span>
+cartog ide --scope project          <span class="comment"># .mcp.json, .cursor/, .vscode/</span>
+cartog ide --scope user             <span class="comment"># user-scope clients only</span>
+cartog ide --client cursor          <span class="comment"># one client</span>
+cartog ide --dry-run                <span class="comment"># preview with before/after diff</span></pre>
+      <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. User-scope clients whose config directory is missing are skipped (treated as "not installed"). Codex stores all servers in one global <code>~/.codex/config.toml</code>, so cartog writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section. Idempotent: existing servers in each file are preserved.</p>
+      <p><strong>Known limitation:</strong> configs containing JSON-with-comments (JSONC) are left untouched and reported as skipped. Configure those clients manually using the snippets below.</p>
+
+      <h3 id="mcp-ide">Bootstrap sequence</h3>
+      <p>Two commands to start; the third is optional.</p>
+      <pre>cartog init                  <span class="comment"># 1. scaffold .cartog.toml (config only)</span>
+cartog index                 <span class="comment"># 2. build the code graph</span>
+
+cartog ide                   <span class="comment"># optional — wire MCP into installed editors</span></pre>
+      <p>Edit <code>.cartog.toml</code> between steps 1 and 2 to change DB path or embedding provider before any heavy work runs. CLI-only users stop after step 2; run <code>cartog ide</code> only if you want cartog wired into MCP-aware editors.</p>
+
+      <h2 id="mcp-clients">Manual setup (per client)</h2>
+      <p>Each block below shows the <code>cartog ide</code> one-liner that writes the right file, plus the manual JSON / TOML if you prefer to edit by hand.</p>
+
+      <details class="mcp-client">
+        <summary><strong>Claude Code</strong> — project <code>.mcp.json</code> + user <code>~/.claude/settings.json</code></summary>
+        <pre>cartog ide --client claude-code
+<span class="comment"># or:</span>
+claude mcp add cartog -- cartog serve --watch                       <span class="comment"># user scope</span>
+claude mcp add --scope project cartog -- cartog serve --watch       <span class="comment"># project scope</span></pre>
+        <p>Manual:</p>
+        <pre>{
+  "mcpServers": {
+    "cartog": { "command": "cartog", "args": ["serve", "--watch"] }
+  }
+}</pre>
+        <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px;">Only Claude Code gets <code>--watch</code> by default — other clients ship plain <code>["serve"]</code>. Agent-driven flows churn files faster than human-driven editor flows, so the in-process file watcher pays off. Drop it with <code>cartog ide --no-watch</code>.</p>
+      </details>
+
+      <details class="mcp-client">
+        <summary><strong>Cursor</strong> — project <code>.cursor/mcp.json</code></summary>
+        <pre>cartog ide --client cursor</pre>
+        <p>Manual:</p>
+        <pre>{
+  "mcpServers": {
+    "cartog": { "command": "cartog", "args": ["serve"] }
+  }
+}</pre>
+      </details>
+
+      <details class="mcp-client">
+        <summary><strong>Codex CLI</strong> — user-global <code>~/.codex/config.toml</code></summary>
+        <pre>cartog ide --client codex</pre>
+        <p>Codex stores all MCP servers in this one user-global file (no per-project config), so <code>cartog ide</code> writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section.</p>
+        <pre>[mcp_servers.cartog]
+command = "cartog"
+args = ["serve"]</pre>
+      </details>
+
+      <details class="mcp-client">
+        <summary><strong>Windsurf</strong> — <code>~/.codeium/windsurf/mcp_config.json</code></summary>
+        <pre>cartog ide --client windsurf</pre>
+        <pre>{
+  "mcpServers": {
+    "cartog": { "command": "cartog", "args": ["serve"] }
+  }
+}</pre>
+      </details>
+
+      <details class="mcp-client">
+        <summary><strong>VS Code (Copilot)</strong> — <code>.vscode/mcp.json</code></summary>
+        <pre>cartog ide --client vscode</pre>
+        <p>Note: top-level key is <code>servers</code>, not <code>mcpServers</code>.</p>
+        <pre>{
+  "servers": {
+    "cartog": { "type": "stdio", "command": "cartog", "args": ["serve"] }
+  }
+}</pre>
+      </details>
+
+      <details class="mcp-client">
+        <summary><strong>Zed</strong> — <code>~/.config/zed/settings.json</code></summary>
+        <pre>cartog ide --client zed</pre>
+        <pre>{
+  "context_servers": {
+    "cartog": { "command": "cartog", "args": ["serve"] }
+  }
+}</pre>
+      </details>
+
+      <details class="mcp-client">
+        <summary><strong>OpenCode</strong> — <code>~/.config/opencode/opencode.json</code></summary>
+        <pre>cartog ide --client opencode</pre>
+        <pre>{
+  "mcp": {
+    "cartog": {
+      "type": "local",
+      "command": ["cartog", "serve"],
+      "enabled": true
+    }
+  }
+}</pre>
+      </details>
+
+      <details class="mcp-client">
+        <summary><strong>Gemini CLI</strong> — <code>~/.gemini/settings.json</code></summary>
+        <pre>cartog ide --client gemini</pre>
+        <pre>{
+  "mcpServers": {
+    "cartog": { "command": "cartog", "args": ["serve"] }
+  }
+}</pre>
+      </details>
+
+      <details class="mcp-client">
+        <summary><strong>Claude Desktop</strong> — <code>claude_desktop_config.json</code></summary>
+        <pre>cartog ide --client claude-desktop</pre>
+        <p>macOS: <code>~/Library/Application Support/Claude/</code>. Windows: <code>%APPDATA%\Claude\</code>. Restart Claude Desktop after editing.</p>
+        <pre>{
+  "mcpServers": {
+    "cartog": { "command": "cartog", "args": ["serve"] }
+  }
+}</pre>
+      </details>
+
+      <details class="mcp-client">
+        <summary><strong>Any other MCP client</strong></summary>
+        <p>Point your client at <code>cartog serve</code> over stdio. Command: <code>cartog</code>, args: <code>["serve"]</code>.</p>
+      </details>
+
+      <h2 id="teach-agent">Teach your agent to use cartog</h2>
+      <p>Wiring MCP is half the job. The other half is telling the LLM <strong>when</strong> to prefer cartog over grep + read. Drop the snippet from <a href="https://github.com/jrollin/cartog/blob/main/docs/agent-snippet.md">docs/agent-snippet.md</a> into your project's <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursor/rules/</code>, or equivalent, and the agent will route navigation questions through cartog's 13 MCP tools instead of flooding context with raw text.</p>
+      <p>Maps the natural-language question to the right tool:</p>
+      <ul>
+        <li>"where is X defined?" → <code>cartog_search</code></li>
+        <li>"who calls / imports / inherits X?" → <code>cartog_refs</code></li>
+        <li>"what does X call?" → <code>cartog_callees</code></li>
+        <li>"what breaks if I change X?" → <code>cartog_impact</code></li>
+        <li>"find code about &lt;concept&gt;" → <code>cartog_rag_search</code></li>
+        <li>"orient me in this repo" → <code>cartog_map</code></li>
+      </ul>
+      <p>Falls back to grep / Read for string literals, comments, config values, or anything outside the indexed root.</p>
 
       <!-- ── CLI Reference ─────────────────────── -->
 
@@ -628,222 +844,6 @@ man cartog</pre>
 .SH NAME
 cartog \- Map your codebase. Navigate by graph, not grep.
   ...</pre>
-
-      <!-- ── Semantic Search ───────────────────── -->
-
-      <h2 id="rag-setup"><code>cartog rag setup</code></h2>
-      <p>Download embedding and re-ranker models from HuggingFace. Run once before using semantic search with the <strong>local</strong> provider.</p>
-      <pre>cartog rag setup</pre>
-      <p>Downloads ~1.2GB of ONNX models (embedding ~80MB + reranker ~1.1GB). Cached in <code>~/.cache/cartog/models/</code>.</p>
-      <p><strong>Note:</strong> When using Ollama, skip this — models are managed by the Ollama server.</p>
-      <pre><span class="comment"># To also skip the reranker download:</span>
-[reranker]
-provider = "none"</pre>
-
-      <h2 id="rag-index"><code>cartog rag index</code></h2>
-      <p>Build the embedding index for semantic search. Indexes both code symbols and Markdown documents (<code>.md</code> files). Requires <code>cartog index</code> first. For the local provider, also requires <code>cartog rag setup</code>.</p>
-      <pre>cartog rag index              <span class="comment"># embed all symbols + documents</span>
-cartog rag index src/         <span class="comment"># embed subdirectory</span>
-cartog rag index --force      <span class="comment"># re-embed all</span></pre>
-      <p class="example-label">Example output</p>
-      <pre class="example-output">Embedded 697 symbols in 3.1s (224/s)
-RAG index ready: 697 vectors, 384 dimensions, sqlite-vec</pre>
-
-      <h2 id="rag-search"><code>cartog rag search &lt;query&gt;</code></h2>
-      <p>Semantic search — use natural language to find code by behavior or concept. Returns code only by default; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
-      <pre>cartog rag search "validate authentication tokens"
-cartog rag search "error handling" --kind function
-cartog rag search "database connection" --limit 5
-cartog rag search "deployment architecture" --kind document</pre>
-      <p class="example-label">Example output</p>
-      <pre class="example-output">Found 1 results (FTS: 1, vector: 0, merged: 1)
-
-1. function auth_middleware  middleware/auth_mw.py:15-37  [fts5] score=0.0164
-    def auth_middleware(request: Dict[str, Any]) -&gt; Dict[str, Any]:
-        """Verify authentication token and attach user context."""
-        validate_request(request)</pre>
-      <p>Combines keyword (BM25/FTS5) and vector similarity, merged via RRF, then re-ranked by a cross-encoder. By default, returns code only; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
-      <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>, <code>all</code>.</p>
-
-      <!-- ── Integration ───────────────────────── -->
-
-      <h2 id="agent-skill">Agent Skill</h2>
-      <p>Install cartog as an agent skill for Claude Code, Cursor, Copilot, and other compatible agents:</p>
-      <pre>npx skills add jrollin/cartog</pre>
-      <p>Or install manually:</p>
-      <pre>cp -r skills/cartog ~/.claude/skills/</pre>
-      <p>The skill teaches your AI agent when and how to use cartog — including search routing, refactoring workflows, and fallback heuristics.</p>
-
-      <h3>Claude Plugin</h3>
-      <p>For Claude Code users, the simplest setup. Run each command separately:</p>
-      <pre>/plugin marketplace add jrollin/cartog</pre>
-      <pre>/plugin install cartog@cartog-plugins</pre>
-
-      <h2 id="mcp-server">MCP Server</h2>
-      <p><code>cartog serve</code> exposes 13 tools over stdio for MCP-compatible clients.</p>
-
-      <table>
-        <thead>
-          <tr><th>Tool</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><code>cartog_index</code></td><td>Build/update the code graph</td></tr>
-          <tr><td><code>cartog_map</code></td><td>Codebase orientation: file list + top symbols (call first in a new repo)</td></tr>
-          <tr><td><code>cartog_search</code></td><td>Find symbols by partial name</td></tr>
-          <tr><td><code>cartog_outline</code></td><td>File structure (symbols, line ranges)</td></tr>
-          <tr><td><code>cartog_refs</code></td><td>All references to a symbol</td></tr>
-          <tr><td><code>cartog_callees</code></td><td>What a symbol calls</td></tr>
-          <tr><td><code>cartog_impact</code></td><td>Transitive impact analysis</td></tr>
-          <tr><td><code>cartog_hierarchy</code></td><td>Inheritance tree</td></tr>
-          <tr><td><code>cartog_deps</code></td><td>File-level imports</td></tr>
-          <tr><td><code>cartog_stats</code></td><td>Index summary</td></tr>
-          <tr><td><code>cartog_changes</code></td><td>Symbols affected by recent git changes</td></tr>
-          <tr><td><code>cartog_rag_index</code></td><td>Build embedding index</td></tr>
-          <tr><td><code>cartog_rag_search</code></td><td>Semantic search</td></tr>
-        </tbody>
-      </table>
-
-      <p><strong>Progress notifications:</strong> <code>cartog_index</code> and <code>cartog_rag_index</code> emit standard MCP <code>notifications/progress</code> when the client includes a <code>progressToken</code> in the request's <code>_meta</code>. <code>cartog_index</code> emits 3 phase events (<code>walking</code>, <code>parsing N files</code>, <code>storing N files</code>) plus an optional fourth (<code>resolving with LSP</code>) when the LSP pass runs. <code>cartog_rag_index</code> emits <code>preparing</code>, one <code>embedding processed/total</code> per ~512-symbol batch, then <code>storing</code>. The <code>message</code> field is human-readable, not a contract. Clients that don't supply a <code>progressToken</code> see no notifications.</p>
-
-      <h3 id="mcp-quickstart">Wiring cartog into editors: <code>cartog ide</code></h3>
-      <p><code>cartog ide</code> is the only verb that writes MCP configs. Run it once per machine, plus any time you install a new editor.</p>
-      <pre>cartog ide                          <span class="comment"># all installed clients, all scopes</span>
-cartog ide --scope project          <span class="comment"># .mcp.json, .cursor/, .vscode/</span>
-cartog ide --scope user             <span class="comment"># user-scope clients only</span>
-cartog ide --client cursor          <span class="comment"># one client</span>
-cartog ide --dry-run                <span class="comment"># preview with before/after diff</span></pre>
-      <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. User-scope clients whose config directory is missing are skipped (treated as "not installed"). Codex stores all servers in one global <code>~/.codex/config.toml</code>, so cartog writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section. Idempotent: existing servers in each file are preserved.</p>
-      <p><strong>Known limitation:</strong> configs containing JSON-with-comments (JSONC) are left untouched and reported as skipped. Configure those clients manually using the snippets below.</p>
-
-      <h3 id="mcp-ide">Bootstrap sequence</h3>
-      <p>Two commands to start; the third is optional.</p>
-      <pre>cartog init                  <span class="comment"># 1. scaffold .cartog.toml (config only)</span>
-cartog index                 <span class="comment"># 2. build the code graph</span>
-
-cartog ide                   <span class="comment"># optional — wire MCP into installed editors</span></pre>
-      <p>Edit <code>.cartog.toml</code> between steps 1 and 2 to change DB path or embedding provider before any heavy work runs. CLI-only users stop after step 2; run <code>cartog ide</code> only if you want cartog wired into MCP-aware editors.</p>
-
-      <h2 id="mcp-clients">Manual setup (per client)</h2>
-      <p>Each block below shows the <code>cartog ide</code> one-liner that writes the right file, plus the manual JSON / TOML if you prefer to edit by hand.</p>
-
-      <details class="mcp-client">
-        <summary><strong>Claude Code</strong> — project <code>.mcp.json</code> + user <code>~/.claude/settings.json</code></summary>
-        <pre>cartog ide --client claude-code
-<span class="comment"># or:</span>
-claude mcp add cartog -- cartog serve --watch                       <span class="comment"># user scope</span>
-claude mcp add --scope project cartog -- cartog serve --watch       <span class="comment"># project scope</span></pre>
-        <p>Manual:</p>
-        <pre>{
-  "mcpServers": {
-    "cartog": { "command": "cartog", "args": ["serve", "--watch"] }
-  }
-}</pre>
-        <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px;">Only Claude Code gets <code>--watch</code> by default — other clients ship plain <code>["serve"]</code>. Agent-driven flows churn files faster than human-driven editor flows, so the in-process file watcher pays off. Drop it with <code>cartog ide --no-watch</code>.</p>
-      </details>
-
-      <details class="mcp-client">
-        <summary><strong>Cursor</strong> — project <code>.cursor/mcp.json</code></summary>
-        <pre>cartog ide --client cursor</pre>
-        <p>Manual:</p>
-        <pre>{
-  "mcpServers": {
-    "cartog": { "command": "cartog", "args": ["serve"] }
-  }
-}</pre>
-      </details>
-
-      <details class="mcp-client">
-        <summary><strong>Codex CLI</strong> — user-global <code>~/.codex/config.toml</code></summary>
-        <pre>cartog ide --client codex</pre>
-        <p>Codex stores all MCP servers in this one user-global file (no per-project config), so <code>cartog ide</code> writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section.</p>
-        <pre>[mcp_servers.cartog]
-command = "cartog"
-args = ["serve"]</pre>
-      </details>
-
-      <details class="mcp-client">
-        <summary><strong>Windsurf</strong> — <code>~/.codeium/windsurf/mcp_config.json</code></summary>
-        <pre>cartog ide --client windsurf</pre>
-        <pre>{
-  "mcpServers": {
-    "cartog": { "command": "cartog", "args": ["serve"] }
-  }
-}</pre>
-      </details>
-
-      <details class="mcp-client">
-        <summary><strong>VS Code (Copilot)</strong> — <code>.vscode/mcp.json</code></summary>
-        <pre>cartog ide --client vscode</pre>
-        <p>Note: top-level key is <code>servers</code>, not <code>mcpServers</code>.</p>
-        <pre>{
-  "servers": {
-    "cartog": { "type": "stdio", "command": "cartog", "args": ["serve"] }
-  }
-}</pre>
-      </details>
-
-      <details class="mcp-client">
-        <summary><strong>Zed</strong> — <code>~/.config/zed/settings.json</code></summary>
-        <pre>cartog ide --client zed</pre>
-        <pre>{
-  "context_servers": {
-    "cartog": { "command": "cartog", "args": ["serve"] }
-  }
-}</pre>
-      </details>
-
-      <details class="mcp-client">
-        <summary><strong>OpenCode</strong> — <code>~/.config/opencode/opencode.json</code></summary>
-        <pre>cartog ide --client opencode</pre>
-        <pre>{
-  "mcp": {
-    "cartog": {
-      "type": "local",
-      "command": ["cartog", "serve"],
-      "enabled": true
-    }
-  }
-}</pre>
-      </details>
-
-      <details class="mcp-client">
-        <summary><strong>Gemini CLI</strong> — <code>~/.gemini/settings.json</code></summary>
-        <pre>cartog ide --client gemini</pre>
-        <pre>{
-  "mcpServers": {
-    "cartog": { "command": "cartog", "args": ["serve"] }
-  }
-}</pre>
-      </details>
-
-      <details class="mcp-client">
-        <summary><strong>Claude Desktop</strong> — <code>claude_desktop_config.json</code></summary>
-        <pre>cartog ide --client claude-desktop</pre>
-        <p>macOS: <code>~/Library/Application Support/Claude/</code>. Windows: <code>%APPDATA%\Claude\</code>. Restart Claude Desktop after editing.</p>
-        <pre>{
-  "mcpServers": {
-    "cartog": { "command": "cartog", "args": ["serve"] }
-  }
-}</pre>
-      </details>
-
-      <details class="mcp-client">
-        <summary><strong>Any other MCP client</strong></summary>
-        <p>Point your client at <code>cartog serve</code> over stdio. Command: <code>cartog</code>, args: <code>["serve"]</code>.</p>
-      </details>
-
-      <h2 id="teach-agent">Teach your agent to use cartog</h2>
-      <p>Wiring MCP is half the job. The other half is telling the LLM <strong>when</strong> to prefer cartog over grep + read. Drop the snippet from <a href="https://github.com/jrollin/cartog/blob/main/docs/agent-snippet.md">docs/agent-snippet.md</a> into your project's <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursor/rules/</code>, or equivalent, and the agent will route navigation questions through cartog's 13 MCP tools instead of flooding context with raw text.</p>
-      <p>Maps the natural-language question to the right tool:</p>
-      <ul>
-        <li>"where is X defined?" → <code>cartog_search</code></li>
-        <li>"who calls / imports / inherits X?" → <code>cartog_refs</code></li>
-        <li>"what does X call?" → <code>cartog_callees</code></li>
-        <li>"what breaks if I change X?" → <code>cartog_impact</code></li>
-        <li>"find code about &lt;concept&gt;" → <code>cartog_rag_search</code></li>
-        <li>"orient me in this repo" → <code>cartog_map</code></li>
-      </ul>
-      <p>Falls back to grep / Read for string literals, comments, config values, or anything outside the indexed root.</p>
 
       <!-- ── Reference ─────────────────────────── -->
 
