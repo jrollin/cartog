@@ -148,6 +148,325 @@ cargo install cartog --no-default-features --features lsp  # selective: LSP only
 
 ---
 
+## Semantic Search
+
+### `cartog rag setup`
+
+Download embedding and re-ranker models from HuggingFace. Run once before using RAG search.
+
+```bash
+cartog rag setup
+```
+
+**First-time download**: ~1.2GB of ONNX models (embedding ~80MB + reranker ~1.1GB). May take a few minutes depending on network speed. Models are cached in `~/.cache/cartog/models/` and reused across all projects — subsequent runs are instant.
+
+Note: `rag setup` downloads models for the **local** provider only. When using Ollama, models are managed by the Ollama server — run `ollama pull nomic-embed-text` instead.
+
+### `cartog rag index [path] [--force]`
+
+Build the embedding index for semantic search. Requires `cartog index` and `cartog rag setup` first. Indexes both code symbols and Markdown documents (`.md` files).
+
+```bash
+cartog rag index              # embed all symbols + documents in CWD
+cartog rag index src/         # embed a subdirectory
+cartog rag index --force      # re-embed everything
+```
+
+After a cartog upgrade that changes the embedding strategy, `cartog rag index` automatically detects the format change and re-embeds all symbols — no `--force` needed.
+
+### `cartog rag search <query> [--kind <kind>] [--limit N]`
+
+Semantic search over code and documentation — use natural language to find code by what it does, or search project docs alongside code.
+
+```bash
+cartog rag search "validate authentication tokens"
+cartog rag search "error handling" --kind function
+cartog rag search "database connection" --limit 5
+cartog rag search "deployment architecture" --kind document
+```
+
+Combines keyword (BM25/FTS5) and vector similarity search, merged via RRF, then re-ranked by a cross-encoder model. By default, returns code only; use `--kind document` for docs or `--kind all` for both.
+
+Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`, `document`, `all`.
+
+## Claude Plugin
+
+cartog is available as a [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code) — the recommended way to install for Claude Code users. Plugins bundle skills, scripts, and MCP server configuration into a single installable package.
+
+### Installation
+
+Run these two commands **one at a time** in Claude Code:
+
+1. Register the marketplace:
+
+```bash
+/plugin marketplace add jrollin/cartog
+```
+
+2. Install the plugin:
+
+```bash
+/plugin install cartog@cartog-plugins
+```
+
+This installs the plugin from GitHub, which includes:
+
+- The agent skill (behavioral instructions in `skills/cartog/SKILL.md`)
+- Setup and install scripts
+- Plugin manifest (`.claude-plugin/plugin.json`)
+
+### Plugin Structure
+
+```text
+.claude-plugin/
+└── plugin.json          # Plugin manifest
+skills/
+└── cartog/
+    ├── SKILL.md         # Agent skill instructions
+    ├── scripts/         # install.sh, ensure_indexed.sh
+    ├── tests/           # Behavioral evals
+    └── references/      # Query cookbook, language support
+```
+
+## Agent Skill
+
+cartog also ships as an [Agent Skill](https://agentskills.io) — behavioral instructions that teach your AI agent *when and how* to use cartog, including search routing, refactoring workflows, and fallback heuristics. Use this method for non-Claude Code environments or any LLM with bash access.
+
+### Installation
+
+```bash
+npx skills add jrollin/cartog
+```
+
+Or install manually:
+
+```bash
+cp -r skills/cartog ~/.claude/skills/
+```
+
+The plugin wires two Claude Code hooks plus a user-typed skill:
+
+- **SessionStart** (`ensure_indexed.sh`): non-blocking. If the binary is missing, forks a background pipeline (install.sh pinned to the plugin version → optionally `cartog index .` → `cartog rag setup` → `cartog rag index .`) and exits fast — MCP becomes available on the next session. If the binary is present, runs `cartog index .` foreground (incremental, typically <1s) and backgrounds rag setup + rag index. Prints a one-line drift warning if the installed binary doesn't match the plugin pin. Missing `.cartog.toml` on an interactive session prints a hint pointing at `cartog init`; on a non-interactive session it exits silently.
+- **SessionEnd** (`update_on_exit.sh`): *transitional* — only upgrades pre-0.14.0 binaries (which lack `cartog self update`) via `install.sh`. Modern binaries (>= 0.14.0) are a noop here; drift is the user's call via `/cartog-install`. Scheduled for removal in the release after the transition.
+- **`/cartog-install` skill** (`skills/cartog-install/SKILL.md`): user-typed verb. Installs the binary (when missing) or upgrades it (via `cartog self update` on >=0.14.0, or via `install.sh` on <0.14.0) to match the plugin's pinned version. Use this to repair a failed background install or to bring a drifted binary back in sync.
+
+To run the SessionStart steps manually:
+
+```bash
+bash skills/cartog/scripts/ensure_indexed.sh
+```
+
+### Skill Contents
+
+| File | Purpose |
+|------|---------|
+| [`SKILL.md`](../skills/cartog/SKILL.md) | Behavioral instructions, commands, and workflows |
+| [`scripts/install.sh`](../skills/cartog/scripts/install.sh) | Automated installation (pre-built binary or cargo install), accepts optional version arg |
+| [`scripts/ensure_indexed.sh`](../skills/cartog/scripts/ensure_indexed.sh) | SessionStart hook: install-if-missing + foreground index + background rag setup/index + drift warning |
+| [`scripts/update_on_exit.sh`](../skills/cartog/scripts/update_on_exit.sh) | SessionEnd hook: peer-aware `cartog self update` (defers if RAG pipeline lock is active) |
+| [`tests/golden_examples.yaml`](../skills/cartog/tests/golden_examples.yaml) | Behavioral test scenarios (expected tool calls per query) |
+| [`tests/test_ensure_indexed.sh`](../skills/cartog/tests/test_ensure_indexed.sh) | Bash unit tests for ensure_indexed.sh |
+| [`tests/test_update_on_exit.sh`](../skills/cartog/tests/test_update_on_exit.sh) | Bash unit tests for update_on_exit.sh |
+| [`tests/test_install.sh`](../skills/cartog/tests/test_install.sh) | Bash unit tests for install.sh |
+| [`tests/eval.sh`](../skills/cartog/tests/eval.sh) | LLM-as-judge evaluation via `claude` CLI |
+| [`references/query_cookbook.md`](../skills/cartog/references/query_cookbook.md) | Recipes for common navigation patterns |
+| [`references/supported_languages.md`](../skills/cartog/references/supported_languages.md) | Language support matrix |
+
+## MCP Server
+
+`cartog serve` runs cartog as an MCP server over stdio, exposing 13 tools (11 core + 2 RAG) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
+
+For editor-specific recipes (Neovim keymaps, VS Code tasks, Emacs `compile`, Telescope picker, `cartog watch --json` floating buffer), see **[Editor integration](editor-integration.md)**.
+
+```bash
+cartog serve                  # basic MCP server
+cartog serve --watch          # auto-re-index on file changes
+cartog serve --watch --rag    # auto-re-index + auto-embed
+```
+
+### Per-editor wiring: `cartog ide`
+
+The verb that actually writes MCP configs. Run it once per machine, plus any
+time you install a new editor.
+
+```bash
+cartog ide                          # configure all installed clients
+cartog ide --scope project          # only .mcp.json + .cursor/mcp.json
+cartog ide --scope user             # only user-scope clients
+cartog ide --client cursor          # one client
+cartog ide --dry-run                # preview without writing
+```
+
+Supported clients (matches the per-client list below): `claude-code` (project
++ user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`,
+`windsurf`, `zed`. User-scope clients whose config directory does not exist
+are skipped (treated as "not installed").
+
+Codex stores all MCP servers in a single user-global `~/.codex/config.toml`,
+so cartog writes one per-project section named `cartog-<slug>-<hash8>` (slug
+is your project directory name, hash8 is the first 4 bytes of SHA-256 of the
+absolute path) to keep multiple projects coexisting. The TOML editor preserves
+comments and ordering in the rest of the file.
+
+#### Flag reference
+
+| Flag | Effect |
+|---|---|
+| `--client <name>` | Target a single client (one of the names above). Default: all matching the scope. |
+| `--scope project\|user\|all` | Limit to project-scoped files, user-scoped files, or both (default `all`). |
+| `-y`, `--yes` | Skip interactive prompts. Also implied by `--dry-run`, `--client`, `--json`, or a non-TTY stdin. |
+| `--dry-run` | Print the planned changes (before/after diff per file) without writing. Implies non-interactive. |
+| `--no-watch` | Drop `--watch` from Claude Code's serve args. Other clients register plain `["serve"]` regardless. |
+| `--json` (global) | Emit a structured `IdeReport` on stdout instead of human text. |
+
+#### Troubleshooting
+
+| Symptom | Meaning | Action |
+|---|---|---|
+| `not modified (config file is not valid JSON); …` | The existing file is JSONC (JSON with comments) or malformed. Cartog refuses to clobber it. | Open the file, fix the JSON manually using the snippets below. |
+| `top-level <key> is a <kind> (expected object); refusing to overwrite` | The user file has the right path but the wrong shape at the container key. | Delete the offending key (or the whole file) and re-run. |
+| `config directory not found (client likely not installed)` | The user-scope config parent dir doesn't exist on this machine. | Install the editor (or skip with `--client X` targeting only what you have). |
+| `0 clients configured` | None of the targeted clients matched. | Check `--client` / `--scope` are compatible (e.g. `cursor` is project-only). |
+
+For deeper diagnostics on the index, embeddings, and language servers, run `cartog doctor`.
+
+### Manual setup (per client)
+
+See **[mcp-setup.md](mcp-setup.md)** for the config-file recipes for every
+supported client (Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode,
+Zed, Codex CLI, Gemini CLI, VS Code/Copilot, and the generic stdio pattern).
+
+`cartog ide` writes those files for you; the manual page is for users who
+want to edit by hand or audit what cartog wrote.
+
+### Available Tools
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `cartog_index` | `path?`, `force?` | Build/update the code graph |
+| `cartog_search` | `query`, `kind?`, `file?`, `limit?` | Find symbols by partial name |
+| `cartog_outline` | `file` | File structure (symbols, line ranges) |
+| `cartog_refs` | `name`, `kind?` | All references to a symbol |
+| `cartog_callees` | `name` | What a symbol calls |
+| `cartog_impact` | `name`, `depth?` | Transitive impact analysis |
+| `cartog_hierarchy` | `name` | Inheritance tree |
+| `cartog_deps` | `file` | File-level imports |
+| `cartog_stats` | — | Index summary |
+| `cartog_map` | `tokens?` | Token-budget-aware codebase summary (file tree + top symbols by centrality) |
+| `cartog_changes` | `commits?`, `kind?` | Symbols affected by recent git changes |
+| `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search |
+| `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
+
+All tool responses are JSON.
+
+**Path restriction**: `cartog_index` and `cartog_rag_index` reject paths outside the project directory (CWD subtree). Agents cannot index arbitrary filesystem locations.
+
+**Progress notifications**: `cartog_index` and `cartog_rag_index` emit standard MCP `notifications/progress` when the client includes a `progressToken` in the request's `_meta`. `cartog_index` emits 3 phase events (`walking`, `parsing N files`, `storing N files`) plus an optional fourth (`resolving with LSP`) when the LSP pass runs. `cartog_rag_index` emits `preparing`, one `embedding processed/total` per ~512-symbol batch, then `storing` — so larger re-embed runs produce more events. The `message` field is human-readable, not a contract. Clients that do not supply a `progressToken` see no notifications and behavior is unchanged. Cold-cache or `force=true` runs report larger `total` values than warm runs; `total` is per-request, not historical.
+
+**Cancellation**: `cartog_index` and `cartog_rag_index` honor MCP `notifications/cancelled`. The indexer aborts at the next phase boundary or per-file checkpoint (sub-second latency in typical cases), and the tool returns an error whose message contains `cancelled`. `cartog_index` runs inside a single rusqlite transaction that rolls back on the error path, so a cancelled run leaves no code-graph changes. `cartog_rag_index` keeps any embedding batches that were already flushed to SQLite; the in-flight batch is dropped. In both cases the next index run redoes the missing work.
+
+### Built-in Workflow Guidance
+
+The MCP server sends workflow instructions to the client at initialization, covering tool chaining order (index → search → refs/callees/impact → re-index) and when to use semantic search. Clients that support the MCP `instructions` field will surface these automatically.
+
+### Logging
+
+Logs go to stderr. The default level depends on how cartog is invoked:
+
+| Invocation | Default level | Why |
+|------------|---------------|-----|
+| `cartog serve` / `cartog watch` / `cartog rag index`, stderr is a TTY | `info` | Foreground user wants progress |
+| Same, stderr is captured (MCP child, piped CI) | `warn` | The parent reads stderr; info-level lines surfaced as `[ERROR]` in client debug logs |
+| Other commands (one-shot CLI) | `warn` | Stay quiet by default |
+
+Set `RUST_LOG` to override in either direction:
+
+```bash
+RUST_LOG=debug cartog serve   # per-request tool call logging
+RUST_LOG=info  cartog serve   # force info under MCP-child mode
+RUST_LOG=warn  cartog watch   # quieten down a foreground watcher
+```
+
+### Plugin vs MCP vs Skill
+
+| | Claude Plugin | MCP Server | Agent Skill |
+|-|--------------|-----------|-------------|
+| Install | `/plugin marketplace add jrollin/cartog` then `/plugin install cartog@cartog-plugins` | `claude mcp add cartog -- cartog serve` | `npx skills add jrollin/cartog` |
+| Context cost | ~150 lines of prompt | Zero (tools are protocol-level) | ~150 lines of prompt |
+| Workflow guidance | Full heuristics | Basic (via `instructions` field) | Full heuristics |
+| Compatibility | Claude Code only | MCP clients only | Any LLM with bash |
+| Latency | Fork+exec per command | Persistent process | Fork+exec per command |
+
+Use the **plugin** for Claude Code (simplest setup, includes skill + scripts + agents). Use **MCP** when you want lower token cost with an MCP-compatible client. Use the **skill** for non-Claude Code environments.
+
+## Agents
+
+cartog ships autonomous agents that execute multi-step workflows end-to-end. Agents are bundled in the plugin and available after plugin installation.
+
+### Available Agents
+
+| Agent | Description | Invocation |
+|-------|-------------|------------|
+| `codebase-onboarding` | Structured onboarding report — adapts to project type and size | `@codebase-onboarding` or "help me understand this project" |
+| `refactoring-scout` | Pre-flight blast radius analysis before a refactoring | `@refactoring-scout` or "is it safe to change X?" |
+
+### How Agents Work
+
+Agents differ from the cartog skill:
+
+- **Skill** (reactive): Claude uses cartog commands in response to your questions — you drive the workflow
+- **Agent** (autonomous): you give a goal, the agent executes a multi-step plan using cartog, and produces a deliverable
+
+Agents use the CLI via Bash (not MCP), so they work as subagents with isolated context. They are self-contained — no skill injection overhead.
+
+### Manual Installation
+
+If not using the plugin, copy agent definitions to your Claude Code agents directory:
+
+```bash
+cp agents/*.md ~/.claude/agents/
+```
+
+### Agent: `codebase-onboarding`
+
+Produces a structured onboarding report for an unfamiliar codebase. The agent adapts to the project — a CLI tool gets different treatment than a web API or a library.
+
+**Workflow:**
+1. **Discover** — `cartog stats` + `cartog map` + manifest/README to determine project type and scale
+2. **Architecture** — trace top-centrality symbols with `callees`/`refs` to map module layout
+3. **Entry points** — targeted searches based on project type (CLI commands, API routes, public surface, etc.)
+4. **Conventions** — test patterns, code style config, recent git activity
+
+Output: a structured markdown report. Sections that don't apply are omitted.
+
+**Usage:**
+```text
+@codebase-onboarding
+# or
+"Use the codebase-onboarding agent to analyze this project"
+# or start a session as the agent
+claude --agent codebase-onboarding
+```
+
+### Agent: `refactoring-scout`
+
+Pre-flight analysis before changing a symbol, module, or file. Maps the full blast radius and produces a go/no-go recommendation.
+
+**Workflow:**
+1. **Locate** — confirm exact symbol with `cartog search`, disambiguate if needed
+2. **Map blast radius** — `refs` + `impact --depth 3` + `callees` + `hierarchy` (for classes)
+3. **Assess risk** — Low / Medium / High based on affected file count and transitive depth
+4. **Report** — affected files, risk warnings, and a concrete update checklist
+
+**Usage:**
+```text
+@refactoring-scout "rename TrackerRepository"
+# or
+"Is it safe to delete the UtilsHelper class?"
+# or start a session as the agent
+claude --agent refactoring-scout
+```
+
 ## Commands
 
 ### `cartog index <path>`
@@ -776,45 +1095,6 @@ cartog self migrate-db --dry-run  # preview the planned moves without touching t
 
 `cartog self migrate-db` refuses to overwrite an existing `.cartog/db.sqlite`, refuses to run while a peer cartog process (`serve` / `watch`) holds the lock **for this project's database** (a peer serving an unrelated project does not block it), and refuses to migrate a symlinked `.cartog.db`.
 
-### `cartog rag setup`
-
-Download embedding and re-ranker models from HuggingFace. Run once before using RAG search.
-
-```bash
-cartog rag setup
-```
-
-**First-time download**: ~1.2GB of ONNX models (embedding ~80MB + reranker ~1.1GB). May take a few minutes depending on network speed. Models are cached in `~/.cache/cartog/models/` and reused across all projects — subsequent runs are instant.
-
-Note: `rag setup` downloads models for the **local** provider only. When using Ollama, models are managed by the Ollama server — run `ollama pull nomic-embed-text` instead.
-
-### `cartog rag index [path] [--force]`
-
-Build the embedding index for semantic search. Requires `cartog index` and `cartog rag setup` first. Indexes both code symbols and Markdown documents (`.md` files).
-
-```bash
-cartog rag index              # embed all symbols + documents in CWD
-cartog rag index src/         # embed a subdirectory
-cartog rag index --force      # re-embed everything
-```
-
-After a cartog upgrade that changes the embedding strategy, `cartog rag index` automatically detects the format change and re-embeds all symbols — no `--force` needed.
-
-### `cartog rag search <query> [--kind <kind>] [--limit N]`
-
-Semantic search over code and documentation — use natural language to find code by what it does, or search project docs alongside code.
-
-```bash
-cartog rag search "validate authentication tokens"
-cartog rag search "error handling" --kind function
-cartog rag search "database connection" --limit 5
-cartog rag search "deployment architecture" --kind document
-```
-
-Combines keyword (BM25/FTS5) and vector similarity search, merged via RRF, then re-ranked by a cross-encoder model. By default, returns code only; use `--kind document` for docs or `--kind all` for both.
-
-Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`, `document`, `all`.
-
 ## Recommended Workflow
 
 ```text
@@ -861,280 +1141,3 @@ Returns arrays of objects with fields like `name`, `kind`, `file_path`, `start_l
 
 **Errors**: if the index doesn't exist yet, query commands print an error message and exit with a non-zero status. Run `cartog index .` first. If a symbol or file isn't found, the result is an empty array (not an error).
 
-## Claude Plugin
-
-cartog is available as a [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code) — the recommended way to install for Claude Code users. Plugins bundle skills, scripts, and MCP server configuration into a single installable package.
-
-### Installation
-
-Run these two commands **one at a time** in Claude Code:
-
-1. Register the marketplace:
-
-```bash
-/plugin marketplace add jrollin/cartog
-```
-
-2. Install the plugin:
-
-```bash
-/plugin install cartog@cartog-plugins
-```
-
-This installs the plugin from GitHub, which includes:
-
-- The agent skill (behavioral instructions in `skills/cartog/SKILL.md`)
-- Setup and install scripts
-- Plugin manifest (`.claude-plugin/plugin.json`)
-
-### Plugin Structure
-
-```text
-.claude-plugin/
-└── plugin.json          # Plugin manifest
-skills/
-└── cartog/
-    ├── SKILL.md         # Agent skill instructions
-    ├── scripts/         # install.sh, ensure_indexed.sh
-    ├── tests/           # Behavioral evals
-    └── references/      # Query cookbook, language support
-```
-
-## Agent Skill
-
-cartog also ships as an [Agent Skill](https://agentskills.io) — behavioral instructions that teach your AI agent *when and how* to use cartog, including search routing, refactoring workflows, and fallback heuristics. Use this method for non-Claude Code environments or any LLM with bash access.
-
-### Installation
-
-```bash
-npx skills add jrollin/cartog
-```
-
-Or install manually:
-
-```bash
-cp -r skills/cartog ~/.claude/skills/
-```
-
-The plugin wires two Claude Code hooks plus a user-typed skill:
-
-- **SessionStart** (`ensure_indexed.sh`): non-blocking. If the binary is missing, forks a background pipeline (install.sh pinned to the plugin version → optionally `cartog index .` → `cartog rag setup` → `cartog rag index .`) and exits fast — MCP becomes available on the next session. If the binary is present, runs `cartog index .` foreground (incremental, typically <1s) and backgrounds rag setup + rag index. Prints a one-line drift warning if the installed binary doesn't match the plugin pin. Missing `.cartog.toml` on an interactive session prints a hint pointing at `cartog init`; on a non-interactive session it exits silently.
-- **SessionEnd** (`update_on_exit.sh`): *transitional* — only upgrades pre-0.14.0 binaries (which lack `cartog self update`) via `install.sh`. Modern binaries (>= 0.14.0) are a noop here; drift is the user's call via `/cartog-install`. Scheduled for removal in the release after the transition.
-- **`/cartog-install` skill** (`skills/cartog-install/SKILL.md`): user-typed verb. Installs the binary (when missing) or upgrades it (via `cartog self update` on >=0.14.0, or via `install.sh` on <0.14.0) to match the plugin's pinned version. Use this to repair a failed background install or to bring a drifted binary back in sync.
-
-To run the SessionStart steps manually:
-
-```bash
-bash skills/cartog/scripts/ensure_indexed.sh
-```
-
-### Skill Contents
-
-| File | Purpose |
-|------|---------|
-| [`SKILL.md`](../skills/cartog/SKILL.md) | Behavioral instructions, commands, and workflows |
-| [`scripts/install.sh`](../skills/cartog/scripts/install.sh) | Automated installation (pre-built binary or cargo install), accepts optional version arg |
-| [`scripts/ensure_indexed.sh`](../skills/cartog/scripts/ensure_indexed.sh) | SessionStart hook: install-if-missing + foreground index + background rag setup/index + drift warning |
-| [`scripts/update_on_exit.sh`](../skills/cartog/scripts/update_on_exit.sh) | SessionEnd hook: peer-aware `cartog self update` (defers if RAG pipeline lock is active) |
-| [`tests/golden_examples.yaml`](../skills/cartog/tests/golden_examples.yaml) | Behavioral test scenarios (expected tool calls per query) |
-| [`tests/test_ensure_indexed.sh`](../skills/cartog/tests/test_ensure_indexed.sh) | Bash unit tests for ensure_indexed.sh |
-| [`tests/test_update_on_exit.sh`](../skills/cartog/tests/test_update_on_exit.sh) | Bash unit tests for update_on_exit.sh |
-| [`tests/test_install.sh`](../skills/cartog/tests/test_install.sh) | Bash unit tests for install.sh |
-| [`tests/eval.sh`](../skills/cartog/tests/eval.sh) | LLM-as-judge evaluation via `claude` CLI |
-| [`references/query_cookbook.md`](../skills/cartog/references/query_cookbook.md) | Recipes for common navigation patterns |
-| [`references/supported_languages.md`](../skills/cartog/references/supported_languages.md) | Language support matrix |
-
-## MCP Server
-
-`cartog serve` runs cartog as an MCP server over stdio, exposing 13 tools (11 core + 2 RAG) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.).
-
-For editor-specific recipes (Neovim keymaps, VS Code tasks, Emacs `compile`, Telescope picker, `cartog watch --json` floating buffer), see **[Editor integration](editor-integration.md)**.
-
-```bash
-cartog serve                  # basic MCP server
-cartog serve --watch          # auto-re-index on file changes
-cartog serve --watch --rag    # auto-re-index + auto-embed
-```
-
-### Per-editor wiring: `cartog ide`
-
-The verb that actually writes MCP configs. Run it once per machine, plus any
-time you install a new editor.
-
-```bash
-cartog ide                          # configure all installed clients
-cartog ide --scope project          # only .mcp.json + .cursor/mcp.json
-cartog ide --scope user             # only user-scope clients
-cartog ide --client cursor          # one client
-cartog ide --dry-run                # preview without writing
-```
-
-Supported clients (matches the per-client list below): `claude-code` (project
-+ user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`,
-`windsurf`, `zed`. User-scope clients whose config directory does not exist
-are skipped (treated as "not installed").
-
-Codex stores all MCP servers in a single user-global `~/.codex/config.toml`,
-so cartog writes one per-project section named `cartog-<slug>-<hash8>` (slug
-is your project directory name, hash8 is the first 4 bytes of SHA-256 of the
-absolute path) to keep multiple projects coexisting. The TOML editor preserves
-comments and ordering in the rest of the file.
-
-#### Flag reference
-
-| Flag | Effect |
-|---|---|
-| `--client <name>` | Target a single client (one of the names above). Default: all matching the scope. |
-| `--scope project\|user\|all` | Limit to project-scoped files, user-scoped files, or both (default `all`). |
-| `-y`, `--yes` | Skip interactive prompts. Also implied by `--dry-run`, `--client`, `--json`, or a non-TTY stdin. |
-| `--dry-run` | Print the planned changes (before/after diff per file) without writing. Implies non-interactive. |
-| `--no-watch` | Drop `--watch` from Claude Code's serve args. Other clients register plain `["serve"]` regardless. |
-| `--json` (global) | Emit a structured `IdeReport` on stdout instead of human text. |
-
-#### Troubleshooting
-
-| Symptom | Meaning | Action |
-|---|---|---|
-| `not modified (config file is not valid JSON); …` | The existing file is JSONC (JSON with comments) or malformed. Cartog refuses to clobber it. | Open the file, fix the JSON manually using the snippets below. |
-| `top-level <key> is a <kind> (expected object); refusing to overwrite` | The user file has the right path but the wrong shape at the container key. | Delete the offending key (or the whole file) and re-run. |
-| `config directory not found (client likely not installed)` | The user-scope config parent dir doesn't exist on this machine. | Install the editor (or skip with `--client X` targeting only what you have). |
-| `0 clients configured` | None of the targeted clients matched. | Check `--client` / `--scope` are compatible (e.g. `cursor` is project-only). |
-
-For deeper diagnostics on the index, embeddings, and language servers, run `cartog doctor`.
-
-### Manual setup (per client)
-
-See **[mcp-setup.md](mcp-setup.md)** for the config-file recipes for every
-supported client (Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode,
-Zed, Codex CLI, Gemini CLI, VS Code/Copilot, and the generic stdio pattern).
-
-`cartog ide` writes those files for you; the manual page is for users who
-want to edit by hand or audit what cartog wrote.
-
-### Available Tools
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `cartog_index` | `path?`, `force?` | Build/update the code graph |
-| `cartog_search` | `query`, `kind?`, `file?`, `limit?` | Find symbols by partial name |
-| `cartog_outline` | `file` | File structure (symbols, line ranges) |
-| `cartog_refs` | `name`, `kind?` | All references to a symbol |
-| `cartog_callees` | `name` | What a symbol calls |
-| `cartog_impact` | `name`, `depth?` | Transitive impact analysis |
-| `cartog_hierarchy` | `name` | Inheritance tree |
-| `cartog_deps` | `file` | File-level imports |
-| `cartog_stats` | — | Index summary |
-| `cartog_map` | `tokens?` | Token-budget-aware codebase summary (file tree + top symbols by centrality) |
-| `cartog_changes` | `commits?`, `kind?` | Symbols affected by recent git changes |
-| `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search |
-| `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
-
-All tool responses are JSON.
-
-**Path restriction**: `cartog_index` and `cartog_rag_index` reject paths outside the project directory (CWD subtree). Agents cannot index arbitrary filesystem locations.
-
-**Progress notifications**: `cartog_index` and `cartog_rag_index` emit standard MCP `notifications/progress` when the client includes a `progressToken` in the request's `_meta`. `cartog_index` emits 3 phase events (`walking`, `parsing N files`, `storing N files`) plus an optional fourth (`resolving with LSP`) when the LSP pass runs. `cartog_rag_index` emits `preparing`, one `embedding processed/total` per ~512-symbol batch, then `storing` — so larger re-embed runs produce more events. The `message` field is human-readable, not a contract. Clients that do not supply a `progressToken` see no notifications and behavior is unchanged. Cold-cache or `force=true` runs report larger `total` values than warm runs; `total` is per-request, not historical.
-
-**Cancellation**: `cartog_index` and `cartog_rag_index` honor MCP `notifications/cancelled`. The indexer aborts at the next phase boundary or per-file checkpoint (sub-second latency in typical cases), and the tool returns an error whose message contains `cancelled`. `cartog_index` runs inside a single rusqlite transaction that rolls back on the error path, so a cancelled run leaves no code-graph changes. `cartog_rag_index` keeps any embedding batches that were already flushed to SQLite; the in-flight batch is dropped. In both cases the next index run redoes the missing work.
-
-### Built-in Workflow Guidance
-
-The MCP server sends workflow instructions to the client at initialization, covering tool chaining order (index → search → refs/callees/impact → re-index) and when to use semantic search. Clients that support the MCP `instructions` field will surface these automatically.
-
-### Logging
-
-Logs go to stderr. The default level depends on how cartog is invoked:
-
-| Invocation | Default level | Why |
-|------------|---------------|-----|
-| `cartog serve` / `cartog watch` / `cartog rag index`, stderr is a TTY | `info` | Foreground user wants progress |
-| Same, stderr is captured (MCP child, piped CI) | `warn` | The parent reads stderr; info-level lines surfaced as `[ERROR]` in client debug logs |
-| Other commands (one-shot CLI) | `warn` | Stay quiet by default |
-
-Set `RUST_LOG` to override in either direction:
-
-```bash
-RUST_LOG=debug cartog serve   # per-request tool call logging
-RUST_LOG=info  cartog serve   # force info under MCP-child mode
-RUST_LOG=warn  cartog watch   # quieten down a foreground watcher
-```
-
-### Plugin vs MCP vs Skill
-
-| | Claude Plugin | MCP Server | Agent Skill |
-|-|--------------|-----------|-------------|
-| Install | `/plugin marketplace add jrollin/cartog` then `/plugin install cartog@cartog-plugins` | `claude mcp add cartog -- cartog serve` | `npx skills add jrollin/cartog` |
-| Context cost | ~150 lines of prompt | Zero (tools are protocol-level) | ~150 lines of prompt |
-| Workflow guidance | Full heuristics | Basic (via `instructions` field) | Full heuristics |
-| Compatibility | Claude Code only | MCP clients only | Any LLM with bash |
-| Latency | Fork+exec per command | Persistent process | Fork+exec per command |
-
-Use the **plugin** for Claude Code (simplest setup, includes skill + scripts + agents). Use **MCP** when you want lower token cost with an MCP-compatible client. Use the **skill** for non-Claude Code environments.
-
-## Agents
-
-cartog ships autonomous agents that execute multi-step workflows end-to-end. Agents are bundled in the plugin and available after plugin installation.
-
-### Available Agents
-
-| Agent | Description | Invocation |
-|-------|-------------|------------|
-| `codebase-onboarding` | Structured onboarding report — adapts to project type and size | `@codebase-onboarding` or "help me understand this project" |
-| `refactoring-scout` | Pre-flight blast radius analysis before a refactoring | `@refactoring-scout` or "is it safe to change X?" |
-
-### How Agents Work
-
-Agents differ from the cartog skill:
-
-- **Skill** (reactive): Claude uses cartog commands in response to your questions — you drive the workflow
-- **Agent** (autonomous): you give a goal, the agent executes a multi-step plan using cartog, and produces a deliverable
-
-Agents use the CLI via Bash (not MCP), so they work as subagents with isolated context. They are self-contained — no skill injection overhead.
-
-### Manual Installation
-
-If not using the plugin, copy agent definitions to your Claude Code agents directory:
-
-```bash
-cp agents/*.md ~/.claude/agents/
-```
-
-### Agent: `codebase-onboarding`
-
-Produces a structured onboarding report for an unfamiliar codebase. The agent adapts to the project — a CLI tool gets different treatment than a web API or a library.
-
-**Workflow:**
-1. **Discover** — `cartog stats` + `cartog map` + manifest/README to determine project type and scale
-2. **Architecture** — trace top-centrality symbols with `callees`/`refs` to map module layout
-3. **Entry points** — targeted searches based on project type (CLI commands, API routes, public surface, etc.)
-4. **Conventions** — test patterns, code style config, recent git activity
-
-Output: a structured markdown report. Sections that don't apply are omitted.
-
-**Usage:**
-```text
-@codebase-onboarding
-# or
-"Use the codebase-onboarding agent to analyze this project"
-# or start a session as the agent
-claude --agent codebase-onboarding
-```
-
-### Agent: `refactoring-scout`
-
-Pre-flight analysis before changing a symbol, module, or file. Maps the full blast radius and produces a go/no-go recommendation.
-
-**Workflow:**
-1. **Locate** — confirm exact symbol with `cartog search`, disambiguate if needed
-2. **Map blast radius** — `refs` + `impact --depth 3` + `callees` + `hierarchy` (for classes)
-3. **Assess risk** — Low / Medium / High based on affected file count and transitive depth
-4. **Report** — affected files, risk warnings, and a concrete update checklist
-
-**Usage:**
-```text
-@refactoring-scout "rename TrackerRepository"
-# or
-"Is it safe to delete the UtilsHelper class?"
-# or start a session as the agent
-claude --agent refactoring-scout
-```
