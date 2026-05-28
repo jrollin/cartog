@@ -377,6 +377,12 @@ surface (`cli` / `mcp`), and a timestamp. Secondary read-only MCP attaches
 skip the write (they can't write at all), so multi-MCP-server setups *under-*
 report secondary traffic rather than double-counting it.
 
+**JSON schema** (`cartog --json savings`): v0.18+ adds `tokens_used_cartog`,
+`tokens_used_grep`, and `percent_saved` to the existing
+`{by_tool, by_source, total_queries, estimated_tokens_saved, baseline_delta}`.
+Consumers must not parse with `deny_unknown_fields` — additive fields are
+expected as the metric evolves.
+
 ### `cartog push [--remote <s3-url>]`
 
 Upload the local index DB to S3-compatible storage (AWS S3, MinIO, Cloudflare R2,

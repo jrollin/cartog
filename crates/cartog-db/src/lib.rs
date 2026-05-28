@@ -2180,12 +2180,14 @@ impl Database {
         let tokens_used_cartog = total_queries.saturating_mul(TOKENS_PER_QUERY_CARTOG as u64);
         let tokens_used_grep = total_queries.saturating_mul(TOKENS_PER_QUERY_GREP as u64);
         let estimated_tokens_saved = tokens_used_grep.saturating_sub(tokens_used_cartog);
-        // 0–99 to keep the visual bar from flat-topping at 100% on degenerate
-        // data and to leave room for "less than 1% rounding" cases.
-        let percent_saved = (estimated_tokens_saved * 100)
+        // 0–100, computed with saturating_mul to match the rest of the
+        // arithmetic in this function (everything else uses saturating_* to
+        // stay safe at extreme query counts).
+        let percent_saved = estimated_tokens_saved
+            .saturating_mul(100)
             .checked_div(tokens_used_grep)
             .unwrap_or(0)
-            .min(99) as u8;
+            .min(100) as u8;
 
         Ok(SavingsReport {
             by_tool,
@@ -2996,11 +2998,14 @@ fn empty_savings_report() -> SavingsReport {
 /// "query_log doesn't exist yet" (return empty report) from real DB faults
 /// (propagate).
 fn is_no_such_table(e: &rusqlite::Error) -> bool {
-    // SQLite reports missing tables as a generic Error (extended code 1)
-    // whose message starts with `no such table:`. Match on the message text
-    // because the rusqlite error variant for prepare-time errors does not
-    // carry the offending object name.
-    e.to_string().contains("no such table")
+    // SQLite raises SQLITE_ERROR (primary code 1) with a message starting
+    // "no such table: <name>". Match on the variant + the message inside it
+    // rather than `e.to_string()` so a future change to rusqlite's Display
+    // wrapper doesn't break the dispatch silently.
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(_, Some(msg)) if msg.contains("no such table")
+    )
 }
 
 // ── Row Mapping Helpers ──

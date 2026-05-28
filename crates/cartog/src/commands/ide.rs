@@ -718,6 +718,26 @@ pub fn cmd_ide(
     Ok(())
 }
 
+/// Strip duplicate `ClientKind`s from a positional argument list while
+/// preserving first-occurrence order. Returns `(unique, dropped)` so the
+/// caller can warn about the duplicates instead of silently swallowing them.
+/// Pulled out so cmd_install can call eprintln! while keeping the dedup
+/// logic itself unit-testable.
+fn dedupe_preserving_order(clients: Vec<ClientKind>) -> (Vec<ClientKind>, Vec<ClientKind>) {
+    // ClientKind isn't Hash and there are only 9 variants, so a linear
+    // membership check is cheaper than deriving Hash just for this.
+    let mut unique = Vec::with_capacity(clients.len());
+    let mut dropped = Vec::new();
+    for c in clients {
+        if unique.contains(&c) {
+            dropped.push(c);
+        } else {
+            unique.push(c);
+        }
+    }
+    (unique, dropped)
+}
+
 /// Filter the static `CLIENT_CATALOGUE` by a positional `clients` list and a
 /// scope. Returns `(ClientKind, Scope)` pairs in catalogue order. Pulled out
 /// of `cmd_install` so the selection logic is unit-testable without spinning
@@ -757,10 +777,36 @@ pub fn cmd_install(
         // exactly like `cartog ide --yes`. The picker is skipped (yes implied).
         run_ide(None, scope, false, dry_run, no_watch, &cwd, &homes)?
     } else {
+        // Dedupe so `cartog install cursor cursor` doesn't waste cycles; warn
+        // so a script bug that produces dupes is visible.
+        let (clients, duplicates) = dedupe_preserving_order(clients);
+        if !duplicates.is_empty() {
+            eprintln!(
+                "note: duplicate clients ignored: {}",
+                duplicates
+                    .iter()
+                    .map(|c| format!("{c:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+
         // Build the (kind, scope) pairs from the catalogue, filtered by the
         // requested clients + scope. Reuses the picker's aggregation path so
         // multiple positional clients produce a single combined report.
         let chosen = filter_catalogue_by_clients(&clients, scope);
+        if chosen.is_empty() {
+            // User asked for clients that don't exist at the requested scope
+            // (e.g. `--scope project codex` — codex is user-only). Bail with
+            // an actionable error rather than silently printing "0 clients".
+            let requested: Vec<String> = clients.iter().map(|c| format!("{c:?}")).collect();
+            anyhow::bail!(
+                "no catalogue entries match clients={:?} at scope={:?}. \
+                 Try --scope all, or pick clients available at this scope.",
+                requested,
+                scope,
+            );
+        }
         run_ide_for_clients(&chosen, dry_run, no_watch, &cwd, &homes)?
     };
 
@@ -1650,6 +1696,53 @@ mod tests {
         // `run_ide(None, ...)`); the filter helper itself returns nothing.
         let chosen = filter_catalogue_by_clients(&[], IdeScope::All);
         assert!(chosen.is_empty());
+    }
+
+    #[test]
+    fn dedupe_drops_repeats_and_reports_them() {
+        let (unique, dropped) = dedupe_preserving_order(vec![
+            ClientKind::Cursor,
+            ClientKind::Vscode,
+            ClientKind::Cursor,
+            ClientKind::Cursor,
+            ClientKind::Codex,
+        ]);
+        assert_eq!(
+            unique,
+            vec![ClientKind::Cursor, ClientKind::Vscode, ClientKind::Codex]
+        );
+        assert_eq!(dropped, vec![ClientKind::Cursor, ClientKind::Cursor]);
+    }
+
+    #[test]
+    fn dedupe_preserves_first_occurrence_order() {
+        let (unique, dropped) = dedupe_preserving_order(vec![
+            ClientKind::Vscode,
+            ClientKind::Cursor,
+            ClientKind::Vscode,
+        ]);
+        assert_eq!(unique, vec![ClientKind::Vscode, ClientKind::Cursor]);
+        assert_eq!(dropped, vec![ClientKind::Vscode]);
+    }
+
+    #[test]
+    fn dedupe_empty_input_returns_two_empty_vecs() {
+        let (unique, dropped) = dedupe_preserving_order(Vec::new());
+        assert!(unique.is_empty());
+        assert!(dropped.is_empty());
+    }
+
+    #[test]
+    fn install_filter_user_only_client_at_project_scope_yields_empty() {
+        // Reproduces the F2 review finding: `cartog install --scope project codex`
+        // would silently succeed with "0 clients" before the bail was added.
+        // Codex is user-only, so the filter yields an empty vec — cmd_install
+        // bails with an error message instead of running.
+        let chosen = filter_catalogue_by_clients(&[ClientKind::Codex], IdeScope::Project);
+        assert!(
+            chosen.is_empty(),
+            "codex has no Project entry in the catalogue"
+        );
     }
 
     #[test]
