@@ -5,11 +5,15 @@ use cartog_core::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
 use super::{node_text, ExtractionResult, Extractor};
 
+/// Tree-sitter–based extractor for Dart source files.
 pub struct DartExtractor {
     parser: Parser,
 }
 
 impl DartExtractor {
+    /// Build a `DartExtractor` with a `Parser` configured for the bundled
+    /// `tree_sitter_dart::LANGUAGE` grammar. Panics only if the grammar fails
+    /// to load (bundled at compile time, so an infallible invariant in practice).
     pub fn new() -> Self {
         let mut parser = Parser::new();
         parser
@@ -93,7 +97,15 @@ fn extract_node(
             );
         }
         "type_alias" => {
-            extract_type_alias(node, source, file_path, parent_id, parent_qname, symbols);
+            extract_type_alias(
+                node,
+                source,
+                file_path,
+                parent_id,
+                parent_qname,
+                symbols,
+                edges,
+            );
         }
         "import_or_export" | "part_directive" => {
             extract_directive(
@@ -332,14 +344,13 @@ fn extract_method_decl(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
-    let sig = match node.child_by_field_name("name").or_else(|| {
-        // Fall back to first method_signature / function_signature descendant.
-        node.named_children(&mut node.walk())
-            .find(|c| c.kind() == "method_signature")
-    }) {
-        Some(s) => s,
-        None => return,
-    };
+    // Prefer the signature subtree (method_signature / function_signature)
+    // so type-ref collection sees parameter and return types. Fall back to
+    // the whole declaration only if no signature child exists.
+    let sig = node
+        .named_children(&mut node.walk())
+        .find(|c| matches!(c.kind(), "method_signature" | "function_signature"))
+        .unwrap_or(node);
 
     let (name, kind, is_async) = match method_name_kind(node, source) {
         Some(t) => t,
@@ -523,7 +534,8 @@ fn extract_declaration(
         return;
     }
 
-    // Case 2: field declaration → emit Variable per identifier.
+    // Case 2: field declaration → emit Variable per identifier, plus Calls
+    // for the initializer expression of each spec.
     let line = node.start_position().row as u32 + 1;
     let end_line = node.end_position().row as u32 + 1;
     for child in node.named_children(&mut node.walk()) {
@@ -534,6 +546,7 @@ fn extract_declaration(
                         .named_children(&mut spec.walk())
                         .find(|c| c.kind() == "identifier");
                     if let Some(id) = id {
+                        let name = node_text(id, source).to_string();
                         push_variable(
                             id,
                             source,
@@ -544,6 +557,8 @@ fn extract_declaration(
                             end_line,
                             symbols,
                         );
+                        let ctx = symbol_id(file_path, "variable", &name, parent_qname);
+                        walk_for_calls(spec, source, file_path, &ctx, edges);
                     }
                 }
             }
@@ -773,6 +788,7 @@ fn extract_type_alias(
     parent_id: Option<&str>,
     parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
+    edges: &mut Vec<Edge>,
 ) {
     let name_node = node
         .named_children(&mut node.walk())
@@ -787,6 +803,7 @@ fn extract_type_alias(
     let visibility = dart_visibility(&name);
     let signature = Some(node_text(node, source).trim().to_string());
 
+    let sym_id = symbol_id(file_path, "type_alias", &name, parent_qname);
     let mut sym = Symbol::new(
         name,
         SymbolKind::TypeAlias,
@@ -803,6 +820,15 @@ fn extract_type_alias(
         sym = sym.with_visibility(visibility);
     }
     symbols.push(sym);
+
+    // Emit References for every type_identifier on the RHS of the alias
+    // (e.g. `typedef Handler = void Function(Request)` → References Request).
+    // The LHS type_identifier is the alias name we already named; skip it.
+    for child in node.named_children(&mut node.walk()) {
+        if child.kind() != "type_identifier" {
+            collect_signature_type_refs(child, source, file_path, &sym_id, edges);
+        }
+    }
 }
 
 // ── Imports / exports / part ──
@@ -1454,6 +1480,38 @@ enum Color { red, green, blue }
         let result = extract("typedef IntList = List<int>;");
         let t = result.symbols.iter().find(|s| s.name == "IntList").unwrap();
         assert_eq!(t.kind, SymbolKind::TypeAlias);
+    }
+
+    #[test]
+    fn test_typedef_emits_type_refs() {
+        let result = extract("typedef Handler = void Function(Request req, User u);");
+        let alias = result.symbols.iter().find(|s| s.name == "Handler").unwrap();
+        let ref_targets: Vec<&str> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::References && e.source_id == alias.id)
+            .map(|e| e.target_name.as_str())
+            .collect();
+        assert!(ref_targets.contains(&"Request"), "{ref_targets:?}");
+        assert!(ref_targets.contains(&"User"), "{ref_targets:?}");
+    }
+
+    #[test]
+    fn test_field_initializer_calls() {
+        let result = extract(
+            r#"
+class Api {
+  final client = buildClient();
+}
+"#,
+        );
+        let field = result.symbols.iter().find(|s| s.name == "client").unwrap();
+        let call = result
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Calls && e.target_name == "buildClient")
+            .expect("buildClient call");
+        assert_eq!(call.source_id, field.id);
     }
 
     #[test]

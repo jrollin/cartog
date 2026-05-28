@@ -127,6 +127,14 @@ mod tests {
     }
 
     #[test]
+    fn test_find_servers_dart() {
+        let specs = find_servers("dart");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].binary, "dart");
+        assert_eq!(specs[0].language_id, "dart");
+    }
+
+    #[test]
     fn test_find_servers_unknown_language() {
         assert!(find_servers("cobol").is_empty());
     }

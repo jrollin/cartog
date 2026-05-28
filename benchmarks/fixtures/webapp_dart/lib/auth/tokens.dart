@@ -20,7 +20,9 @@ extension TokenString on String {
   String get masked => length <= 4 ? '****' : '${substring(0, 4)}…';
 }
 
-/// Library-private helper.
+/// Deterministic, fixture-only hex generator. NOT cryptographically secure;
+/// the cartog benchmark suite needs reproducible output, so do not copy
+/// this into production code — use `Random.secure()` instead.
 String _randomHex(int n) {
   final buf = StringBuffer();
   for (var i = 0; i < n; i++) {
@@ -29,7 +31,7 @@ String _randomHex(int n) {
   return buf.toString();
 }
 
-/// Default issuer.
+/// Default issuer (fixture-only; see [_randomHex]).
 Future<String> defaultIssuer(String subject) async {
   return '$subject.${_randomHex(32)}';
 }
