@@ -95,6 +95,7 @@
           <a href="#mcp-quickstart">Wiring editors: cartog ide</a>
           <a href="#mcp-ide">Bootstrap sequence</a>
           <a href="#mcp-clients">Manual setup</a>
+          <a href="#teach-agent">Teach your agent</a>
         </div>
         <div class="sidebar-group">
           <div class="sidebar-label">Reference</div>
@@ -398,7 +399,9 @@ cartog completions fish  &gt; ~/.config/fish/completions/cartog.fish</pre>
 
       <h2 id="cmd-manpage"><code>cartog manpage</code></h2>
       <p>Emit a <code>roff</code>-formatted man page on stdout. Intended for packagers and distro maintainers.</p>
-      <pre>cartog manpage &gt; /usr/local/share/man/man1/cartog.1
+      <p>The output filename <strong>must</strong> end in <code>.1</code> (the section-1 extension <code>man</code> looks for) and the target directory must exist:</p>
+      <pre>sudo mkdir -p /usr/local/share/man/man1
+cartog manpage | sudo tee /usr/local/share/man/man1/cartog.1 &gt; /dev/null
 man cartog</pre>
 
       <!-- ── Semantic Search ───────────────────── -->
@@ -486,56 +489,77 @@ cartog ide                   <span class="comment"># optional — wire MCP into 
       <p>Edit <code>.cartog.toml</code> between steps 1 and 2 to change DB path or embedding provider before any heavy work runs. CLI-only users stop after step 2; run <code>cartog ide</code> only if you want cartog wired into MCP-aware editors.</p>
 
       <h2 id="mcp-clients">Manual setup (per client)</h2>
-      <p>If you prefer to edit MCP configs by hand, here are the canonical paths and JSON shapes <code>cartog ide</code> writes.</p>
+      <p>Each block below shows the <code>cartog ide</code> one-liner that writes the right file, plus the manual JSON / TOML if you prefer to edit by hand.</p>
 
-      <h3>Claude Code</h3>
-      <pre>claude mcp add cartog -- cartog serve --watch</pre>
-      <p>Or edit <code>~/.claude/settings.json</code>:</p>
-      <pre>{
+      <details class="mcp-client">
+        <summary><strong>Claude Code</strong> — project <code>.mcp.json</code> + user <code>~/.claude/settings.json</code></summary>
+        <pre>cartog ide --client claude-code
+<span class="comment"># or:</span>
+claude mcp add cartog -- cartog serve --watch                       <span class="comment"># user scope</span>
+claude mcp add --scope project cartog -- cartog serve --watch       <span class="comment"># project scope</span></pre>
+        <p>Manual:</p>
+        <pre>{
   "mcpServers": {
-    "cartog": {
-      "command": "cartog",
-      "args": ["serve", "--watch"]
-    }
+    "cartog": { "command": "cartog", "args": ["serve", "--watch"] }
   }
 }</pre>
+      </details>
 
-      <h3>Claude Desktop</h3>
-      <p>Edit <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>:</p>
-      <pre>{
+      <details class="mcp-client">
+        <summary><strong>Cursor</strong> — project <code>.cursor/mcp.json</code></summary>
+        <pre>cartog ide --client cursor</pre>
+        <p>Manual:</p>
+        <pre>{
   "mcpServers": {
-    "cartog": {
-      "command": "cartog",
-      "args": ["serve"]
-    }
+    "cartog": { "command": "cartog", "args": ["serve"] }
   }
 }</pre>
+      </details>
 
-      <h3>Cursor</h3>
-      <p>Edit <code>.cursor/mcp.json</code> in your project root:</p>
-      <pre>{
+      <details class="mcp-client">
+        <summary><strong>Codex CLI</strong> — user-global <code>~/.codex/config.toml</code></summary>
+        <pre>cartog ide --client codex</pre>
+        <p>Codex stores all MCP servers in this one user-global file (no per-project config), so <code>cartog ide</code> writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section.</p>
+        <pre>[mcp_servers.cartog]
+command = "cartog"
+args = ["serve"]</pre>
+      </details>
+
+      <details class="mcp-client">
+        <summary><strong>Windsurf</strong> — <code>~/.codeium/windsurf/mcp_config.json</code></summary>
+        <pre>cartog ide --client windsurf</pre>
+        <pre>{
   "mcpServers": {
-    "cartog": {
-      "command": "cartog",
-      "args": ["serve"]
-    }
+    "cartog": { "command": "cartog", "args": ["serve"] }
   }
 }</pre>
+      </details>
 
-      <h3>Windsurf</h3>
-      <p>Edit <code>~/.codeium/windsurf/mcp_config.json</code>:</p>
-      <pre>{
-  "mcpServers": {
-    "cartog": {
-      "command": "cartog",
-      "args": ["serve"]
-    }
+      <details class="mcp-client">
+        <summary><strong>VS Code (Copilot)</strong> — <code>.vscode/mcp.json</code></summary>
+        <pre>cartog ide --client vscode</pre>
+        <p>Note: top-level key is <code>servers</code>, not <code>mcpServers</code>.</p>
+        <pre>{
+  "servers": {
+    "cartog": { "type": "stdio", "command": "cartog", "args": ["serve"] }
   }
 }</pre>
+      </details>
 
-      <h3>OpenCode</h3>
-      <p>Edit <code>~/.config/opencode/opencode.json</code>:</p>
-      <pre>{
+      <details class="mcp-client">
+        <summary><strong>Zed</strong> — <code>~/.config/zed/settings.json</code></summary>
+        <pre>cartog ide --client zed</pre>
+        <pre>{
+  "context_servers": {
+    "cartog": { "command": "cartog", "args": ["serve"] }
+  }
+}</pre>
+      </details>
+
+      <details class="mcp-client">
+        <summary><strong>OpenCode</strong> — <code>~/.config/opencode/opencode.json</code></summary>
+        <pre>cartog ide --client opencode</pre>
+        <pre>{
   "mcp": {
     "cartog": {
       "type": "local",
@@ -544,49 +568,46 @@ cartog ide                   <span class="comment"># optional — wire MCP into 
     }
   }
 }</pre>
+      </details>
 
-      <h3>Zed</h3>
-      <p>Edit <code>~/.config/zed/settings.json</code>:</p>
-      <pre>{
-  "context_servers": {
-    "cartog": {
-      "command": "cartog",
-      "args": ["serve"]
-    }
-  }
-}</pre>
-
-      <h3>Codex CLI</h3>
-      <p>Edit <code>~/.codex/config.toml</code>. Codex stores all MCP servers in this one user-global file (no per-project config), so <code>cartog ide</code> writes a per-project <code>[mcp_servers.cartog-&lt;dir&gt;-&lt;hash&gt;]</code> section.</p>
-      <pre>[mcp_servers.cartog]
-command = "cartog"
-args = ["serve"]</pre>
-
-      <h3>Gemini CLI</h3>
-      <p>Edit <code>~/.gemini/settings.json</code>:</p>
-      <pre>{
+      <details class="mcp-client">
+        <summary><strong>Gemini CLI</strong> — <code>~/.gemini/settings.json</code></summary>
+        <pre>cartog ide --client gemini</pre>
+        <pre>{
   "mcpServers": {
-    "cartog": {
-      "command": "cartog",
-      "args": ["serve"]
-    }
+    "cartog": { "command": "cartog", "args": ["serve"] }
   }
 }</pre>
+      </details>
 
-      <h3>VS Code (Copilot)</h3>
-      <p>Edit <code>.vscode/mcp.json</code> (note: top-level key is <code>servers</code>, not <code>mcpServers</code>):</p>
-      <pre>{
-  "servers": {
-    "cartog": {
-      "type": "stdio",
-      "command": "cartog",
-      "args": ["serve"]
-    }
+      <details class="mcp-client">
+        <summary><strong>Claude Desktop</strong> — <code>claude_desktop_config.json</code></summary>
+        <pre>cartog ide --client claude-desktop</pre>
+        <p>macOS: <code>~/Library/Application Support/Claude/</code>. Windows: <code>%APPDATA%\Claude\</code>. Restart Claude Desktop after editing.</p>
+        <pre>{
+  "mcpServers": {
+    "cartog": { "command": "cartog", "args": ["serve"] }
   }
 }</pre>
+      </details>
 
-      <h3>Any MCP client</h3>
-      <p>Point your client at <code>cartog serve</code> over stdio. Command: <code>cartog</code>, args: <code>["serve"]</code>.</p>
+      <details class="mcp-client">
+        <summary><strong>Any other MCP client</strong></summary>
+        <p>Point your client at <code>cartog serve</code> over stdio. Command: <code>cartog</code>, args: <code>["serve"]</code>.</p>
+      </details>
+
+      <h2 id="teach-agent">Teach your agent to use cartog</h2>
+      <p>Wiring MCP is half the job. The other half is telling the LLM <strong>when</strong> to prefer cartog over grep + read. Drop the snippet from <a href="https://github.com/jrollin/cartog/blob/main/docs/agent-snippet.md">docs/agent-snippet.md</a> into your project's <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursor/rules/</code>, or equivalent, and the agent will route navigation questions through cartog's 13 MCP tools instead of flooding context with raw text.</p>
+      <p>Maps the natural-language question to the right tool:</p>
+      <ul>
+        <li>"where is X defined?" → <code>cartog_search</code></li>
+        <li>"who calls / imports / inherits X?" → <code>cartog_refs</code></li>
+        <li>"what does X call?" → <code>cartog_callees</code></li>
+        <li>"what breaks if I change X?" → <code>cartog_impact</code></li>
+        <li>"find code about &lt;concept&gt;" → <code>cartog_rag_search</code></li>
+        <li>"orient me in this repo" → <code>cartog_map</code></li>
+      </ul>
+      <p>Falls back to grep / Read for string literals, comments, config values, or anything outside the indexed root.</p>
 
       <!-- ── Reference ─────────────────────────── -->
 

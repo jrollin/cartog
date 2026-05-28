@@ -596,10 +596,17 @@ cartog completions fish  > ~/.config/fish/completions/cartog.fish
 
 Emit a `roff` man page on stdout. Intended for packagers and distro maintainers.
 
+The output filename **must** end in `.1` (the section-1 extension `man` looks
+for) and the target directory must exist:
+
 ```bash
-cartog manpage > /usr/local/share/man/man1/cartog.1
+sudo mkdir -p /usr/local/share/man/man1
+cartog manpage | sudo tee /usr/local/share/man/man1/cartog.1 > /dev/null
 man cartog
 ```
+
+On macOS the path is the same. On Linux distros some packagers prefer
+`/usr/share/man/man1/`; either works as long as it is on `MANPATH`.
 
 ### `cartog self <update|version|rollback|migrate-db>`
 
