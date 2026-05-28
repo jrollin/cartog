@@ -44,6 +44,7 @@ microseconds — far cheaper than grep + read.
 
 **Index hygiene:**
 - If a tool reports stale data, call `mcp__cartog__cartog_index` once
+- If `cartog_rag_search` results feel out of date after new files were added, call `mcp__cartog__cartog_rag_index` once
 - For semantic search to work, the user must have run `cartog rag setup` and `cartog rag index .`
 ```
 
@@ -52,7 +53,7 @@ microseconds — far cheaper than grep + read.
 ## Why this works
 
 - Tells the agent **when** to prefer cartog (the hard part — most agents default to grep)
-- Lists the 13 MCP tools by their canonical names so the agent calls them directly
+- Lists all 13 MCP tools by their canonical names so the agent calls them directly
 - Names the fall-back conditions so the agent doesn't get stuck
 - Self-contained — no links to follow at decision time
 

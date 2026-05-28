@@ -559,6 +559,16 @@ pub fn cmd_hierarchy(
 
     // --json wins if both flags are set (matches the documented behavior).
     if mermaid && !json {
+        // Surface the same diagnostic the plain branch shows so users running
+        // --mermaid on a typo or empty index get the did-you-mean hint
+        // alongside the bare `graph TD` document.
+        if pairs.is_empty() {
+            eprintln!(
+                "No hierarchy found for '{name}'{}{}",
+                empty_index_hint(&db),
+                did_you_mean(&db, &name)
+            );
+        }
         print!("{}", mermaid::render_hierarchy(&pairs));
         return Ok(());
     }
@@ -605,6 +615,14 @@ pub fn cmd_deps(
     let file = file.to_string();
 
     if mermaid && !json {
+        // Surface the same diagnostic the plain branch shows so users running
+        // --mermaid against an unindexed file or empty index get the hint.
+        if edges.is_empty() {
+            eprintln!(
+                "No dependencies found for '{file}'{}",
+                empty_index_hint(&db)
+            );
+        }
         let targets: Vec<(String, u32)> = edges
             .iter()
             .map(|e| (e.target_name.clone(), e.line))
@@ -698,12 +716,18 @@ pub fn cmd_pull(
 }
 
 /// Index statistics summary.
-pub fn cmd_stats(db_path: &Path, json: bool, embedding_dim: usize, savings: bool) -> Result<()> {
+pub fn cmd_stats(
+    db_path: &Path,
+    json: bool,
+    token_budget: Option<u32>,
+    embedding_dim: usize,
+    savings: bool,
+) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
 
     if savings {
         let report = db.savings_breakdown()?;
-        return output(&report, json, None, |r| {
+        return output(&report, json, token_budget, |r| {
             let mut out = String::new();
             if r.total_queries == 0 {
                 out.push_str(
@@ -731,7 +755,7 @@ pub fn cmd_stats(db_path: &Path, json: bool, embedding_dim: usize, savings: bool
     }
 
     let stats = db.stats()?;
-    output(&stats, json, None, |stats| {
+    output(&stats, json, token_budget, |stats| {
         let mut out = String::new();
         out.push_str(&format!("Files:    {}\n", stats.num_files));
         out.push_str(&format!("Symbols:  {}\n", stats.num_symbols));
@@ -776,12 +800,13 @@ pub fn cmd_map(
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let files = db.all_files()?;
-    db.log_query("map", "cli");
 
     if files.is_empty() {
         if json {
             println!("{{}}");
         } else if mermaid {
+            // Tell the user to index before pasting the (empty) diagram.
+            eprintln!("No files indexed. Run `cartog index .` first.");
             println!("graph TD\n    repo[\"Repo (empty)\"]");
         } else {
             println!("No files indexed. Run 'cartog index .' first.");
@@ -789,29 +814,49 @@ pub fn cmd_map(
         return Ok(());
     }
 
+    // Log AFTER the empty-files guard so no-op calls on an unindexed repo
+    // don't inflate `cartog savings`.
+    db.log_query("map", "cli");
+
     if mermaid && !json {
-        // Honor the token budget by walking files until we exhaust it. Each
-        // file edge costs roughly its path length + ~20 bytes of overhead.
+        // Honor the token budget by walking files until we exhaust it. The
+        // emitted lines look like:
+        //   repo --> f_<sane>_<hash8>["<label>"]
+        //   f_<sane>_<hash8> --> s_<sane>_<hash8>["<name> (<kind>)"]
+        // so per-file overhead is roughly `len(path) * 2 + len(prefix+hash) * 2 + 30`
+        // and per-leaf overhead is roughly `len(path) + len(name) * 2 + len(kind) + 50`.
+        // The constants are deliberately conservative — better to underfill
+        // than overshoot the documented `--tokens` budget.
         let budget_bytes = (tokens as usize) * 4;
-        let mut included_files: Vec<String> = Vec::new();
+        let mut included_files: Vec<&str> = Vec::new();
         let mut size = "graph TD\n    repo[\"Repo\"]\n".len();
+        // f_<sanitized>_<hash8> has at least len(path)+13 bytes of ID overhead.
+        const FILE_ID_OVERHEAD: usize = 13;
+        // s_<sanitized>_<hash8> for a "<file>::<name>" raw key — even longer.
+        const SYM_ID_OVERHEAD: usize = 13;
         for f in &files {
-            let edge_cost = f.len() * 2 + 30; // path appears twice (id + label)
+            let edge_cost = f.len() * 2 + FILE_ID_OVERHEAD + 30;
             if size + edge_cost > budget_bytes && !included_files.is_empty() {
                 break;
             }
             size += edge_cost;
-            included_files.push(f.clone());
+            included_files.push(f.as_str());
         }
+        // HashSet so per-symbol membership is O(1), not O(N).
+        let included_set: std::collections::HashSet<&str> =
+            included_files.iter().copied().collect();
         // Add top symbols per file until budget runs out.
         let symbols = db.top_symbols(500)?;
         let mut symbols_by_file: std::collections::BTreeMap<String, Vec<(String, String)>> =
             std::collections::BTreeMap::new();
-        for sym in symbols {
-            if !included_files.contains(&sym.file_path) {
+        for sym in &symbols {
+            if !included_set.contains(sym.file_path.as_str()) {
                 continue;
             }
-            let leaf_cost = sym.name.len() * 2 + 40;
+            // The actual emitted leaf carries the file path inside the
+            // sym ID (`s_<sanitize(file::name)>_<hash>`), plus the file ID
+            // again on the source side of `-->`. Account for both.
+            let leaf_cost = sym.name.len() * 2 + sym.file_path.len() + SYM_ID_OVERHEAD * 2 + 50;
             if size + leaf_cost > budget_bytes {
                 break;
             }
@@ -819,11 +864,12 @@ pub fn cmd_map(
             symbols_by_file
                 .entry(sym.file_path.clone())
                 .or_default()
-                .push((sym.name.clone(), sym.kind.to_string()));
+                .push((sym.name.clone(), sym.kind.as_str().to_string()));
         }
+        let included_owned: Vec<String> = included_files.iter().map(|s| (*s).to_string()).collect();
         let symbols_vec: Vec<(String, Vec<(String, String)>)> =
             symbols_by_file.into_iter().collect();
-        print!("{}", mermaid::render_map(&included_files, &symbols_vec));
+        print!("{}", mermaid::render_map(&included_owned, &symbols_vec));
         return Ok(());
     }
 
@@ -913,10 +959,12 @@ pub fn cmd_changes(
     embedding_dim: usize,
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
-    db.log_query("changes", "cli");
     let root = std::env::current_dir()?;
 
+    // Log AFTER the git call succeeds; otherwise non-git directories inflate
+    // the savings counter via the `?` propagating an error.
     let changed_files = indexer::git_recently_changed_files(&root, commits)?;
+    db.log_query("changes", "cli");
 
     if changed_files.is_empty() {
         if json {

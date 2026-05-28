@@ -387,10 +387,16 @@ fn tool_response_named(
     tool: &str,
     queried_name: Option<&str>,
 ) -> Result<CallToolResult, McpError> {
-    log_tool_query(db, tool);
     let is_empty = !db
         .has_indexed_files()
         .map_err(|e| mcp_err(format!("stats check failed: {e}")))?;
+
+    // Log AFTER the has_indexed_files probe succeeds and only when the index
+    // is non-empty. An "Index is empty — run cartog_index first" response is
+    // not a real query and shouldn't count toward `cartog stats --savings`.
+    if !is_empty {
+        log_tool_query(db, tool);
+    }
 
     // Empty navigation result on a populated index → suggest near matches.
     if !is_empty {
@@ -985,6 +991,10 @@ impl CartogServer {
             }
             let json = serde_json::to_string_pretty(&value)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            // cartog_stats bypasses tool_response_named so it must log itself
+            // — otherwise MCP-side stats calls disappear from
+            // `cartog stats --savings`.
+            log_tool_query(&db, "cartog_stats");
             Ok(CallToolResult::success(vec![Content::text(json)]))
         })
         .await

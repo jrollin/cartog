@@ -2103,13 +2103,21 @@ impl Database {
     /// / `cartog savings` retention hook.
     ///
     /// Best-effort: errors are swallowed (logged via `warn!`) so a failing
-    /// write never aborts the user's actual query. No-op on read-only attach —
-    /// secondary MCP servers cannot write, and double-counting a query that
-    /// will also be logged by the primary is the wrong shape anyway.
+    /// write never aborts the user's actual query.
     ///
-    /// Stored fields: `tool` (e.g. `"search"`, `"refs"`, `"cartog_search"`),
-    /// `source` (`"cli"` or `"mcp"`), and a unix-seconds timestamp. The query
-    /// payload itself is never recorded — see the privacy banner in README.
+    /// **Read-only attach skips the write.** Secondary MCP servers opened via
+    /// [`Self::open_readonly`] cannot write at all. As a result, queries
+    /// served by a secondary are NOT reflected in `query_log` — there is no
+    /// IPC that forwards them to the primary. `cartog stats --savings` on a
+    /// machine that runs multiple MCP servers will therefore *undercount*
+    /// secondary traffic, not overcount it. This is a deliberate trade-off:
+    /// the alternative would be a separate per-process file with its own
+    /// merge logic, which is more complexity than the retention hook needs.
+    ///
+    /// Stored fields: `tool` (e.g. `"search"`, `"refs"`, MCP-side already
+    /// strips the `cartog_` prefix so CLI and MCP rows aggregate), `source`
+    /// (`"cli"` or `"mcp"`), and a unix-seconds timestamp. The query payload
+    /// itself is never recorded — see the privacy banner in README.
     pub fn log_query(&self, tool: &str, source: &str) {
         if self.is_read_only() {
             return;
@@ -2122,13 +2130,42 @@ impl Database {
             "INSERT INTO query_log (tool, source, ts) VALUES (?1, ?2, ?3)",
             params![tool, source, ts],
         ) {
+            // Always warn for the individual failure (debuggable in traces),
+            // and additionally emit a one-shot loud-error on the first
+            // failure so a persistently-broken query_log (e.g. SQLITE_FULL
+            // or a missing table on a manually-tampered DB) is visible even
+            // when warns are filtered.
             warn!(error = %e, tool, source, "query_log insert failed");
+            if !LOG_QUERY_FAILURE_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::error!(
+                    error = %e,
+                    "query_log is failing — `cartog stats --savings` will undercount. \
+                     Check disk space and `cartog doctor`."
+                );
+            }
         }
     }
 
     /// Aggregate `query_log` for `cartog stats --savings` / `cartog savings`.
-    /// Safe on read-only attach (it's a read).
+    /// Safe on read-only attach (it's a read). Returns an empty report when
+    /// the `query_log` table is missing (the read-only attach path skips
+    /// schema bootstrap, so a v5 DB that lost the table — manual drop, partial
+    /// snapshot restore — would otherwise surface a `no such table` error).
     pub fn savings_breakdown(&self) -> Result<SavingsReport> {
+        // Cheap guard: probe for the table once. On read-only attach we can't
+        // CREATE it, but returning an empty report is the right shape for the
+        // caller (the CLI prints "No queries logged yet").
+        let table_exists = self.conn.prepare("SELECT 1 FROM query_log LIMIT 0").is_ok();
+        if !table_exists {
+            return Ok(SavingsReport {
+                by_tool: Vec::new(),
+                by_source: Vec::new(),
+                total_queries: 0,
+                estimated_tokens_saved: 0,
+                baseline_delta: TOKENS_SAVED_PER_QUERY,
+            });
+        }
+
         let mut tool_stmt = self.conn.prepare(
             "SELECT tool, COUNT(*) FROM query_log GROUP BY tool ORDER BY COUNT(*) DESC, tool",
         )?;
@@ -2906,6 +2943,13 @@ pub struct SavingsReport {
 /// (~1,420) is taken as the per-query savings. Coarse but defensible; refining
 /// per-tool would require a richer per-call metric and isn't worth it pre-v1.
 pub const TOKENS_SAVED_PER_QUERY: u32 = 1_420;
+
+/// One-shot flag flipped the first time `log_query` fails. Surfaces a loud
+/// error so a persistently-broken `query_log` (SQLITE_FULL, missing table)
+/// is visible even when `warn!` is filtered. Process-scoped on purpose: the
+/// goal is one user-visible message per cartog invocation, not per row.
+static LOG_QUERY_FAILURE_REPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 // ── Row Mapping Helpers ──
 
