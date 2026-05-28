@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.18.0] - 2026-05-27
+## [0.19.0] - 2026-05-28
 
 ### Bug Fixes
 
@@ -88,6 +88,11 @@
 - **self**: Scope migrate-db peer check to the target database ([`d84b3b9`](https://github.com/jrollin/cartog/commit/d84b3b900b30baab88f4825aae90acc671359c85))
 - **rag**: Actionable errors when Ollama is unreachable or model is missing ([`99d7283`](https://github.com/jrollin/cartog/commit/99d72833f38cd581037ec5d44f3839331736529d))
 - **cli**: Actionable errors for corrupt or read-only database ([`3bc5800`](https://github.com/jrollin/cartog/commit/3bc58002bff3c341325d7488881605b04ba9db3f))
+- Address 15 review findings on adoption branch ([`6255823`](https://github.com/jrollin/cartog/commit/62558235d1be50ecdb17f6070a438223ace78cce))
+- **review**: Empty-result CLI logging, savings error-match, fence langs ([`54daa60`](https://github.com/jrollin/cartog/commit/54daa60af37fa2b744a99343a5895e9916ce7867))
+- **review**: Adversarial-review findings on the unpushed diff ([`faf9794`](https://github.com/jrollin/cartog/commit/faf9794d2c4a3349907d8641037a0ae83a6bfa44))
+- **benchmarks**: Wire Java and PHP fixtures into the suite ([`8d71ece`](https://github.com/jrollin/cartog/commit/8d71ece18e67355932dae6b41c0ad9ed79e8175c))
+- **languages**: Address Dart extractor PR review ([`50919c2`](https://github.com/jrollin/cartog/commit/50919c20a8c14c93a2bbaca151b4b3f2fdd4ba99))
 
 ### Documentation
 
@@ -128,6 +133,11 @@
 - **crates**: Add cartog-process-lock README; sync crate READMEs with code ([`ce111e7`](https://github.com/jrollin/cartog/commit/ce111e719c7e71c06516324efab1d36d0df62f49))
 - Reorganize docs/, amend convention, fix stale site/docs facts ([`e74523c`](https://github.com/jrollin/cartog/commit/e74523c18ff14bc092dd8ef02c8fcbb4a83b9fd6))
 - Fix PID-file fence lang, drop duplicate watch Status, en-dash range ([`2b2cfef`](https://github.com/jrollin/cartog/commit/2b2cfef7a85e9798a0cabcaccb278ebe48a51de9))
+- **adoption**: Quantified hero, agent snippet, collapsible MCP setup ([`813836a`](https://github.com/jrollin/cartog/commit/813836a25d7bae98a072bfd902e921b2d14d2df2))
+- **site**: Add example output for every command in usage.html ([`056867d`](https://github.com/jrollin/cartog/commit/056867d358f0884bb1f856e1a19892a53428faa3))
+- Explain Claude Code --watch asymmetry, document cartog install alias ([`8a73027`](https://github.com/jrollin/cartog/commit/8a73027974e4f989a0f7bd97f7823559ce09c3aa))
+- **usage**: Surface Configuration, RAG, and Integration before CLI list ([`5cfa4ca`](https://github.com/jrollin/cartog/commit/5cfa4ca07698575a0799b6c2f1a83971baee813b))
+- Remove spec files and references ([`58872bd`](https://github.com/jrollin/cartog/commit/58872bda755bbce92319a612e61e1c5d70cca0ef))
 
 ### Features
 
@@ -212,6 +222,12 @@
 - **indexer**: Report files skipped for unsupported languages ([`455bfd3`](https://github.com/jrollin/cartog/commit/455bfd370448cd210a112279b86d931b358b1a5f))
 - **cli**: Hint to run index when stats shows an empty database ([`a253478`](https://github.com/jrollin/cartog/commit/a2534786232d2afa51bcf897d899a2b3e73d0bd6))
 - **build**: Include Ollama embedding provider in default features ([`5413379`](https://github.com/jrollin/cartog/commit/5413379b6e3037c7872e4650706a7ea7915fff0c))
+- **cli**: Add `cartog install` as visible alias of `cartog ide` ([`2a142a7`](https://github.com/jrollin/cartog/commit/2a142a7cc679cacbb0b339e6b552b53918266eff))
+- **stats**: Add cartog stats --savings and cartog savings alias ([`ffc533f`](https://github.com/jrollin/cartog/commit/ffc533fd25ba39695aff804ba2027f5df16514b1))
+- **cli**: --mermaid for hierarchy, deps, and map ([`1052db2`](https://github.com/jrollin/cartog/commit/1052db2f56d1ec85ce78449a48757062dc8bd0c1))
+- **cli**: Cartog install takes positional clients (brew/npm convention) ([`bf7988d`](https://github.com/jrollin/cartog/commit/bf7988d5d4d959bc79ab9b8453f41046eaf37a77))
+- **savings**: With/without/saved breakdown + per-tool call counts ([`0b646d2`](https://github.com/jrollin/cartog/commit/0b646d2804fe058fd26524ea4b79bb636c720b44))
+- **languages**: Add Dart extractor ([`4376b30`](https://github.com/jrollin/cartog/commit/4376b305fa82ac3aaaee8f1ad4d5c19da370be86))
 
 ### Miscellaneous
 
