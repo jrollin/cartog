@@ -299,6 +299,10 @@ pub enum Command {
     /// Supports Claude Code, Claude Desktop, Cursor, VS Code, Codex CLI, Gemini CLI,
     /// OpenCode, Windsurf, Zed. User-scope clients whose config directory does not
     /// exist are skipped (not installed).
+    ///
+    /// Aliased as `cartog install` for discoverability — both verbs run the same
+    /// handler.
+    #[command(visible_alias = "install")]
     Ide {
         /// Target a single client. Default: configure all clients in scope.
         #[arg(long, value_enum)]
