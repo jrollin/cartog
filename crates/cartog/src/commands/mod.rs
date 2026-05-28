@@ -378,7 +378,11 @@ pub fn cmd_outline(
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let symbols = db.outline(file)?;
-    db.log_query("outline", "cli");
+    // Don't count empty results — an empty-index call or a typo'd file path
+    // didn't actually save the user any tokens vs grep + read.
+    if !symbols.is_empty() {
+        db.log_query("outline", "cli");
+    }
     let file = file.to_string();
     output(&symbols, json, token_budget, |syms| {
         if syms.is_empty() {
@@ -419,7 +423,9 @@ pub fn cmd_callees(
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let edges = db.callees(name)?;
-    db.log_query("callees", "cli");
+    if !edges.is_empty() {
+        db.log_query("callees", "cli");
+    }
     let name = name.to_string();
     output(&edges, json, token_budget, |edges| {
         if edges.is_empty() {
@@ -453,7 +459,9 @@ pub fn cmd_impact(
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let results = db.impact(name, depth)?;
-    db.log_query("impact", "cli");
+    if !results.is_empty() {
+        db.log_query("impact", "cli");
+    }
     let name = name.to_string();
 
     #[derive(Serialize)]
@@ -502,7 +510,9 @@ pub fn cmd_refs(
     let db = open_db(db_path, embedding_dim)?;
     let kind_filter = kind.map(EdgeKind::from);
     let results = db.refs(name, kind_filter)?;
-    db.log_query("refs", "cli");
+    if !results.is_empty() {
+        db.log_query("refs", "cli");
+    }
     let name = name.to_string();
 
     #[derive(Serialize)]
@@ -554,7 +564,9 @@ pub fn cmd_hierarchy(
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let pairs = db.hierarchy(name)?;
-    db.log_query("hierarchy", "cli");
+    if !pairs.is_empty() {
+        db.log_query("hierarchy", "cli");
+    }
     let name = name.to_string();
 
     // --json wins if both flags are set (matches the documented behavior).
@@ -611,7 +623,9 @@ pub fn cmd_deps(
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let edges = db.file_deps(file)?;
-    db.log_query("deps", "cli");
+    if !edges.is_empty() {
+        db.log_query("deps", "cli");
+    }
     let file = file.to_string();
 
     if mermaid && !json {
@@ -669,7 +683,9 @@ pub fn cmd_search(
     };
     let limit = limit.min(MAX_SEARCH_LIMIT);
     let symbols = db.search(query, kind_filter, file, limit)?;
-    db.log_query("search", "cli");
+    if !symbols.is_empty() {
+        db.log_query("search", "cli");
+    }
     let query = query.to_string();
 
     output(&symbols, json, token_budget, |syms| {

@@ -175,7 +175,7 @@ cartog search config --file src/db.rs        # scoped to one file
 cartog search parse --limit 5               # cap results
 ```
 
-```
+```text
 function  validate_token    auth/tokens.py:30
 function  validate_session  auth/tokens.py:68
 function  validate_user     services/user.py:12
@@ -193,7 +193,7 @@ Show all symbols in a file with their types, signatures, and line ranges. Use th
 cartog outline src/db.rs
 ```
 
-```
+```text
 use anyhow  L1
 use rusqlite  L2
 class Database  L62-500
@@ -210,7 +210,7 @@ Find what a function calls — answers "what does this depend on?".
 cartog callees validate_token
 ```
 
-```
+```text
 lookup_session  auth/tokens.py:37
 TokenError      auth/tokens.py:39
 ExpiredTokenError  auth/tokens.py:42
@@ -224,7 +224,7 @@ Transitive impact analysis — follows the caller chain up to N hops (default 3)
 cartog impact validate_token --depth 3
 ```
 
-```
+```text
   calls  get_current_user  auth/service.py:40
   calls  refresh_token  auth/tokens.py:54
     calls  impersonate  auth/service.py:52
@@ -241,7 +241,7 @@ cartog refs UserService                  # all reference types
 cartog refs validate_token --kind calls  # only call sites
 ```
 
-```
+```text
 imports  ./service  routes/auth.py:3
 calls    login  routes/auth.py:15
 inherits AdminService  auth/service.py:47
@@ -260,14 +260,14 @@ cartog hierarchy AuthService
 cartog hierarchy AuthService --mermaid
 ```
 
-```
+```text
 AuthService -> BaseService
 AdminService -> AuthService
 ```
 
 With `--mermaid`:
 
-```
+```text
 graph TD
     AuthService["AuthService"] --> BaseService["BaseService"]
     AdminService["AdminService"] --> AuthService["AuthService"]
@@ -283,7 +283,7 @@ cartog deps auth/service.py
 cartog deps auth/service.py --mermaid
 ```
 
-```
+```text
 validate_token  L5
 generate_token  L5
 User            L6
@@ -291,7 +291,7 @@ User            L6
 
 With `--mermaid`:
 
-```
+```text
 graph LR
     auth_service_py["auth/service.py"]
     auth_service_py --> validate_token["validate_token (L5)"]
@@ -311,7 +311,7 @@ cartog stats
 cartog stats --savings
 ```
 
-```
+```text
 Files:    42
 Symbols:  387
 Edges:    1204 (891 resolved)
@@ -341,7 +341,7 @@ cartog savings
 cartog --json savings
 ```
 
-```
+```text
 Total queries: 5  (~7100 tokens saved vs grep+read baseline, at 1420 tokens/query)
 
 By tool:
@@ -461,7 +461,7 @@ cartog map --tokens 8000      # detailed summary
 cartog map --mermaid          # paste-into-PR diagram
 ```
 
-```
+```text
 # Codebase Map (42 files)
 
   src/auth/tokens.py
@@ -482,7 +482,7 @@ Phase 1 shows the file tree; phase 2 fills remaining budget with symbols ordered
 
 With `--mermaid`:
 
-```
+```text
 graph TD
     repo["Repo"]
     repo --> auth_service_py["auth/service.py"]
@@ -504,7 +504,7 @@ cartog changes --commits 10           # last 10 commits
 cartog changes --kind function        # only functions that changed
 ```
 
-```
+```text
 27 files changed in last 5 commits, 158 symbols affected
 
 src/commands.rs:
@@ -527,7 +527,7 @@ Check that all requirements are met and everything is working. Validates the env
 cartog doctor
 ```
 
-```
+```text
   [+] git: git repository at /home/user/project
   [+] config: loaded from /home/user/project/.cartog.toml
   [+] database: 42 files, 387 symbols at /home/user/project/.cartog/db.sqlite
@@ -737,7 +737,7 @@ Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, 
 
 ## Recommended Workflow
 
-```
+```text
 cartog index .          # 1. build the graph
 cartog search foo       # 2. discover exact symbol names
 cartog refs foo         # 3. find all usages
@@ -748,7 +748,7 @@ cartog index .          # 6. re-index after code changes
 
 For semantic search, add the RAG pipeline:
 
-```
+```text
 cartog rag setup        # one-time model download (~1.2GB, may take a few minutes)
 cartog rag index        # embed symbols
 cartog rag search "..."  # natural language queries
@@ -809,7 +809,7 @@ This installs the plugin from GitHub, which includes:
 
 ### Plugin Structure
 
-```
+```text
 .claude-plugin/
 └── plugin.json          # Plugin manifest
 skills/
@@ -1032,7 +1032,7 @@ Produces a structured onboarding report for an unfamiliar codebase. The agent ad
 Output: a structured markdown report. Sections that don't apply are omitted.
 
 **Usage:**
-```
+```text
 @codebase-onboarding
 # or
 "Use the codebase-onboarding agent to analyze this project"
@@ -1051,7 +1051,7 @@ Pre-flight analysis before changing a symbol, module, or file. Maps the full bla
 4. **Report** — affected files, risk warnings, and a concrete update checklist
 
 **Usage:**
-```
+```text
 @refactoring-scout "rename TrackerRepository"
 # or
 "Is it safe to delete the UtilsHelper class?"

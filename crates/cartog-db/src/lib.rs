@@ -2152,18 +2152,20 @@ impl Database {
     /// schema bootstrap, so a v5 DB that lost the table — manual drop, partial
     /// snapshot restore — would otherwise surface a `no such table` error).
     pub fn savings_breakdown(&self) -> Result<SavingsReport> {
-        // Cheap guard: probe for the table once. On read-only attach we can't
-        // CREATE it, but returning an empty report is the right shape for the
-        // caller (the CLI prints "No queries logged yet").
-        let table_exists = self.conn.prepare("SELECT 1 FROM query_log LIMIT 0").is_ok();
-        if !table_exists {
-            return Ok(SavingsReport {
-                by_tool: Vec::new(),
-                by_source: Vec::new(),
-                total_queries: 0,
-                estimated_tokens_saved: 0,
-                baseline_delta: TOKENS_SAVED_PER_QUERY,
-            });
+        // Probe for the table once. Only treat "no such table" as the empty-
+        // report case so real DB faults (corruption, locked, permissions)
+        // still propagate to the caller.
+        if let Err(e) = self.conn.prepare("SELECT 1 FROM query_log LIMIT 0") {
+            if is_no_such_table(&e) {
+                return Ok(SavingsReport {
+                    by_tool: Vec::new(),
+                    by_source: Vec::new(),
+                    total_queries: 0,
+                    estimated_tokens_saved: 0,
+                    baseline_delta: TOKENS_SAVED_PER_QUERY,
+                });
+            }
+            return Err(e.into());
         }
 
         let mut tool_stmt = self.conn.prepare(
@@ -2950,6 +2952,18 @@ pub const TOKENS_SAVED_PER_QUERY: u32 = 1_420;
 /// goal is one user-visible message per cartog invocation, not per row.
 static LOG_QUERY_FAILURE_REPORTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+/// Returns true when a rusqlite error specifically indicates a missing table,
+/// not any other prepare failure. Used by `savings_breakdown` to distinguish
+/// "query_log doesn't exist yet" (return empty report) from real DB faults
+/// (propagate).
+fn is_no_such_table(e: &rusqlite::Error) -> bool {
+    // SQLite reports missing tables as a generic Error (extended code 1)
+    // whose message starts with `no such table:`. Match on the message text
+    // because the rusqlite error variant for prepare-time errors does not
+    // carry the offending object name.
+    e.to_string().contains("no such table")
+}
 
 // ── Row Mapping Helpers ──
 
