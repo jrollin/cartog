@@ -49,7 +49,7 @@ Both `cartog init` and `cartog index` are safe to run via Bash during an active 
 
 If MCP runs with `--watch`, the watcher will also re-index on file changes. A manual `cartog index .` is still safe; it just shares the write-queue.
 
-When two `cartog serve` instances run against the same DB (e.g. two Claude Code windows on the same project), single-writer election picks one as **primary** and the others attach **read-only**. Read-only secondaries refuse `cartog_index` / `cartog_rag_index` with a clear message but serve the other 11 MCP tools normally. The secondary auto-promotes to primary within ~10s if the primary process dies. See `docs/spec-mcp-sharing.md`.
+When two `cartog serve` instances run against the same DB (e.g. two Claude Code windows on the same project), single-writer election picks one as **primary** and the others attach **read-only**. Read-only secondaries refuse `cartog_index` / `cartog_rag_index` with a clear message but serve the other 11 MCP tools normally. The secondary auto-promotes to primary within ~10s if the primary process dies.
 
 If `cartog_index` or `cartog_rag_index` fails with a read-only error, call `cartog_stats` and check `role` (`primary` vs `read-only`) and `watcher_active` (whether the primary is auto-reindexing). That tells you whether to wait for promotion (~10s) or whether the primary's watcher will pick up changes on its own.
 

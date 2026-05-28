@@ -115,17 +115,11 @@ All documentation lives in `docs/`. Consolidate into the canonical files below �
 | `docs/editor-integration.md` | Non-MCP editor CLI recipes (Neovim, Emacs, …) |
 | `docs/updates.md` | `cartog self update`: exit codes, env vars, state file |
 | `docs/troubleshooting.md` | Common errors and fixes (the single home for these) |
-| `docs/spec-*.md` | Feature specs (design records, kept after implementation) |
 | `docs/architecture/*.md` | Cross-cutting subsystem deep-dives (e.g. incremental indexing) |
 
 The MCP config JSON has one canonical copy in `docs/mcp-setup.md`; other docs link to it rather than re-embedding it. Release runbooks (e.g. `scripts/release-smoke.md`) live with the release scripts, not in `docs/`.
 
-### Specs vs. architecture deep-dives
-
-- `docs/spec-*.md` — a **feature** design record: overview, architecture, FRs, NFRs, acceptance criteria. Create one for new features with 3+ functional requirements or cross-cutting concerns. Do **not** create specs for bug fixes, small enhancements, or docs-only changes.
-- `docs/architecture/*.md` — a **subsystem** explainer that spans features (the indexing pipeline, edge resolution). Use when the topic is too detailed for `tech.md` but not tied to one feature.
-
-A spec stays as a design record after implementation. Do **not** leave a completed "implementation checklist / TODO" section in it — once shipped, replace it with a one-line Status note pointing at the crate/code; the durable value is the architecture and rationale, not the done checkboxes.
+`docs/architecture/*.md` is a **subsystem** explainer that spans features (the indexing pipeline, edge resolution). Use when the topic is too detailed for `tech.md` but not tied to one feature.
 
 ## Current State
 
@@ -134,7 +128,7 @@ A spec stays as a design record after implementation. Do **not** leave a complet
 - **Indexing**: incremental (git-based + SHA-256 + Merkle-tree symbol diffing), `--force` re-index. Stable symbol IDs (`file:kind:qualified_name`) survive line movements. Scoped edge resolution for changed files only
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
 - **Watch**: `cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding
-- **MCP single-writer**: `cartog serve` instances on the same DB use atomic O_EXCL election. First is primary, subsequent attach read-only (11 of 13 tools); promoter on the secondary takes over within ~10s if the primary dies. Kill switch: `CARTOG_SINGLE_WRITER=0`. See [docs/spec-mcp-sharing.md](docs/spec-mcp-sharing.md).
+- **MCP single-writer**: `cartog serve` instances on the same DB use atomic O_EXCL election. First is primary, subsequent attach read-only (11 of 13 tools); promoter on the secondary takes over within ~10s if the primary dies. Kill switch: `CARTOG_SINGLE_WRITER=0`.
 - **CI/CD**: fmt, clippy, test, coverage, release to crates.io + GitHub Releases
 - **Centrality**: in-degree ranking — search results prefer highly-referenced symbols
 - **Codebase map**: `cartog map --tokens N` produces budget-aware file tree + top symbols

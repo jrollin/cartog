@@ -4,7 +4,7 @@ A living list of issues that turn up on first-run or after upgrades.
 If something here is out of date or you hit a new problem,
 [open an issue](https://github.com/jrollin/cartog/issues).
 
-> Related docs: [usage.md](usage.md) for the full CLI reference, [spec-watch.md](spec-watch.md) for `cartog watch` internals, [editor-integration.md](editor-integration.md) for editor-specific setup.
+> Related docs: [usage.md](usage.md) for the full CLI reference, [editor-integration.md](editor-integration.md) for editor-specific setup.
 
 ## Installation
 
@@ -83,8 +83,7 @@ embedding-dimension migration. As of v0.17 cartog uses single-writer
 election: the first `cartog serve` is the primary, the second attaches
 read-only and exposes 11 of 13 MCP tools (`cartog_index` and
 `cartog_rag_index` return a clear refusal pointing at the primary). If the
-primary process dies, the secondary takes over within ~10s. See
-[spec-mcp-sharing.md](spec-mcp-sharing.md).
+primary process dies, the secondary takes over within ~10s.
 
 If you still see the error, check that the cartog binary is at v0.17 or
 newer (`cartog --version`) and that you haven't set `CARTOG_SINGLE_WRITER=0`.

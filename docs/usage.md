@@ -958,8 +958,6 @@ The directory holds `state.toml` (used by `cartog self update`) and PID lock fil
 
 `<hash>` is a 16-char SHA-256 prefix of the canonical DB path. On every `cartog serve` / `cartog watch` startup, stale PID files (whose recorded process has exited) are reaped automatically — no manual cleanup needed.
 
-See [`spec-mcp-sharing.md`](spec-mcp-sharing.md) for the full design.
-
 ### `cartog init [--dry-run]`
 
 Scaffold a `.cartog.toml` template in the current project. That's all it does. The next-steps hint points at `cartog ide` (MCP wiring) and `cartog index` (build the graph).

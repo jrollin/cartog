@@ -18,12 +18,6 @@ Start here: the root [README](../README.md) for install and quick start.
 - [structure.md](structure.md) — workspace layout and per-crate links
 - [architecture/incremental-indexing.md](architecture/incremental-indexing.md) — layered change detection, Merkle invariants, failure modes
 
-## Specs (design records, kept after implementation)
-
-- [spec-watch.md](spec-watch.md) — `cartog watch` background indexer
-- [spec-mcp-sharing.md](spec-mcp-sharing.md) — single-writer MCP with read-only attach
-- [spec-cancellation.md](spec-cancellation.md) — cooperative cancellation for long-running MCP tools
-
 ## Release
 
 - [release-smoke.md](../scripts/release-smoke.md) — manual smoke checklist run before tagging
