@@ -90,6 +90,13 @@ pub const SERVERS: &[ServerSpec] = &[
         language_id: "php",
         install_hint: "composer global require phpactor/phpactor",
     },
+    ServerSpec {
+        language: "dart",
+        binary: "dart",
+        args: &["language-server", "--protocol=lsp"],
+        language_id: "dart",
+        install_hint: "install Dart SDK from https://dart.dev/get-dart",
+    },
 ];
 
 /// Find all server specs for a cartog language name, in priority order.

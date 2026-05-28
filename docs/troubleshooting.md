@@ -21,9 +21,12 @@ LSP is enabled by default. If you installed with `--no-default-features`, the
 `cartog-lsp` dependency was omitted — reinstall with plain `cargo install
 cartog`. Otherwise, confirm a language server is on `PATH` (e.g.
 `rust-analyzer`, `pyright`, `typescript-language-server`, `gopls`,
-`intelephense`) and that you haven't passed `--no-lsp` at runtime.
+`intelephense`, `dart`) and that you haven't passed `--no-lsp` at runtime.
 
 For PHP, cartog probes `intelephense` first and falls back to `phpactor`.
+
+For Dart, cartog invokes `dart language-server --protocol=lsp` from the Dart
+SDK; install the SDK from <https://dart.dev/get-dart>.
 Intelephense is closed-source with an optional premium tier; the free tier
 handles `textDocument/definition` used by cartog.
 

@@ -4,8 +4,9 @@
 //! Each language implements the [`Extractor`] trait with compiled S-expression
 //! queries for declarative AST pattern matching.
 //!
-//! Supported languages: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP.
+//! Supported languages: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP, Dart.
 
+pub mod dart;
 pub mod go;
 pub mod java;
 pub mod javascript;
@@ -57,6 +58,7 @@ pub fn get_extractor(language: &str) -> Option<Box<dyn Extractor>> {
         "ruby" => Some(Box::new(ruby::RubyExtractor::new())),
         "java" => Some(Box::new(java::JavaExtractor::new())),
         "php" => Some(Box::new(php::PhpExtractor::new())),
+        "dart" => Some(Box::new(dart::DartExtractor::new())),
         "markdown" => Some(Box::new(markdown::MarkdownExtractor::new())),
         _ => None,
     }
@@ -77,6 +79,7 @@ mod tests {
         assert!(get_extractor("ruby").is_some());
         assert!(get_extractor("java").is_some());
         assert!(get_extractor("php").is_some());
+        assert!(get_extractor("dart").is_some());
         assert!(get_extractor("markdown").is_some());
         assert!(get_extractor("unknown").is_none());
     }

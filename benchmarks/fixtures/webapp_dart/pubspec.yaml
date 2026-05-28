@@ -1,0 +1,7 @@
+name: webapp_dart
+description: Synthetic Dart fixture for cartog benchmarks.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
