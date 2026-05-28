@@ -233,7 +233,8 @@ cartog ide --client cursor                  # one client
 cartog ide --client claude-desktop --dry-run  # preview without writing
 ```
 
-Idempotent. Existing servers in each file are preserved.
+Idempotent. Existing servers in each file are preserved. `cartog install` is a
+visible alias of `cartog ide` if that name feels more natural.
 
 Prefer to wire it yourself? Pick your client below.
 
@@ -257,6 +258,11 @@ Manual (`<repo>/.mcp.json`):
   }
 }
 ```
+
+> Only Claude Code gets `--watch` by default — the others ship plain `["serve"]`.
+> Agent-driven flows churn files faster than human-driven editor flows, so the
+> in-process file watcher pays off. Drop `--watch` with `cartog ide --no-watch`
+> if you don't want it.
 </details>
 
 <details>

@@ -561,6 +561,9 @@ cartog init --dry-run        # preview without writing
 
 Wire `cartog serve` into one or all MCP-compatible editors. This is the only verb that touches editor configs.
 
+`cartog install` is a visible alias — same flags, same behavior, just a more
+discoverable name for newcomers.
+
 ```bash
 cartog ide                          # all installed clients, all scopes
 cartog ide --client cursor          # one client

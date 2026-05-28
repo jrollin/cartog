@@ -53,6 +53,15 @@ claude mcp add --scope project cartog -- cartog serve --watch
 
 Add `"--rag"` to `args` if you want automatic embedding updates on file change.
 
+> **Why `--watch` only here?** Of all clients, Claude Code is the only one
+> `cartog ide` defaults to `["serve", "--watch"]`; the rest ship plain
+> `["serve"]`. Agent-driven workflows churn files faster than human-driven
+> editor flows, so the in-process file watcher pays for itself. Drop it with
+> `cartog ide --no-watch`, or call `cartog index` manually when you want a
+> refresh. Multiple watchers compete for the single-writer lock, so keeping the
+> default off elsewhere avoids surprises when a user wires cartog into several
+> editors at once.
+
 ## Claude Desktop
 
 Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):

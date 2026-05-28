@@ -488,6 +488,7 @@ Dry run only. Re-run without --dry-run to apply.</pre>
 
       <h2 id="cmd-ide"><code>cartog ide</code></h2>
       <p>Wire <code>cartog serve</code> into one or all MCP-compatible editors. The only verb that writes editor configs.</p>
+      <p style="font-size: 13px; color: var(--text-tertiary);"><code>cartog install</code> is a visible alias — same flags, same behavior, just a more discoverable name.</p>
       <pre>cartog ide                          <span class="comment"># all installed clients, all scopes</span>
 cartog ide --client cursor          <span class="comment"># one client</span>
 cartog ide --scope user             <span class="comment"># only user-scope clients</span>
@@ -661,6 +662,7 @@ claude mcp add --scope project cartog -- cartog serve --watch       <span class=
     "cartog": { "command": "cartog", "args": ["serve", "--watch"] }
   }
 }</pre>
+        <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px;">Only Claude Code gets <code>--watch</code> by default — other clients ship plain <code>["serve"]</code>. Agent-driven flows churn files faster than human-driven editor flows, so the in-process file watcher pays off. Drop it with <code>cartog ide --no-watch</code>.</p>
       </details>
 
       <details class="mcp-client">
