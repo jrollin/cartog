@@ -295,11 +295,13 @@ Shows everything that transitively depends on a symbol up to N hops.
 ### Hierarchy (inheritance tree)
 ```bash
 cartog hierarchy BaseService
+cartog hierarchy BaseService --mermaid   # paste-into-PR diagram
 ```
 
 ### Deps (file imports)
 ```bash
 cartog deps src/routes/auth.py
+cartog deps src/routes/auth.py --mermaid # graph LR with file as root
 ```
 
 ### Map (codebase overview)
@@ -307,8 +309,9 @@ cartog deps src/routes/auth.py
 cartog map                               # default 4000 tokens
 cartog map --tokens 2000                 # compact
 cartog map --tokens 8000                 # detailed
+cartog map --mermaid                     # graph TD rooted at "Repo"
 ```
-File tree + top symbols ranked by reference count (centrality). Use at the start of a session for context loading.
+File tree + top symbols ranked by reference count (centrality). Use at the start of a session for context loading. `--mermaid` honors the token budget by stopping before it overflows.
 
 ### Changes (recently modified symbols)
 ```bash
@@ -445,6 +448,7 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 | Check if a change is safe | `cartog impact <name> --depth 3` |
 | Understand class hierarchy | `cartog hierarchy <class>` |
 | See file dependencies | `cartog deps <file>` |
+| Render a diagram to paste into a PR / doc | append `--mermaid` to `hierarchy`, `deps`, or `map` |
 | See what changed recently | `cartog changes` (`--commits N` for more history) |
 | Improve graph precision for a refactoring | `cartog index .` (with LSP auto-detected) |
 | Fast re-index after code changes | `cartog index . --no-lsp` |

@@ -436,12 +436,15 @@ cartog refs validate_token --kind calls     # only call sites
 cartog callees authenticate                 # what does this call?
 cartog impact SessionManager --depth 3      # what breaks if I change this?
 cartog hierarchy BaseService                # inheritance tree
+cartog hierarchy BaseService --mermaid      # paste-into-PR diagram
 cartog deps src/routes/auth.py              # file-level imports
+cartog deps src/routes/auth.py --mermaid    # graph LR with file as root
 
 # Inspect
 cartog stats                                # index summary
 cartog savings                              # tokens saved vs grep+read baseline
 cartog map --tokens 4000                    # codebase overview by centrality
+cartog map --mermaid                        # codebase map as graph TD
 cartog changes --commits 5                  # recently changed symbols
 cartog doctor                               # environment health check
 

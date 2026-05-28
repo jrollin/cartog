@@ -361,16 +361,22 @@ ExpiredTokenError auth/tokens.py:50</pre>
     calls  get_current_user          auth/middleware.py:61</pre>
       <p>Answers "what breaks if I change this?".</p>
 
-      <h2 id="cmd-hierarchy"><code>cartog hierarchy &lt;class&gt;</code></h2>
-      <p>Show inheritance relationships — both parents and children.</p>
-      <pre>cartog hierarchy AuthService</pre>
+      <h2 id="cmd-hierarchy"><code>cartog hierarchy &lt;class&gt; [--mermaid]</code></h2>
+      <p>Show inheritance relationships — both parents and children. Add <code>--mermaid</code> for a <code>graph TD</code> diagram you can paste into a PR description, doc, or mermaid.live.</p>
+      <pre>cartog hierarchy AuthService
+cartog hierarchy AuthService --mermaid</pre>
       <p class="example-label">Example output</p>
       <pre class="example-output">AuthService -&gt; BaseService
 AdminService -&gt; AuthService</pre>
+      <p class="example-label">With <code>--mermaid</code></p>
+      <pre class="example-output">graph TD
+    AuthService["AuthService"] --&gt; BaseService["BaseService"]
+    AdminService["AdminService"] --&gt; AuthService["AuthService"]</pre>
 
-      <h2 id="cmd-deps"><code>cartog deps &lt;file&gt;</code></h2>
-      <p>List symbols imported by a file — answers "what does this file depend on?".</p>
-      <pre>cartog deps auth/service.py</pre>
+      <h2 id="cmd-deps"><code>cartog deps &lt;file&gt; [--mermaid]</code></h2>
+      <p>List symbols imported by a file — answers "what does this file depend on?". Add <code>--mermaid</code> for a <code>graph LR</code> diagram rooted at the file.</p>
+      <pre>cartog deps auth/service.py
+cartog deps auth/service.py --mermaid</pre>
       <p class="example-label">Example output</p>
       <pre class="example-output">Optional         L3
 validate_token   L5
@@ -378,6 +384,12 @@ generate_token   L5
 revoke_token     L5
 User             L6
 get_logger       L7</pre>
+      <p class="example-label">With <code>--mermaid</code></p>
+      <pre class="example-output">graph LR
+    auth_service_py["auth/service.py"]
+    auth_service_py --&gt; validate_token["validate_token (L5)"]
+    auth_service_py --&gt; generate_token["generate_token (L5)"]
+    auth_service_py --&gt; User["User (L6)"]</pre>
 
       <h2 id="cmd-stats"><code>cartog stats [--savings]</code></h2>
       <p>Summary of the index — file count, symbol count, edge resolution rate. On an unindexed repo all counts are <code>0</code> and the output ends with a hint to run <code>cartog index .</code>. Pass <code>--savings</code> to show per-tool query counts and estimated tokens saved instead (or use the <a href="#cmd-savings"><code>cartog savings</code></a> alias).</p>
@@ -427,10 +439,11 @@ All 6 checks passed</pre>
       <p>Each check reports <strong>OK</strong>, <strong>Warn</strong>, or <strong>Error</strong>. Exits with code 1 if any check is an error. Run this when commands fail unexpectedly or after first setup.</p>
 
       <h2 id="cmd-map"><code>cartog map</code></h2>
-      <p>Token-budget-aware codebase summary — file tree + top symbols ranked by reference count.</p>
+      <p>Token-budget-aware codebase summary — file tree + top symbols ranked by reference count. Add <code>--mermaid</code> for a <code>graph TD</code> rooted at "Repo"; the token budget still applies (renderer stops adding nodes before it overflows).</p>
       <pre>cartog map                    <span class="comment"># default 4000 tokens</span>
 cartog map --tokens 2000      <span class="comment"># compact</span>
-cartog map --tokens 8000      <span class="comment"># detailed</span></pre>
+cartog map --tokens 8000      <span class="comment"># detailed</span>
+cartog map --mermaid          <span class="comment"># paste-into-PR diagram</span></pre>
       <p class="example-label">Example output (truncated)</p>
       <pre class="example-output"># Codebase Map (70 files)
 
@@ -443,6 +456,16 @@ cartog map --tokens 8000      <span class="comment"># detailed</span></pre>
   auth/service.py
   auth/tokens.py
   ...</pre>
+      <p class="example-label">With <code>--mermaid</code> (truncated)</p>
+      <pre class="example-output">graph TD
+    repo["Repo"]
+    repo --&gt; README_md["README.md"]
+    repo --&gt; auth_service_py["auth/service.py"]
+    repo --&gt; auth_tokens_py["auth/tokens.py"]
+    auth_tokens_py --&gt; auth_tokens_py__validate_token["validate_token (function)"]
+    auth_tokens_py --&gt; auth_tokens_py__generate_token["generate_token (function)"]
+    ...</pre>
+      <p style="font-size: 13px; color: var(--text-tertiary);"><code>--json</code> wins over <code>--mermaid</code> when both are passed.</p>
 
       <h2 id="cmd-changes"><code>cartog changes</code></h2>
       <p>Show symbols affected by recent git changes.</p>

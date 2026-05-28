@@ -250,12 +250,14 @@ references  process  routes/auth.py:22
 
 Available `--kind` values: `calls`, `imports`, `inherits`, `references`, `raises`, `implements`, `type-of`.
 
-### `cartog hierarchy <class>`
+### `cartog hierarchy <class> [--mermaid]`
 
 Show inheritance relationships involving a class — both parents and children.
+Add `--mermaid` for a `graph TD` diagram you can paste into a PR or doc.
 
 ```bash
 cartog hierarchy AuthService
+cartog hierarchy AuthService --mermaid
 ```
 
 ```
@@ -263,18 +265,38 @@ AuthService -> BaseService
 AdminService -> AuthService
 ```
 
-### `cartog deps <file>`
+With `--mermaid`:
+
+```
+graph TD
+    AuthService["AuthService"] --> BaseService["BaseService"]
+    AdminService["AdminService"] --> AuthService["AuthService"]
+```
+
+### `cartog deps <file> [--mermaid]`
 
 List symbols imported by a file — answers "what does this file depend on?".
+Add `--mermaid` for a `graph LR` diagram rooted at the file.
 
 ```bash
-cartog deps src/routes/auth.py
+cartog deps auth/service.py
+cartog deps auth/service.py --mermaid
 ```
 
 ```
 validate_token  L5
 generate_token  L5
 User            L6
+```
+
+With `--mermaid`:
+
+```
+graph LR
+    auth_service_py["auth/service.py"]
+    auth_service_py --> validate_token["validate_token (L5)"]
+    auth_service_py --> generate_token["generate_token (L5)"]
+    auth_service_py --> User["User (L6)"]
 ```
 
 ### `cartog stats [--savings]`
@@ -428,14 +450,15 @@ cargo install cartog --no-default-features --features lsp   # keep LSP only
 A binary built without `remote-s3` refuses `cartog push` and `cartog pull` with
 a clear error pointing at the reinstall command.
 
-### `cartog map [--tokens N]`
+### `cartog map [--tokens N] [--mermaid]`
 
-Token-budget-aware codebase summary — file tree + top symbols ranked by reference count (in-degree centrality).
+Token-budget-aware codebase summary — file tree + top symbols ranked by reference count (in-degree centrality). Add `--mermaid` for a `graph TD` rooted at "Repo"; the token budget still applies (the renderer stops adding nodes before it overflows).
 
 ```bash
 cartog map                    # default 4000 tokens
 cartog map --tokens 2000      # compact summary
 cartog map --tokens 8000      # detailed summary
+cartog map --mermaid          # paste-into-PR diagram
 ```
 
 ```
@@ -456,6 +479,20 @@ src/auth/service.py:
 ```
 
 Phase 1 shows the file tree; phase 2 fills remaining budget with symbols ordered by centrality (most-referenced first). Use `--json` for structured output.
+
+With `--mermaid`:
+
+```
+graph TD
+    repo["Repo"]
+    repo --> auth_service_py["auth/service.py"]
+    repo --> auth_tokens_py["auth/tokens.py"]
+    auth_tokens_py --> auth_tokens_py__validate_token["validate_token (function)"]
+    auth_tokens_py --> auth_tokens_py__generate_token["generate_token (function)"]
+    ...
+```
+
+`--json` wins over `--mermaid` when both are set.
 
 ### `cartog changes [--commits N] [--kind <kind>]`
 

@@ -17,6 +17,7 @@ use cartog_watch::{self as watch, WatchConfig};
 
 pub mod ide;
 pub mod init;
+pub mod mermaid;
 pub mod remote;
 
 /// Stderr progress reporter for long-running CLI commands.
@@ -547,6 +548,7 @@ pub fn cmd_hierarchy(
     db_path: &Path,
     name: &str,
     json: bool,
+    mermaid: bool,
     token_budget: Option<u32>,
     embedding_dim: usize,
 ) -> Result<()> {
@@ -554,6 +556,12 @@ pub fn cmd_hierarchy(
     let pairs = db.hierarchy(name)?;
     db.log_query("hierarchy", "cli");
     let name = name.to_string();
+
+    // --json wins if both flags are set (matches the documented behavior).
+    if mermaid && !json {
+        print!("{}", mermaid::render_hierarchy(&pairs));
+        return Ok(());
+    }
 
     #[derive(Serialize)]
     struct HierarchyEntry {
@@ -587,6 +595,7 @@ pub fn cmd_deps(
     db_path: &Path,
     file: &str,
     json: bool,
+    mermaid: bool,
     token_budget: Option<u32>,
     embedding_dim: usize,
 ) -> Result<()> {
@@ -594,6 +603,15 @@ pub fn cmd_deps(
     let edges = db.file_deps(file)?;
     db.log_query("deps", "cli");
     let file = file.to_string();
+
+    if mermaid && !json {
+        let targets: Vec<(String, u32)> = edges
+            .iter()
+            .map(|e| (e.target_name.clone(), e.line))
+            .collect();
+        print!("{}", mermaid::render_deps(&file, &targets));
+        return Ok(());
+    }
 
     output(&edges, json, token_budget, |edges| {
         if edges.is_empty() {
@@ -749,7 +767,13 @@ pub fn cmd_stats(db_path: &Path, json: bool, embedding_dim: usize, savings: bool
 }
 
 /// Token-budget-aware codebase summary: file tree + top symbols ranked by centrality.
-pub fn cmd_map(db_path: &Path, tokens: u32, json: bool, embedding_dim: usize) -> Result<()> {
+pub fn cmd_map(
+    db_path: &Path,
+    tokens: u32,
+    json: bool,
+    mermaid: bool,
+    embedding_dim: usize,
+) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let files = db.all_files()?;
     db.log_query("map", "cli");
@@ -757,9 +781,49 @@ pub fn cmd_map(db_path: &Path, tokens: u32, json: bool, embedding_dim: usize) ->
     if files.is_empty() {
         if json {
             println!("{{}}");
+        } else if mermaid {
+            println!("graph TD\n    repo[\"Repo (empty)\"]");
         } else {
             println!("No files indexed. Run 'cartog index .' first.");
         }
+        return Ok(());
+    }
+
+    if mermaid && !json {
+        // Honor the token budget by walking files until we exhaust it. Each
+        // file edge costs roughly its path length + ~20 bytes of overhead.
+        let budget_bytes = (tokens as usize) * 4;
+        let mut included_files: Vec<String> = Vec::new();
+        let mut size = "graph TD\n    repo[\"Repo\"]\n".len();
+        for f in &files {
+            let edge_cost = f.len() * 2 + 30; // path appears twice (id + label)
+            if size + edge_cost > budget_bytes && !included_files.is_empty() {
+                break;
+            }
+            size += edge_cost;
+            included_files.push(f.clone());
+        }
+        // Add top symbols per file until budget runs out.
+        let symbols = db.top_symbols(500)?;
+        let mut symbols_by_file: std::collections::BTreeMap<String, Vec<(String, String)>> =
+            std::collections::BTreeMap::new();
+        for sym in symbols {
+            if !included_files.contains(&sym.file_path) {
+                continue;
+            }
+            let leaf_cost = sym.name.len() * 2 + 40;
+            if size + leaf_cost > budget_bytes {
+                break;
+            }
+            size += leaf_cost;
+            symbols_by_file
+                .entry(sym.file_path.clone())
+                .or_default()
+                .push((sym.name.clone(), sym.kind.to_string()));
+        }
+        let symbols_vec: Vec<(String, Vec<(String, String)>)> =
+            symbols_by_file.into_iter().collect();
+        print!("{}", mermaid::render_map(&included_files, &symbols_vec));
         return Ok(());
     }
 

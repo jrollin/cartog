@@ -189,12 +189,22 @@ fn main() -> Result<()> {
         Command::Refs { name, kind } => {
             commands::cmd_refs(&db_path, &name, kind, cli.json, token_budget, embedding_dim)
         }
-        Command::Hierarchy { name } => {
-            commands::cmd_hierarchy(&db_path, &name, cli.json, token_budget, embedding_dim)
-        }
-        Command::Deps { file } => {
-            commands::cmd_deps(&db_path, &file, cli.json, token_budget, embedding_dim)
-        }
+        Command::Hierarchy { name, mermaid } => commands::cmd_hierarchy(
+            &db_path,
+            &name,
+            cli.json,
+            mermaid,
+            token_budget,
+            embedding_dim,
+        ),
+        Command::Deps { file, mermaid } => commands::cmd_deps(
+            &db_path,
+            &file,
+            cli.json,
+            mermaid,
+            token_budget,
+            embedding_dim,
+        ),
         Command::Stats { savings } => {
             commands::cmd_stats(&db_path, cli.json, embedding_dim, savings)
         }
@@ -245,7 +255,9 @@ fn main() -> Result<()> {
             token_budget,
             embedding_dim,
         ),
-        Command::Map { tokens } => commands::cmd_map(&db_path, tokens, cli.json, embedding_dim),
+        Command::Map { tokens, mermaid } => {
+            commands::cmd_map(&db_path, tokens, cli.json, mermaid, embedding_dim)
+        }
         Command::Changes { commits, kind } => commands::cmd_changes(
             &db_path,
             commits,

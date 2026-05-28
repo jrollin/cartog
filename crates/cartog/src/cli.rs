@@ -181,12 +181,23 @@ pub enum Command {
     Hierarchy {
         /// Class name
         name: String,
+
+        /// Render the hierarchy as a Mermaid `graph TD` diagram instead of
+        /// plain text. Paste the output into any Mermaid renderer (GitHub,
+        /// mermaid.live, ...). Ignored when `--json` is also set.
+        #[arg(long)]
+        mermaid: bool,
     },
 
     /// File-level import dependencies
     Deps {
         /// File path
         file: String,
+
+        /// Render the imports as a Mermaid `graph LR` diagram instead of
+        /// plain text. Ignored when `--json` is also set.
+        #[arg(long)]
+        mermaid: bool,
     },
 
     /// Index statistics summary
@@ -262,6 +273,12 @@ pub enum Command {
         /// Approximate token budget for the output (default: 4000)
         #[arg(long, default_value = "4000")]
         tokens: u32,
+
+        /// Render the file tree as a Mermaid `graph TD` diagram instead of
+        /// indented text. Token budget still applies. Ignored when `--json`
+        /// is also set.
+        #[arg(long)]
+        mermaid: bool,
     },
 
     /// Show symbols affected by recent git changes
