@@ -190,7 +190,18 @@ pub enum Command {
     },
 
     /// Index statistics summary
-    Stats,
+    Stats {
+        /// Show per-tool query counts and estimated tokens saved vs grep+read.
+        /// Reads the local query log; no network calls.
+        #[arg(long)]
+        savings: bool,
+    },
+
+    /// Per-tool query counts + estimated tokens saved.
+    ///
+    /// Alias for `cartog stats --savings`. Shipped as a top-level verb because
+    /// it's the retention hook — surfaces ongoing ROI in one keystroke.
+    Savings,
 
     /// Upload the local index to an S3-compatible remote (opt-in feature).
     ///

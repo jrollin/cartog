@@ -75,6 +75,7 @@
           <a href="#cmd-self">cartog self</a>
           <a href="#cmd-serve">cartog serve</a>
           <a href="#cmd-stats">cartog stats</a>
+          <a href="#cmd-savings">cartog savings</a>
           <a href="#cmd-watch">cartog watch</a>
         </div>
         <div class="sidebar-group">
@@ -378,9 +379,10 @@ revoke_token     L5
 User             L6
 get_logger       L7</pre>
 
-      <h2 id="cmd-stats"><code>cartog stats</code></h2>
-      <p>Summary of the index — file count, symbol count, edge resolution rate. On an unindexed repo all counts are <code>0</code> and the output ends with a hint to run <code>cartog index .</code>.</p>
-      <pre>cartog stats</pre>
+      <h2 id="cmd-stats"><code>cartog stats [--savings]</code></h2>
+      <p>Summary of the index — file count, symbol count, edge resolution rate. On an unindexed repo all counts are <code>0</code> and the output ends with a hint to run <code>cartog index .</code>. Pass <code>--savings</code> to show per-tool query counts and estimated tokens saved instead (or use the <a href="#cmd-savings"><code>cartog savings</code></a> alias).</p>
+      <pre>cartog stats
+cartog stats --savings</pre>
       <p class="example-label">Example output</p>
       <pre class="example-output">Files:    70
 Symbols:  697
@@ -394,6 +396,20 @@ Symbols by kind:
   function: 90
   variable: 80
   class: 52</pre>
+
+      <h2 id="cmd-savings"><code>cartog savings</code></h2>
+      <p>Per-tool query counts + estimated tokens saved versus a grep+read baseline (~1,420 tokens/query). Visible alias of <code>cartog stats --savings</code>, shipped as a top-level verb so the retention hook is one keystroke away.</p>
+      <pre>cartog savings
+cartog --json savings</pre>
+      <p class="example-label">Example output</p>
+      <pre class="example-output">Total queries: 5  (~7100 tokens saved vs grep+read baseline, at 1420 tokens/query)
+
+By tool:
+       2  search
+       1  impact
+       1  map
+       1  refs</pre>
+      <p>Data comes from a local <code>query_log</code> table inside <code>.cartog/db.sqlite</code>. Nothing leaves the machine; no query payloads are recorded — only the tool name, call surface (<code>cli</code> / <code>mcp</code>), and a timestamp. Secondary read-only MCP attaches skip the write to avoid double-counting from the primary.</p>
 
       <h2 id="cmd-doctor"><code>cartog doctor</code></h2>
       <p>Validate that all requirements are met and everything is working. Checks git repo, config, database, embedding provider, and reranker.</p>

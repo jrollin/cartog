@@ -351,6 +351,16 @@ fn tool_response(db: &Database, json: String, tool: &str) -> Result<CallToolResu
     tool_response_named(db, json, tool, None)
 }
 
+/// Record a successful read tool call into the query log for
+/// `cartog stats --savings`. Strips the `cartog_` prefix so MCP and CLI
+/// counts aggregate under the same tool name; the `source` field keeps the
+/// surface distinction. Best-effort — `Database::log_query` swallows write
+/// errors and no-ops on read-only attach.
+fn log_tool_query(db: &Database, tool: &str) {
+    let short = tool.strip_prefix("cartog_").unwrap_or(tool);
+    db.log_query(short, "mcp");
+}
+
 /// Build the "did you mean" suffix for an empty navigation result. Returns
 /// `None` when there are no candidates or one is an exact match (the symbol
 /// exists but genuinely has no edges, so suggesting it would be noise).
@@ -377,6 +387,7 @@ fn tool_response_named(
     tool: &str,
     queried_name: Option<&str>,
 ) -> Result<CallToolResult, McpError> {
+    log_tool_query(db, tool);
     let is_empty = !db
         .has_indexed_files()
         .map_err(|e| mcp_err(format!("stats check failed: {e}")))?;

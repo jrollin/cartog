@@ -377,6 +377,7 @@ pub fn cmd_outline(
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let symbols = db.outline(file)?;
+    db.log_query("outline", "cli");
     let file = file.to_string();
     output(&symbols, json, token_budget, |syms| {
         if syms.is_empty() {
@@ -417,6 +418,7 @@ pub fn cmd_callees(
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let edges = db.callees(name)?;
+    db.log_query("callees", "cli");
     let name = name.to_string();
     output(&edges, json, token_budget, |edges| {
         if edges.is_empty() {
@@ -450,6 +452,7 @@ pub fn cmd_impact(
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let results = db.impact(name, depth)?;
+    db.log_query("impact", "cli");
     let name = name.to_string();
 
     #[derive(Serialize)]
@@ -498,6 +501,7 @@ pub fn cmd_refs(
     let db = open_db(db_path, embedding_dim)?;
     let kind_filter = kind.map(EdgeKind::from);
     let results = db.refs(name, kind_filter)?;
+    db.log_query("refs", "cli");
     let name = name.to_string();
 
     #[derive(Serialize)]
@@ -548,6 +552,7 @@ pub fn cmd_hierarchy(
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let pairs = db.hierarchy(name)?;
+    db.log_query("hierarchy", "cli");
     let name = name.to_string();
 
     #[derive(Serialize)]
@@ -587,6 +592,7 @@ pub fn cmd_deps(
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let edges = db.file_deps(file)?;
+    db.log_query("deps", "cli");
     let file = file.to_string();
 
     output(&edges, json, token_budget, |edges| {
@@ -627,6 +633,7 @@ pub fn cmd_search(
     };
     let limit = limit.min(MAX_SEARCH_LIMIT);
     let symbols = db.search(query, kind_filter, file, limit)?;
+    db.log_query("search", "cli");
     let query = query.to_string();
 
     output(&symbols, json, token_budget, |syms| {
@@ -673,10 +680,39 @@ pub fn cmd_pull(
 }
 
 /// Index statistics summary.
-pub fn cmd_stats(db_path: &Path, json: bool, embedding_dim: usize) -> Result<()> {
+pub fn cmd_stats(db_path: &Path, json: bool, embedding_dim: usize, savings: bool) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
-    let stats = db.stats()?;
 
+    if savings {
+        let report = db.savings_breakdown()?;
+        return output(&report, json, None, |r| {
+            let mut out = String::new();
+            if r.total_queries == 0 {
+                out.push_str(
+                    "No queries logged yet. Run `cartog search`, `cartog refs`, … or \
+                     point an MCP-aware editor at this index, then re-run.\n",
+                );
+                return out;
+            }
+            out.push_str(&format!(
+                "Total queries: {}  (~{} tokens saved vs grep+read baseline, at {} tokens/query)\n\n",
+                r.total_queries, r.estimated_tokens_saved, r.baseline_delta
+            ));
+            out.push_str("By tool:\n");
+            for (tool, count) in &r.by_tool {
+                out.push_str(&format!("  {count:>6}  {tool}\n"));
+            }
+            if r.by_source.len() > 1 {
+                out.push_str("\nBy source:\n");
+                for (source, count) in &r.by_source {
+                    out.push_str(&format!("  {count:>6}  {source}\n"));
+                }
+            }
+            out
+        });
+    }
+
+    let stats = db.stats()?;
     output(&stats, json, None, |stats| {
         let mut out = String::new();
         out.push_str(&format!("Files:    {}\n", stats.num_files));
@@ -716,6 +752,7 @@ pub fn cmd_stats(db_path: &Path, json: bool, embedding_dim: usize) -> Result<()>
 pub fn cmd_map(db_path: &Path, tokens: u32, json: bool, embedding_dim: usize) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
     let files = db.all_files()?;
+    db.log_query("map", "cli");
 
     if files.is_empty() {
         if json {
@@ -812,6 +849,7 @@ pub fn cmd_changes(
     embedding_dim: usize,
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
+    db.log_query("changes", "cli");
     let root = std::env::current_dir()?;
 
     let changed_files = indexer::git_recently_changed_files(&root, commits)?;
@@ -1014,6 +1052,7 @@ pub fn cmd_rag_search(
         reranker_factory,
         tuning,
     )?;
+    db.log_query("rag_search", "cli");
     let query = query.to_string();
 
     output(&search_result, json, token_budget, |sr| {

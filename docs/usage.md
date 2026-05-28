@@ -277,12 +277,16 @@ generate_token  L5
 User            L6
 ```
 
-### `cartog stats`
+### `cartog stats [--savings]`
 
-Summary of the index — file count, symbol count, edge resolution rate.
+Summary of the index — file count, symbol count, edge resolution rate. Pass
+`--savings` to instead show per-tool query counts and estimated tokens saved
+versus a grep+read baseline (or use the [`cartog savings`](#cartog-savings)
+top-level alias).
 
 ```bash
 cartog stats
+cartog stats --savings
 ```
 
 ```
@@ -302,6 +306,33 @@ Symbols by kind:
 
 On an unindexed repo all counts are `0` and the output ends with
 `Index is empty — run \`cartog index .\` to build the code graph.`
+
+### `cartog savings`
+
+Per-tool query counts + an estimated tokens-saved figure versus a grep+read
+baseline (~1,420 tokens/query, drawn from the benchmark suite). Visible alias
+of `cartog stats --savings`; shipped as a top-level verb because it's the
+retention hook — surfaces ongoing ROI in one keystroke.
+
+```bash
+cartog savings
+cartog --json savings
+```
+
+```
+Total queries: 5  (~7100 tokens saved vs grep+read baseline, at 1420 tokens/query)
+
+By tool:
+       2  search
+       1  impact
+       1  map
+       1  refs
+```
+
+Data comes from a local `query_log` table inside `.cartog/db.sqlite`. Nothing
+leaves the machine; no query payloads are recorded — only the tool name, call
+surface (`cli` / `mcp`), and a timestamp. Secondary read-only MCP attaches
+skip the write to avoid double-counting from the primary.
 
 ### `cartog push [--remote <s3-url>]`
 

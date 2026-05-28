@@ -144,6 +144,19 @@ CREATE TABLE IF NOT EXISTS metadata (
     value TEXT
 );
 
+-- query_log feeds `cartog stats --savings` / `cartog savings`. One row per
+-- successful read tool call (CLI or MCP). No query payload is stored — just
+-- which tool, when, and the call surface — to keep the local-first promise.
+CREATE TABLE IF NOT EXISTS query_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tool TEXT NOT NULL,
+    source TEXT NOT NULL,
+    ts INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_query_log_tool ON query_log(tool);
+CREATE INDEX IF NOT EXISTS idx_query_log_ts ON query_log(ts);
+
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_kind ON symbols(kind);
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path);
@@ -378,7 +391,7 @@ pub fn register_sqlite_vec() {
 }
 
 /// Current schema version. Increment when adding migrations.
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 
 /// Public mirror of [`SCHEMA_VERSION`] for callers outside this crate
 /// (e.g. `cartog pull` needs it to compare against a pulled DB and refuse
@@ -473,8 +486,10 @@ fn migrate(conn: &Connection) {
     let has_resolution_state = conn
         .prepare("SELECT resolution_state FROM edges LIMIT 0")
         .is_ok();
+    // Same idea for v5: ensure query_log exists even on partial migration.
+    let has_query_log = conn.prepare("SELECT 1 FROM query_log LIMIT 0").is_ok();
 
-    if current >= SCHEMA_VERSION && has_hash_cols && has_resolution_state {
+    if current >= SCHEMA_VERSION && has_hash_cols && has_resolution_state && has_query_log {
         return;
     }
 
@@ -515,6 +530,31 @@ fn migrate(conn: &Connection) {
         );
         let _ = conn.execute(
             "UPDATE edges SET resolution_state = 1 WHERE target_id IS NOT NULL",
+            [],
+        );
+    }
+
+    // Migration 4 → 5: query_log table for `cartog stats --savings`.
+    // Additive only; the SCHEMA bootstrap above already runs `CREATE TABLE IF
+    // NOT EXISTS query_log`, so this branch is just the version bump for
+    // databases that ran through `migrate()` on a pre-v5 binary.
+    if current < 5 || !has_query_log {
+        info!("schema v5: query_log table");
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS query_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool TEXT NOT NULL,
+                source TEXT NOT NULL,
+                ts INTEGER NOT NULL
+            )",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_query_log_tool ON query_log(tool)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_query_log_ts ON query_log(ts)",
             [],
         );
     }
@@ -2059,6 +2099,62 @@ impl Database {
         })
     }
 
+    /// Record a successful query against the index for the `cartog stats --savings`
+    /// / `cartog savings` retention hook.
+    ///
+    /// Best-effort: errors are swallowed (logged via `warn!`) so a failing
+    /// write never aborts the user's actual query. No-op on read-only attach —
+    /// secondary MCP servers cannot write, and double-counting a query that
+    /// will also be logged by the primary is the wrong shape anyway.
+    ///
+    /// Stored fields: `tool` (e.g. `"search"`, `"refs"`, `"cartog_search"`),
+    /// `source` (`"cli"` or `"mcp"`), and a unix-seconds timestamp. The query
+    /// payload itself is never recorded — see the privacy banner in README.
+    pub fn log_query(&self, tool: &str, source: &str) {
+        if self.is_read_only() {
+            return;
+        }
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        if let Err(e) = self.conn.execute(
+            "INSERT INTO query_log (tool, source, ts) VALUES (?1, ?2, ?3)",
+            params![tool, source, ts],
+        ) {
+            warn!(error = %e, tool, source, "query_log insert failed");
+        }
+    }
+
+    /// Aggregate `query_log` for `cartog stats --savings` / `cartog savings`.
+    /// Safe on read-only attach (it's a read).
+    pub fn savings_breakdown(&self) -> Result<SavingsReport> {
+        let mut tool_stmt = self.conn.prepare(
+            "SELECT tool, COUNT(*) FROM query_log GROUP BY tool ORDER BY COUNT(*) DESC, tool",
+        )?;
+        let by_tool: Vec<(String, u64)> = tool_stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut src_stmt = self.conn.prepare(
+            "SELECT source, COUNT(*) FROM query_log GROUP BY source ORDER BY COUNT(*) DESC, source",
+        )?;
+        let by_source: Vec<(String, u64)> = src_stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let total_queries: u64 = by_tool.iter().map(|(_, c)| c).sum();
+        let estimated_tokens_saved = total_queries.saturating_mul(TOKENS_SAVED_PER_QUERY as u64);
+
+        Ok(SavingsReport {
+            by_tool,
+            by_source,
+            total_queries,
+            estimated_tokens_saved,
+            baseline_delta: TOKENS_SAVED_PER_QUERY,
+        })
+    }
+
     /// Get all non-import symbols ordered by in-degree (highest first), then by file.
     ///
     /// Used by `cartog map` to produce a centrality-ranked codebase summary.
@@ -2786,6 +2882,31 @@ pub struct IndexStats {
     pub symbol_kinds: Vec<(String, u32)>,
 }
 
+/// Per-tool query counts + token-savings estimate for `cartog stats --savings`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SavingsReport {
+    /// `(tool_name, count)` sorted by count descending, then tool name.
+    pub by_tool: Vec<(String, u64)>,
+    /// `(source, count)` for `"cli"` / `"mcp"`.
+    pub by_source: Vec<(String, u64)>,
+    /// Sum of all per-tool counts.
+    pub total_queries: u64,
+    /// Estimated tokens saved versus a grep+read baseline.
+    /// Uses [`TOKENS_SAVED_PER_QUERY`] as a flat multiplier — coarse on purpose;
+    /// per-tool token accounting is a future refinement.
+    pub estimated_tokens_saved: u64,
+    /// Baseline token delta used. Exposed so the CLI can name the figure.
+    pub baseline_delta: u32,
+}
+
+/// Token delta per cartog query versus a `grep + Read` baseline.
+///
+/// Sources: the benchmark suite measures ~1,700 tokens for a grep+read sweep
+/// answering "where is X used?" against cartog's ~280 tokens. The difference
+/// (~1,420) is taken as the per-query savings. Coarse but defensible; refining
+/// per-tool would require a richer per-call metric and isn't worth it pre-v1.
+pub const TOKENS_SAVED_PER_QUERY: u32 = 1_420;
+
 // ── Row Mapping Helpers ──
 
 fn row_to_symbol(row: &rusqlite::Row<'_>) -> rusqlite::Result<Symbol> {
@@ -3012,6 +3133,59 @@ mod tests {
         let stats = db.stats().unwrap();
         assert_eq!(stats.num_files, 1);
         assert_eq!(stats.num_symbols, 1);
+    }
+
+    #[test]
+    fn savings_breakdown_empty_returns_zero() {
+        let db = Database::open_memory().unwrap();
+        let r = db.savings_breakdown().unwrap();
+        assert_eq!(r.total_queries, 0);
+        assert_eq!(r.estimated_tokens_saved, 0);
+        assert!(r.by_tool.is_empty());
+        assert!(r.by_source.is_empty());
+        assert_eq!(r.baseline_delta, TOKENS_SAVED_PER_QUERY);
+    }
+
+    #[test]
+    fn log_query_persists_rows_aggregated_by_tool_and_source() {
+        let db = Database::open_memory().unwrap();
+        db.log_query("search", "cli");
+        db.log_query("search", "cli");
+        db.log_query("refs", "cli");
+        db.log_query("search", "mcp");
+        db.log_query("impact", "mcp");
+
+        let r = db.savings_breakdown().unwrap();
+        assert_eq!(r.total_queries, 5);
+        assert_eq!(r.estimated_tokens_saved, 5 * TOKENS_SAVED_PER_QUERY as u64);
+
+        // by_tool sorted by count desc, then name
+        let tool_counts: Vec<_> = r.by_tool.iter().map(|(t, c)| (t.as_str(), *c)).collect();
+        assert_eq!(tool_counts, vec![("search", 3), ("impact", 1), ("refs", 1)]);
+
+        let src_counts: Vec<_> = r.by_source.iter().map(|(s, c)| (s.as_str(), *c)).collect();
+        assert_eq!(src_counts, vec![("cli", 3), ("mcp", 2)]);
+    }
+
+    #[test]
+    fn log_query_noop_on_read_only_attach() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let primary = Database::open(&db_path, 384).unwrap();
+            primary.log_query("search", "cli"); // primary write succeeds
+        }
+
+        let reader = Database::open_readonly(&db_path).unwrap();
+        assert!(reader.is_read_only());
+        // log_query on read-only attach must silently no-op (no panic, no insert).
+        reader.log_query("search", "mcp");
+        reader.log_query("refs", "mcp");
+
+        let r = reader.savings_breakdown().unwrap();
+        // Only the primary's row is visible — secondary writes were dropped.
+        assert_eq!(r.total_queries, 1);
+        assert_eq!(r.by_tool, vec![("search".to_string(), 1)]);
     }
 
     #[test]
@@ -5922,6 +6096,6 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(bumped, "4");
+        assert_eq!(bumped, SCHEMA_VERSION.to_string());
     }
 }

@@ -440,6 +440,7 @@ cartog deps src/routes/auth.py              # file-level imports
 
 # Inspect
 cartog stats                                # index summary
+cartog savings                              # tokens saved vs grep+read baseline
 cartog map --tokens 4000                    # codebase overview by centrality
 cartog changes --commits 5                  # recently changed symbols
 cartog doctor                               # environment health check

@@ -195,7 +195,10 @@ fn main() -> Result<()> {
         Command::Deps { file } => {
             commands::cmd_deps(&db_path, &file, cli.json, token_budget, embedding_dim)
         }
-        Command::Stats => commands::cmd_stats(&db_path, cli.json, embedding_dim),
+        Command::Stats { savings } => {
+            commands::cmd_stats(&db_path, cli.json, embedding_dim, savings)
+        }
+        Command::Savings => commands::cmd_stats(&db_path, cli.json, embedding_dim, true),
         Command::Push { remote } => {
             commands::cmd_push(&db_path, &cartog_config, remote.as_deref(), cli.json)
         }
