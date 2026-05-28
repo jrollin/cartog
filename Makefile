@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-install-script sync-install-script bench bench-criterion bench-rag eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-install-script sync-install-script bench bench-criterion bench-rag eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -52,7 +52,7 @@ check-rust: ## cargo fmt + clippy + test
 
 # --- Fixture syntax/build checks ---
 
-check-fixtures: check-py check-ts check-go check-rs check-rb check-java check-php ## Validate all fixture codebases
+check-fixtures: check-py check-ts check-go check-rs check-rb check-java check-php check-dart ## Validate all fixture codebases
 
 check-fixtures-docker: ## Validate all fixture codebases via Docker (reproducible)
 	@$(MAKE) check-fixtures FORCE_DOCKER=1
@@ -98,6 +98,12 @@ check-php: ## Validate PHP fixtures (php -l, falls back to Docker)
 	$(call check_lang,php,php:8.3-cli,\
 		find benchmarks/fixtures/webapp_php -name '*.php' -exec php -l {} + > /dev/null,\
 		for f in $$(find webapp_php -name "*.php"); do php -l "$$f" > /dev/null || exit 1; done)
+
+check-dart: ## Validate Dart fixtures (dart analyze, falls back to Docker)
+	@echo "==> Checking Dart fixtures..."
+	$(call check_lang,dart,dart:stable,\
+		cd benchmarks/fixtures/webapp_dart && dart analyze --fatal-infos,\
+		cd webapp_dart && HOME=/tmp PUB_CACHE=/tmp/pub dart analyze --fatal-infos)
 
 # --- Skill tests ---
 

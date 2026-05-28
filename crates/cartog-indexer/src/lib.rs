@@ -136,7 +136,7 @@ pub struct IndexResult {
     #[serde(skip)]
     pub dirty_files: u32,
     /// Files seen during the walk whose extension maps to no supported language
-    /// (e.g. `.dart`, `.swift`). Surfaced so a user on a mixed/monorepo isn't
+    /// (e.g. `.kt`, `.swift`). Surfaced so a user on a mixed/monorepo isn't
     /// misled into thinking an unsupported subtree was indexed.
     #[serde(skip_serializing_if = "is_zero")]
     pub files_unsupported: u32,
@@ -1176,8 +1176,8 @@ mod tests {
         let dir = tmp.path().join("proj");
         std::fs::create_dir(&dir).unwrap();
         std::fs::write(dir.join("a.rs"), "fn main() {}\n").unwrap();
-        std::fs::write(dir.join("b.dart"), "void main() {}\n").unwrap();
-        std::fs::write(dir.join("c.dart"), "void main() {}\n").unwrap();
+        std::fs::write(dir.join("b.kt"), "fun main() {}\n").unwrap();
+        std::fs::write(dir.join("c.kt"), "fun main() {}\n").unwrap();
         std::fs::write(dir.join("d.swift"), "print(1)\n").unwrap();
         // cartog's own DB sidecars must NOT count as unsupported languages.
         std::fs::write(dir.join(".cartog.db"), "x").unwrap();
@@ -1189,12 +1189,12 @@ mod tests {
         assert_eq!(r.files_indexed, 1, "only a.rs is supported");
         assert_eq!(
             r.files_unsupported, 3,
-            "2 dart + 1 swift, db sidecars excluded"
+            "2 kotlin + 1 swift, db sidecars excluded"
         );
         // Descending by count, ties broken alphabetically.
         assert_eq!(
             r.unsupported_by_ext,
-            vec![("dart".to_string(), 2), ("swift".to_string(), 1)]
+            vec![("kt".to_string(), 2), ("swift".to_string(), 1)]
         );
     }
 

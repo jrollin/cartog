@@ -1,6 +1,6 @@
 # Supported Languages
 
-## Currently Supported (9 languages)
+## Currently Supported (10 languages)
 
 ### Python (.py, .pyi)
 - Functions, classes, methods
@@ -104,6 +104,18 @@
 - Docblocks (`/** ... */`) and line comments (`//`) as docstrings
 - Visibility: `public`, `protected`, `private`
 - Uses `LANGUAGE_PHP_ONLY` parser (files starting with `<?php`, no inline HTML)
+
+### Dart (.dart)
+- Classes (including abstract and `sealed`), mixins (as trait symbols), extensions (as class symbols), enums, typedefs
+- Top-level functions, methods, constructors (default/named/factory/const), getters/setters
+- Imports (`import 'package:foo/bar.dart'`, `dart:async`, relative paths), part directives
+- Function and method calls
+- Inheritance (`extends` and `with` mixins → `Inherits` edges)
+- Interface implementation (`implements` → `Implements` edges)
+- Type annotation references (parameter types, return types, generic types)
+- Async functions / methods
+- Doc comments (`///`)
+- Library-private visibility (leading underscore `_foo` → private)
 
 ### Markdown (.md)
 - Document sections chunked by heading (`#`, `##`, `###`, etc.)

@@ -90,6 +90,13 @@ pub const SERVERS: &[ServerSpec] = &[
         language_id: "php",
         install_hint: "composer global require phpactor/phpactor",
     },
+    ServerSpec {
+        language: "dart",
+        binary: "dart",
+        args: &["language-server", "--protocol=lsp"],
+        language_id: "dart",
+        install_hint: "install Dart SDK from https://dart.dev/get-dart",
+    },
 ];
 
 /// Find all server specs for a cartog language name, in priority order.
@@ -117,6 +124,14 @@ mod tests {
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].binary, "rust-analyzer");
         assert_eq!(specs[0].language_id, "rust");
+    }
+
+    #[test]
+    fn test_find_servers_dart() {
+        let specs = find_servers("dart");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].binary, "dart");
+        assert_eq!(specs[0].language_id, "dart");
     }
 
     #[test]

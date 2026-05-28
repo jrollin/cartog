@@ -21,3 +21,4 @@ tree-sitter-go = { workspace = true }
 tree-sitter-ruby = { workspace = true }
 tree-sitter-java = { workspace = true }
 tree-sitter-php = { workspace = true }
+tree-sitter-dart = { workspace = true }
