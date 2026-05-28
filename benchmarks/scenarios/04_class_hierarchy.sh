@@ -62,4 +62,5 @@ run_scenario "webapp_ts" "BaseService" "class.*BaseService\|extends.*BaseService
 run_scenario "webapp_go" "BaseService" "BaseService\|embed"
 run_scenario "webapp_rs" "AuthProvider" "impl.*AuthProvider\|trait AuthProvider"
 run_scenario "webapp_rb" "BaseService" "class.*BaseService\|class.*<.*BaseService\|class.*<.*AuthService"
+run_scenario "webapp_java" "BaseService" "class.*BaseService\|class.*extends.*BaseService\|class.*extends.*AuthService"
 run_scenario "webapp_php" "BaseService" "class.*BaseService\|class.*extends.*BaseService\|class.*extends.*AuthService"

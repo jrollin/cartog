@@ -34,6 +34,7 @@ should_skip_fixture() {
         go) [[ "$fixture_name" != *"_go"* ]] && return 0 || return 1 ;;
         rs) [[ "$fixture_name" != *"_rs"* ]] && return 0 || return 1 ;;
         rb) [[ "$fixture_name" != *"_rb"* ]] && return 0 || return 1 ;;
+        java) [[ "$fixture_name" != *"_java"* ]] && return 0 || return 1 ;;
         php) [[ "$fixture_name" != *"_php"* ]] && return 0 || return 1 ;;
         *)  return 1 ;;
     esac

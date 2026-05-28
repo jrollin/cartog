@@ -20,7 +20,9 @@ Compares cartog graph queries vs grep/cat approaches for common code navigation 
 | `fixtures/webapp_go/` | Go | 45 | ~3,300 |
 | `fixtures/webapp_rs/` | Rust | 65 | ~3,200 |
 | `fixtures/webapp_rb/` | Ruby | 51 | ~2,300 |
-| **Total** | | **278** | **~15,300** |
+| `fixtures/webapp_java/` | Java | 41 | ~1,800 |
+| `fixtures/webapp_php/` | PHP | 25 | ~1,500 |
+| **Total** | | **345** | **~18,600** |
 
 All fixtures model the same domain (auth service, tokens, routes, middleware, database, cache, events, validators) with controlled, known relationships defined in `ground_truth/`.
 
@@ -45,7 +47,7 @@ All fixtures model the same domain (auth service, tokens, routes, middleware, da
 ## Usage
 
 ```bash
-# Run all scenarios (01-13) across all 5 languages
+# Run all scenarios (01-13) across all 7 languages
 ./benchmarks/run.sh
 
 # Run single scenario
@@ -57,6 +59,8 @@ All fixtures model the same domain (auth service, tokens, routes, middleware, da
 ./benchmarks/run.sh --fixture go
 ./benchmarks/run.sh --fixture rs
 ./benchmarks/run.sh --fixture rb
+./benchmarks/run.sh --fixture java
+./benchmarks/run.sh --fixture php
 ```
 
 ## Criterion benchmarks (query latency)
@@ -120,12 +124,14 @@ It auto-discovers symbols, runs 5 comparison scenarios (outline, callers, callee
 Validate that all fixture codebases compile/parse correctly:
 
 ```bash
-make check-fixtures   # all fixtures (py, go, rs, rb)
+make check-fixtures   # all fixtures (py, ts, go, rs, rb, java, php)
 make check-py         # Python: py_compile
 make check-ts         # TypeScript: tsc --noEmit (requires npx)
 make check-go         # Go: go build ./...
 make check-rs         # Rust: cargo check
 make check-rb         # Ruby: ruby -c
+make check-java       # Java: javac
+make check-php        # PHP: php -l
 ```
 
 Run `make check` to also include Rust project checks (fmt + clippy + test).

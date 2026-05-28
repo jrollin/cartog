@@ -61,4 +61,5 @@ run_scenario "webapp_ts" "src/routes/auth.ts" "^import "
 run_scenario "webapp_go" "internal/routes/auth_routes.go" '"webapp_go/'
 run_scenario "webapp_rs" "routes/auth.rs" "^use "
 run_scenario "webapp_rb" "routes/auth.rb" "^require"
+run_scenario "webapp_java" "routes/AuthRoutes.java" "^import "
 run_scenario "webapp_php" "routes/auth.php" "^use "

@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # cartog Benchmark Suite
 #
-# Compares cartog queries vs grep/cat approaches across 7 scenarios,
+# Compares cartog queries vs grep/cat approaches across 13 scenarios,
 # measuring token efficiency, command count, and recall against ground truth.
 #
 # Usage:
-#   ./benchmarks/run.sh                  # Run all scenarios (01–08)
+#   ./benchmarks/run.sh                  # Run all scenarios (01–13)
 #   ./benchmarks/run.sh --scenario 08    # Run single scenario
 #   ./benchmarks/run.sh --fixture py     # Run only Python fixtures
 #   ./benchmarks/run.sh --fixture ts     # Run only TypeScript fixtures
 #   ./benchmarks/run.sh --fixture go     # Run only Go fixtures
 #   ./benchmarks/run.sh --fixture rs     # Run only Rust fixtures
 #   ./benchmarks/run.sh --fixture rb     # Run only Ruby fixtures
+#   ./benchmarks/run.sh --fixture java   # Run only Java fixtures
 #   ./benchmarks/run.sh --fixture php    # Run only PHP fixtures
 
 set -euo pipefail
@@ -39,7 +40,7 @@ while [[ $# -gt 0 ]]; do
         --scenario) SCENARIO_FILTER="$2"; shift 2 ;;
         --fixture)  FIXTURE_FILTER="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb|php]"
+            echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb|java|php]"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -86,6 +87,7 @@ for fixture_dir in "$BENCH_DIR"/fixtures/*/; do
             go) [[ "$fixture_name" != *"_go"* ]] && continue ;;
             rs) [[ "$fixture_name" != *"_rs"* ]] && continue ;;
             rb) [[ "$fixture_name" != *"_rb"* ]] && continue ;;
+            java) [[ "$fixture_name" != *"_java"* ]] && continue ;;
             php) [[ "$fixture_name" != *"_php"* ]] && continue ;;
         esac
     fi
