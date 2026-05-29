@@ -1046,6 +1046,50 @@ mod tests {
         );
     }
 
+    // ── validate_pid_lock_config branches ──
+
+    #[test]
+    fn validate_pid_lock_accepts_both_none() {
+        let config = WatchConfig::new(PathBuf::from("."));
+        assert!(
+            validate_pid_lock_config(&config).is_ok(),
+            "untracked mode (both None) is valid"
+        );
+    }
+
+    #[test]
+    fn validate_pid_lock_accepts_both_set() {
+        let mut config = WatchConfig::new(PathBuf::from("."));
+        config.pid_lock_dir = Some(PathBuf::from("/tmp/cartog-locks"));
+        config.pid_lock_slot = Some("watch-0123456789abcdef".to_string());
+        assert!(
+            validate_pid_lock_config(&config).is_ok(),
+            "both fields set is valid"
+        );
+    }
+
+    #[test]
+    fn validate_pid_lock_rejects_dir_without_slot() {
+        let mut config = WatchConfig::new(PathBuf::from("."));
+        config.pid_lock_dir = Some(PathBuf::from("/tmp/cartog-locks"));
+        let err = validate_pid_lock_config(&config).expect_err("dir without slot must fail");
+        assert!(
+            err.to_string().contains("pid_lock_slot is None"),
+            "error names the missing slot: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_pid_lock_rejects_slot_without_dir() {
+        let mut config = WatchConfig::new(PathBuf::from("."));
+        config.pid_lock_slot = Some("watch-0123456789abcdef".to_string());
+        let err = validate_pid_lock_config(&config).expect_err("slot without dir must fail");
+        assert!(
+            err.to_string().contains("pid_lock_dir is None"),
+            "error names the missing directory: {err}"
+        );
+    }
+
     // ── is_ignored_dirname direct tests ──
 
     #[test]
