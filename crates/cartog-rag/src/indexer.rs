@@ -26,15 +26,14 @@ const DB_BATCH_LIMIT: usize = 256;
 fn flush_embedding_batch<P: EmbeddingProvider + ?Sized>(
     provider: &mut P,
     db: &Database,
-    texts: &[String],
-    symbol_ids: &[String],
+    batch: &[(String, String)],
     db_batch: &mut Vec<(i64, Vec<u8>)>,
     result: &mut RagIndexResult,
 ) -> Result<usize> {
-    let str_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+    let str_refs: Vec<&str> = batch.iter().map(|(t, _)| t.as_str()).collect();
     match provider.embed_documents(&str_refs) {
         Ok(embeddings) => {
-            for (embedding, sid) in embeddings.iter().zip(symbol_ids.iter()) {
+            for (embedding, (_, sid)) in embeddings.iter().zip(batch.iter()) {
                 let embedding_id = db.get_or_create_embedding_id(sid)?;
                 let bytes = embedding_to_bytes(embedding);
                 db_batch.push((embedding_id, bytes));
@@ -50,7 +49,7 @@ fn flush_embedding_batch<P: EmbeddingProvider + ?Sized>(
         Err(e) => {
             tracing::warn!(error = %e, "Batch embedding failed, falling back to sequential");
             let mut count = 0;
-            for (text, sid) in texts.iter().zip(symbol_ids.iter()) {
+            for (text, sid) in batch.iter() {
                 match provider.embed_document(text) {
                     Ok(embedding) => {
                         let embedding_id = db.get_or_create_embedding_id(sid)?;
@@ -305,10 +304,7 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
 
     for batch in pairs.chunks(CHUNK_SIZE) {
         check_cancel()?;
-        let texts: Vec<String> = batch.iter().map(|(t, _)| t.clone()).collect();
-        let sids: Vec<String> = batch.iter().map(|(_, s)| s.clone()).collect();
-
-        let count = flush_embedding_batch(provider, db, &texts, &sids, &mut db_batch, &mut result)?;
+        let count = flush_embedding_batch(provider, db, batch, &mut db_batch, &mut result)?;
         processed += count;
 
         emit(ProgressUpdate::Embedding {

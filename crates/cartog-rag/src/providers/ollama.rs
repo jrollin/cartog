@@ -15,7 +15,7 @@ pub struct OllamaEmbeddingProvider {
 #[derive(Serialize)]
 struct EmbedRequest<'a> {
     model: &'a str,
-    input: Vec<&'a str>,
+    input: &'a [&'a str],
 }
 
 #[derive(Deserialize)]
@@ -80,7 +80,7 @@ impl OllamaEmbeddingProvider {
                     .post(format!("{base_url}/api/embed"))
                     .json(&EmbedRequest {
                         model,
-                        input: vec!["dimension probe"],
+                        input: &["dimension probe"],
                     })
                     .send()
                     .map_err(|e| connect_err(base_url, e))?
@@ -118,7 +118,7 @@ impl OllamaEmbeddingProvider {
             .post(format!("{}/api/embed", self.base_url))
             .json(&EmbedRequest {
                 model: &self.model,
-                input: texts.to_vec(),
+                input: texts,
             })
             .send()
             .map_err(|e| connect_err(&self.base_url, e))?
@@ -188,7 +188,7 @@ mod tests {
     fn test_embed_request_serialization() {
         let req = EmbedRequest {
             model: "nomic-embed-text",
-            input: vec!["hello world", "test"],
+            input: &["hello world", "test"],
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("nomic-embed-text"));
