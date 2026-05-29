@@ -74,20 +74,16 @@ fn parse_one_file(
 
     let modified = file_modified(path);
 
-    // Extract symbols/edges using the per-thread extractor cache.
-    let extraction = THREAD_EXTRACTORS.with(|cell| {
-        let mut map = cell.borrow_mut();
-        let extractor = map
-            .entry(lang)
-            .or_insert_with(|| get_extractor(lang).expect("lang was validated by detect_language"))
-            .as_mut();
-        extractor.extract(&source, rel_path)
-    });
+    let extraction = extract_with_cached(lang, &source, rel_path);
 
     let mut extraction = match extraction {
-        Ok(e) => e,
-        Err(err) => {
+        Some(Ok(e)) => e,
+        Some(Err(err)) => {
             warn!(file = %rel_path, error = %err, "extraction failed");
+            return ParseOutput::Failed;
+        }
+        None => {
+            warn!(file = %rel_path, lang, "no extractor registered for language");
             return ParseOutput::Failed;
         }
     };
@@ -104,6 +100,27 @@ fn parse_one_file(
         symbols: extraction.symbols,
         edges: extraction.edges,
     }
+}
+
+/// Run the per-thread cached extractor for `lang` over `source`.
+///
+/// Returns `None` when no extractor is registered for `lang` — which means
+/// `detect_language` and `get_extractor` disagree (a bug introduced when adding
+/// a language). The caller skips the file rather than panicking inside the rayon
+/// worker, which would abort the whole index run.
+fn extract_with_cached(
+    lang: &'static str,
+    source: &str,
+    rel_path: &str,
+) -> Option<Result<cartog_languages::ExtractionResult>> {
+    THREAD_EXTRACTORS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        if !map.contains_key(lang) {
+            map.insert(lang, get_extractor(lang)?);
+        }
+        let extractor = map.get_mut(lang).expect("just inserted").as_mut();
+        Some(extractor.extract(source, rel_path))
+    })
 }
 
 /// Summary of an indexing operation.
@@ -1050,6 +1067,22 @@ mod tests {
         let h1 = file_hash("def foo(): pass");
         let h2 = file_hash("def bar(): pass");
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn extract_with_cached_returns_none_for_unregistered_language() {
+        assert!(extract_with_cached("klingon", "irrelevant", "a.kl").is_none());
+    }
+
+    #[test]
+    fn extract_with_cached_extracts_for_known_language() {
+        let result = extract_with_cached("python", "def foo():\n    pass\n", "a.py")
+            .expect("python is registered")
+            .expect("valid source extracts");
+        assert!(
+            result.symbols.iter().any(|s| s.name == "foo"),
+            "expected `foo` among extracted symbols"
+        );
     }
 
     #[test]
