@@ -1502,4 +1502,129 @@ mod tests {
             }
         }
     }
+
+    // ── Lazy hybrid search (factory gating) ───────────────────────────
+
+    use crate::provider::test_utils::MockRerankerProvider;
+    use std::cell::Cell;
+
+    #[test]
+    fn lazy_search_invokes_factory_and_reranks_when_above_min() {
+        let db = Database::open_memory().unwrap();
+        seed_python_corpus(&db);
+
+        let called = Cell::new(false);
+        // rerank_min=1 guarantees the seeded corpus clears the bar, so the
+        // factory is built and its reranker scores the candidates.
+        let tuning = SearchTuning {
+            rerank_min: 1,
+            ..SearchTuning::default()
+        };
+        let result = hybrid_search_tuned_lazy(
+            &db,
+            "validate token",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            Some(|| {
+                called.set(true);
+                Some(Box::new(MockRerankerProvider) as Box<dyn RerankerProvider>)
+            }),
+            &tuning,
+        )
+        .unwrap();
+
+        assert!(
+            called.get(),
+            "factory must run when candidates >= rerank_min"
+        );
+        assert!(
+            result.results.iter().any(|r| r.rerank_score.is_some()),
+            "reranked candidates carry a rerank_score"
+        );
+    }
+
+    #[test]
+    fn lazy_search_skips_factory_when_below_min() {
+        let db = Database::open_memory().unwrap();
+        seed_python_corpus(&db);
+
+        let called = Cell::new(false);
+        // rerank_min far above the 5-symbol corpus → factory never touched.
+        let tuning = SearchTuning {
+            rerank_min: 100,
+            ..SearchTuning::default()
+        };
+        let result = hybrid_search_tuned_lazy(
+            &db,
+            "validate token",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            Some(|| {
+                called.set(true);
+                Some(Box::new(MockRerankerProvider) as Box<dyn RerankerProvider>)
+            }),
+            &tuning,
+        )
+        .unwrap();
+
+        assert!(
+            !called.get(),
+            "factory must NOT run when candidates < rerank_min"
+        );
+        assert!(result.fts_count > 0, "retrieval still happened");
+        assert!(
+            result.results.iter().all(|r| r.rerank_score.is_none()),
+            "no reranking → all rerank_score None"
+        );
+    }
+
+    #[test]
+    fn lazy_search_handles_no_factory() {
+        let db = Database::open_memory().unwrap();
+        seed_python_corpus(&db);
+
+        let result = hybrid_search_tuned_lazy(
+            &db,
+            "authenticate",
+            10,
+            KindFilter::All,
+            &mut MockEmbeddingProvider::new(384),
+            None::<fn() -> Option<Box<dyn RerankerProvider>>>,
+            &SearchTuning::default(),
+        )
+        .unwrap();
+
+        assert!(!result.results.is_empty(), "search returns results");
+        assert!(
+            result.results.iter().all(|r| r.rerank_score.is_none()),
+            "no factory → no rerank scores"
+        );
+    }
+
+    #[test]
+    fn lazy_search_respects_kind_filter() {
+        let db = Database::open_memory().unwrap();
+        seed_python_corpus(&db);
+
+        let result = hybrid_search_tuned_lazy(
+            &db,
+            "token",
+            10,
+            KindFilter::Exact(SymbolKind::Function),
+            &mut MockEmbeddingProvider::new(384),
+            None::<fn() -> Option<Box<dyn RerankerProvider>>>,
+            &SearchTuning::default(),
+        )
+        .unwrap();
+
+        assert!(
+            result
+                .results
+                .iter()
+                .all(|r| r.symbol.kind == SymbolKind::Function),
+            "kind filter keeps only functions"
+        );
+    }
 }
