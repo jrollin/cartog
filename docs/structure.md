@@ -61,4 +61,5 @@ Each link goes to that crate's `README.md`, which has the detailed responsibilit
 - Public functions documented with `///`. Crate `lib.rs` has `//!` crate docs.
 - CLI output: human-readable by default, `--json` for structured output.
 - Tests: unit tests in each crate (`#[cfg(test)]`), integration tests in `crates/cartog/tests/`, shared fixtures in `tests/fixtures/`.
+- Benches: criterion `[[bench]]` targets in `crates/cartog/benches/` (`queries`, `rag_search`, `rag_onnx`) and `crates/cartog-indexer/benches/` (`indexing`); see [tech.md](tech.md#benchmarks). Fixtures live in `benchmarks/fixtures/`.
 - Lint gate (must pass before commit): `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`, `make check-skill`.

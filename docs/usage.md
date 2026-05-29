@@ -679,7 +679,7 @@ By tool (call counts):
      1  refs
 
 Baseline: ~1700 tokens for an equivalent grep+read sweep vs cartog's ~280.
-Measured across 13 benchmark scenarios (see crates/cartog/benches/queries.rs).
+Measured across 13 benchmark scenarios (see benchmarks/scenarios/).
 ```
 
 The header line is `cartog · <project> · <N> queries`, where `<project>` is

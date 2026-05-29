@@ -24,7 +24,7 @@
 | `fastembed` | ONNX Runtime inference for embeddings + re-ranking (local provider) | Optional via `provider-local` feature (default on). `default-features = false` drops image models (CLIP etc.). `rustls-tls` avoids OpenSSL system dependency |
 | `reqwest` | HTTP client for self-update + remote embedding providers (Ollama) | Non-optional in the `cartog` binary (self-update). The Ollama provider in `cartog-rag` is gated by `provider-ollama`, which the binary enables by default (`ollama-embedding`). Uses `blocking` + `rustls-tls` |
 | `sqlite-vec` | Vector similarity search (KNN) in SQLite | `vec0` virtual table, requires integer rowids (bridged via `symbol_embedding_map`) |
-| `criterion` (dev) | Micro-benchmarks | Query latency benchmarks (µs-level) |
+| `criterion` (dev) | Micro-benchmarks | Four `[[bench]]` targets — see [Benchmarks](#benchmarks). Inputs/results are `black_box`-wrapped so µs-scale benches measure real work |
 | `rust-s3` 0.37 (`tokio-rustls-tls`) | S3-compatible client for `cartog push` / `cartog pull` | Optional via `remote-s3` feature (default on). Chosen over `aws-sdk-s3` for size (~5 MB vs ~18 MB); supports AWS S3, MinIO, R2, floci |
 
 ## Build Profiles
@@ -34,6 +34,40 @@
 | `dev.opt-level` | `1` | Tree-sitter C grammars are machine-generated huge files that compile very slowly at opt-level 0. Level 1 also makes indexing usably fast during development |
 | `release.lto` | `"thin"` | Most binary size / performance benefits of full LTO at a fraction of the link time |
 | `release.strip` | `"debuginfo"` | Removes DWARF sections (~50% binary size reduction) but keeps function names in panic backtraces for diagnosable crash reports |
+
+## Benchmarks
+
+Two distinct surfaces, both rooted in `benchmarks/fixtures/` (8 language webapps):
+
+- **Shell suite** (`benchmarks/run.sh`, 13 scenarios × fixtures) — token efficiency
+  and recall versus grep/cat. Run with `make bench`.
+- **Criterion micro-benchmarks** — in-process latency. The guiding rule: benchmark
+  cartog's own CPU-bound work; anything dominated by an external service (the
+  Ollama daemon, S3) gets a *correctness* test at the boundary, not a latency
+  bench, so numbers never measure infrastructure.
+
+Criterion benches are split into four `[[bench]]` targets so the ONNX boundary is
+expressed by target membership — CI runs the three runtime-ONNX-free targets and
+simply never names the fourth (criterion's regex filter cannot express exclusion):
+
+| Target | Crate | Scope | Runtime ONNX | CI |
+|--------|-------|-------|--------------|-----|
+| `queries` | `cartog` | 8 query ops (search/refs/impact/outline/callees/hierarchy/deps/stats), Python + Java | no | ✅ |
+| `indexing` | `cartog-indexer` | `index_full_force/<lang>` over all 8 fixtures + 2 incremental scenarios | no (crate has no `cartog-rag` dep) | ✅ |
+| `rag_search` | `cartog` | `hybrid_search` (FTS5 + vector KNN + RRF) via a deterministic stub provider | no (stub vectors) | ✅ |
+| `rag_onnx` | `cartog` | real fastembed embed + cross-encoder rerank | **yes** | ❌ opt-in (`make bench-onnx`) |
+
+Conventions: every `b.iter` input and result is wrapped in `std::hint::black_box`
+so the compiler cannot constant-fold literal inputs or eliminate unused results —
+without it the µs-scale query benches would risk measuring nothing. Query latency
+is language-agnostic (same SQL regardless of source language), so it is benched on
+Python + Java only; per-language cost lives in the tree-sitter grammar/extractor,
+so `index_full_force` is parameterized across all 8 fixtures. The shared scenario
+bodies live in `cartog_indexer::bench_support` so `queries` and `indexing` cannot
+drift. On PRs the CI `bench` job establishes a same-runner baseline at the merge
+base and reports a `--baseline` delta (controlling for runner variance); it is
+`continue-on-error`, so a noisy result never blocks. Run everything ONNX-free
+locally with `make bench-criterion`.
 
 ## Architecture Decisions
 

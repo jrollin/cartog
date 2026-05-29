@@ -33,8 +33,9 @@ make check-fixtures-docker # same, forcing the Docker fallback for every languag
 make check-skill           # skill tests (ensure_indexed.sh unit tests)
 make eval-skill            # LLM-as-judge skill evaluation (requires claude CLI)
 make eval-agents           # LLM-as-judge agent evaluation (requires claude CLI)
-make bench                 # shell benchmark suite (13 scenarios x 5 languages)
-make bench-criterion       # Rust criterion benchmarks (query latency)
+make bench                 # shell benchmark suite (13 scenarios x 8 languages)
+make bench-criterion       # ONNX-free criterion benches (queries, per-language indexing, hybrid search)
+make bench-onnx            # real-model embed/rerank benches (needs `cartog rag setup`; not in CI)
 make bench-rag             # RAG relevancy benchmarks (in-memory + shell scenario 13)
 ```
 

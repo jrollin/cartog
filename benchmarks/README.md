@@ -63,44 +63,70 @@ All fixtures model the same domain (auth service, tokens, routes, middleware, da
 ./benchmarks/run.sh --fixture php
 ```
 
-## Criterion benchmarks (query latency)
+## Criterion benchmarks (in-process latency)
 
-Measures query latency in microseconds using Rust-native criterion benchmarks on the Python fixture indexed into an in-memory SQLite database.
+Rust-native criterion benchmarks measure cartog's own CPU-bound work against the
+`benchmarks/fixtures/` corpora indexed into in-memory SQLite. They are split into
+four `[[bench]]` targets so the ONNX boundary is expressed by target membership
+(see [docs/tech.md](../docs/tech.md#benchmarks) for the full rationale). Inputs and
+results are wrapped in `black_box`, so the µs-scale benches measure real work.
 
 ```bash
-# Run all query benchmarks
-cargo bench --bench queries
+# Everything ONNX-free (queries + per-language indexing + hybrid search)
+make bench-criterion
 
-# Run specific benchmark
-cargo bench --bench queries -- search_token
-
-# Quick run (fewer iterations)
-cargo bench --bench queries -- --quick
+# Real-model embed/rerank — needs `cartog rag setup`, not run in CI
+make bench-onnx
 ```
 
-Benchmarked operations: `search`, `refs`, `impact`, `outline`, `callees`, `hierarchy`, `deps`, `stats`.
+### `queries` — query latency (`cartog`)
 
-### Indexing benchmarks
-
-Measures indexing performance including the incremental Merkle-tree diffing path:
+Microsecond-scale latency for `search`, `refs`, `impact`, `outline`, `callees`,
+`hierarchy`, `deps`, `stats` on the Python and Java fixtures. Query latency is
+language-agnostic (same SQL regardless of source language), so two fixtures suffice.
 
 ```bash
-cargo bench --bench queries -- index_
+cargo bench -p cartog --bench queries
+cargo bench -p cartog --bench queries -- search_token   # one bench (substring match)
+```
+
+### `indexing` — per-language indexing (`cartog-indexer`)
+
+Lives in `cartog-indexer`, which has no `cartog-rag`/ONNX dependency, so it builds
+and runs without the native ONNX library. Per-language cost lives in the
+tree-sitter grammar + extractor, so the full-index scenario is parameterized over
+all 8 fixtures.
+
+```bash
+cargo bench -p cartog-indexer --bench indexing
+cargo bench -p cartog-indexer --bench indexing -- index_full_force/rs   # one language
 ```
 
 | Benchmark | What it measures |
 |-----------|-----------------|
-| `index_full_force` | Full index of fixture (force=true), baseline |
-| `index_incremental_noop` | Re-index with no changes (all files skipped via hash) |
-| `index_incremental_one_file` | One file's hash invalidated, triggers Merkle diff + scoped resolution |
+| `index_full_force/<lang>` | Full index of each fixture (force=true) — `py ts go rs rb java php dart` |
+| `index_incremental_noop` | Re-index with no changes (all files skipped via hash); Python |
+| `index_incremental_one_file` | One file's hash invalidated, triggers Merkle diff + scoped resolution; Python |
 
-The same three scenarios are also available as a standalone `cartog-indexer` bench, which builds without the ONNX runtime native dependency:
+### `rag_search` — hybrid search (`cartog`)
+
+`hybrid_search` (FTS5 + vector KNN + RRF merge) over the embedded Python fixture,
+using a deterministic stub embedding provider — no ONNX model is loaded, so it runs
+in CI.
 
 ```bash
-cargo bench -p cartog-indexer --bench indexing
+cargo bench -p cartog --bench rag_search
 ```
 
-Use this form when iterating on indexer code without a configured ONNX install. Numbers are within noise of the `cartog`-binary version.
+### `rag_onnx` — real embedding + reranking (`cartog`, opt-in)
+
+Loads the actual fastembed/ONNX models to measure `embed_query`,
+`embed_documents`, and cross-encoder `rerank`. **Not run in CI**; requires the
+models on disk (`cartog rag setup`) and skips gracefully if they are absent.
+
+```bash
+make bench-onnx   # or: cargo bench -p cartog --bench rag_onnx
+```
 
 ## Benchmark any project
 
