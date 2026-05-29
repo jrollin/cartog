@@ -2857,4 +2857,159 @@ mod tests {
             "ollama check should be Ok or Error, not Warn"
         );
     }
+
+    // ── cmd_* command bodies over a real indexed DB ───────────────────
+    //
+    // Drive the read commands end-to-end against a temp DB populated from a
+    // small Python fixture. The commands print to stdout (so output content
+    // can't be asserted directly), but calling them exercises the real query,
+    // the human/JSON formatter closures, the empty-result did-you-mean paths,
+    // and the token-budget branch — returning Ok/Err is the observable
+    // contract. Query-log side effects are verified via savings_breakdown.
+
+    const CMD_FIXTURE_SRC: &str = "\
+class Animal:
+    def speak(self):
+        return helper()
+
+
+class Dog(Animal):
+    def speak(self):
+        return helper()
+
+
+def helper():
+    return 42
+
+
+def main():
+    d = Dog()
+    return d.speak()
+";
+
+    /// Index `CMD_FIXTURE_SRC` as `lib.py` and return the DB path. The TempDir
+    /// is returned so the caller keeps it alive for the test's duration. The
+    /// index root is a named subdir: the walker prunes dot-prefixed dirs, and
+    /// a bare TempDir name starts with ".tmp".
+    fn indexed_db() -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("lib.py"), CMD_FIXTURE_SRC).unwrap();
+        let db_path = tmp.path().join("cartog.db");
+        let db = Database::open(&db_path, 384).unwrap();
+        indexer::index_directory(&db, &root, true, false, None, None).expect("fixture indexes");
+        drop(db);
+        (tmp, db_path)
+    }
+
+    #[test]
+    fn cmd_outline_renders_symbols_and_logs_query() {
+        let (_tmp, db) = indexed_db();
+        cmd_outline(&db, "lib.py", false, None, 384).expect("outline ok");
+        // outline of a populated file logs a query; savings reflects it.
+        let report = Database::open(&db, 384)
+            .unwrap()
+            .savings_breakdown()
+            .unwrap();
+        assert!(report.total_queries >= 1, "outline should log one query");
+    }
+
+    #[test]
+    fn cmd_outline_json_branch_is_ok() {
+        let (_tmp, db) = indexed_db();
+        cmd_outline(&db, "lib.py", true, None, 384).expect("outline --json ok");
+    }
+
+    #[test]
+    fn cmd_outline_unknown_file_is_ok() {
+        let (_tmp, db) = indexed_db();
+        cmd_outline(&db, "missing.py", false, None, 384).expect("outline of unknown file is ok");
+    }
+
+    #[test]
+    fn cmd_refs_renders_and_filters_by_kind() {
+        let (_tmp, db) = indexed_db();
+        cmd_refs(&db, "helper", None, false, None, 384).expect("refs ok");
+        cmd_refs(&db, "helper", Some(EdgeKindFilter::Calls), false, None, 384)
+            .expect("refs --kind calls ok");
+    }
+
+    #[test]
+    fn cmd_refs_unknown_name_renders_did_you_mean() {
+        let (_tmp, db) = indexed_db();
+        // Empty result triggers the did_you_mean / empty_index_hint branch.
+        cmd_refs(&db, "helpe", None, false, None, 384).expect("refs of near-miss name is ok");
+    }
+
+    #[test]
+    fn cmd_callees_renders_over_populated_db() {
+        let (_tmp, db) = indexed_db();
+        cmd_callees(&db, "main", false, None, 384).expect("callees ok");
+        cmd_callees(&db, "no_such_symbol", false, None, 384).expect("empty callees is ok");
+    }
+
+    #[test]
+    fn cmd_impact_renders_with_depth() {
+        let (_tmp, db) = indexed_db();
+        cmd_impact(&db, "helper", 3, false, None, 384).expect("impact ok");
+        cmd_impact(&db, "helper", 3, true, None, 384).expect("impact --json ok");
+    }
+
+    #[test]
+    fn cmd_hierarchy_renders_plain_json_and_mermaid() {
+        let (_tmp, db) = indexed_db();
+        cmd_hierarchy(&db, "Dog", false, false, None, 384).expect("hierarchy ok");
+        cmd_hierarchy(&db, "Dog", true, false, None, 384).expect("hierarchy --json ok");
+        cmd_hierarchy(&db, "Dog", false, true, None, 384).expect("hierarchy --mermaid ok");
+    }
+
+    #[test]
+    fn cmd_deps_renders_plain_and_mermaid() {
+        let (_tmp, db) = indexed_db();
+        cmd_deps(&db, "lib.py", false, false, None, 384).expect("deps ok");
+        cmd_deps(&db, "lib.py", false, true, None, 384).expect("deps --mermaid ok");
+    }
+
+    #[test]
+    fn cmd_search_renders_filters_and_budget() {
+        let (_tmp, db) = indexed_db();
+        cmd_search(&db, "Anim", None, None, 30, false, None, 384).expect("search ok");
+        cmd_search(
+            &db,
+            "speak",
+            Some(SymbolKindFilter::Method),
+            Some("lib.py"),
+            30,
+            false,
+            None,
+            384,
+        )
+        .expect("search with kind + file filter ok");
+        // Token-budget branch.
+        cmd_search(&db, "e", None, None, 30, false, Some(50), 384).expect("search --tokens ok");
+    }
+
+    #[test]
+    fn cmd_search_empty_result_is_ok() {
+        let (_tmp, db) = indexed_db();
+        cmd_search(&db, "zzz_no_match", None, None, 30, false, None, 384)
+            .expect("empty search is ok");
+    }
+
+    #[test]
+    fn cmd_stats_renders_plain_json_and_savings() {
+        let (_tmp, db) = indexed_db();
+        cmd_stats(&db, false, None, 384, false).expect("stats ok");
+        cmd_stats(&db, true, None, 384, false).expect("stats --json ok");
+        cmd_stats(&db, false, None, 384, true).expect("stats --savings ok");
+    }
+
+    #[test]
+    fn cmd_map_renders_plain_json_and_mermaid() {
+        let (_tmp, db) = indexed_db();
+        cmd_map(&db, 1000, false, false, 384).expect("map ok");
+        cmd_map(&db, 1000, true, false, 384).expect("map --json ok");
+        cmd_map(&db, 1000, false, true, 384).expect("map --mermaid ok");
+    }
 }
