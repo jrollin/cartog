@@ -22,9 +22,15 @@ Compares cartog graph queries vs grep/cat approaches for common code navigation 
 | `fixtures/webapp_rb/` | Ruby | 51 | ~2,300 |
 | `fixtures/webapp_java/` | Java | 41 | ~1,800 |
 | `fixtures/webapp_php/` | PHP | 25 | ~1,500 |
-| **Total** | | **345** | **~18,600** |
+| `fixtures/webapp_dart/` | Dart | 9 | ~200 |
+| **Total** | | **354** | **~18,800** |
 
 All fixtures model the same domain (auth service, tokens, routes, middleware, database, cache, events, validators) with controlled, known relationships defined in `ground_truth/`.
+
+The criterion `indexing` bench exercises all 8 fixtures. The shell scenarios and
+`ground_truth/` currently cover the first 7 — `webapp_dart` has no scenario
+ground truth yet, so it is indexed by the criterion bench but not scored by the
+shell suite.
 
 ## Scenarios
 

@@ -163,6 +163,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # need the merge base for the PR baseline comparison
+          # The job git-checkouts arbitrary SHAs but never pushes, so do not
+          # leave credentials persisted in the workspace.
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
