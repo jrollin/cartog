@@ -650,6 +650,39 @@ mod imp {
             }
         })
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn http_status_hint_flags_auth_and_not_found() {
+            assert!(http_status_hint(401).contains("credentials"));
+            assert!(http_status_hint(403).contains("credentials"));
+            assert!(http_status_hint(404).contains("not found"));
+            assert_eq!(http_status_hint(500), "");
+            assert_eq!(http_status_hint(200), "");
+        }
+
+        #[test]
+        fn is_cross_device_error_matches_exdev_only() {
+            let exdev = std::io::Error::from_raw_os_error(18);
+            assert!(
+                is_cross_device_error(&exdev),
+                "EXDEV (18) is the cross-device case"
+            );
+            let enoent = std::io::Error::from_raw_os_error(2);
+            assert!(
+                !is_cross_device_error(&enoent),
+                "ENOENT is not cross-device"
+            );
+            let no_os = std::io::Error::other("synthetic");
+            assert!(
+                !is_cross_device_error(&no_os),
+                "an error without an OS code is not cross-device"
+            );
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -851,5 +884,98 @@ mod tests {
                 "should NOT match as AWS endpoint: {ep}"
             );
         }
+    }
+
+    // ── build_bucket region resolution ────────────────────────────────
+
+    #[test]
+    fn build_bucket_uses_custom_region_and_endpoint() {
+        let cfg = RemoteConfig {
+            region: Some("eu-west-3".into()),
+            endpoint: Some("https://minio.local:9000".into()),
+            ..Default::default()
+        };
+        // Anonymous creds so the test doesn't depend on an AWS credential chain.
+        let bucket = imp::build_bucket("my-bucket", Some(&cfg), true).unwrap();
+        assert_eq!(bucket.region.to_string(), "eu-west-3");
+    }
+
+    #[test]
+    fn build_bucket_parses_named_region_without_endpoint() {
+        let cfg = RemoteConfig {
+            region: Some("us-east-1".into()),
+            ..Default::default()
+        };
+        let bucket = imp::build_bucket("my-bucket", Some(&cfg), true).unwrap();
+        assert_eq!(bucket.region.to_string(), "us-east-1");
+    }
+
+    #[test]
+    fn build_bucket_defaults_region_when_only_endpoint_given() {
+        let cfg = RemoteConfig {
+            endpoint: Some("https://r2.example.com".into()),
+            ..Default::default()
+        };
+        let bucket = imp::build_bucket("my-bucket", Some(&cfg), true).unwrap();
+        // No region configured + a custom endpoint → fall back to us-east-1.
+        assert_eq!(bucket.region.to_string(), "us-east-1");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn build_bucket_falls_back_to_aws_region_env() {
+        let saved_region = std::env::var("AWS_REGION").ok();
+        let saved_default = std::env::var("AWS_DEFAULT_REGION").ok();
+        // SAFETY: serialized via #[serial]; restored below regardless of outcome.
+        unsafe {
+            std::env::set_var("AWS_REGION", "ap-southeast-2");
+            std::env::remove_var("AWS_DEFAULT_REGION");
+        }
+
+        let result = imp::build_bucket("my-bucket", None, true);
+
+        unsafe {
+            match saved_region {
+                Some(v) => std::env::set_var("AWS_REGION", v),
+                None => std::env::remove_var("AWS_REGION"),
+            }
+            match saved_default {
+                Some(v) => std::env::set_var("AWS_DEFAULT_REGION", v),
+                None => std::env::remove_var("AWS_DEFAULT_REGION"),
+            }
+        }
+
+        let bucket = result.expect("env region resolves a bucket");
+        assert_eq!(bucket.region.to_string(), "ap-southeast-2");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn build_bucket_errors_when_no_region_resolvable() {
+        let saved_region = std::env::var("AWS_REGION").ok();
+        let saved_default = std::env::var("AWS_DEFAULT_REGION").ok();
+        unsafe {
+            std::env::remove_var("AWS_REGION");
+            std::env::remove_var("AWS_DEFAULT_REGION");
+        }
+
+        let result = imp::build_bucket("my-bucket", None, true);
+
+        unsafe {
+            match saved_region {
+                Some(v) => std::env::set_var("AWS_REGION", v),
+                None => std::env::remove_var("AWS_REGION"),
+            }
+            match saved_default {
+                Some(v) => std::env::set_var("AWS_DEFAULT_REGION", v),
+                None => std::env::remove_var("AWS_DEFAULT_REGION"),
+            }
+        }
+
+        let err = result.expect_err("no region anywhere must fail");
+        assert!(
+            err.to_string().contains("no AWS region resolvable"),
+            "actionable error names the missing region: {err}"
+        );
     }
 }
