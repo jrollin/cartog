@@ -41,6 +41,7 @@ impl Symbol {
     /// `visibility` defaults to `Public`, and `is_async` defaults to `false`.
     /// Use the builder-style setters to override.
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn new(
         name: impl Into<String>,
         kind: SymbolKind,
@@ -74,30 +75,35 @@ impl Symbol {
     }
 
     /// Set the parent symbol ID.
+    #[must_use]
     pub fn with_parent(mut self, parent_id: Option<&str>) -> Self {
         self.parent_id = parent_id.map(str::to_string);
         self
     }
 
     /// Set the function/method signature.
+    #[must_use]
     pub fn with_signature(mut self, signature: Option<String>) -> Self {
         self.signature = signature;
         self
     }
 
     /// Set the visibility.
+    #[must_use]
     pub fn with_visibility(mut self, visibility: Visibility) -> Self {
         self.visibility = visibility;
         self
     }
 
     /// Mark as async.
+    #[must_use]
     pub fn with_async(mut self, is_async: bool) -> Self {
         self.is_async = is_async;
         self
     }
 
     /// Set the docstring.
+    #[must_use]
     pub fn with_docstring(mut self, docstring: Option<String>) -> Self {
         self.docstring = docstring;
         self
@@ -121,6 +127,7 @@ pub enum SymbolKind {
 }
 
 impl SymbolKind {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Function => "function",
@@ -174,6 +181,7 @@ pub enum Visibility {
 }
 
 impl Visibility {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Public => "public",
@@ -183,6 +191,7 @@ impl Visibility {
     }
 
     /// Parse a visibility string, defaulting to `Public` for unknown values.
+    #[must_use]
     pub fn from_str_lossy(s: &str) -> Self {
         match s {
             "private" => Self::Private,
@@ -210,6 +219,7 @@ pub struct Edge {
 
 impl Edge {
     /// Create a new edge with `target_id` set to `None` (resolved later by `db.resolve_edges()`).
+    #[must_use]
     pub fn new(
         source_id: impl Into<String>,
         target_name: impl Into<String>,
@@ -241,6 +251,7 @@ pub enum EdgeKind {
 }
 
 impl EdgeKind {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Calls => "calls",
@@ -300,6 +311,7 @@ pub struct ChangesResult {
 /// - Nested class:       `src/auth.py:class:Outer.Inner`
 ///
 /// This ID is stable across line movements within a file.
+#[must_use]
 pub fn symbol_id(file_path: &str, kind: &str, name: &str, parent_name: Option<&str>) -> String {
     match parent_name {
         Some(pn) => format!("{file_path}:{kind}:{pn}.{name}"),
@@ -308,6 +320,7 @@ pub fn symbol_id(file_path: &str, kind: &str, name: &str, parent_name: Option<&s
 }
 
 /// Map file extension to language name.
+#[must_use]
 pub fn detect_language(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?;
     match ext {

@@ -67,6 +67,15 @@ criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 serial_test = "3"
 
+[workspace.lints.rust]
+# cartog-process-lock has unsafe libc/Win32 calls; require explicit unsafe
+# blocks inside unsafe fns so each call site documents its own invariant.
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+# Enforce the clippy default groups on every local build, not just in CI.
+all = "warn"
+
 [profile.release]
 lto = "thin"
 strip = "debuginfo"
@@ -74,3 +83,9 @@ strip = "debuginfo"
 # opt-level=1 because tree-sitter C grammars compile very slowly at the default level=0
 [profile.dev]
 opt-level = 1
+
+# Benchmarks run with release optimizations but keep debug symbols so
+# profilers (perf, flamegraph) can attribute samples to source lines.
+[profile.bench]
+inherits = "release"
+debug = true

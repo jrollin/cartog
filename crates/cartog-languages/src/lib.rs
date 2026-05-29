@@ -44,6 +44,13 @@ pub(crate) fn node_text<'a>(node: Node, source: &'a str) -> &'a str {
     source.get(node.start_byte()..node.end_byte()).unwrap_or("")
 }
 
+/// Last segment of `s` after the final `sep`, or all of `s` if `sep` is absent.
+/// Used to turn dotted/slashed import paths into a bare target name
+/// (`a.b.C` → `C`, `pkg/mod` → `mod`, `crate::path::Item` → `Item`).
+pub(crate) fn last_segment<'a>(s: &'a str, sep: &str) -> &'a str {
+    s.rsplit(sep).next().unwrap_or(s)
+}
+
 pub use cartog_core::detect_language;
 
 /// Get the extractor for a language name.

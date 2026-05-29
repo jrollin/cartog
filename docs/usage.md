@@ -119,6 +119,8 @@ base_url = "http://localhost:11434"
 | `local` (default) | No config needed | `cartog rag setup` to download models | ONNX Runtime via fastembed, ~1.2GB models |
 | `ollama` | `provider = "ollama"` | Ollama server running with model pulled | No model download needed, dimension auto-detected. Compiled into every default build; **local ONNX stays the default provider** — set `provider = "ollama"` to use it. |
 
+An unknown `provider` value (embedding: `local`, `ollama`; reranker: `local`, `none`) is rejected when `.cartog.toml` is loaded, with an error naming the bad value — a typo like `provider = "ollma"` fails fast instead of silently falling back to the default.
+
 **Advanced local configuration:**
 
 ```toml

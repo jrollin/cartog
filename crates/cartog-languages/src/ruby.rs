@@ -3,7 +3,7 @@ use tree_sitter::{Language, Node, Parser};
 
 use cartog_core::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
-use super::{node_text, ExtractionResult, Extractor};
+use super::{last_segment, node_text, ExtractionResult, Extractor};
 
 /// Extracts symbols and edges from Ruby source files.
 pub struct RubyExtractor {
@@ -522,7 +522,7 @@ fn extract_require(
     );
 
     // Use the last segment of the path as the imported name
-    let imported_name = arg_text.rsplit('/').next().unwrap_or(&arg_text);
+    let imported_name = last_segment(&arg_text, "/");
     edges.push(Edge::new(
         sym_id,
         imported_name,

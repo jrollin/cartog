@@ -3,7 +3,7 @@ use tree_sitter::{Language, Node, Parser};
 
 use cartog_core::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
-use super::{node_text, ExtractionResult, Extractor};
+use super::{last_segment, node_text, ExtractionResult, Extractor};
 
 /// Tree-sitter–based extractor for Dart source files.
 pub struct DartExtractor {
@@ -913,7 +913,7 @@ fn strip_quotes(raw: &str) -> String {
 
 /// Pick a short import target name (last path segment, without extension).
 fn uri_short_name(uri: &str) -> String {
-    let last = uri.rsplit('/').next().unwrap_or(uri);
+    let last = last_segment(uri, "/");
     let stem = last.strip_suffix(".dart").unwrap_or(last);
     if let Some(rest) = uri.strip_prefix("package:") {
         // For `package:foo/bar.dart`, prefer the package name `foo`.

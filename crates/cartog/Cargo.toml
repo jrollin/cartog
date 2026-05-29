@@ -60,3 +60,6 @@ libc = { workspace = true }
 [[bench]]
 name = "queries"
 harness = false
+
+[lints]
+workspace = true

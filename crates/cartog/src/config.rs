@@ -432,7 +432,45 @@ fn read_config(path: &Path) -> Option<CartogConfig> {
         }
     }
 
+    // Reject an unknown `provider` value at parse time. Without this a typo
+    // (`provider = "ollma"`) only surfaces later, when the provider is actually
+    // loaded — and the reranker typo never surfaces at all. Fail fast here.
+    if let Err(msg) = validate_providers(&parsed) {
+        eprintln!("cartog: error in {}: {msg}", path.display());
+        return None;
+    }
+
     Some(parsed)
+}
+
+/// Reject an unknown embedding/reranker `provider` value. Unknown values are a
+/// user typo: surface them at config load rather than at first use. Absent
+/// (`None`) means "use the default" and is always accepted.
+fn validate_providers(config: &CartogConfig) -> Result<(), String> {
+    const EMBEDDING_PROVIDERS: &[&str] = &["local", "ollama"];
+    const RERANKER_PROVIDERS: &[&str] = &["local", "none"];
+
+    if let Some(p) = config
+        .embedding
+        .as_ref()
+        .and_then(|e| e.provider.as_deref())
+    {
+        if !EMBEDDING_PROVIDERS.contains(&p) {
+            return Err(format!(
+                "unknown embedding provider '{p}'; supported: {}",
+                EMBEDDING_PROVIDERS.join(", ")
+            ));
+        }
+    }
+    if let Some(p) = config.reranker.as_ref().and_then(|r| r.provider.as_deref()) {
+        if !RERANKER_PROVIDERS.contains(&p) {
+            return Err(format!(
+                "unknown reranker provider '{p}'; supported: {}",
+                RERANKER_PROVIDERS.join(", ")
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Reject a `[remote].endpoint` value that embeds credentials via the
@@ -595,6 +633,48 @@ mod tests {
             toml::from_str("[database]\npath = \"x\"\n[embedding]\nprovider = \"local\"\n")
                 .unwrap();
         assert!(unknown_sections(&raw).is_empty());
+    }
+
+    #[test]
+    fn validate_providers_accepts_known_values() {
+        let config: CartogConfig =
+            toml::from_str("[embedding]\nprovider = \"ollama\"\n[reranker]\nprovider = \"none\"\n")
+                .unwrap();
+        assert!(validate_providers(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_providers_accepts_absent_provider() {
+        let config = CartogConfig::default();
+        assert!(validate_providers(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_providers_rejects_unknown_embedding_provider() {
+        let config: CartogConfig = toml::from_str("[embedding]\nprovider = \"ollma\"\n").unwrap();
+        let err = validate_providers(&config).unwrap_err();
+        assert!(
+            err.contains("ollma"),
+            "error should name the bad value: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_providers_rejects_unknown_reranker_provider() {
+        let config: CartogConfig = toml::from_str("[reranker]\nprovider = \"bogus\"\n").unwrap();
+        let err = validate_providers(&config).unwrap_err();
+        assert!(
+            err.contains("bogus"),
+            "error should name the bad value: {err}"
+        );
+    }
+
+    #[test]
+    fn read_config_rejects_unknown_provider() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        fs::write(&cfg_path, "[embedding]\nprovider = \"ollma\"\n").unwrap();
+        assert!(read_config(&cfg_path).is_none());
     }
 
     #[test]

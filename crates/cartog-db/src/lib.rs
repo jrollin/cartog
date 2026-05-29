@@ -332,9 +332,9 @@ pub fn normalize_symbol_name(name: &str) -> String {
                 // SCREAMING to PascalCase boundary: `HTTPResponse` → split before R
                 words.push(std::mem::take(&mut current));
             }
-            current.push(c.to_lowercase().next().unwrap());
+            current.extend(c.to_lowercase());
         } else if c.is_alphanumeric() {
-            current.push(c.to_lowercase().next().unwrap());
+            current.extend(c.to_lowercase());
         } else {
             // Non-alphanumeric (other than _ and -): treat as separator
             if !current.is_empty() {
