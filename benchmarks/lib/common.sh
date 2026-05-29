@@ -28,15 +28,12 @@ should_skip_fixture() {
     if [ -z "${FIXTURE_FILTER:-}" ]; then
         return 1
     fi
+    # Match by the `_<tag>` suffix in the fixture directory name. Keep this list
+    # in sync with the languages that have fixtures under benchmarks/fixtures/.
     case "$FIXTURE_FILTER" in
-        py) [[ "$fixture_name" != *"_py"* ]] && return 0 || return 1 ;;
-        ts) [[ "$fixture_name" != *"_ts"* ]] && return 0 || return 1 ;;
-        go) [[ "$fixture_name" != *"_go"* ]] && return 0 || return 1 ;;
-        rs) [[ "$fixture_name" != *"_rs"* ]] && return 0 || return 1 ;;
-        rb) [[ "$fixture_name" != *"_rb"* ]] && return 0 || return 1 ;;
-        java) [[ "$fixture_name" != *"_java"* ]] && return 0 || return 1 ;;
-        php) [[ "$fixture_name" != *"_php"* ]] && return 0 || return 1 ;;
-        *)  return 1 ;;
+        py|ts|go|rs|rb|java|php|dart)
+            [[ "$fixture_name" != *"_${FIXTURE_FILTER}"* ]] && return 0 || return 1 ;;
+        *) return 1 ;;
     esac
 }
 
@@ -106,21 +103,7 @@ run_cat() {
 }
 
 # ── Recall computation ──
-
-# Count how many expected items appear in output.
-# Usage: count_matches <output> <item1> <item2> ...
-# Returns: count of found items
-count_matches() {
-    local output="$1"
-    shift
-    local found=0
-    for item in "$@"; do
-        if echo "$output" | grep -c "$item" >/dev/null 2>&1; then
-            found=$((found + 1))
-        fi
-    done
-    echo $found
-}
+# Recall matching itself lives in `check_recall` (compare.sh).
 
 # Compute recall as percentage.
 # Usage: compute_recall <found> <total>

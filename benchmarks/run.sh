@@ -25,13 +25,9 @@ PROJECT_ROOT="$(cd "$BENCH_DIR/.." && pwd)"
 RESULTS_DIR="$BENCH_DIR/results"
 RESULTS_FILE="$RESULTS_DIR/latest.jsonl"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+# Colors + should_skip_fixture live in common.sh — single source of truth so the
+# runner and the scenarios share one fixture-filter definition.
+source "$BENCH_DIR/lib/common.sh"
 
 # Parse args
 SCENARIO_FILTER=""
@@ -80,19 +76,8 @@ echo -e "${BOLD}Indexing fixtures...${NC}"
 for fixture_dir in "$BENCH_DIR"/fixtures/*/; do
     fixture_name=$(basename "$fixture_dir")
 
-    # Apply fixture filter
-    if [ -n "$FIXTURE_FILTER" ]; then
-        case "$FIXTURE_FILTER" in
-            py) [[ "$fixture_name" != *"_py"* ]] && continue ;;
-            ts) [[ "$fixture_name" != *"_ts"* ]] && continue ;;
-            go) [[ "$fixture_name" != *"_go"* ]] && continue ;;
-            rs) [[ "$fixture_name" != *"_rs"* ]] && continue ;;
-            rb) [[ "$fixture_name" != *"_rb"* ]] && continue ;;
-            java) [[ "$fixture_name" != *"_java"* ]] && continue ;;
-            php) [[ "$fixture_name" != *"_php"* ]] && continue ;;
-            dart) [[ "$fixture_name" != *"_dart"* ]] && continue ;;
-        esac
-    fi
+    # Apply fixture filter (shared definition in common.sh).
+    should_skip_fixture "$fixture_name" && continue
 
     echo -n "  $fixture_name: "
     (cd "$fixture_dir" && $CARTOG index . --force 2>&1 | head -1)

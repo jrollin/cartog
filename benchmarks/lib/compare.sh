@@ -64,10 +64,12 @@ check_recall() {
     while IFS= read -r item; do
         [ -z "$item" ] && continue
         total=$((total + 1))
-        # Use grep -c instead of grep -q to avoid SIGPIPE with pipefail on large outputs.
-        # When grep -q finds a match and exits early, echo may still be writing,
-        # causing SIGPIPE (exit 141) which pipefail treats as failure.
-        if echo "$output" | grep -c "$item" >/dev/null 2>&1; then
+        # Fixed-string (-F), whole-word (-w) match: a symbol name must appear as
+        # a token, not as a substring (`login` must not match `login_route`) and
+        # not as a regex (a name like `User[` or `f.bar` must match literally).
+        # `-q` on a here-string has no pipe, so the SIGPIPE-with-pipefail issue
+        # that motivated the old `-c` idiom does not arise.
+        if grep -Fwq -- "$item" <<< "$output"; then
             found=$((found + 1))
         fi
     done <<< "$items"
