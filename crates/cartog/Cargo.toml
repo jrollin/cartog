@@ -56,6 +56,11 @@ sha2 = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = { workspace = true }
+# Fabricate a valid .tar.gz containing a runnable cartog stub so the
+# --apply-pending success path (download → swap → smoke → clear → breadcrumb)
+# can be exercised end-to-end. Versions already in the lockfile via self_update.
+flate2 = "1"
+tar = "0.4"
 
 [[bench]]
 name = "queries"

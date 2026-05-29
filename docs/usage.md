@@ -248,9 +248,9 @@ cp -r skills/cartog ~/.claude/skills/
 
 The plugin wires two Claude Code hooks plus a user-typed skill:
 
-- **SessionStart** (`ensure_indexed.sh`): non-blocking. If the binary is missing, forks a background pipeline (install.sh pinned to the plugin version → optionally `cartog index .` → `cartog rag setup` → `cartog rag index .`) and exits fast — MCP becomes available on the next session. If the binary is present, runs `cartog index .` foreground (incremental, typically <1s) and backgrounds rag setup + rag index. Prints a one-line drift warning if the installed binary doesn't match the plugin pin. Missing `.cartog.toml` on an interactive session prints a hint pointing at `cartog init`; on a non-interactive session it exits silently.
-- **SessionEnd** (`update_on_exit.sh`): *transitional* — only upgrades pre-0.14.0 binaries (which lack `cartog self update`) via `install.sh`. Modern binaries (>= 0.14.0) are a noop here; drift is the user's call via `/cartog-install`. Scheduled for removal in the release after the transition.
-- **`/cartog-install` skill** (`skills/cartog-install/SKILL.md`): user-typed verb. Installs the binary (when missing) or upgrades it (via `cartog self update` on >=0.14.0, or via `install.sh` on <0.14.0) to match the plugin's pinned version. Use this to repair a failed background install or to bring a drifted binary back in sync.
+- **SessionStart** (`ensure_indexed.sh`): non-blocking. If the binary is missing, forks a background pipeline (install.sh pinned to the plugin version → optionally `cartog index .` → `cartog rag setup` → `cartog rag index .`) and exits fast — MCP becomes available on the next session. If the binary is present, runs `cartog index .` foreground (incremental, typically <1s) and backgrounds rag setup + rag index. Prints a one-line drift warning if the installed binary doesn't match the plugin pin — or, when a deferred update is already armed for that pin, "cartog X will be applied when this session ends". Surfaces a "cartog updated to X" breadcrumb once after a completed boundary swap. Missing `.cartog.toml` on an interactive session prints a hint pointing at `cartog init`; on a non-interactive session it exits silently.
+- **SessionEnd** (`update_on_exit.sh`): applies a deferred update at the safe boundary. For modern binaries (>= 0.14.0) it runs `cartog self update --apply-pending` once the serve process has exited (no-op if nothing was armed; skipped while a RAG pipeline lock is active; exit 6 means a peer is still live and it retries next session). For pre-0.14.0 binaries (which lack `cartog self update`) it still upgrades via `install.sh` — that legacy path is transitional and scheduled for removal.
+- **`/cartog-install` skill** (`skills/cartog-install/SKILL.md`): user-typed verb. Installs the binary (when missing) or upgrades it to match the plugin's pinned version. On >=0.14.0 it runs `cartog self update`; inside a Claude Code session, where the MCP server is the live peer (exit 6), it arms a deferred update with `cartog self update --defer` instead. On <0.14.0 it upgrades via `install.sh`. Use this to repair a failed background install or to bring a drifted binary back in sync.
 
 To run the SessionStart steps manually:
 
@@ -265,7 +265,7 @@ bash skills/cartog/scripts/ensure_indexed.sh
 | [`SKILL.md`](../skills/cartog/SKILL.md) | Behavioral instructions, commands, and workflows |
 | [`scripts/install.sh`](../skills/cartog/scripts/install.sh) | Automated installation (pre-built binary or cargo install), accepts optional version arg |
 | [`scripts/ensure_indexed.sh`](../skills/cartog/scripts/ensure_indexed.sh) | SessionStart hook: install-if-missing + foreground index + background rag setup/index + drift warning |
-| [`scripts/update_on_exit.sh`](../skills/cartog/scripts/update_on_exit.sh) | SessionEnd hook: peer-aware `cartog self update` (defers if RAG pipeline lock is active) |
+| [`scripts/update_on_exit.sh`](../skills/cartog/scripts/update_on_exit.sh) | SessionEnd hook: applies a deferred update (`cartog self update --apply-pending`) once the serve peer exits; legacy `install.sh` upgrade for <0.14.0 |
 | [`tests/golden_examples.yaml`](../skills/cartog/tests/golden_examples.yaml) | Behavioral test scenarios (expected tool calls per query) |
 | [`tests/test_ensure_indexed.sh`](../skills/cartog/tests/test_ensure_indexed.sh) | Bash unit tests for ensure_indexed.sh |
 | [`tests/test_update_on_exit.sh`](../skills/cartog/tests/test_update_on_exit.sh) | Bash unit tests for update_on_exit.sh |
@@ -276,7 +276,7 @@ bash skills/cartog/scripts/ensure_indexed.sh
 
 ## MCP Server
 
-`cartog serve` runs cartog as an MCP server over stdio, exposing 13 tools (11 core + 2 RAG) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: the 11 query tools are read-only, only `cartog_index` and `cartog_rag_index` write, so clients can skip approval prompts for the safe ones.
+`cartog serve` runs cartog as an MCP server over stdio, exposing 14 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 11 query tools are read-only; `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones.
 
 Read tools also declare an `outputSchema` and return `structuredContent` (the typed result mirrored alongside the human-readable text block) so schema-aware clients get validated, machine-readable output. To keep responses within the caller's context window, the size cap (`CARTOG_MCP_MAX_BYTES`, default 64 KB) counts the text block plus the structured copy: `structuredContent` is dropped when the combined size would exceed the cap (and when the text block itself is truncated, which adds a truncation notice).
 
@@ -937,8 +937,8 @@ When `--watch` is passed, a background file watcher keeps the code graph up to d
 Opening two Claude Code windows on the same project (or running `cartog serve` in a terminal while a Claude Code window has its own MCP child) is supported via **single-writer election**:
 
 - The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 13 MCP tools. The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
-- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 11 of 13 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
-- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 13 tools become available on what was the secondary.
+- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 12 of 14 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) and `cartog_update` (which arms a machine-level deferred update, not a DB write) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
+- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 14 tools become available on what was the secondary.
 
 Escape hatches:
 

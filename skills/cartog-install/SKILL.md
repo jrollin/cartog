@@ -73,8 +73,14 @@ Handle the documented exit codes:
 |---|---|---|
 | 0 | Updated | "cartog upgraded. Restart Claude Code to pick up the new binary." |
 | 3 | Installed via cargo | "cartog was installed via cargo. Run `cargo install cartog --force` to upgrade." |
-| 6 | Another cartog process is running | "Close other Claude Code sessions (or stop background `cartog watch`) and run /cartog-install again." |
+| 6 | Another cartog process is running | Inside a Claude Code session this is the **normal** case — the cartog MCP server (`cartog serve`) is the running peer. Arm a deferred update **to the pinned version** instead, substituting `$PLUGIN_VERSION` from the top of this file: `cartog self update --defer --to $PLUGIN_VERSION`. Tell the user "cartog will update to $PLUGIN_VERSION when this session ends." (Manual alternative: close other Claude Code sessions, stop any background `cartog watch`, then run /cartog-install again.) |
 | other | Unexpected | Surface the exit code + stderr to the user. Then run the bundled installer pinned to `$PLUGIN_VERSION` as a recovery: `bash "${CLAUDE_PLUGIN_ROOT}/skills/cartog/scripts/install.sh" $PLUGIN_VERSION`. Never invoke `install.sh` without the pinned version — that would install the latest GitHub release, drifting off the plugin's pin. |
+
+`cartog self update --defer --to $PLUGIN_VERSION` is the right call from
+**inside** a Claude Code session: the MCP server is the peer that blocks an
+in-place swap, and `--to` arms the **pinned** version (not the latest GitHub
+release) so the deferred update lands exactly on the plugin's pin. Plain
+`cartog self update` is for a terminal with no cartog serve/watch running.
 
 ### 5. If already up to date
 

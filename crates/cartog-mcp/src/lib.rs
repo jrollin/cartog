@@ -1,7 +1,8 @@
 //! MCP server for the cartog code graph.
 //!
-//! Exposes cartog's graph queries, indexing, and semantic search as 13 MCP tools
-//! over stdio transport. Designed for Claude Code, Cursor, and other MCP clients.
+//! Exposes cartog's graph queries, indexing, semantic search, and deferred
+//! self-update as 14 MCP tools over stdio transport. Designed for Claude Code,
+//! Cursor, and other MCP clients.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -196,6 +197,22 @@ struct StatsResult {
     stats: cartog_db::IndexStats,
     role: Role,
     watcher_active: bool,
+}
+
+/// Result of `cartog_update` (arm a deferred self-update).
+#[derive(Debug, Serialize, JsonSchema)]
+struct UpdateResult {
+    /// The currently-running cartog version.
+    current: String,
+    /// The version that will be installed at the next boundary, when armed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<String>,
+    /// One of `armed`, `up-to-date`, `cargo-refused`, or `error`.
+    status: String,
+    /// When the armed update takes effect.
+    apply: String,
+    /// Human-readable summary for display.
+    message: String,
 }
 
 // ── Path validation ──
@@ -432,6 +449,108 @@ fn success_result(text: String, structured: Option<serde_json::Value>) -> CallTo
     let mut result = CallToolResult::success(vec![Content::text(text)]);
     result.structured_content = structured;
     result
+}
+
+/// Map the JSON envelope from `cartog self update --defer --json` to an
+/// [`UpdateResult`]. The CLI is the single source of truth for arming
+/// behavior and exit semantics; this only reshapes its output for MCP.
+fn parse_arm_output(output: &std::process::Output) -> UpdateResult {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Scan from the last line for an object carrying a string `status`. The
+    // `status` filter rejects a bare scalar (e.g. a stray `99` log line that
+    // happens to be valid JSON) that would otherwise be picked and mask a real
+    // result.
+    let parsed: Option<serde_json::Value> = stdout.lines().rev().find_map(|line| {
+        serde_json::from_str::<serde_json::Value>(line.trim())
+            .ok()
+            .filter(|v| v.get("status").and_then(|s| s.as_str()).is_some())
+    });
+
+    let unknown = || {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = if !stderr.trim().is_empty() {
+            stderr.trim().to_string()
+        } else {
+            stdout.trim().to_string()
+        };
+        // No output at all (e.g. the child was SIGKILLed before printing) would
+        // otherwise be a dead end. Always leave the agent an actionable step.
+        let message = if detail.is_empty() {
+            let code = output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            format!(
+                "could not arm deferred update (exit {code}, no output). Run `cartog self update \
+                 --defer` in a terminal, or /cartog-install, to see the error."
+            )
+        } else {
+            format!("could not arm deferred update: {detail}")
+        };
+        UpdateResult {
+            current: current.clone(),
+            target: None,
+            status: "error".to_string(),
+            apply: "n/a".to_string(),
+            message,
+        }
+    };
+
+    let Some(obj) = parsed else { return unknown() };
+    let status = obj.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    match status {
+        "armed" => {
+            let target = obj
+                .get("target")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            UpdateResult {
+                message: match &target {
+                    Some(t) => format!(
+                        "Armed update to {t}. It applies when this Claude Code session ends \
+                         (or on the next restart) — the current session keeps running the \
+                         installed binary."
+                    ),
+                    None => "Armed a deferred update.".to_string(),
+                },
+                current,
+                target,
+                status: "armed".to_string(),
+                apply: "session-end-or-restart".to_string(),
+            }
+        }
+        "up-to-date" => UpdateResult {
+            current: current.clone(),
+            target: None,
+            status: "up-to-date".to_string(),
+            apply: "n/a".to_string(),
+            message: format!("cartog is already up to date ({current})."),
+        },
+        "cargo" => UpdateResult {
+            current,
+            target: None,
+            status: "cargo-refused".to_string(),
+            apply: "n/a".to_string(),
+            message: "cartog was installed via cargo. Run `cargo install cartog --force` to \
+                      upgrade."
+                .to_string(),
+        },
+        _ => {
+            let msg = obj
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            UpdateResult {
+                current,
+                target: None,
+                status: "error".to_string(),
+                apply: "n/a".to_string(),
+                message: format!("could not arm deferred update: {msg}"),
+            }
+        }
+    }
 }
 
 /// Build a JSON text response with next-tool suggestions appended.
@@ -681,8 +800,9 @@ impl CartogServer {
     /// Construct a secondary MCP server that attached read-only because
     /// another cartog process owns the `serve` PID lock. Skips schema
     /// migrations and the embedding-fingerprint reconcile (the primary
-    /// owns both); the 2 write tools return a clear error at dispatch
-    /// time. The 11 read tools work normally.
+    /// owns both); the 2 DB-write tools return a clear error at dispatch
+    /// time. The other 12 tools (11 read + `cartog_update`, which arms a
+    /// machine-level deferred update, not a DB write) work normally.
     pub fn new_read_only(
         db_path: &std::path::Path,
         rag_config: rag::EmbeddingProviderConfig,
@@ -1154,6 +1274,52 @@ impl CartogServer {
             // — otherwise MCP-side stats calls disappear from
             // `cartog stats --savings`.
             log_tool_query(&db, "cartog_stats");
+            Ok(success_result(json, structured))
+        })
+        .await
+        .map_err(|e| mcp_err(format!("task join failed: {e}")))?
+    }
+
+    /// Arm a deferred cartog self-update.
+    ///
+    /// Deliberately NOT gated by `refuse_if_read_only`: arming writes the
+    /// machine-level state file, not the index DB, so a read-only secondary
+    /// may arm just like the primary. The guard exists only to stop a
+    /// secondary from writing the DB — adding it here would be a category
+    /// error.
+    ///
+    /// Never swaps the binary in-session: this server IS the live peer that
+    /// `cartog self update` refuses to overwrite. It shells out to
+    /// `self update --defer`, which records the target and exits without
+    /// touching the binary; the boundary swap happens at SessionEnd.
+    #[tool(
+        description = "Arm a deferred cartog self-update to the LATEST stable release. Does NOT upgrade in this session — the running server keeps its current binary; the new version becomes active after this session ends (or the next restart). Use when the user confirms they want to update cartog. NOTE: if cartog was installed as a Claude Code plugin (pinned version), prefer the /cartog-install skill, which arms the plugin's PINNED version instead of latest. Not for: indexing or search. Returns: {current, target, status, apply, message}.",
+        annotations(
+            title = "Update cartog",
+            read_only_hint = false,
+            destructive_hint = false,
+            // Not idempotent: each call re-fetches the latest tag and rewrites
+            // armed_at / last_update_check timestamps, so repeated calls change
+            // state.toml even when the armed target is unchanged.
+            idempotent_hint = false,
+            open_world_hint = true
+        ),
+        output_schema = output_schema_for::<UpdateResult>()
+    )]
+    async fn cartog_update(&self) -> Result<CallToolResult, McpError> {
+        tokio::task::spawn_blocking(move || {
+            debug!("update (arm deferred)");
+            let exe = std::env::current_exe()
+                .map_err(|e| mcp_err(format!("cannot resolve cartog binary: {e}")))?;
+            let output = std::process::Command::new(exe)
+                .args(["self", "update", "--defer", "--json"])
+                .output()
+                .map_err(|e| mcp_err(format!("failed to run self update --defer: {e}")))?;
+
+            let result = parse_arm_output(&output);
+            let json = serde_json::to_string_pretty(&result)
+                .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            let structured = serde_json::to_value(&result).ok();
             Ok(success_result(json, structured))
         })
         .await
@@ -2127,14 +2293,143 @@ async fn wait_for_sigterm() {
 mod tests {
     use super::*;
 
+    // ── parse_arm_output tests (cartog_update envelope reshaping) ──
+    //
+    // Unix-only: these construct a real `ExitStatus` by spawning `true`/`sh`.
+    // The parse logic itself is platform-independent.
+
+    /// Build an `Output` with the given stdout/stderr and a zero exit status.
+    /// parse_arm_output reads `status` only in the no-output branch, so a
+    /// success-shaped status is fine for the parse-path cases.
+    #[cfg(unix)]
+    fn output_ok(stdout: &str, stderr: &str) -> std::process::Output {
+        std::process::Output {
+            status: std::process::Command::new("true")
+                .status()
+                .expect("run true"),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_arm_output_armed_maps_fields() {
+        let r = parse_arm_output(&output_ok(
+            r#"{"status":"armed","current":"0.19.0","target":"0.20.0","apply":"session-end-or-restart"}"#,
+            "",
+        ));
+        assert_eq!(r.status, "armed");
+        assert_eq!(r.target.as_deref(), Some("0.20.0"));
+        assert_eq!(r.apply, "session-end-or-restart");
+        assert!(r.message.contains("session ends"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_arm_output_up_to_date_maps() {
+        let r = parse_arm_output(&output_ok(
+            r#"{"status":"up-to-date","current":"0.19.0","latest":"0.19.0"}"#,
+            "",
+        ));
+        assert_eq!(r.status, "up-to-date");
+        assert_eq!(r.apply, "n/a");
+        assert!(r.target.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_arm_output_cargo_maps_to_cargo_refused() {
+        let r = parse_arm_output(&output_ok(
+            r#"{"status":"cargo","message":"cartog was installed via cargo. Run `cargo install cartog --force` to upgrade."}"#,
+            "",
+        ));
+        assert_eq!(r.status, "cargo-refused");
+        assert!(r.message.contains("cargo install cartog --force"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_arm_output_foreign_status_echoes_message_as_error() {
+        let r = parse_arm_output(&output_ok(
+            r#"{"status":"fetch-failed","message":"GitHub API returned status 500"}"#,
+            "",
+        ));
+        assert_eq!(r.status, "error");
+        assert!(r.message.contains("GitHub API returned status 500"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_arm_output_skips_log_lines_before_json() {
+        // A daily-update-check hint or any noise line before the JSON must not
+        // break the parse — the reverse scan finds the real object.
+        let r = parse_arm_output(&output_ok(
+            "cartog: a new version is available\n{\"status\":\"armed\",\"target\":\"0.20.0\"}\n",
+            "",
+        ));
+        assert_eq!(r.status, "armed");
+        assert_eq!(r.target.as_deref(), Some("0.20.0"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_arm_output_ignores_trailing_bare_scalar() {
+        // A trailing bare scalar that is valid JSON must NOT be picked over the
+        // real status object earlier in the stream.
+        let r = parse_arm_output(&output_ok(
+            "{\"status\":\"armed\",\"target\":\"1.2.3\"}\n99\n",
+            "",
+        ));
+        assert_eq!(r.status, "armed", "bare scalar must be skipped");
+        assert_eq!(r.target.as_deref(), Some("1.2.3"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_arm_output_empty_output_names_exit_and_next_action() {
+        // Child produced nothing (e.g. SIGKILL). The message must still give a
+        // next step rather than a dead-end empty string.
+        let out = std::process::Output {
+            status: std::process::Command::new("sh")
+                .args(["-c", "exit 9"])
+                .status()
+                .expect("run sh"),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        let r = parse_arm_output(&out);
+        assert_eq!(r.status, "error");
+        assert!(
+            r.message.contains("exit 9"),
+            "must name the exit code: {}",
+            r.message
+        );
+        assert!(
+            r.message.contains("--defer") || r.message.contains("/cartog-install"),
+            "must name a next action: {}",
+            r.message
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_arm_output_nonjson_stderr_surfaces_detail() {
+        let r = parse_arm_output(&output_ok("", "boom: something broke"));
+        assert_eq!(r.status, "error");
+        assert!(r.message.contains("boom: something broke"));
+    }
+
     // ── Tool annotation tests ──
 
-    /// Tools that never mutate the DB advertise `read_only_hint = true`; the two
-    /// index-building tools advertise `false`. Clients use this to skip approval
-    /// prompts for safe tools and flag the writers.
+    /// Tools without side effects advertise `read_only_hint = true`; the three
+    /// side-effecting tools advertise `false`. Two of those write the DB
+    /// (`cartog_index`, `cartog_rag_index`); `cartog_update` arms a machine-level
+    /// deferred update. Clients use the hint to skip approval prompts for safe
+    /// tools and flag the rest.
     #[test]
     fn tool_annotations_mark_read_only_correctly() {
-        let writers = ["cartog_index", "cartog_rag_index"];
+        let side_effecting = ["cartog_index", "cartog_rag_index", "cartog_update"];
         let tools = CartogServer::tool_router().list_all();
 
         assert!(!tools.is_empty(), "router exposes tools");
@@ -2143,7 +2438,7 @@ mod tests {
                 .annotations
                 .as_ref()
                 .unwrap_or_else(|| panic!("{} has no annotations", tool.name));
-            let expected_read_only = !writers.contains(&tool.name.as_ref());
+            let expected_read_only = !side_effecting.contains(&tool.name.as_ref());
             assert_eq!(
                 ann.read_only_hint,
                 Some(expected_read_only),
@@ -2919,6 +3214,29 @@ mod tests {
         assert!(
             primary.refuse_if_read_only("cartog_index").is_none(),
             "primary must NOT refuse"
+        );
+    }
+
+    #[test]
+    fn cartog_update_is_registered_and_not_gated_read_only() {
+        // cartog_update arms a machine-level deferred update, not a DB write,
+        // so it must be available even on a read-only secondary. The router
+        // lists it regardless of role, and the handler never consults
+        // refuse_if_read_only for it.
+        let names: Vec<String> = CartogServer::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "cartog_update"),
+            "cartog_update must be registered, got: {names:?}"
+        );
+
+        let writers = ["cartog_index", "cartog_rag_index"];
+        assert!(
+            !writers.contains(&"cartog_update"),
+            "cartog_update must NOT be in the DB-write set that refuse_if_read_only gates"
         );
     }
 

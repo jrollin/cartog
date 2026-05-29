@@ -8,7 +8,9 @@
 |---------|--------------|
 | `cartog self update` | Upgrade in place to the latest stable release |
 | `cartog self update --check` | Check whether an update exists; do nothing else |
-| `cartog self version` | Print version, target triple, install source, last check timestamp |
+| `cartog self update --defer` | Arm a deferred update (record the target, do **not** swap); succeeds even while a peer runs |
+| `cartog self update --apply-pending` | Apply a previously-armed deferred update once no peer holds the lock |
+| `cartog self version` | Print version, target triple, install source, last check timestamp, pending update |
 | `cartog self rollback` | Restore the previous binary (the `<bin>.old` sibling) |
 
 ## Upgrade in place
@@ -40,6 +42,50 @@ cartog self update --check --quiet      # no output; exit code is the only signa
 | `4` | Checksum mismatch; no filesystem mutation, original binary intact |
 | `5` | New binary failed smoke test; previous binary restored |
 | `6` | A peer `cartog serve`/`watch` is running |
+
+## Deferred update (in-session)
+
+Inside a Claude Code session the cartog plugin runs `cartog serve --watch` as the MCP server. That process holds the serve PID lock for the whole session, so a plain `cartog self update` would refuse (exit `6`) — you cannot swap the inode of a running binary. The deferred flow splits the decision from the swap:
+
+1. **Arm** — `cartog self update --defer` records the target version in the state file and exits **without** touching the binary. It succeeds even while the serve peer is live (it deliberately skips the peer check). By default it arms the **latest stable** release; pass `--to <version>` to pin an exact target. `/cartog-install` passes the plugin's pinned version (`--to $PLUGIN_VERSION`) so a plugin-managed update can't overshoot the pin; the `cartog_update` MCP tool arms latest (it can't see the pin).
+2. **Apply** — at the next safe boundary (the plugin's SessionEnd hook, after the serve process has exited and released its lock) `cartog self update --apply-pending` reads the armed target, waits briefly for any peer lock to clear, performs the real swap, and clears the intent. The swap only proceeds when the armed target is **newer** than the installed binary — an armed target at or below the current version is a clean no-op (no downgrade).
+3. **Confirm** — the next SessionStart surfaces a one-line "cartog updated to X" breadcrumb, and the drift warning becomes "cartog X will be applied when this session ends" while an update is pending.
+
+The tarball is fetched at **apply** time, keyed to the armed target — not at arm time.
+
+```bash
+cartog self update --defer                 # arm the latest stable release, no swap (exit 0 even with a peer)
+cartog self update --defer --to 0.20.0     # arm an exact pinned version instead of latest
+cartog self update --defer --json          # {"status":"armed","current":…,"target":…,"apply":"session-end-or-restart"}
+cartog self update --apply-pending          # apply the armed update once no peer holds the lock
+```
+
+### Exit codes — `--defer`
+
+| Code | Meaning |
+|------|---------|
+| `0` | Armed (or already up to date — nothing to arm) |
+| `2` | Network or parse error reaching `api.github.com` |
+| `3` | Refused — binary was installed via `cargo install` |
+| `5` | State write failed; the intent was not persisted |
+
+`--defer` never returns `6` — arming under a live peer is the whole point.
+
+### Exit codes — `--apply-pending`
+
+| Code | Meaning | Pending intent |
+|------|---------|----------------|
+| `0` | Applied, nothing armed, or already at target | cleared (or n/a) |
+| `2` | Network error fetching the target tarball | kept (retry next session) |
+| `3` | Cargo-installed | cleared |
+| `4` | Checksum mismatch | cleared (won't self-heal) |
+| `5` | Disk/permission fault during the swap | kept (retry next session) |
+| `6` | A peer is still running after the bounded wait | kept (retry next session) |
+| `7` | New binary failed its smoke test; previous binary restored | cleared (deterministic — won't self-heal) |
+
+Deterministic failures (`4` checksum, `7` smoke) clear the intent so the same tarball is not retried every session; transient ones (`2` network, `5` disk) keep it for the next boundary. A smoke failure surfaces an actionable message pointing at `cartog self update` / `/cartog-install` rather than implying a silent retry will fix it.
+
+`--apply-pending` also serializes against a concurrent `--apply-pending` (two Claude Code windows closing at once) via a short-lived `apply-update` lock: the second invocation sees the lock held and exits `0` as a benign no-op, leaving the in-flight apply to land the swap.
 
 ## Inspect the installation
 
@@ -102,6 +148,17 @@ cartog persists `last_update_check`, `last_known_latest`, and `last_known_outdat
 | Linux | `$XDG_STATE_HOME/cartog/state.toml` (typically `~/.local/state/cartog/state.toml`) |
 | macOS | `~/Library/Application Support/cartog/state.toml` |
 | Windows | `%LOCALAPPDATA%\cartog\state.toml` |
+
+When a deferred update is armed (`--defer`), cartog also writes a `[pending_update]` table:
+
+```toml
+[pending_update]
+target_version = "0.20.0"   # the version --apply-pending will install
+armed_from = "0.19.0"        # the version that armed it (stale detection)
+armed_at = "2026-05-29T10:00:00Z"
+```
+
+`--apply-pending` clears this table after a successful swap (or when it finds the intent stale — already at or past the target). `cartog self version --json` echoes it as a `pending_update` field so the plugin's SessionStart hook can report it.
 
 The file is best-effort: if it is missing, malformed, or unwritable, cartog falls back to defaults and continues. Safe to delete; it will be recreated on the next check.
 

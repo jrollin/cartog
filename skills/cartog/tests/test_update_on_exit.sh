@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Unit tests for update_on_exit.sh (SessionEnd hook, transitional).
+# Unit tests for update_on_exit.sh (SessionEnd hook).
 #
-# Contract: only the pre-self-update cohort (<0.14.0) is upgraded by this
-# hook. Modern binaries (>=0.14.0) are a noop — drift is the user's call
-# via /cartog-install.
+# Contract:
+#   >= 0.14.0 — runs `cartog self update --apply-pending` to apply any
+#               deferred update armed in-session. Exit 6 (peer still running)
+#               is an expected no-error retry; 2/4/5 write last-error.
+#   <  0.14.0 — transitional: upgraded via install.sh pinned to plugin version.
 #
 # Usage: bash skills/cartog/tests/test_update_on_exit.sh
 
@@ -69,8 +71,11 @@ JSON
 }
 
 # Mock cartog: supports --version, logs other invocations.
+# $2 (optional): exit code the mock returns for `self update --apply-pending`,
+# so tests can drive the hook's exit-code mapping. Defaults to 0.
 create_mock_cartog() {
     local mock_version="${1:-0.14.1}"
+    local apply_exit="${2:-0}"
     cat > "$TEST_DIR/bin/cartog" <<MOCK
 #!/usr/bin/env bash
 if [ "\$1" = "--version" ]; then
@@ -78,6 +83,9 @@ if [ "\$1" = "--version" ]; then
     exit 0
 fi
 echo "\$@" >> "$CARTOG_TEST_LOG"
+if [ "\$1 \$2 \$3" = "self update --apply-pending" ]; then
+    exit $apply_exit
+fi
 exit 0
 MOCK
     chmod +x "$TEST_DIR/bin/cartog"
@@ -134,42 +142,132 @@ test_missing_binary_is_noop() {
     teardown
 }
 
-test_modern_binary_is_noop_even_when_outdated() {
-    echo "TEST: modern binary (>=0.14.0) is a noop — drift left for /cartog-install"
+test_modern_binary_runs_apply_pending() {
+    echo "TEST: modern binary (>=0.14.0) runs self update --apply-pending"
     setup
     write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.0"
+    create_mock_cartog "0.14.0" 0
     shadow_install_sh 0
 
     run_update_on_exit > /dev/null
     restore_install_sh
 
-    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  FAIL: 'self update' ran (transitional hook should not handle modern binaries)"; FAIL=$((FAIL + 1))
+    if grep -qx 'self update --apply-pending' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: 'self update --apply-pending' invoked on modern binary"; PASS=$((PASS + 1))
     else
-        echo "  PASS: 'self update' not invoked on modern binary"; PASS=$((PASS + 1))
+        echo "  FAIL: 'self update --apply-pending' not invoked on modern binary"; FAIL=$((FAIL + 1))
     fi
     if [ -s "$TEST_DIR/install.log" ]; then
-        echo "  FAIL: install.sh ran (transitional hook should not handle >=0.14.0)"; FAIL=$((FAIL + 1))
+        echo "  FAIL: install.sh ran (apply-pending path must not call install.sh)"; FAIL=$((FAIL + 1))
     else
         echo "  PASS: install.sh not invoked on modern binary"; PASS=$((PASS + 1))
     fi
     teardown
 }
 
-test_modern_binary_in_sync_is_noop() {
-    echo "TEST: modern binary in sync with plugin is a noop"
+test_apply_pending_exit_6_is_not_error() {
+    echo "TEST: apply-pending exit 6 (peer running) is not an error"
     setup
     write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.3"
+    create_mock_cartog "0.14.0" 6
 
     run_update_on_exit > /dev/null
 
-    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  FAIL: 'self update' ran when versions matched"; FAIL=$((FAIL + 1))
+    if [ -f "$CARTOG_LOG_DIR/last-error" ]; then
+        echo "  FAIL: exit 6 wrote last-error (should be a silent retry)"; FAIL=$((FAIL + 1))
     else
-        echo "  PASS: 'self update' not invoked when versions matched"; PASS=$((PASS + 1))
+        echo "  PASS: exit 6 did not write last-error"; PASS=$((PASS + 1))
     fi
+    assert_contains "log explains the retry" "kept for next session" "$(session_log)"
+    teardown
+}
+
+test_apply_pending_exit_4_writes_last_error() {
+    echo "TEST: apply-pending exit 4 (checksum) writes last-error"
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.14.0" 4
+
+    run_update_on_exit > /dev/null
+
+    if [ -f "$CARTOG_LOG_DIR/last-error" ]; then
+        echo "  PASS: terminal failure wrote last-error"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: last-error missing after terminal apply-pending failure"; FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
+test_apply_pending_exit_7_smoke_writes_actionable_last_error() {
+    echo "TEST: apply-pending exit 7 (smoke) writes an actionable, non-transient last-error"
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.14.0" 7
+
+    run_update_on_exit > /dev/null
+
+    if [ -f "$CARTOG_LOG_DIR/last-error" ]; then
+        echo "  PASS: smoke failure wrote last-error"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: last-error missing after smoke failure"; FAIL=$((FAIL + 1))
+    fi
+    local err
+    err=$(cat "$CARTOG_LOG_DIR/last-error" 2>/dev/null || echo "")
+    assert_contains "names a manual next step" "cartog self update" "$err"
+    if echo "$err" | grep -qi "transient"; then
+        echo "  FAIL: smoke failure must NOT be labelled transient"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: smoke failure not labelled transient"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+test_apply_pending_exit_2_writes_transient_last_error() {
+    echo "TEST: apply-pending exit 2 (network) writes a transient last-error"
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.14.0" 2
+
+    run_update_on_exit > /dev/null
+
+    local err
+    err=$(cat "$CARTOG_LOG_DIR/last-error" 2>/dev/null || echo "")
+    assert_contains "labels the failure transient" "transient" "$err"
+    teardown
+}
+
+test_apply_pending_exit_0_no_last_error() {
+    echo "TEST: apply-pending exit 0 writes no last-error and logs success"
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.14.0" 0
+
+    run_update_on_exit > /dev/null
+
+    if [ -f "$CARTOG_LOG_DIR/last-error" ]; then
+        echo "  FAIL: exit 0 wrote a last-error"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: exit 0 wrote no last-error"; PASS=$((PASS + 1))
+    fi
+    assert_contains "logs applied/nothing-pending" "Deferred update applied" "$(session_log)"
+    teardown
+}
+
+test_apply_pending_skipped_when_rag_lock_active() {
+    echo "TEST: apply-pending skipped when RAG pipeline lock is recent"
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.14.0" 0
+    mkdir -p "$CARTOG_LOCK_DIR"   # fresh lock — pipeline "running"
+
+    run_update_on_exit > /dev/null
+
+    if grep -qx 'self update --apply-pending' "$CARTOG_TEST_LOG"; then
+        echo "  FAIL: apply-pending ran while RAG pipeline lock was active"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: apply-pending skipped while RAG pipeline lock active"; PASS=$((PASS + 1))
+    fi
+    assert_contains "log explains skip" "background pipeline still running" "$(session_log)"
     teardown
 }
 
@@ -301,14 +399,24 @@ test_proceeds_when_rag_lock_is_stale() {
 
 # --- run ---
 
-echo "=== update_on_exit.sh unit tests (transitional, <0.14 cohort) ==="
+echo "=== update_on_exit.sh unit tests ==="
 echo ""
 
 test_missing_binary_is_noop
 echo ""
-test_modern_binary_is_noop_even_when_outdated
+test_modern_binary_runs_apply_pending
 echo ""
-test_modern_binary_in_sync_is_noop
+test_apply_pending_exit_6_is_not_error
+echo ""
+test_apply_pending_exit_4_writes_last_error
+echo ""
+test_apply_pending_exit_7_smoke_writes_actionable_last_error
+echo ""
+test_apply_pending_exit_2_writes_transient_last_error
+echo ""
+test_apply_pending_exit_0_no_last_error
+echo ""
+test_apply_pending_skipped_when_rag_lock_active
 echo ""
 test_legacy_binary_outdated_routes_to_install_sh
 echo ""

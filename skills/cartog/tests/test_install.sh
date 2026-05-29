@@ -266,44 +266,45 @@ test_no_arg_not_installed_installs_latest() {
     teardown
 }
 
-test_cargo_fallback_with_version() {
-    echo "TEST: version arg + no binary available → cargo install cartog@version"
+test_no_prebuilt_binary_fails_release_only() {
+    echo "TEST: download fails → exit 1 with a clear message, cargo NEVER invoked (release-only)"
     setup
-    # Mock cartog at different version to trigger upgrade path
     create_mock_cartog "0.6.1"
-    # curl that fails (no pre-built binary)
+    # curl that fails (no pre-built binary downloadable).
     cat > "$TEST_DIR/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
 exit 1
 MOCK
     chmod +x "$TEST_DIR/bin/curl"
+    # A cargo mock is present to PROVE the script never calls it.
     create_mock_cargo
-    # Mock rustc for version check
     cat > "$TEST_DIR/bin/rustc" <<'MOCK'
 #!/usr/bin/env bash
 echo "rustc 1.77.0 (aedd173a2 2024-03-17)"
 MOCK
     chmod +x "$TEST_DIR/bin/rustc"
 
-    run_install "0.7.0" > /dev/null 2>&1 || true
+    local output exit_code=0
+    output=$(run_install "0.7.0" 2>&1) || exit_code=$?
 
-    local cargo_log="$TEST_DIR/cargo.log"
-    if [ -f "$cargo_log" ]; then
-        local cargo_args
-        cargo_args=$(cat "$cargo_log")
-        assert_contains "cargo install with version" "cartog@0.7.0" "$cargo_args"
-    else
-        echo "  FAIL: cargo was not called"
+    assert_eq "exits 1" "1" "$exit_code"
+    assert_contains "names the download failure" "could not download a pre-built cartog binary" "$output"
+    assert_contains "points at the tagged release" "releases/tag/v0.7.0" "$output"
+    if [ -f "$TEST_DIR/cargo.log" ]; then
+        echo "  FAIL: cargo was invoked (release-only must never fall back to cargo)"
         FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: cargo was not invoked"
+        PASS=$((PASS + 1))
     fi
     teardown
 }
 
-test_no_curl_no_cargo_fails() {
-    echo "TEST: no curl + no cargo → error and exit 1"
+test_unsupported_platform_fails_release_only() {
+    echo "TEST: no curl available → exit 1, never builds from source"
     setup
-    # Shadow curl and tar with failing stubs so download path fails,
-    # and no cargo mock so the fallback also fails
+    # Shadow curl with a failing stub so the download path fails; no cargo
+    # fallback exists anymore.
     cat > "$TEST_DIR/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
 exit 1
@@ -311,35 +312,11 @@ MOCK
     chmod +x "$TEST_DIR/bin/curl"
 
     local output exit_code=0
-    output=$(run_install) || exit_code=$?
+    output=$(run_install 2>&1) || exit_code=$?
 
     assert_eq "exits 1" "1" "$exit_code"
-    assert_contains "shows error" "cargo not found" "$output"
-    teardown
-}
-
-test_rust_version_too_old_fails() {
-    echo "TEST: Rust version too old → error and exit 1"
-    setup
-    # curl that fails (no pre-built binary)
-    cat > "$TEST_DIR/bin/curl" <<'MOCK'
-#!/usr/bin/env bash
-exit 1
-MOCK
-    chmod +x "$TEST_DIR/bin/curl"
-    # cargo present but rustc too old
-    create_mock_cargo
-    cat > "$TEST_DIR/bin/rustc" <<'MOCK'
-#!/usr/bin/env bash
-echo "rustc 1.50.0 (cb75ad5db 2021-02-10)"
-MOCK
-    chmod +x "$TEST_DIR/bin/rustc"
-
-    local output exit_code=0
-    output=$(run_install) || exit_code=$?
-
-    assert_eq "exits 1" "1" "$exit_code"
-    assert_contains "shows rust too old" "Rust toolchain too old" "$output"
+    assert_contains "names a release-only failure" "could not download a pre-built cartog binary" "$output"
+    assert_not_contains "no cargo guidance" "cargo install" "$output"
     teardown
 }
 
@@ -534,7 +511,7 @@ MOCK
     (
         # Strip lines below the function definitions so sourcing doesn't
         # trigger the actual install flow at the bottom of the script.
-        sed -n '1,/^# Try pre-built binary first/p' "$INSTALL_SCRIPT" | sed '$d' > "$TEST_DIR/install-lib.sh"
+        sed -n '1,/^# === main (release-only install) ===/p' "$INSTALL_SCRIPT" | sed '$d' > "$TEST_DIR/install-lib.sh"
         export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
         export HOME="$TEST_DIR/home"
         export CARTOG_INSTALL_DIR="$TEST_DIR/installdir"
@@ -565,7 +542,7 @@ MOCK
     chmod +x "$TEST_DIR/installdir/cartog"
 
     (
-        sed -n '1,/^# Try pre-built binary first/p' "$INSTALL_SCRIPT" | sed '$d' > "$TEST_DIR/install-lib.sh"
+        sed -n '1,/^# === main (release-only install) ===/p' "$INSTALL_SCRIPT" | sed '$d' > "$TEST_DIR/install-lib.sh"
         export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
         export HOME="$TEST_DIR/home"
         export CARTOG_INSTALL_DIR="$TEST_DIR/installdir"
@@ -583,45 +560,6 @@ MOCK
         echo "  FAIL: broken binary not deleted despite marker"
         FAIL=$((FAIL + 1))
     fi
-    teardown
-}
-
-test_cargo_fallback_honors_cargo_install_root() {
-    echo "TEST: cargo fallback + CARGO_INSTALL_ROOT → verify_install probes the right dir"
-    setup
-    # Force github path to fail
-    cat > "$TEST_DIR/bin/curl" <<'MOCK'
-#!/usr/bin/env bash
-exit 1
-MOCK
-    chmod +x "$TEST_DIR/bin/curl"
-    create_mock_cargo
-    cat > "$TEST_DIR/bin/rustc" <<'MOCK'
-#!/usr/bin/env bash
-echo "rustc 1.77.0"
-MOCK
-    chmod +x "$TEST_DIR/bin/rustc"
-    # Pre-stage a runnable binary at the CARGO_INSTALL_ROOT location so
-    # verify_install can find it (cargo is mocked, doesn't actually write).
-    mkdir -p "$TEST_DIR/cargo-root/bin"
-    cat > "$TEST_DIR/cargo-root/bin/cartog" <<'MOCK'
-#!/usr/bin/env bash
-echo "cartog 0.9.0"
-MOCK
-    chmod +x "$TEST_DIR/cargo-root/bin/cartog"
-
-    local output
-    output=$(
-        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        export HOME="$TEST_DIR/home"
-        export CARGO_HOME="$TEST_DIR/cargo_home"
-        export CARGO_INSTALL_ROOT="$TEST_DIR/cargo-root"
-        mkdir -p "$HOME" "$CARGO_HOME/bin"
-        bash "$INSTALL_SCRIPT" 2>&1
-    ) || true
-
-    assert_contains "verifies binary at CARGO_INSTALL_ROOT" "Verified: cartog 0.9.0" "$output"
-    assert_not_contains "does not report not-found" "binary not found" "$output"
     teardown
 }
 
@@ -644,11 +582,9 @@ test_version_arg_uses_tag_url
 echo ""
 test_no_arg_not_installed_installs_latest
 echo ""
-test_cargo_fallback_with_version
+test_no_prebuilt_binary_fails_release_only
 echo ""
-test_no_curl_no_cargo_fails
-echo ""
-test_rust_version_too_old_fails
+test_unsupported_platform_fails_release_only
 echo ""
 test_install_dir_prefers_local_bin_when_present
 echo ""
@@ -669,8 +605,6 @@ echo ""
 test_verify_install_preserves_existing_binary_on_exec_failure
 echo ""
 test_verify_install_deletes_freshly_installed_broken_binary
-echo ""
-test_cargo_fallback_honors_cargo_install_root
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

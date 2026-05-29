@@ -102,6 +102,12 @@ pub(crate) struct VersionInfo {
     /// RFC3339 timestamp of the last successful update check, or `None`.
     /// Serialised as JSON `null` when absent.
     pub last_update_check: Option<String>,
+    /// A deferred update armed but not yet applied. Lets the SessionStart hook
+    /// read the pending target via the binary's own state-path resolution
+    /// instead of re-deriving the platform path in shell. `None` when nothing
+    /// is armed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_update: Option<crate::state::PendingUpdate>,
 }
 
 impl VersionInfo {
@@ -111,6 +117,7 @@ impl VersionInfo {
             target: TARGET_TRIPLE.to_string(),
             install_source: effective_install_source().to_string(),
             last_update_check: state.last_update_check.clone(),
+            pending_update: state.pending_update.clone(),
         }
     }
 
@@ -143,11 +150,45 @@ pub fn cmd_self_version(json: bool) -> Result<()> {
     Ok(())
 }
 
-/// `cartog self update [--check] [--quiet] [--json]` entry point.
+/// Which variant of `cartog self update` the user invoked. Closed set — the
+/// three mode flags are mutually exclusive at the clap layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateMode {
+    /// Read-only: report whether an update exists (`--check`).
+    Check,
+    /// Arm a deferred update without swapping (`--defer`). `Some(version)`
+    /// pins an explicit target (`--to`); `None` resolves the latest stable.
+    Defer(Option<String>),
+    /// Apply a previously-armed deferred update (`--apply-pending`).
+    ApplyPending,
+    /// Default: upgrade in place now.
+    Now,
+}
+
+impl UpdateMode {
+    /// Map the (mutually exclusive) clap flags to a mode. clap guarantees at
+    /// most one of check/defer/apply_pending is set (via `conflicts_with_all`)
+    /// and that `to` is only present with `defer` (via `requires`).
+    #[must_use]
+    pub fn from_flags(check: bool, defer: bool, to: Option<String>, apply_pending: bool) -> Self {
+        match (check, defer, apply_pending) {
+            (true, _, _) => Self::Check,
+            (_, true, _) => Self::Defer(to),
+            (_, _, true) => Self::ApplyPending,
+            _ => Self::Now,
+        }
+    }
+}
+
+/// `cartog self update [--check|--defer|--apply-pending] [--quiet] [--json]`.
 ///
-/// In `--check` mode this is read-only (see [`run_check`]).
+/// - `--check` is read-only (see [`run_check`]).
+/// - `--defer` arms a deferred update without swapping (see [`run_arm`]) —
+///   succeeds even while a peer is running.
+/// - `--apply-pending` applies a previously-armed update (see
+///   [`run_apply_pending`]) once no peer holds the lock.
 ///
-/// In upgrade mode the flow is:
+/// In the default upgrade mode the flow is:
 /// 1. Refuse for cargo-installed binaries (exit 3) — direct user to
 ///    `cargo install cartog --force`.
 /// 2. Refuse if a peer `cartog serve`/`watch` is still running (exit 6).
@@ -156,12 +197,13 @@ pub fn cmd_self_version(json: bool) -> Result<()> {
 ///    checksum (exit 4 on mismatch), atomically swap the binary in
 ///    place, preserve `<bin>.old`, smoke-test the new binary
 ///    (exit 5 on failure → restore `.old`).
-pub fn cmd_self_update(check: bool, quiet: bool, json: bool) -> Result<()> {
-    if check {
-        let exit_code = run_check(quiet, json);
-        std::process::exit(exit_code);
-    }
-    let exit_code = run_upgrade(quiet, json);
+pub fn cmd_self_update(mode: UpdateMode, quiet: bool, json: bool) -> Result<()> {
+    let exit_code = match mode {
+        UpdateMode::Check => run_check(quiet, json),
+        UpdateMode::Defer(target) => run_arm(target.as_deref(), quiet, json),
+        UpdateMode::ApplyPending => run_apply_pending(quiet, json),
+        UpdateMode::Now => run_upgrade(quiet, json),
+    };
     std::process::exit(exit_code);
 }
 
@@ -422,6 +464,12 @@ mod exit {
     pub const CHECKSUM_FAILED: i32 = 4;
     pub const DISK_OR_PERMISSION_FAILED: i32 = 5;
     pub const PEER_RUNNING: i32 = 6;
+    /// `--apply-pending` only: the new binary failed its smoke test and the
+    /// previous one was restored. Distinct from `5` (transient disk fault) so
+    /// the SessionEnd hook can treat it as terminal — the intent is cleared,
+    /// not retried. The plain `cartog self update` path keeps mapping a smoke
+    /// failure to `5` for backward compatibility.
+    pub const SMOKE_TEST_FAILED: i32 = 7;
 }
 
 /// Drive the upgrade path and return the desired exit code.
@@ -491,7 +539,9 @@ fn run_upgrade(quiet: bool, json: bool) -> i32 {
             emit_upgrade_message(quiet, json, "checksum-failed", &msg);
             exit::CHECKSUM_FAILED
         }
-        Err(UpgradeError::Filesystem(msg)) => {
+        // Smoke and Filesystem both surface as exit 5 here: the new binary
+        // failed and the old one was restored (or a true disk fault occurred).
+        Err(UpgradeError::Smoke(msg)) | Err(UpgradeError::Filesystem(msg)) => {
             emit_upgrade_message(quiet, json, "filesystem-failed", &msg);
             exit::DISK_OR_PERMISSION_FAILED
         }
@@ -503,6 +553,409 @@ enum UpgradeError {
     Network(String),
     Checksum(String),
     Filesystem(String),
+    /// The downloaded binary swapped in but failed its smoke test, and the
+    /// previous binary was restored. Deterministic for a fixed target — unlike
+    /// [`Self::Filesystem`] (a transient disk/permission fault), retrying the
+    /// same tarball will fail identically, so a deferred update clears its
+    /// intent on this rather than retry-looping every session.
+    Smoke(String),
+}
+
+// ── deferred update (--defer / --apply-pending) ───────────────────────
+
+/// How long `--apply-pending` waits for a peer `serve`/`watch` lock to clear
+/// before giving up and deferring to the next session. At a session boundary
+/// the serve process is already exiting and unlinks its PID file within
+/// milliseconds of dropping its `ProcessLock`, so this only has to absorb
+/// normal teardown lag.
+const APPLY_PEER_WAIT: Duration = Duration::from_secs(3);
+
+/// Poll interval while waiting for peers to clear in [`wait_for_no_peer`].
+const APPLY_PEER_POLL: Duration = Duration::from_millis(200);
+
+/// Machine-global lock slot serializing concurrent `--apply-pending` swaps.
+/// Not DB-scoped: every apply on this machine swaps the same binary, so they
+/// must mutually exclude regardless of which project triggered them.
+const APPLY_LOCK_SLOT: &str = "apply-update";
+
+/// Test seam: overrides [`APPLY_PEER_WAIT`] (milliseconds) so the suite can
+/// exercise the timeout branch without a real 3s wait.
+const TEST_APPLY_PEER_WAIT_MS_ENV: &str = "CARTOG_TEST_APPLY_PEER_WAIT_MS";
+
+fn apply_peer_wait() -> Duration {
+    match std::env::var(TEST_APPLY_PEER_WAIT_MS_ENV) {
+        Ok(v) => v
+            .parse::<u64>()
+            .map(Duration::from_millis)
+            .unwrap_or(APPLY_PEER_WAIT),
+        Err(_) => APPLY_PEER_WAIT,
+    }
+}
+
+/// Whether a pending update should still be applied given the running version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApplyDecision {
+    /// The running binary already satisfies (or exceeds) the target — clear
+    /// the intent and no-op.
+    Skip,
+    /// The target is newer than the running binary — proceed with the swap.
+    Proceed,
+}
+
+/// Pure idempotency/staleness check, factored out for unit testing. Applies
+/// only when the armed `target` is a well-formed version strictly newer than
+/// the running `current`. A malformed/garbage `target` (hand-edited or
+/// foreign state) is treated as stale rather than silently parsed to `0.0.0`,
+/// so the caller clears it with an honest message instead of a misleading
+/// "already at X".
+fn decide_apply(current: &str, target: &str) -> ApplyDecision {
+    if !is_stable_semver(target) {
+        return ApplyDecision::Skip;
+    }
+    if compare_stable_versions(current, target) == std::cmp::Ordering::Less {
+        ApplyDecision::Proceed
+    } else {
+        ApplyDecision::Skip
+    }
+}
+
+/// What `--apply-pending` does with the armed intent after a failed swap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IntentDisposition {
+    /// Keep the intent armed; the next boundary retries (transient fault).
+    Keep,
+    /// Clear the intent; retrying the same target would fail identically.
+    Clear,
+}
+
+/// Pure mapping from an upgrade failure to whether the deferred intent should
+/// survive. Factored out so all four dispositions are unit-testable without a
+/// real failing upgrade. Network and a true filesystem/permission fault are
+/// transient (keep); a checksum mismatch or a smoke-test failure is
+/// deterministic for a fixed target (clear, else it retry-loops every session).
+fn intent_disposition(err: &UpgradeError) -> IntentDisposition {
+    match err {
+        UpgradeError::Network(_) | UpgradeError::Filesystem(_) => IntentDisposition::Keep,
+        UpgradeError::Checksum(_) | UpgradeError::Smoke(_) => IntentDisposition::Clear,
+    }
+}
+
+/// Poll for peer locks to clear, up to `budget`. Returns `Ok(())` once no peer
+/// holds a serve/watch lock; `Err(peer)` if the budget elapses with one still
+/// live. `find_active_locks` already applies `is_same_process`, so a PID
+/// reused by an unrelated process is correctly treated as not-a-peer.
+///
+/// The [`APPLY_LOCK_SLOT`] coordination lock is excluded: it is held by a
+/// concurrent `--apply-pending`, not a serve/watch process whose live binary we
+/// would unlink. A second apply must reach the lock-acquire step (and cleanly
+/// skip via `Held`) rather than time out here waiting on its sibling.
+fn wait_for_no_peer(
+    state_dir: &Path,
+    budget: Duration,
+) -> std::result::Result<(), cartog_process_lock::ActiveLock> {
+    let deadline = std::time::Instant::now() + budget;
+    loop {
+        let mut active = cartog_process_lock::find_active_locks(state_dir);
+        active.retain(|lock| lock.slot != APPLY_LOCK_SLOT);
+        match active.into_iter().next() {
+            None => return Ok(()),
+            Some(peer) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(peer);
+                }
+                std::thread::sleep(APPLY_PEER_POLL);
+            }
+        }
+    }
+}
+
+/// Drive `--defer`: arm a deferred update without swapping the binary. Unlike
+/// [`run_upgrade`], this deliberately does NOT check for a running peer — the
+/// whole point is to arm while a `cartog serve`/`watch` (e.g. the MCP server)
+/// holds the lock. The swap happens later via [`run_apply_pending`].
+///
+/// `target_override` (from `--to`) pins an explicit version — `/cartog-install`
+/// passes the plugin's pin so arming can't overshoot it. When `None`, the
+/// latest stable release is resolved from GitHub.
+fn run_arm(target_override: Option<&str>, quiet: bool, json: bool) -> i32 {
+    if effective_install_source() == "cargo" {
+        emit_upgrade_message(
+            quiet,
+            json,
+            "cargo",
+            "cartog was installed via cargo. Run `cargo install cartog --force` to upgrade.",
+        );
+        return exit::CARGO_INSTALL_REFUSED;
+    }
+
+    let latest = match target_override {
+        Some(v) => {
+            // An explicit pin must be a bare MAJOR.MINOR.PATCH — reject garbage
+            // up front rather than arming an unappliable target.
+            if !is_stable_semver(v) {
+                emit_upgrade_message(
+                    quiet,
+                    json,
+                    "invalid-version",
+                    &format!("`--to {v}` is not a MAJOR.MINOR.PATCH version"),
+                );
+                return exit::NETWORK_OR_PARSE_ERROR;
+            }
+            v.to_string()
+        }
+        None => {
+            let api_url = github_latest_url();
+            match fetch_latest_version(&api_url) {
+                Ok(v) => v,
+                Err(e) => {
+                    emit_upgrade_message(quiet, json, "fetch-failed", &e.to_string());
+                    return exit::NETWORK_OR_PARSE_ERROR;
+                }
+            }
+        }
+    };
+    let current = env!("CARGO_PKG_VERSION");
+
+    // Already current (or ahead): nothing to arm. Clear any stale intent.
+    if compare_stable_versions(current, &latest) != std::cmp::Ordering::Less {
+        if let Some(state_path) = state::default_state_file() {
+            let mut state = State::load_from(&state_path);
+            if state.pending_update.take().is_some() {
+                let _ = state.save_to(&state_path);
+            }
+        }
+        if !quiet {
+            if json {
+                let payload = serde_json::json!({
+                    "status": "up-to-date",
+                    "current": current,
+                    "latest": latest,
+                });
+                println!("{payload}");
+            } else {
+                println!("cartog: already up to date ({current})");
+            }
+        }
+        return exit::SUCCESS;
+    }
+
+    let Some(state_path) = state::default_state_file() else {
+        emit_upgrade_message(
+            quiet,
+            json,
+            "filesystem-failed",
+            "cannot resolve state file to record the deferred update",
+        );
+        return exit::DISK_OR_PERMISSION_FAILED;
+    };
+    let mut state = State::load_from(&state_path);
+    state.pending_update = Some(crate::state::PendingUpdate {
+        target_version: latest.clone(),
+        armed_from: Some(current.to_string()),
+        armed_at: Some(rfc3339_now()),
+    });
+    state.last_known_latest = Some(latest.clone());
+    state.last_known_outdated = true;
+    state.last_update_check = Some(rfc3339_now());
+    if let Err(e) = state.save_to(&state_path) {
+        emit_upgrade_message(
+            quiet,
+            json,
+            "filesystem-failed",
+            &format!("failed to persist deferred update intent: {e}"),
+        );
+        return exit::DISK_OR_PERMISSION_FAILED;
+    }
+
+    if !quiet {
+        if json {
+            let payload = serde_json::json!({
+                "status": "armed",
+                "current": current,
+                "target": latest,
+                "apply": "session-end-or-restart",
+            });
+            println!("{payload}");
+        } else {
+            println!(
+                "cartog: armed update {current} -> {latest}; it will be applied when the \
+                 current session ends (or run `cartog self update` from a terminal with no \
+                 cartog serve/watch running)."
+            );
+        }
+    }
+    exit::SUCCESS
+}
+
+/// Drive `--apply-pending`: apply a previously-armed deferred update once no
+/// peer holds the lock. Owns read-state → re-check-peer → swap → clear-state so
+/// the SessionEnd hook stays thin and the race logic is unit-tested in Rust.
+fn run_apply_pending(quiet: bool, json: bool) -> i32 {
+    let Some(state_path) = state::default_state_file() else {
+        // No state file means nothing could have been armed.
+        return exit::SUCCESS;
+    };
+    let mut state = State::load_from(&state_path);
+    let Some(pending) = state.pending_update.clone() else {
+        return exit::SUCCESS; // nothing armed — clean no-op
+    };
+    let target = pending.target_version;
+    let current = env!("CARGO_PKG_VERSION");
+
+    // A binary reinstalled via cargo after arming can never be swapped here.
+    if effective_install_source() == "cargo" {
+        state.pending_update = None;
+        let _ = state.save_to(&state_path);
+        emit_upgrade_message(
+            quiet,
+            json,
+            "cargo",
+            "cartog was installed via cargo. Run `cargo install cartog --force` to upgrade.",
+        );
+        return exit::CARGO_INSTALL_REFUSED;
+    }
+
+    // Idempotency / staleness: already at or past the armed target.
+    if decide_apply(current, &target) == ApplyDecision::Skip {
+        state.pending_update = None;
+        let _ = state.save_to(&state_path);
+        if !quiet && !json {
+            println!("cartog: already at {current}; cleared stale deferred update ({target}).");
+        }
+        return exit::SUCCESS;
+    }
+
+    // Re-check for a live peer, waiting briefly for normal session-teardown
+    // lag. If a peer is still live after the budget, keep the intent armed and
+    // retry on the next boundary.
+    if let Some(dir) = state::default_state_dir() {
+        if let Err(peer) = wait_for_no_peer(&dir, apply_peer_wait()) {
+            emit_upgrade_message(
+                quiet,
+                json,
+                "peer-running",
+                &format!(
+                    "another cartog process is still running ({slot}, PID {pid}); \
+                     deferred update kept and will retry next session",
+                    slot = peer.slot,
+                    pid = peer.pid,
+                ),
+            );
+            return exit::PEER_RUNNING;
+        }
+    }
+
+    // Serialize the swap+clear against another `--apply-pending` (e.g. two
+    // Claude Code windows closing at once). Both would otherwise pass the peer
+    // wait, download in parallel, and interleave atomic swaps — muddying the
+    // `<bin>.old` rollback target. Held → another apply is in flight; treat as a
+    // benign no-op (it will land the swap and clear the intent). Held by RAII
+    // until this function returns. An Io failure here is non-fatal: fall through
+    // and let the swap proceed unserialized rather than block the update.
+    let _apply_lock = match state::default_state_dir() {
+        Some(dir) => match cartog_process_lock::ProcessLock::acquire(&dir, APPLY_LOCK_SLOT) {
+            Ok(lock) => Some(lock),
+            Err(cartog_process_lock::AcquireError::Held(_)) => {
+                if !quiet && !json {
+                    println!("cartog: another deferred update is already in progress; skipping.");
+                }
+                return exit::SUCCESS;
+            }
+            Err(cartog_process_lock::AcquireError::Io(e)) => {
+                tracing::warn!(error = %e, "apply-update lock unavailable; proceeding unserialized");
+                None
+            }
+        },
+        None => None,
+    };
+
+    let err = match perform_upgrade(current, &target, quiet, json) {
+        Ok(()) => {
+            // perform_upgrade already refreshed last_known_*; reload and clear
+            // the pending intent.
+            let mut state = State::load_from(&state_path);
+            state.pending_update = None;
+            let _ = state.save_to(&state_path);
+            write_last_update_breadcrumb(&target);
+            return exit::SUCCESS;
+        }
+        Err(e) => e,
+    };
+
+    // Clear the intent for deterministic failures (checksum, smoke) so we don't
+    // retry the identical tarball every session; keep it for transient ones
+    // (network, disk/permission) so the next boundary retries.
+    if intent_disposition(&err) == IntentDisposition::Clear {
+        let mut state = State::load_from(&state_path);
+        state.pending_update = None;
+        let _ = state.save_to(&state_path);
+    }
+
+    match err {
+        UpgradeError::Network(msg) => {
+            emit_upgrade_message(quiet, json, "fetch-failed", &msg);
+            exit::NETWORK_OR_PARSE_ERROR
+        }
+        UpgradeError::Checksum(msg) => {
+            emit_upgrade_message(quiet, json, "checksum-failed", &msg);
+            exit::CHECKSUM_FAILED
+        }
+        // Smoke-test failure is deterministic for this target. Distinct exit
+        // (7) so the hook treats it as terminal; the message names a manual
+        // next step instead of implying a silent retry will fix it.
+        UpgradeError::Smoke(msg) => {
+            emit_upgrade_message(
+                quiet,
+                json,
+                "smoke-failed",
+                &format!(
+                    "{msg}. This target failed verification and will not be retried \
+                     automatically; run `cartog self update` from a terminal or reinstall \
+                     via /cartog-install."
+                ),
+            );
+            exit::SMOKE_TEST_FAILED
+        }
+        UpgradeError::Filesystem(msg) => {
+            emit_upgrade_message(quiet, json, "filesystem-failed", &msg);
+            exit::DISK_OR_PERMISSION_FAILED
+        }
+    }
+}
+
+/// Drop a one-line breadcrumb the SessionStart hook surfaces once to confirm a
+/// completed deferred update. Best-effort: a failure to write it never affects
+/// the (already successful) upgrade. Sibling of the hook's `last-error` file.
+fn write_last_update_breadcrumb(target: &str) {
+    let Some(path) = last_update_breadcrumb_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, format!("cartog updated to {target}.\n"));
+}
+
+/// Path of the `last-update` breadcrumb, in the exact directory the hooks read
+/// from. Mirrors their precedence: `$CARTOG_LOG_DIR` used verbatim (it already
+/// points at the log dir), else `$XDG_CACHE_HOME/cartog`, else `~/.cache/cartog`.
+/// Returns `None` if none resolves. Keeping this in lockstep with the hooks
+/// matters: a divergence would write the breadcrumb where the hook never looks,
+/// silently dropping the "cartog updated to X" confirmation.
+fn last_update_breadcrumb_path() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("CARTOG_LOG_DIR") {
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir).join("last-update"));
+        }
+    }
+    let base = match std::env::var_os("XDG_CACHE_HOME") {
+        Some(v) if !v.is_empty() => PathBuf::from(v),
+        _ => {
+            let home = std::env::var_os("HOME")?;
+            PathBuf::from(home).join(".cache")
+        }
+    };
+    Some(base.join("cartog").join("last-update"))
 }
 
 fn perform_upgrade(
@@ -576,7 +1029,7 @@ fn perform_upgrade(
     if let Err(smoke_err) = smoke_test(&current_bin) {
         match std::fs::rename(&backup_path, &current_bin) {
             Ok(()) => {
-                return Err(UpgradeError::Filesystem(format!(
+                return Err(UpgradeError::Smoke(format!(
                     "new binary failed smoke test ({smoke_err}); previous binary restored"
                 )));
             }
@@ -1088,6 +1541,209 @@ fn emit_migrate_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    #[test]
+    fn update_mode_from_flags_maps_each_combination() {
+        assert_eq!(
+            UpdateMode::from_flags(true, false, None, false),
+            UpdateMode::Check
+        );
+        assert_eq!(
+            UpdateMode::from_flags(false, true, None, false),
+            UpdateMode::Defer(None)
+        );
+        assert_eq!(
+            UpdateMode::from_flags(false, true, Some("0.20.0".to_string()), false),
+            UpdateMode::Defer(Some("0.20.0".to_string())),
+            "--to pins an explicit target"
+        );
+        assert_eq!(
+            UpdateMode::from_flags(false, false, None, true),
+            UpdateMode::ApplyPending
+        );
+        assert_eq!(
+            UpdateMode::from_flags(false, false, None, false),
+            UpdateMode::Now
+        );
+    }
+
+    #[test]
+    fn decide_apply_proceeds_only_when_target_is_newer() {
+        assert_eq!(decide_apply("0.19.0", "0.20.0"), ApplyDecision::Proceed);
+        assert_eq!(
+            decide_apply("0.20.0", "0.20.0"),
+            ApplyDecision::Skip,
+            "target == current is a satisfied (stale) intent"
+        );
+        assert_eq!(
+            decide_apply("0.21.0", "0.20.0"),
+            ApplyDecision::Skip,
+            "target < current is stale"
+        );
+    }
+
+    #[test]
+    fn decide_apply_skips_on_malformed_target() {
+        // Hand-edited or foreign state: a non-bare-semver target must be
+        // treated as stale, not parsed to 0.0.0 and acted on.
+        assert_eq!(
+            decide_apply("0.19.0", "v0.20.0"),
+            ApplyDecision::Skip,
+            "a `v`-prefixed target is not bare semver"
+        );
+        assert_eq!(decide_apply("0.19.0", ""), ApplyDecision::Skip);
+        assert_eq!(decide_apply("0.19.0", "garbage"), ApplyDecision::Skip);
+        assert_eq!(decide_apply("0.19.0", "0.20"), ApplyDecision::Skip);
+        assert_eq!(decide_apply("0.19.0", "1.0.0-rc.1"), ApplyDecision::Skip);
+    }
+
+    #[test]
+    fn intent_disposition_keeps_transient_clears_deterministic() {
+        assert_eq!(
+            intent_disposition(&UpgradeError::Network("x".into())),
+            IntentDisposition::Keep
+        );
+        assert_eq!(
+            intent_disposition(&UpgradeError::Filesystem("x".into())),
+            IntentDisposition::Keep
+        );
+        assert_eq!(
+            intent_disposition(&UpgradeError::Checksum("x".into())),
+            IntentDisposition::Clear
+        );
+        assert_eq!(
+            intent_disposition(&UpgradeError::Smoke("x".into())),
+            IntentDisposition::Clear,
+            "a smoke failure is deterministic for a fixed target — clear, do not retry-loop"
+        );
+    }
+
+    #[test]
+    fn wait_for_no_peer_returns_ok_when_no_locks() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Empty state dir → no peers → immediate Ok.
+        assert!(wait_for_no_peer(dir.path(), Duration::from_millis(50)).is_ok());
+    }
+
+    #[test]
+    fn wait_for_no_peer_ignores_apply_lock_slot() {
+        // The apply-update coordination lock must not be seen as a serve/watch
+        // peer — a concurrent apply reaches the lock-acquire step instead.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join(format!("{APPLY_LOCK_SLOT}.pid")),
+            std::process::id().to_string(),
+        )
+        .unwrap();
+        assert!(
+            wait_for_no_peer(dir.path(), Duration::from_millis(50)).is_ok(),
+            "apply-update lock must be ignored by the peer wait"
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn wait_for_no_peer_proceeds_when_peer_clears_mid_wait() {
+        // Plant a live peer, then remove it partway through the budget; the
+        // poll loop must re-check and return Ok before the deadline.
+        let dir = tempfile::TempDir::new().unwrap();
+        let pid_file = dir.path().join("serve.pid");
+        std::fs::write(&pid_file, std::process::id().to_string()).unwrap();
+        let pid_file_clone = pid_file.clone();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            let _ = std::fs::remove_file(&pid_file_clone);
+        });
+        let result = wait_for_no_peer(dir.path(), Duration::from_secs(2));
+        handle.join().unwrap();
+        assert!(
+            result.is_ok(),
+            "must proceed once the peer lock disappears mid-wait"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn last_update_breadcrumb_path_honors_cartog_log_dir_first() {
+        let _xdg = EnvVarGuard::set("XDG_CACHE_HOME", "/tmp/should-not-be-used");
+        let _log = EnvVarGuard::set("CARTOG_LOG_DIR", "/tmp/cartog-logs");
+        let path = last_update_breadcrumb_path().expect("path resolves");
+        assert_eq!(path, PathBuf::from("/tmp/cartog-logs/last-update"));
+    }
+
+    #[test]
+    #[serial]
+    fn last_update_breadcrumb_path_prefers_xdg_then_home() {
+        let _log = EnvVarGuard::unset("CARTOG_LOG_DIR");
+        let _xdg = EnvVarGuard::set("XDG_CACHE_HOME", "/tmp/xdg-cache");
+        let path = last_update_breadcrumb_path().expect("path resolves");
+        assert_eq!(path, PathBuf::from("/tmp/xdg-cache/cartog/last-update"));
+
+        let _xdg2 = EnvVarGuard::unset("XDG_CACHE_HOME");
+        let _home = EnvVarGuard::set("HOME", "/tmp/fake-home");
+        let path = last_update_breadcrumb_path().expect("path resolves");
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/fake-home/.cache/cartog/last-update")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn write_last_update_breadcrumb_writes_target() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _log = EnvVarGuard::set("CARTOG_LOG_DIR", dir.path().to_str().unwrap());
+        write_last_update_breadcrumb("0.42.0");
+        let contents = std::fs::read_to_string(dir.path().join("last-update")).unwrap();
+        assert_eq!(contents, "cartog updated to 0.42.0.\n");
+    }
+
+    /// Scoped env-var setter/un-setter that restores the prior value on drop.
+    /// Used with `#[serial]` so the process-global mutation can't leak across
+    /// concurrently-running tests.
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, prev }
+        }
+        fn unset(key: &'static str) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, prev }
+        }
+    }
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn wait_for_no_peer_times_out_with_live_peer() {
+        // Plant our own (live) PID as a serve lock; the wait must give up
+        // within roughly the budget and name the peer.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("serve.pid"), std::process::id().to_string()).unwrap();
+        let start = std::time::Instant::now();
+        let result = wait_for_no_peer(dir.path(), Duration::from_millis(150));
+        let elapsed = start.elapsed();
+        assert!(result.is_err(), "live peer must cause a timeout error");
+        assert_eq!(result.unwrap_err().pid, std::process::id());
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "must not block far beyond the budget, took {elapsed:?}"
+        );
+    }
 
     #[test]
     fn archive_name_drops_version_to_match_release_workflow() {

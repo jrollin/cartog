@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Install cartog binary
-# 1. Try downloading pre-built binary from GitHub Releases (requires curl + tar)
-# 2. Fallback to cargo install (requires Rust 1.70+)
+# Install cartog binary by downloading a pre-built release tarball from GitHub
+# Releases (requires curl + tar). Release-only: there is no cargo-install
+# fallback — if no matching pre-built binary is available, the script fails
+# with a clear message rather than silently building from source.
 
 REPO="jrollin/cartog"
-MIN_RUST_MAJOR=1
-MIN_RUST_MINOR=70
 REQUESTED_VERSION="${1:-}"
 
 # Marker hands the chosen install dir from the writer to verify_install.
@@ -42,22 +41,6 @@ if command -v cartog &>/dev/null; then
 fi
 
 has_cmd() { command -v "$1" &>/dev/null; }
-
-check_rust_version() {
-    if ! has_cmd rustc; then
-        return 1
-    fi
-    local version
-    version="$(rustc --version | sed -E 's/rustc ([0-9]+\.[0-9]+).*/\1/')"
-    local major minor
-    major="${version%%.*}"
-    minor="${version##*.}"
-    if [ "$major" -gt "$MIN_RUST_MAJOR" ] || { [ "$major" -eq "$MIN_RUST_MAJOR" ] && [ "$minor" -ge "$MIN_RUST_MINOR" ]; }; then
-        return 0
-    fi
-    echo "Warning: Rust $version found, but cartog requires >= $MIN_RUST_MAJOR.$MIN_RUST_MINOR"
-    return 1
-}
 
 # Pick the install directory. Preference order:
 #   1. $CARTOG_INSTALL_DIR — explicit override
@@ -201,34 +184,31 @@ verify_install() {
     return 1
 }
 
-# Try pre-built binary first
-if target="$(detect_target)"; then
-    if install_from_github "$target"; then
-        verify_install
-        exit 0
+# === main (release-only install) ===
+# Everything above is function/const definitions; the executable flow starts
+# here. The sentinel comment on the line above is a stable anchor for
+# test_install.sh, which sources only the definitions — keep it in sync if you
+# rename it.
+#
+# Download a pre-built binary from GitHub Releases. There is no cargo-install
+# fallback — a failure here is surfaced, not silently worked around by building
+# from source.
+if ! target="$(detect_target)"; then
+    echo "Error: unsupported platform — no pre-built cartog binary for this OS/arch."
+    echo "Build from source instead: https://github.com/${REPO}#install"
+    exit 1
+fi
+
+if ! install_from_github "$target"; then
+    echo "Error: could not download a pre-built cartog binary for ${target}."
+    if [ -n "$REQUESTED_VERSION" ]; then
+        echo "Check that release v${REQUESTED_VERSION} publishes an asset for ${target}:"
+        echo "  https://github.com/${REPO}/releases/tag/v${REQUESTED_VERSION}"
+    else
+        echo "Check your network/proxy, or see https://github.com/${REPO}/releases"
     fi
-    echo "Pre-built binary not available, falling back to cargo install..."
-fi
-
-# Fallback to cargo install
-if ! has_cmd cargo; then
-    echo "Error: could not download pre-built binary and cargo not found."
-    echo "Install Rust from https://rustup.rs/ then run:"
-    echo "  cargo install cartog"
+    echo "To build from source instead: https://github.com/${REPO}#install"
     exit 1
 fi
 
-if ! check_rust_version; then
-    echo "Error: Rust toolchain too old. Update with: rustup update"
-    exit 1
-fi
-
-echo "Installing cartog via cargo..."
-if [ -n "$REQUESTED_VERSION" ]; then
-    cargo install "cartog@${REQUESTED_VERSION}"
-else
-    cargo install cartog
-fi
-# cargo install resolves its target dir as: CARGO_INSTALL_ROOT > CARGO_HOME > ~/.cargo
-printf '%s\n' "${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin" > "$INSTALL_DIR_MARKER"
 verify_install
