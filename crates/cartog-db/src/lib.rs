@@ -2914,7 +2914,7 @@ pub struct UnresolvedEdge {
     pub line: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct IndexStats {
     pub num_files: u32,
     pub num_symbols: u32,

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use rmcp::schemars;
 use rmcp::{
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    handler::server::{router::tool::ToolRouter, tool::schema_for_output, wrapper::Parameters},
     model::*,
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -135,23 +135,67 @@ pub struct MapParams {
 }
 
 // ── Response wrappers for JSON serialization ──
+//
+// MCP `structuredContent` must be a JSON object, and `schema_for_output`
+// rejects non-object output schemas, so every tool returns an object — list
+// tools wrap their array under a `results` field. The text content block keeps
+// the original (bare-array) shape for clients without schema support.
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 struct RefEntry {
     edge: cartog_core::Edge,
     source: Option<cartog_core::Symbol>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 struct ImpactEntry {
     edge: cartog_core::Edge,
     depth: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 struct HierarchyEntry {
     child: String,
     parent: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct SymbolList {
+    results: Vec<cartog_core::Symbol>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct EdgeList {
+    results: Vec<cartog_core::Edge>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct RefList {
+    results: Vec<RefEntry>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct ImpactList {
+    results: Vec<ImpactEntry>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct HierarchyList {
+    results: Vec<HierarchyEntry>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct MapResult {
+    files: Vec<String>,
+    top_symbols: Vec<cartog_core::Symbol>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct StatsResult {
+    #[serde(flatten)]
+    stats: cartog_db::IndexStats,
+    role: String,
+    watcher_active: bool,
 }
 
 // ── Path validation ──
@@ -341,14 +385,73 @@ fn narrowing_hint_for(tool: &str) -> &'static str {
     }
 }
 
+/// Generate a tool's output schema with schemars' non-standard integer
+/// `format` values stripped.
+///
+/// schemars tags Rust integers with formats like `uint32`/`int64` that aren't
+/// JSON Schema standard formats, so strict client validators (e.g. Ajv) log a
+/// warning per field on every connection. Removing them keeps the schema valid
+/// (the field is still an `integer`) and the client log clean.
+fn output_schema_for<T: schemars::JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+    let schema = schema_for_output::<T>().expect("output schema must be a JSON object");
+    let mut value = serde_json::Value::Object((*schema).clone());
+    strip_int_formats(&mut value);
+    match value {
+        serde_json::Value::Object(map) => Arc::new(map),
+        _ => schema,
+    }
+}
+
+/// Non-standard integer formats schemars emits for Rust integer types.
+const NONSTANDARD_INT_FORMATS: &[&str] = &[
+    "uint", "uint8", "uint16", "uint32", "uint64", "uint128", "int128",
+];
+
+/// Recursively remove non-standard integer `format` annotations from a schema.
+fn strip_int_formats(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(fmt)) = map.get("format") {
+                if NONSTANDARD_INT_FORMATS.contains(&fmt.as_str()) {
+                    map.remove("format");
+                }
+            }
+            map.values_mut().for_each(strip_int_formats);
+        }
+        serde_json::Value::Array(items) => {
+            items.iter_mut().for_each(strip_int_formats);
+        }
+        _ => {}
+    }
+}
+
+/// Build a successful result carrying both a text block and structured content.
+/// `structuredContent` is attached only when present (callers omit it for
+/// truncated responses, so an oversized payload can't bypass the size cap).
+fn success_result(text: String, structured: Option<serde_json::Value>) -> CallToolResult {
+    let mut result = CallToolResult::success(vec![Content::text(text)]);
+    result.structured_content = structured;
+    result
+}
+
 /// Build a JSON text response with next-tool suggestions appended.
+///
+/// `structured` is the object-shaped payload mirrored into `structuredContent`
+/// for schema-aware clients; it is dropped when the response is truncated so an
+/// oversized payload can't slip past the size cap. The text block always keeps
+/// the original (possibly bare-array) JSON shape.
 ///
 /// Caps total response size at `mcp_max_bytes()` so individual tool calls
 /// don't blow the caller's context window. On overflow the payload is cut
 /// at a safe char boundary and an overflow notice pointing at a narrower
 /// tool is appended.
-fn tool_response(db: &Database, json: String, tool: &str) -> Result<CallToolResult, McpError> {
-    tool_response_named(db, json, tool, None)
+fn tool_response(
+    db: &Database,
+    json: String,
+    structured: Option<serde_json::Value>,
+    tool: &str,
+) -> Result<CallToolResult, McpError> {
+    tool_response_named(db, json, structured, tool, None)
 }
 
 /// Record a successful read tool call into the query log for
@@ -384,6 +487,7 @@ fn did_you_mean_suffix(name: &str, candidates: &[String]) -> Option<String> {
 fn tool_response_named(
     db: &Database,
     json: String,
+    structured: Option<serde_json::Value>,
     tool: &str,
     queried_name: Option<&str>,
 ) -> Result<CallToolResult, McpError> {
@@ -409,6 +513,8 @@ fn tool_response_named(
                 if let Some(suffix) = did_you_mean_suffix(name, &candidates) {
                     let mut text = json;
                     text.push_str(&suffix);
+                    // No structured content: the empty `[]` result plus a prose
+                    // hint has no useful typed form.
                     return Ok(CallToolResult::success(vec![Content::text(text)]));
                 }
             }
@@ -431,6 +537,14 @@ fn tool_response_named(
         (json, 0)
     };
 
+    // Structured content is kept only for full (untruncated) responses, so an
+    // oversized payload can't bypass the size cap via `structuredContent`.
+    let mut structured = if truncated_bytes > 0 {
+        None
+    } else {
+        structured
+    };
+
     if truncated_bytes > 0 {
         text.push_str(&format!(
             "\n\n(Response truncated: {truncated_bytes} bytes omitted to stay under the \
@@ -439,11 +553,12 @@ fn tool_response_named(
         ));
     } else if is_empty {
         text.push_str("\n\n(Index is empty. Run cartog_index first to build the code graph.)");
+        structured = None;
     } else if let Some(hint) = suggestions_for(tool) {
         text.push_str("\n\n");
         text.push_str(hint);
     }
-    Ok(CallToolResult::success(vec![Content::text(text)]))
+    Ok(success_result(text, structured))
 }
 
 // ── MCP Server ──
@@ -709,7 +824,8 @@ impl CartogServer {
     /// Show symbols and structure of a file without reading its content.
     #[tool(
         description = "Show file structure: functions, classes, methods, imports with signatures and line ranges. Use this INSTEAD of reading a file when you need to understand what's in it — then Read only the specific lines you need. Not for: reading the actual function body (use Read with offset/limit), or finding usages (use cartog_refs). Returns: Symbol[] with {name, kind, signature, line_start, line_end, parent_id, is_async, is_exported}.",
-        annotations(title = "Outline file", read_only_hint = true, open_world_hint = false)
+        annotations(title = "Outline file", read_only_hint = true, open_world_hint = false),
+        output_schema = output_schema_for::<SymbolList>()
     )]
     async fn cartog_outline(
         &self,
@@ -729,7 +845,8 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response(&db, json, "cartog_outline")
+            let structured = serde_json::to_value(SymbolList { results: symbols }).ok();
+            tool_response(&db, json, structured, "cartog_outline")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -742,7 +859,8 @@ impl CartogServer {
             title = "Find references",
             read_only_hint = true,
             open_world_hint = false
-        )
+        ),
+        output_schema = output_schema_for::<RefList>()
     )]
     async fn cartog_refs(
         &self,
@@ -780,7 +898,8 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response_named(&db, json, "cartog_refs", Some(&name))
+            let structured = serde_json::to_value(RefList { results: entries }).ok();
+            tool_response_named(&db, json, structured, "cartog_refs", Some(&name))
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -793,7 +912,8 @@ impl CartogServer {
             title = "Trace callees",
             read_only_hint = true,
             open_world_hint = false
-        )
+        ),
+        output_schema = output_schema_for::<EdgeList>()
     )]
     async fn cartog_callees(
         &self,
@@ -813,7 +933,8 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&edges)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response_named(&db, json, "cartog_callees", Some(&name))
+            let structured = serde_json::to_value(EdgeList { results: edges }).ok();
+            tool_response_named(&db, json, structured, "cartog_callees", Some(&name))
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -826,7 +947,8 @@ impl CartogServer {
             title = "Impact analysis",
             read_only_hint = true,
             open_world_hint = false
-        )
+        ),
+        output_schema = output_schema_for::<ImpactList>()
     )]
     async fn cartog_impact(
         &self,
@@ -852,7 +974,8 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response_named(&db, json, "cartog_impact", Some(&name))
+            let structured = serde_json::to_value(ImpactList { results: entries }).ok();
+            tool_response_named(&db, json, structured, "cartog_impact", Some(&name))
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -865,7 +988,8 @@ impl CartogServer {
             title = "Class hierarchy",
             read_only_hint = true,
             open_world_hint = false
-        )
+        ),
+        output_schema = output_schema_for::<HierarchyList>()
     )]
     async fn cartog_hierarchy(
         &self,
@@ -890,7 +1014,8 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response_named(&db, json, "cartog_hierarchy", Some(&name))
+            let structured = serde_json::to_value(HierarchyList { results: entries }).ok();
+            tool_response_named(&db, json, structured, "cartog_hierarchy", Some(&name))
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -903,7 +1028,8 @@ impl CartogServer {
             title = "File dependencies",
             read_only_hint = true,
             open_world_hint = false
-        )
+        ),
+        output_schema = output_schema_for::<EdgeList>()
     )]
     async fn cartog_deps(
         &self,
@@ -923,7 +1049,8 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&edges)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response(&db, json, "cartog_deps")
+            let structured = serde_json::to_value(EdgeList { results: edges }).ok();
+            tool_response(&db, json, structured, "cartog_deps")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -936,7 +1063,8 @@ impl CartogServer {
             title = "Search symbols",
             read_only_hint = true,
             open_world_hint = false
-        )
+        ),
+        output_schema = output_schema_for::<SymbolList>()
     )]
     async fn cartog_search(
         &self,
@@ -982,7 +1110,8 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response(&db, json, "cartog_search")
+            let structured = serde_json::to_value(SymbolList { results: symbols }).ok();
+            tool_response(&db, json, structured, "cartog_search")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -991,7 +1120,8 @@ impl CartogServer {
     /// Index statistics summary.
     #[tool(
         description = "Show index health: file count, symbol count, edge count, and edge resolution buckets. Use to verify the index is built and check coverage. Not for: finding code (use cartog_search or cartog_rag_search). Returns: {num_files, num_symbols, num_edges, num_resolved, num_unresolvable, num_external, languages, symbol_kinds, role, watcher_active}. num_external counts edges whose LSP-resolved target lives outside the indexed root (stdlib, deps, node_modules).",
-        annotations(title = "Index stats", read_only_hint = true, open_world_hint = false)
+        annotations(title = "Index stats", read_only_hint = true, open_world_hint = false),
+        output_schema = output_schema_for::<StatsResult>()
     )]
     async fn cartog_stats(&self) -> Result<CallToolResult, McpError> {
         let db = Arc::clone(&self.db);
@@ -1009,32 +1139,24 @@ impl CartogServer {
                 .stats()
                 .map_err(|e| mcp_err(format!("stats query failed: {e}")))?;
 
-            // Serialize the base stats then splice the role + watcher
-            // status alongside. `watcher_active=false` on a Primary means
-            // either the user did not request `--watch`, or a post-
-            // promotion watcher spawn failed (e.g., another live
-            // `cartog watch` holds the watch slot, or notify install
-            // failed). The user can distinguish the cases by checking
-            // whether they passed `--watch`.
-            let mut value = serde_json::to_value(&stats)
+            // `watcher_active=false` on a Primary means either the user did not
+            // request `--watch`, or a post-promotion watcher spawn failed (e.g.,
+            // another live `cartog watch` holds the watch slot, or notify install
+            // failed). The user can distinguish the cases by whether they passed
+            // `--watch`.
+            let result = StatsResult {
+                stats,
+                role: role.as_str().to_string(),
+                watcher_active,
+            };
+            let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert(
-                    "role".to_string(),
-                    serde_json::Value::String(role.as_str().to_string()),
-                );
-                obj.insert(
-                    "watcher_active".to_string(),
-                    serde_json::Value::Bool(watcher_active),
-                );
-            }
-            let json = serde_json::to_string_pretty(&value)
-                .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            let structured = serde_json::to_value(&result).ok();
             // cartog_stats bypasses tool_response_named so it must log itself
             // — otherwise MCP-side stats calls disappear from
             // `cartog stats --savings`.
             log_tool_query(&db, "cartog_stats");
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            Ok(success_result(json, structured))
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1043,7 +1165,8 @@ impl CartogServer {
     /// Codebase orientation: file list + top symbols by centrality.
     #[tool(
         description = "Orient yourself in an unfamiliar codebase. Returns the full file list plus the top N symbols ranked by reference count (most-used definitions first). Use as the FIRST call when dropped into a new repo, before search or refs. Not for: locating a specific symbol (use cartog_search), or fetching one file's structure (use cartog_outline). Returns: {files: string[], top_symbols: Symbol[]}.",
-        annotations(title = "Codebase map", read_only_hint = true, open_world_hint = false)
+        annotations(title = "Codebase map", read_only_hint = true, open_world_hint = false),
+        output_schema = output_schema_for::<MapResult>()
     )]
     async fn cartog_map(
         &self,
@@ -1064,16 +1187,12 @@ impl CartogServer {
                 .top_symbols(limit)
                 .map_err(|e| mcp_err(format!("top_symbols query failed: {e}")))?;
 
-            #[derive(Serialize)]
-            struct MapResult {
-                files: Vec<String>,
-                top_symbols: Vec<cartog_core::Symbol>,
-            }
             let result = MapResult { files, top_symbols };
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response(&db, json, "cartog_map")
+            let structured = serde_json::to_value(&result).ok();
+            tool_response(&db, json, structured, "cartog_map")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1086,7 +1205,8 @@ impl CartogServer {
             title = "Recent changes",
             read_only_hint = true,
             open_world_hint = false
-        )
+        ),
+        output_schema = output_schema_for::<cartog_core::ChangesResult>()
     )]
     async fn cartog_changes(
         &self,
@@ -1128,7 +1248,8 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response(&db, json, "cartog_changes")
+            let structured = serde_json::to_value(&result).ok();
+            tool_response(&db, json, structured, "cartog_changes")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1225,7 +1346,8 @@ impl CartogServer {
             title = "Semantic code search",
             read_only_hint = true,
             open_world_hint = false
-        )
+        ),
+        output_schema = output_schema_for::<rag::search::HybridSearchResult>()
     )]
     async fn cartog_rag_search(
         &self,
@@ -1276,7 +1398,8 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            tool_response(&db, json, "cartog_rag_search")
+            let structured = serde_json::to_value(&result).ok();
+            tool_response(&db, json, structured, "cartog_rag_search")
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -2047,6 +2170,154 @@ mod tests {
                 tool.name
             );
         }
+    }
+
+    // ── Output schema / structured content tests ──
+
+    /// Every read tool advertises an output schema so schema-aware clients can
+    /// validate `structuredContent`. The two write tools have no typed output.
+    #[test]
+    fn read_tools_advertise_output_schemas() {
+        let writers = ["cartog_index", "cartog_rag_index"];
+        for tool in CartogServer::tool_router().list_all() {
+            let has_schema = tool.output_schema.is_some();
+            let expected = !writers.contains(&tool.name.as_ref());
+            assert_eq!(has_schema, expected, "{} output_schema", tool.name);
+        }
+    }
+
+    /// `schema_for_output` rejects non-object schemas, so list tools must wrap
+    /// their arrays. Building each schema proves the wrappers stay object-typed
+    /// (a regression here would panic the tool macro at startup).
+    #[test]
+    fn output_schemas_are_objects() {
+        output_schema_for::<SymbolList>();
+        output_schema_for::<EdgeList>();
+        output_schema_for::<RefList>();
+        output_schema_for::<ImpactList>();
+        output_schema_for::<HierarchyList>();
+        output_schema_for::<MapResult>();
+        output_schema_for::<StatsResult>();
+        output_schema_for::<cartog_core::ChangesResult>();
+        output_schema_for::<rag::search::HybridSearchResult>();
+    }
+
+    /// Non-standard integer formats (`uint32`, …) are stripped so strict client
+    /// validators don't warn, while the field stays typed as an integer.
+    #[test]
+    fn output_schema_strips_nonstandard_int_formats() {
+        let schema = output_schema_for::<SymbolList>();
+        let value = serde_json::Value::Object((*schema).clone());
+
+        fn collect_formats(v: &serde_json::Value, out: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    if let Some(serde_json::Value::String(f)) = map.get("format") {
+                        out.push(f.clone());
+                    }
+                    map.values().for_each(|v| collect_formats(v, out));
+                }
+                serde_json::Value::Array(items) => {
+                    items.iter().for_each(|v| collect_formats(v, out));
+                }
+                _ => {}
+            }
+        }
+        let mut formats = Vec::new();
+        collect_formats(&value, &mut formats);
+        assert!(
+            !formats
+                .iter()
+                .any(|f| NONSTANDARD_INT_FORMATS.contains(&f.as_str())),
+            "non-standard int formats leaked: {formats:?}"
+        );
+
+        // The integer field survives, just without the bogus format.
+        let start_line = &value["$defs"]["Symbol"]["properties"]["start_line"];
+        assert_eq!(start_line["type"], "integer");
+        assert!(start_line.get("format").is_none());
+    }
+
+    fn populated_memory_db() -> Database {
+        let db = Database::open_memory().expect("in-memory DB");
+        db.upsert_file(&cartog_core::FileInfo {
+            path: "test.py".to_string(),
+            last_modified: 0.0,
+            hash: "h".to_string(),
+            language: "python".to_string(),
+            num_symbols: 1,
+        })
+        .expect("upsert file");
+        db
+    }
+
+    /// A full (under-budget) response mirrors its payload into
+    /// `structuredContent` while keeping the bare-array text block.
+    #[test]
+    fn tool_response_attaches_structured_content_under_budget() {
+        let db = populated_memory_db();
+        let symbols = db.search("anything", None, None, 30).expect("search");
+        let json = serde_json::to_string_pretty(&symbols).expect("json");
+        let structured = serde_json::to_value(SymbolList { results: symbols }).ok();
+
+        let result = tool_response(&db, json, structured, "cartog_search").expect("response");
+
+        let structured = result
+            .structured_content
+            .expect("structured content present");
+        assert!(
+            structured.get("results").is_some(),
+            "structured content is the object wrapper"
+        );
+        assert_eq!(result.content.len(), 1, "text block retained");
+    }
+
+    /// An over-budget response drops `structuredContent` so an oversized payload
+    /// can't bypass the size cap, and the text block carries a truncation notice.
+    #[test]
+    fn tool_response_drops_structured_content_when_truncated() {
+        let db = populated_memory_db();
+        // Exceed the default 64KB cap deterministically (no env mutation).
+        let big = "x".repeat(mcp_max_bytes() + 1024);
+        let json = format!("[\"{big}\"]");
+        let structured = Some(serde_json::json!({ "results": [] }));
+
+        let result = tool_response(&db, json, structured, "cartog_search").expect("response");
+
+        assert!(
+            result.structured_content.is_none(),
+            "structured content dropped on truncation"
+        );
+        let text = match &result.content.first().expect("content").raw {
+            RawContent::Text(t) => &t.text,
+            _ => panic!("expected text content"),
+        };
+        assert!(
+            text.contains("Response truncated"),
+            "truncation notice present"
+        );
+    }
+
+    /// `StatsResult` flattens `IndexStats` and adds role + watcher fields at the
+    /// top level (no nested `stats` object), matching the documented shape.
+    #[test]
+    fn stats_result_flattens_index_stats() {
+        let db = populated_memory_db();
+        let stats = db.stats().expect("stats");
+        let result = StatsResult {
+            stats,
+            role: "primary".to_string(),
+            watcher_active: false,
+        };
+        let value = serde_json::to_value(&result).expect("serialize");
+        let obj = value.as_object().expect("object");
+        assert!(obj.contains_key("num_files"), "flattened stats field");
+        assert_eq!(obj.get("role").and_then(|v| v.as_str()), Some("primary"));
+        assert_eq!(
+            obj.get("watcher_active").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert!(!obj.contains_key("stats"), "stats is flattened, not nested");
     }
 
     // ── Path validation tests ──

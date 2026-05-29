@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct Symbol {
     pub id: String,
     pub name: String,
@@ -110,7 +110,7 @@ impl Symbol {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolKind {
     Function,
@@ -172,7 +172,7 @@ impl std::fmt::Display for SymbolKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Visibility {
     Public,
@@ -207,7 +207,7 @@ impl std::fmt::Display for Visibility {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct Edge {
     pub source_id: String,
     pub target_name: String,
@@ -238,7 +238,7 @@ impl Edge {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
     Calls,
@@ -297,7 +297,7 @@ pub struct FileInfo {
     pub num_symbols: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ChangesResult {
     pub changed_files: Vec<String>,
     pub symbols: Vec<Symbol>,

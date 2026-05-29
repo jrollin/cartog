@@ -20,7 +20,7 @@ pub enum KindFilter {
 use super::provider::{embedding_to_bytes, EmbeddingProvider, RerankerProvider};
 
 /// A search result combining symbol metadata with relevance info.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct SearchResult {
     pub symbol: Symbol,
     pub content: Option<String>,
@@ -33,7 +33,7 @@ pub struct SearchResult {
 }
 
 /// Result of a hybrid search operation.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct HybridSearchResult {
     pub results: Vec<SearchResult>,
     pub fts_count: u32,
