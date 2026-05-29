@@ -54,11 +54,13 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    # The default-feature suite is run (and gated) by the `coverage` job via
+    # `cargo llvm-cov`, so it is not repeated here. This job covers only the
+    # `--no-default-features` build, which `coverage` does not exercise.
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test
       - run: cargo test --no-default-features
 
   test-remote:
