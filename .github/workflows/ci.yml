@@ -138,28 +138,80 @@ jobs:
     name: Benchmarks
     runs-on: ubuntu-latest
     # Benchmarks on shared GitHub runners are noisy — never fail a PR on a
-    # variance-driven regression, but surface results as an artifact so
-    # reviewers can spot outliers. Tuned for ~1 min of actual measurement
-    # across the whole suite on top of the ~3 min compile:
-    # - `--sample-size 10` is criterion's minimum (default is 100).
-    # - `--warm-up-time 1 --measurement-time 1` trims each benchmark to
-    #   roughly 2 s of wall-clock. Statistical confidence intervals widen,
-    #   which is fine for catching order-of-magnitude regressions rather
-    #   than µs-level shifts.
+    # variance-driven regression (the job is `continue-on-error`), but surface
+    # results as an artifact and, on PRs, a same-runner comparison against the
+    # PR's merge base so reviewers can spot real shifts.
+    #
+    # CI runs three of the four bench targets. The fourth, `rag_onnx`, loads the
+    # real fastembed/ONNX model and is intentionally NOT named here — that is
+    # how it is excluded (criterion's regex filter cannot express exclusion).
+    #
+    # Budget knobs (kept short so the whole suite is ~1–2 min of measurement on
+    # top of the compile):
+    # - `--sample-size 10` is criterion's minimum (default 100).
+    # - `--warm-up-time 1 --measurement-time 1` trims each bench to ~2 s of
+    #   wall-clock. Confidence intervals widen — fine for catching
+    #   order-of-magnitude shifts, not µs-level ones. The `index_full_force/*`
+    #   benches are ms-scale and noisier; treat their numbers as indicative.
     # - `--noplot` skips SVG rendering; `estimates.json` still lands in
-    #   `target/criterion/` so the artifact stays useful.
+    #   `target/criterion/`, so the artifact stays useful.
     continue-on-error: true
+    env:
+      # Shared by every step; `index_full_force/*` reuses the same knobs.
+      CRITERION_ARGS: "--sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot"
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # need the merge base for the PR baseline comparison
+          # The job git-checkouts arbitrary SHAs but never pushes, so do not
+          # leave credentials persisted in the workspace.
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Run criterion benches
-        run: >-
-          cargo bench --bench queries --
-          --sample-size 10
-          --warm-up-time 1
-          --measurement-time 1
-          --noplot
+
+      # On a PR, establish a baseline from the merge base on THIS runner first,
+      # so the comparison controls for runner-to-runner variance (the dominant
+      # noise source). The fast µs-scale targets only — the ms-scale indexing
+      # benches are too noisy for a meaningful 1 s-window delta.
+      - name: Baseline (merge base, PR only)
+        if: github.event_name == 'pull_request'
+        # Best-effort: a target that does not yet exist on the base commit (a PR
+        # that adds a new bench) cannot be baselined — that is fine, the compare
+        # step below just skips its `--baseline` for that target. Hence no
+        # `set -e` on the per-target runs.
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="$(git rev-parse HEAD)"
+          echo "Baselining queries + rag_search at merge base $base"
+          git checkout --quiet "$base"
+          cargo bench -p cartog --bench queries -- $CRITERION_ARGS --save-baseline base || \
+            echo "::warning::queries bench not present on base; skipping its baseline"
+          cargo bench -p cartog --bench rag_search -- $CRITERION_ARGS --save-baseline base || \
+            echo "::warning::rag_search bench not present on base; skipping its baseline"
+          git checkout --quiet "$head"
+
+      - name: Query + RAG-search benches
+        run: |
+          set -euo pipefail
+          # On a PR, compare against the merge-base baseline if one was saved;
+          # on a push to main there is no baseline, so just measure. `--baseline`
+          # errors if the named baseline is absent, so fall back to a plain run.
+          run_bench() {
+            local crate_bench="$1"
+            if [ "${{ github.event_name }}" = "pull_request" ] && \
+               cargo bench $crate_bench -- $CRITERION_ARGS --baseline base 2>/dev/null; then
+              return 0
+            fi
+            cargo bench $crate_bench -- $CRITERION_ARGS
+          }
+          run_bench "-p cartog --bench queries"
+          run_bench "-p cartog --bench rag_search"
+
+      - name: Indexing benches (all languages)
+        # Artifact-only: ms-scale and the noisiest of the suite, so no baseline
+        # gate — the numbers are for spotting gross per-grammar regressions.
+        run: cargo bench -p cartog-indexer --bench indexing -- $CRITERION_ARGS
+
       - uses: actions/upload-artifact@v7
         with:
           name: criterion-report

@@ -70,7 +70,7 @@ Every code navigation tool makes you choose: fast but shallow (grep), or precise
 | **Recall** (completeness) | 78% | ~100% | **97%** [*](#benchmark-notes) |
 | **Privacy** | local | local | **100% local** |
 
-Measured across 13 scenarios, 5 languages ([benchmark suite](crates/cartog/benches/queries.rs)).
+Measured across 13 scenarios, 8 languages ([benchmark suite](benchmarks/)).
 
 <a id="benchmark-notes"></a>
 > **\*** 97 % recall requires a matching language server on PATH. The

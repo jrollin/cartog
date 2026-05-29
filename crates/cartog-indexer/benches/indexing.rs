@@ -1,77 +1,57 @@
 //! ONNX-free indexing benchmarks for `cartog-indexer`.
 //!
-//! Mirrors the `index_*` benches in `crates/cartog/benches/queries.rs`, but
-//! lives in `cartog-indexer` so it can be run without the cartog-rag /
-//! ONNX runtime build chain. Useful for quick local perf checks and CI
-//! environments without the native ONNX library installed.
+//! This is the canonical home for indexing-throughput benchmarks: it lives in
+//! `cartog-indexer`, which has no `cartog-rag`/ONNX dependency, so CI can run
+//! it without the native ONNX build chain. The sibling `cartog --bench
+//! queries` target deliberately does *not* duplicate these.
 //!
-//! Run with: `cargo bench --bench indexing`
+//! Run with: `cargo bench -p cartog-indexer --bench indexing`
 //!
-//! **Keep in sync with `crates/cartog/benches/queries.rs::bench_indexing`.**
-//! When you adjust scenarios here (fixture path, page-cap, fixture file
-//! invalidated for the single-file edit case), apply the same change there
-//! so the two surfaces measure the same thing. Duplication is intentional —
-//! the cartog-binary bench depends on `cartog-rag` which depends on the
-//! ONNX native library; this crate has no such constraint.
+//! Scenarios:
+//! - `index_full_force/<lang>` — full re-index of each language fixture. Each
+//!   exercises a distinct tree-sitter grammar + extractor, which is where
+//!   indexing cost actually varies, so this is parameterized over all 8
+//!   fixtures.
+//! - `index_incremental_noop` / `index_incremental_one_file` — the incremental
+//!   skip/diff paths. These are language-agnostic (hash compare + Merkle diff
+//!   in `cartog-db`/`cartog-indexer`, not in any grammar), so they run on the
+//!   dense Python fixture only.
+//!
+//! The timed bodies live in [`cartog_indexer::bench_support`] so they stay
+//! identical to anything that reuses them.
 
-use std::path::Path;
+use std::hint::black_box;
 
-use cartog_core::FileInfo;
-use cartog_db::Database;
-use cartog_indexer::index_directory;
-use criterion::{criterion_group, criterion_main, Criterion};
+use cartog_indexer::bench_support;
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-fn fixture_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("benchmarks")
-        .join("fixtures")
-        .join("webapp_py")
+fn bench_full_index(c: &mut Criterion) {
+    let mut group = c.benchmark_group("index_full_force");
+    for (lang, fixture) in bench_support::all_fixtures() {
+        group.bench_with_input(BenchmarkId::from_parameter(lang), &fixture, |b, fixture| {
+            b.iter(|| black_box(bench_support::full_force(black_box(fixture))));
+        });
+    }
+    group.finish();
 }
 
-fn bench_indexing(c: &mut Criterion) {
-    let fixture = fixture_dir();
-    assert!(
-        fixture.exists(),
-        "expected fixture at {fixture:?}; run from a checkout that includes benchmarks/"
-    );
-
-    // Full index (force=true): baseline.
-    c.bench_function("index_full_force", |b| {
-        b.iter(|| {
-            let db = Database::open_memory().unwrap();
-            index_directory(&db, &fixture, true, false, None, None).unwrap();
-        });
-    });
+fn bench_incremental(c: &mut Criterion) {
+    let fixture = bench_support::fixture_path();
 
     // No-op re-index: every file's stored hash matches; everything is skipped
     // before parsing.
     c.bench_function("index_incremental_noop", |b| {
-        let db = Database::open_memory().unwrap();
-        index_directory(&db, &fixture, true, false, None, None).unwrap();
-        b.iter(|| {
-            index_directory(&db, &fixture, false, false, None, None).unwrap();
-        });
+        let db = bench_support::seed(&fixture);
+        b.iter(|| black_box(bench_support::noop(black_box(&db), black_box(&fixture))));
     });
 
     // Single-file change: invalidate one file's stored hash so it re-parses
     // and exercises the Merkle-diff path inside Phase 3.
     c.bench_function("index_incremental_one_file", |b| {
-        let db = Database::open_memory().unwrap();
-        index_directory(&db, &fixture, true, false, None, None).unwrap();
-        b.iter(|| {
-            db.upsert_file(&FileInfo {
-                path: "auth/service.py".to_string(),
-                last_modified: 0.0,
-                hash: "invalidated".to_string(),
-                language: "python".to_string(),
-                num_symbols: 0,
-            })
-            .unwrap();
-            index_directory(&db, &fixture, false, false, None, None).unwrap();
-        });
+        let db = bench_support::seed(&fixture);
+        b.iter(|| black_box(bench_support::one_file(black_box(&db), black_box(&fixture))));
     });
 }
 
-criterion_group!(benches, bench_indexing);
+criterion_group!(benches, bench_full_index, bench_incremental);
 criterion_main!(benches);

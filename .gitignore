@@ -5,5 +5,6 @@
 .ruff_cache/
 __pycache__/
 benchmarks/results/*.jsonl
+benchmarks/.indexes/
 benchmarks/fixtures/webapp_rs/target/
 .playwright-mcp/

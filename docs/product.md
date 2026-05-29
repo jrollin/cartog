@@ -19,7 +19,7 @@ Code is a graph of relationships (calls, imports, inherits, type references). ca
 | Query latency | multi-step | 8–450 µs |
 | Transitive analysis | impossible | `impact --depth 3` |
 
-Measured across 13 scenarios, 5 languages. Best gains on call chain tracing (88% token reduction) and caller lookup (95% reduction).
+Measured across 13 scenarios, 8 languages. Best gains on call chain tracing (88% token reduction) and caller lookup (95% reduction).
 
 > **Recall caveat:** The 97% figure requires a matching language server on `PATH` (the default build ships LSP support). Without a server (or with `--no-lsp`), edge resolution falls to ~25–37% depending on language; with LSP it reaches 44–81%. See [README — Benchmark notes](../README.md#benchmark-notes) for methodology.
 

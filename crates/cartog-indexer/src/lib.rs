@@ -1052,6 +1052,134 @@ fn extract_symbol_content(source: &str, sym: &cartog_core::Symbol) -> Option<(St
     Some((raw.to_string(), header))
 }
 
+/// Shared scenario bodies for the indexing benchmarks.
+///
+/// Both `cartog-indexer/benches/indexing.rs` (ONNX-free) and
+/// `cartog/benches/queries.rs` (pulls in `cartog-rag`/ONNX) reuse these so the
+/// timed work cannot drift between the two `[[bench]]` targets. The criterion
+/// wiring stays in each bench (criterion is only a dev-dependency).
+///
+/// Each scenario function performs exactly one timed unit of work and returns
+/// the [`IndexResult`] so the caller can hand it to `black_box`.
+#[doc(hidden)]
+pub mod bench_support {
+    use super::{index_directory, IndexResult};
+    use cartog_core::FileInfo;
+    use cartog_db::Database;
+    use std::path::{Path, PathBuf};
+
+    /// Language tags for the per-language indexing benchmark, paired with their
+    /// `benchmarks/fixtures/webapp_<tag>` directory name. Each exercises a
+    /// distinct tree-sitter grammar + extractor, which is where indexing cost
+    /// actually varies by language.
+    pub const FIXTURE_LANGS: [&str; 8] = ["py", "ts", "go", "rs", "rb", "java", "php", "dart"];
+
+    /// Absolute path to `benchmarks/fixtures`, relative to either bench crate.
+    fn fixtures_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("benchmarks")
+            .join("fixtures")
+    }
+
+    /// Path to the `webapp_py` fixture — the dense default corpus used by the
+    /// language-agnostic incremental scenarios and the query benches.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fixture directory is missing — benches are always run
+    /// from a checkout that includes `benchmarks/`, so its absence is a bug.
+    #[must_use]
+    pub fn fixture_path() -> PathBuf {
+        fixture_for("py")
+    }
+
+    /// Path to the `webapp_<lang>` fixture for one language tag.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fixture directory is missing (a checkout/setup bug).
+    #[must_use]
+    pub fn fixture_for(lang: &str) -> PathBuf {
+        let dir = fixtures_dir().join(format!("webapp_{lang}"));
+        assert!(
+            dir.exists(),
+            "expected fixture at {dir:?}; run from a checkout that includes benchmarks/"
+        );
+        dir
+    }
+
+    /// All language fixtures as `(lang_tag, path)` pairs, for parameterizing the
+    /// full-index benchmark across every grammar.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any fixture directory is missing (a checkout/setup bug).
+    #[must_use]
+    pub fn all_fixtures() -> Vec<(&'static str, PathBuf)> {
+        FIXTURE_LANGS
+            .iter()
+            .map(|&lang| (lang, fixture_for(lang)))
+            .collect()
+    }
+
+    /// Open a fresh in-memory DB and full-index the fixture (force = true).
+    ///
+    /// This is the timed body of the `index_full_force` benchmark; it returns
+    /// the [`IndexResult`] so the caller can `black_box` it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if opening the DB or indexing fails; both are setup invariants
+    /// in a benchmark, not recoverable conditions.
+    pub fn full_force(fixture: &Path) -> IndexResult {
+        let db = Database::open_memory().expect("open in-memory DB");
+        index_directory(&db, fixture, true, false, None, None).expect("full index")
+    }
+
+    /// Open an in-memory DB and full-index the fixture, returning the DB.
+    ///
+    /// Used to seed the `noop` and `one_file` benchmarks outside their timed
+    /// loop (criterion setup, not measured).
+    ///
+    /// # Panics
+    ///
+    /// Panics if opening the DB or the seed index fails (setup invariants).
+    #[must_use]
+    pub fn seed(fixture: &Path) -> Database {
+        let db = Database::open_memory().expect("open in-memory DB");
+        index_directory(&db, fixture, true, false, None, None).expect("seed index");
+        db
+    }
+
+    /// Re-index with no changes: every stored hash matches, all files skipped.
+    ///
+    /// # Panics
+    ///
+    /// Panics if re-indexing fails (a setup invariant).
+    pub fn noop(db: &Database, fixture: &Path) -> IndexResult {
+        index_directory(db, fixture, false, false, None, None).expect("noop re-index")
+    }
+
+    /// Invalidate one file's stored hash, then re-index so it re-parses and
+    /// exercises the Merkle-diff path.
+    ///
+    /// # Panics
+    ///
+    /// Panics if upserting the file or re-indexing fails (setup invariants).
+    pub fn one_file(db: &Database, fixture: &Path) -> IndexResult {
+        db.upsert_file(&FileInfo {
+            path: "auth/service.py".to_string(),
+            last_modified: 0.0,
+            hash: "invalidated".to_string(),
+            language: "python".to_string(),
+            num_symbols: 0,
+        })
+        .expect("invalidate file hash");
+        index_directory(db, fixture, false, false, None, None).expect("incremental re-index")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

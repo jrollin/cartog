@@ -28,15 +28,12 @@ should_skip_fixture() {
     if [ -z "${FIXTURE_FILTER:-}" ]; then
         return 1
     fi
+    # Match by the `_<tag>` suffix in the fixture directory name. Keep this list
+    # in sync with the languages that have fixtures under benchmarks/fixtures/.
     case "$FIXTURE_FILTER" in
-        py) [[ "$fixture_name" != *"_py"* ]] && return 0 || return 1 ;;
-        ts) [[ "$fixture_name" != *"_ts"* ]] && return 0 || return 1 ;;
-        go) [[ "$fixture_name" != *"_go"* ]] && return 0 || return 1 ;;
-        rs) [[ "$fixture_name" != *"_rs"* ]] && return 0 || return 1 ;;
-        rb) [[ "$fixture_name" != *"_rb"* ]] && return 0 || return 1 ;;
-        java) [[ "$fixture_name" != *"_java"* ]] && return 0 || return 1 ;;
-        php) [[ "$fixture_name" != *"_php"* ]] && return 0 || return 1 ;;
-        *)  return 1 ;;
+        py|ts|go|rs|rb|java|php|dart)
+            [[ "$fixture_name" != *"_${FIXTURE_FILTER}"* ]] && return 0 || return 1 ;;
+        *) return 1 ;;
     esac
 }
 
@@ -63,6 +60,26 @@ count_tokens() {
 
 # ── Run approaches ──
 
+# Isolated index location for a fixture.
+#
+# The fixtures live inside the cartog repo, so a bare `cartog index .` walks up
+# and writes to the repo-root .cartog, where every fixture clobbers the same DB
+# and recall is measured against whichever fixture indexed last. Pinning
+# CARTOG_DB to a per-fixture path keeps each index isolated.
+#
+# The path is derived from the fixture_dir argument (an absolute
+# `.../benchmarks/fixtures/<name>`), not from $BENCH_DIR — callers may invoke
+# this after `cd`-ing into the fixture, where a relative $BENCH_DIR would be
+# wrong. Indexes land in `benchmarks/.indexes/<name>.sqlite`.
+# Usage: fixture_db_path <fixture_dir>  (absolute path required)
+fixture_db_path() {
+    local fixture_dir="${1%/}"
+    local fixtures_root indexes_root
+    fixtures_root=$(dirname "$fixture_dir")   # .../benchmarks/fixtures
+    indexes_root="$(dirname "$fixtures_root")/.indexes"  # .../benchmarks/.indexes
+    echo "$indexes_root/$(basename "$fixture_dir").sqlite"
+}
+
 # Run a grep command and capture output + metrics.
 # Usage: run_grep <label> <fixture_dir> <command...>
 # Sets: GREP_OUTPUT, GREP_TOKENS, GREP_LINES
@@ -84,13 +101,18 @@ run_cartog_cmd() {
     local fixture_dir="$1"
     shift
 
+    # Query the fixture's isolated index (see fixture_db_path) so recall is not
+    # measured against a sibling fixture's leftover symbols.
+    local db
+    db=$(fixture_db_path "$fixture_dir")
+
     # Human-readable output for token comparison (what agent actually processes)
-    CARTOG_OUTPUT=$(cd "$fixture_dir" && $CARTOG "$@" 2>/dev/null || true)
+    CARTOG_OUTPUT=$(cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG "$@" 2>/dev/null || true)
     CARTOG_TOKENS=$(count_tokens "$CARTOG_OUTPUT")
     CARTOG_LINES=$(count_lines "$CARTOG_OUTPUT")
 
     # JSON output for recall checking (names are more reliably extractable)
-    CARTOG_JSON_OUTPUT=$(cd "$fixture_dir" && $CARTOG --json "$@" 2>/dev/null || true)
+    CARTOG_JSON_OUTPUT=$(cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG --json "$@" 2>/dev/null || true)
 }
 
 # Run a cat command (simulating "read entire file") and capture metrics.
@@ -106,21 +128,7 @@ run_cat() {
 }
 
 # ── Recall computation ──
-
-# Count how many expected items appear in output.
-# Usage: count_matches <output> <item1> <item2> ...
-# Returns: count of found items
-count_matches() {
-    local output="$1"
-    shift
-    local found=0
-    for item in "$@"; do
-        if echo "$output" | grep -c "$item" >/dev/null 2>&1; then
-            found=$((found + 1))
-        fi
-    done
-    echo $found
-}
+# Recall matching itself lives in `check_recall` (compare.sh).
 
 # Compute recall as percentage.
 # Usage: compute_recall <found> <total>

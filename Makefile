@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-install-script sync-install-script bench bench-criterion bench-rag eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-install-script sync-install-script bench bench-criterion bench-rag bench-onnx eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -124,8 +124,13 @@ eval-agents: ## Run LLM-as-judge agent evaluation (requires claude CLI)
 bench: ## Run shell benchmark suite (all scenarios, all fixtures)
 	./benchmarks/run.sh
 
-bench-criterion: ## Run Rust criterion benchmarks (query latency)
-	cargo bench --bench queries
+bench-criterion: ## Run all ONNX-free criterion benches (queries, per-language indexing, hybrid search)
+	cargo bench -p cartog --bench queries
+	cargo bench -p cartog-indexer --bench indexing
+	cargo bench -p cartog --bench rag_search
+
+bench-onnx: ## Run real-model embed/rerank benches (needs `cartog rag setup`; not run in CI)
+	cargo bench -p cartog --bench rag_onnx
 
 bench-rag: ## Run RAG relevancy benchmarks (in-memory + shell scenario 13)
 	cargo test --test rag_relevancy -- --nocapture

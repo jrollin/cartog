@@ -22,9 +22,15 @@ Compares cartog graph queries vs grep/cat approaches for common code navigation 
 | `fixtures/webapp_rb/` | Ruby | 51 | ~2,300 |
 | `fixtures/webapp_java/` | Java | 41 | ~1,800 |
 | `fixtures/webapp_php/` | PHP | 25 | ~1,500 |
-| **Total** | | **345** | **~18,600** |
+| `fixtures/webapp_dart/` | Dart | 9 | ~200 |
+| **Total** | | **354** | **~18,800** |
 
 All fixtures model the same domain (auth service, tokens, routes, middleware, database, cache, events, validators) with controlled, known relationships defined in `ground_truth/`.
+
+The criterion `indexing` bench exercises all 8 fixtures. The shell scenarios and
+`ground_truth/` currently cover the first 7 — `webapp_dart` has no scenario
+ground truth yet, so it is indexed by the criterion bench but not scored by the
+shell suite.
 
 ## Scenarios
 
@@ -43,6 +49,32 @@ All fixtures model the same domain (auth service, tokens, routes, middleware, da
 | 11 | "Deep call chain (5+ hops)" | Sequential `callees` x6 vs 6 grep rounds with noise |
 | 12 | "Deep impact at depth 5" | `impact --depth 5` (transitive BFS) vs flat grep |
 | 13 | "Find authentication logic" | `rag search` (FTS5 + vector KNN + reranker) vs grep keywords |
+
+## Index isolation
+
+The fixtures live inside the cartog repo, so a bare `cartog index .` walks up and
+writes to the repo-root `.cartog`, where every fixture would clobber the next and
+recall would be measured against whichever fixture indexed last. `run.sh` and the
+scenarios pin `CARTOG_DB` to a per-fixture file under `benchmarks/.indexes/`
+(gitignored) so each fixture stays isolated. Any new `cartog` invocation in a
+scenario must do the same — use `fixture_db_path "$fixture_dir"` from `lib/common.sh`.
+
+## Known cartog gaps
+
+Some scenarios deliberately keep ground truth at the *objectively correct* answer
+read from source, so cartog scores below 100% where its resolution is incomplete.
+These rows exist to track that — they should approach parity as the gaps close:
+
+- **PHP class inheritance (scenario 04)**: `hierarchy BaseService` returns nothing
+  even though `AuthService`/`AuthenticationService`/`PaymentProcessor` extend it.
+  PHP's *error* tree resolves (`TokenError -> App\AppError`), so this looks
+  namespace/`use`-related rather than a total miss.
+- **Rust traits / Go interfaces (excluded from scenario 04)**: Rust uses traits and
+  Go uses struct embedding, not class inheritance. cartog does not model
+  trait-impl or interface-satisfaction as a hierarchy, so "who implements this
+  contract?" is not answerable today. Those rows are skipped rather than scored 0.
+- **Dart mixins**: `hierarchy AuthResult` (sealed class) resolves, but `refs`
+  on a `mixin` (e.g. `TokenCache`) does not surface the `with`-ing classes.
 
 ## Usage
 
@@ -63,44 +95,70 @@ All fixtures model the same domain (auth service, tokens, routes, middleware, da
 ./benchmarks/run.sh --fixture php
 ```
 
-## Criterion benchmarks (query latency)
+## Criterion benchmarks (in-process latency)
 
-Measures query latency in microseconds using Rust-native criterion benchmarks on the Python fixture indexed into an in-memory SQLite database.
+Rust-native criterion benchmarks measure cartog's own CPU-bound work against the
+`benchmarks/fixtures/` corpora indexed into in-memory SQLite. They are split into
+four `[[bench]]` targets so the ONNX boundary is expressed by target membership
+(see [docs/tech.md](../docs/tech.md#benchmarks) for the full rationale). Inputs and
+results are wrapped in `black_box`, so the µs-scale benches measure real work.
 
 ```bash
-# Run all query benchmarks
-cargo bench --bench queries
+# Everything ONNX-free (queries + per-language indexing + hybrid search)
+make bench-criterion
 
-# Run specific benchmark
-cargo bench --bench queries -- search_token
-
-# Quick run (fewer iterations)
-cargo bench --bench queries -- --quick
+# Real-model embed/rerank — needs `cartog rag setup`, not run in CI
+make bench-onnx
 ```
 
-Benchmarked operations: `search`, `refs`, `impact`, `outline`, `callees`, `hierarchy`, `deps`, `stats`.
+### `queries` — query latency (`cartog`)
 
-### Indexing benchmarks
-
-Measures indexing performance including the incremental Merkle-tree diffing path:
+Microsecond-scale latency for `search`, `refs`, `impact`, `outline`, `callees`,
+`hierarchy`, `deps`, `stats` on the Python and Java fixtures. Query latency is
+language-agnostic (same SQL regardless of source language), so two fixtures suffice.
 
 ```bash
-cargo bench --bench queries -- index_
+cargo bench -p cartog --bench queries
+cargo bench -p cartog --bench queries -- search_token   # one bench (substring match)
+```
+
+### `indexing` — per-language indexing (`cartog-indexer`)
+
+Lives in `cartog-indexer`, which has no `cartog-rag`/ONNX dependency, so it builds
+and runs without the native ONNX library. Per-language cost lives in the
+tree-sitter grammar + extractor, so the full-index scenario is parameterized over
+all 8 fixtures.
+
+```bash
+cargo bench -p cartog-indexer --bench indexing
+cargo bench -p cartog-indexer --bench indexing -- index_full_force/rs   # one language
 ```
 
 | Benchmark | What it measures |
 |-----------|-----------------|
-| `index_full_force` | Full index of fixture (force=true), baseline |
-| `index_incremental_noop` | Re-index with no changes (all files skipped via hash) |
-| `index_incremental_one_file` | One file's hash invalidated, triggers Merkle diff + scoped resolution |
+| `index_full_force/<lang>` | Full index of each fixture (force=true) — `py ts go rs rb java php dart` |
+| `index_incremental_noop` | Re-index with no changes (all files skipped via hash); Python |
+| `index_incremental_one_file` | One file's hash invalidated, triggers Merkle diff + scoped resolution; Python |
 
-The same three scenarios are also available as a standalone `cartog-indexer` bench, which builds without the ONNX runtime native dependency:
+### `rag_search` — hybrid search (`cartog`)
+
+`hybrid_search` (FTS5 + vector KNN + RRF merge) over the embedded Python fixture,
+using a deterministic stub embedding provider — no ONNX model is loaded, so it runs
+in CI.
 
 ```bash
-cargo bench -p cartog-indexer --bench indexing
+cargo bench -p cartog --bench rag_search
 ```
 
-Use this form when iterating on indexer code without a configured ONNX install. Numbers are within noise of the `cartog`-binary version.
+### `rag_onnx` — real embedding + reranking (`cartog`, opt-in)
+
+Loads the actual fastembed/ONNX models to measure `embed_query`,
+`embed_documents`, and cross-encoder `rerank`. **Not run in CI**; requires the
+models on disk (`cartog rag setup`) and skips gracefully if they are absent.
+
+```bash
+make bench-onnx   # or: cargo bench -p cartog --bench rag_onnx
+```
 
 ## Benchmark any project
 

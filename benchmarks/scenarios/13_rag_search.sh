@@ -32,9 +32,16 @@ run_scenario() {
     should_skip_fixture "$fixture_name" && return 0
 
     # RAG requires symbol content (populated during index) + embeddings.
-    # Re-index to ensure symbol_content is populated, then build RAG index.
-    (cd "$fixture_dir" && $CARTOG index . --force >/dev/null 2>&1) || true
-    (cd "$fixture_dir" && $CARTOG rag index >/dev/null 2>&1) || true
+    # Re-index to ensure symbol_content is populated, then build RAG index —
+    # both into the fixture's isolated DB so the later query reads them back.
+    # Warn (but continue) on failure so a setup error is visible rather than
+    # masquerading as a 0-recall cartog result.
+    local db
+    db=$(fixture_db_path "$fixture_dir")
+    (cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG index . --force >/dev/null 2>&1) ||
+        echo -e "  ${YELLOW}[$fixture_name] warning: cartog index failed (exit $?)${NC}" >&2
+    (cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG rag index >/dev/null 2>&1) ||
+        echo -e "  ${YELLOW}[$fixture_name] warning: cartog rag index failed (exit $?)${NC}" >&2
 
     echo -e "  ${CYAN}[$fixture_name]${NC} RAG search: '$QUERY'" >&2
 
