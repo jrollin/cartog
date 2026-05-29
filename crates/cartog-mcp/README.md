@@ -49,7 +49,7 @@ All user-supplied paths are validated against the project root:
 
 ### Output schemas and structured content
 
-Read tools return both a text block (the original JSON shape, including bare arrays) and `structuredContent` (the typed result), and declare a matching `outputSchema`. MCP requires `structuredContent` to be a JSON object and `schema_for_output` rejects non-object schemas, so list tools wrap their array under a `results` field (`SymbolList`, `EdgeList`, …). `structuredContent` is omitted when a response is truncated past `CARTOG_MCP_MAX_BYTES`, so an oversized payload can't bypass the size cap.
+Read tools return both a text block (the original JSON shape, including bare arrays) and `structuredContent` (the typed result), and declare a matching `outputSchema`. MCP requires `structuredContent` to be a JSON object and `schema_for_output` rejects non-object schemas, so list tools wrap their array under a `results` field (`SymbolList`, `EdgeList`, …). The `CARTOG_MCP_MAX_BYTES` size cap counts the text block plus the structured copy (which roughly doubles the payload): `structuredContent` is omitted when the combined size would exceed the cap, so an oversized payload can't bypass it.
 
 ## Public API
 

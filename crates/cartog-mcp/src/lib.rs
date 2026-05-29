@@ -194,7 +194,7 @@ struct MapResult {
 struct StatsResult {
     #[serde(flatten)]
     stats: cartog_db::IndexStats,
-    role: String,
+    role: Role,
     watcher_active: bool,
 }
 
@@ -538,11 +538,16 @@ fn tool_response_named(
     };
 
     // Structured content is kept only for full (untruncated) responses, so an
-    // oversized payload can't bypass the size cap via `structuredContent`.
-    let mut structured = if truncated_bytes > 0 {
-        None
-    } else {
-        structured
+    // oversized payload can't bypass the size cap via `structuredContent`. The
+    // structured copy roughly doubles the payload, so it counts toward the cap:
+    // drop it when text + structured would exceed the budget (the text block
+    // already fits on its own).
+    let mut structured = match structured {
+        Some(value) if truncated_bytes == 0 => {
+            let structured_bytes = serde_json::to_string(&value).map(|s| s.len()).unwrap_or(0);
+            (text.len() + structured_bytes <= budget).then_some(value)
+        }
+        _ => None,
     };
 
     if truncated_bytes > 0 {
@@ -604,19 +609,12 @@ pub struct CartogServer {
 }
 
 /// Role of this MCP server instance under single-writer election.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub enum Role {
+    #[serde(rename = "primary")]
     Primary,
+    #[serde(rename = "read-only")]
     ReadOnly,
-}
-
-impl Role {
-    fn as_str(self) -> &'static str {
-        match self {
-            Role::Primary => "primary",
-            Role::ReadOnly => "read-only",
-        }
-    }
 }
 
 /// Lock-free, `Clone`-able cell holding the current [`Role`]. Backed by an
@@ -1146,7 +1144,7 @@ impl CartogServer {
             // `--watch`.
             let result = StatsResult {
                 stats,
-                role: role.as_str().to_string(),
+                role,
                 watcher_active,
             };
             let json = serde_json::to_string_pretty(&result)
@@ -2298,6 +2296,36 @@ mod tests {
         );
     }
 
+    /// The size cap counts the structured copy too: when the text fits on its own
+    /// but text + structuredContent would exceed the budget, structured is dropped
+    /// (the text block is kept intact, not truncated).
+    #[test]
+    fn tool_response_drops_structured_when_combined_exceeds_cap() {
+        let db = populated_memory_db();
+        // Text alone is just under the cap; the structured mirror pushes the
+        // combined size over it.
+        let budget = mcp_max_bytes();
+        let payload = "y".repeat(budget * 3 / 4);
+        let json = format!("[\"{payload}\"]");
+        let structured = Some(serde_json::json!({ "results": [payload.clone()] }));
+
+        assert!(json.len() <= budget, "text alone fits the cap");
+        let result = tool_response(&db, json, structured, "cartog_search").expect("response");
+
+        assert!(
+            result.structured_content.is_none(),
+            "structured dropped when combined size exceeds cap"
+        );
+        let text = match &result.content.first().expect("content").raw {
+            RawContent::Text(t) => &t.text,
+            _ => panic!("expected text content"),
+        };
+        assert!(
+            !text.contains("Response truncated"),
+            "text block fits on its own, so it is not truncated"
+        );
+    }
+
     /// `StatsResult` flattens `IndexStats` and adds role + watcher fields at the
     /// top level (no nested `stats` object), matching the documented shape.
     #[test]
@@ -2306,13 +2334,14 @@ mod tests {
         let stats = db.stats().expect("stats");
         let result = StatsResult {
             stats,
-            role: "primary".to_string(),
+            role: Role::ReadOnly,
             watcher_active: false,
         };
         let value = serde_json::to_value(&result).expect("serialize");
         let obj = value.as_object().expect("object");
         assert!(obj.contains_key("num_files"), "flattened stats field");
-        assert_eq!(obj.get("role").and_then(|v| v.as_str()), Some("primary"));
+        // Role serializes to the exact wire string (hyphen preserved).
+        assert_eq!(obj.get("role").and_then(|v| v.as_str()), Some("read-only"));
         assert_eq!(
             obj.get("watcher_active").and_then(|v| v.as_bool()),
             Some(false)

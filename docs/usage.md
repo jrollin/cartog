@@ -278,7 +278,7 @@ bash skills/cartog/scripts/ensure_indexed.sh
 
 `cartog serve` runs cartog as an MCP server over stdio, exposing 13 tools (11 core + 2 RAG) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: the 11 query tools are read-only, only `cartog_index` and `cartog_rag_index` write, so clients can skip approval prompts for the safe ones.
 
-Read tools also declare an `outputSchema` and return `structuredContent` (the typed result mirrored alongside the human-readable text block) so schema-aware clients get validated, machine-readable output. To keep responses within the caller's context window, `structuredContent` is dropped when a response is truncated past the size cap (`CARTOG_MCP_MAX_BYTES`, default 64 KB); the text block then carries a truncation notice.
+Read tools also declare an `outputSchema` and return `structuredContent` (the typed result mirrored alongside the human-readable text block) so schema-aware clients get validated, machine-readable output. To keep responses within the caller's context window, the size cap (`CARTOG_MCP_MAX_BYTES`, default 64 KB) counts the text block plus the structured copy: `structuredContent` is dropped when the combined size would exceed the cap (and when the text block itself is truncated, which adds a truncation notice).
 
 For editor-specific recipes (Neovim keymaps, VS Code tasks, Emacs `compile`, Telescope picker, `cartog watch --json` floating buffer), see **[Editor integration](editor-integration.md)**.
 

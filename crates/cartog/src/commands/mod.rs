@@ -1288,7 +1288,12 @@ pub fn cmd_rag_search(
             sr.merged_count
         );
         for (i, r) in sr.results.iter().enumerate() {
-            let sources = r.sources.join("+");
+            let sources = r
+                .sources
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("+");
             let rerank_str = r
                 .rerank_score
                 .map(|s| format!(" rerank={s:.2}"))
