@@ -10,7 +10,7 @@ Exposes cartog's graph queries, indexing, and semantic search as MCP tools over 
 
 ### MCP tools
 
-13 tools are exposed via rmcp's `#[tool_router]` macro with auto-generated JSON Schema parameters:
+13 tools are exposed via rmcp's `#[tool_router]` macro with auto-generated JSON Schema parameters. Each tool also carries `annotations` (a `title` and `readOnlyHint`: `true` for the 11 query tools, `false` for the two index tools), and the read tools declare an `outputSchema`:
 
 | Tool | Description |
 |------|-------------|
@@ -46,6 +46,10 @@ All user-supplied paths are validated against the project root:
 ### Progress notifications
 
 `cartog_index` and `cartog_rag_index` emit standard MCP `notifications/progress` events when the client supplies a `progressToken` in the request's `_meta`. The bridge lives in `src/progress.rs`: a bounded mpsc channel decouples the blocking indexer (best-effort `try_send`) from an async forwarder that calls `Peer::notify_progress` with a monotonic counter. Clients that don't subscribe see byte-identical behavior to the no-token path.
+
+### Output schemas and structured content
+
+Read tools return both a text block (the original JSON shape, including bare arrays) and `structuredContent` (the typed result), and declare a matching `outputSchema`. MCP requires `structuredContent` to be a JSON object and `schema_for_output` rejects non-object schemas, so list tools wrap their array under a `results` field (`SymbolList`, `EdgeList`, …). The `CARTOG_MCP_MAX_BYTES` size cap counts the text block plus the structured copy (which roughly doubles the payload): `structuredContent` is omitted when the combined size would exceed the cap, so an oversized payload can't bypass it.
 
 ## Public API
 

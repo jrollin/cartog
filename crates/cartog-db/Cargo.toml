@@ -13,6 +13,7 @@ anyhow = { workspace = true }
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+schemars = { workspace = true }
 sqlite-vec = { workspace = true }
 tracing = { workspace = true }
 

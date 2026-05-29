@@ -19,8 +19,38 @@ pub enum KindFilter {
 
 use super::provider::{embedding_to_bytes, EmbeddingProvider, RerankerProvider};
 
+/// Retrieval method that surfaced a search result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    /// Keyword match via the FTS5 (BM25) index.
+    Fts5,
+    /// Semantic match via vector similarity.
+    Vector,
+}
+
+impl Source {
+    /// Map an internal ranked-list label to a [`Source`], if recognized.
+    fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "fts5" => Some(Self::Fts5),
+            "vector" => Some(Self::Vector),
+            _ => None,
+        }
+    }
+
+    /// Wire label for this source, matching the serialized form.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fts5 => "fts5",
+            Self::Vector => "vector",
+        }
+    }
+}
+
 /// A search result combining symbol metadata with relevance info.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct SearchResult {
     pub symbol: Symbol,
     pub content: Option<String>,
@@ -29,11 +59,11 @@ pub struct SearchResult {
     /// the cross-encoder model is available.
     pub rerank_score: Option<f64>,
     /// Which retrieval methods found this result.
-    pub sources: Vec<String>,
+    pub sources: Vec<Source>,
 }
 
 /// Result of a hybrid search operation.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct HybridSearchResult {
     pub results: Vec<SearchResult>,
     pub fts_count: u32,
@@ -182,7 +212,10 @@ pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
                 content,
                 rrf_score: score,
                 rerank_score: None,
-                sources: sources.clone(),
+                sources: sources
+                    .iter()
+                    .filter_map(|s| Source::from_label(s))
+                    .collect(),
             });
         }
     }
@@ -270,7 +303,10 @@ where
                 content,
                 rrf_score: score,
                 rerank_score: None,
-                sources: sources.clone(),
+                sources: sources
+                    .iter()
+                    .filter_map(|s| Source::from_label(s))
+                    .collect(),
             });
         }
     }
@@ -634,7 +670,7 @@ mod tests {
         assert!(result.fts_count > 0, "FTS5 should find results");
         assert_eq!(result.vec_count, 0, "no embeddings → no vector results");
         assert_eq!(result.results[0].symbol.name, "validate_token");
-        assert!(result.results[0].sources.contains(&"fts5".to_string()));
+        assert!(result.results[0].sources.contains(&Source::Fts5));
 
         // generate_token matches "token" but NOT "validate" — must rank below validate_token
         if let Some(gen_pos) = result
@@ -1390,7 +1426,7 @@ mod tests {
             content: content.map(|s| s.to_string()),
             rrf_score: rrf,
             rerank_score: rerank,
-            sources: vec!["fts5".to_string()],
+            sources: vec![Source::Fts5],
         }
     }
 

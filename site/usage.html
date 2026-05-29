@@ -69,6 +69,7 @@
           <div class="sidebar-label">Integration</div>
           <a href="#agent-skill">Agent Skill</a>
           <a href="#mcp-server">MCP Server</a>
+          <a href="#mcp-tool-shape">Tool metadata &amp; output</a>
           <a href="#mcp-quickstart">Wiring editors: cartog ide</a>
           <a href="#mcp-ide">Bootstrap sequence</a>
           <a href="#mcp-clients">Manual setup</a>
@@ -351,6 +352,56 @@ cartog rag search "deployment architecture" --kind document</pre>
           <tr><td><code>cartog_rag_search</code></td><td>Semantic search</td></tr>
         </tbody>
       </table>
+
+      <h3 id="mcp-tool-shape">Tool metadata &amp; output</h3>
+      <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 11 read-only tools declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
+
+      <table>
+        <thead>
+          <tr><th>Field</th><th>Read tools (search, refs, map, …)</th><th>Write tools (<code>cartog_index</code>, <code>cartog_rag_index</code>)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>title</code></td><td>e.g. "Search symbols", "Find references"</td><td>e.g. "Index codebase"</td></tr>
+          <tr><td><code>readOnlyHint</code></td><td><code>true</code> — client can run without an approval prompt</td><td><code>false</code> — mutates the index</td></tr>
+          <tr><td><code>openWorldHint</code></td><td><code>false</code> — closed domain (the local index)</td><td><code>false</code></td></tr>
+          <tr><td><code>outputSchema</code></td><td>present — typed result schema</td><td>—</td></tr>
+        </tbody>
+      </table>
+
+      <p class="example-label"><code>tools/list</code> entry for <code>cartog_search</code></p>
+      <pre class="example-output">{
+  "name": "cartog_search",
+  "annotations": {
+    "title": "Search symbols",
+    "readOnlyHint": true,
+    "openWorldHint": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": { "results": { "type": "array", "items": { "$ref": "#/$defs/Symbol" } } },
+    "required": ["results"]
+  }
+}</pre>
+
+      <p>Read tools return <strong>structured content</strong>: the typed result (matching <code>outputSchema</code>) is mirrored in <code>structuredContent</code> alongside the human-readable text block, so schema-aware clients get validated, machine-readable data without re-parsing text.</p>
+
+      <p class="example-label"><code>tools/call</code> result for <code>cartog_search</code> (query "validate")</p>
+      <pre class="example-output">{
+  "content": [{ "type": "text", "text": "[ … pretty-printed JSON … ]" }],
+  "structuredContent": {
+    "results": [
+      {
+        "name": "validate",
+        "kind": "function",
+        "file_path": "api/v1/auth.py",
+        "start_line": 16,
+        "end_line": 22
+      }
+    ]
+  }
+}</pre>
+
+      <p style="font-size: 13px; color: var(--text-tertiary);">The size cap (<code>CARTOG_MCP_MAX_BYTES</code>, default 64&nbsp;KB) counts the text block plus the structured copy: <code>structuredContent</code> is dropped when the combined size would exceed the cap, so an oversized payload can't blow the caller's context window. The two write tools have no <code>outputSchema</code> and report <code>readOnlyHint: false</code> with <code>destructiveHint: false</code> (they only add to the index).</p>
 
       <p><strong>Progress notifications:</strong> <code>cartog_index</code> and <code>cartog_rag_index</code> emit standard MCP <code>notifications/progress</code> when the client includes a <code>progressToken</code> in the request's <code>_meta</code>. <code>cartog_index</code> emits 3 phase events (<code>walking</code>, <code>parsing N files</code>, <code>storing N files</code>) plus an optional fourth (<code>resolving with LSP</code>) when the LSP pass runs. <code>cartog_rag_index</code> emits <code>preparing</code>, one <code>embedding processed/total</code> per ~512-symbol batch, then <code>storing</code>. The <code>message</code> field is human-readable, not a contract. Clients that don't supply a <code>progressToken</code> see no notifications.</p>
 
