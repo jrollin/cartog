@@ -1981,4 +1981,92 @@ mod tests {
         assert_eq!(with.args, vec!["serve", "--watch"]);
         assert_eq!(without.args, vec!["serve"]);
     }
+
+    // ── process_spec: merge + write core (non-interactive) ────────────
+
+    fn project_spec(path: PathBuf) -> ClientSpec {
+        ClientSpec {
+            kind: ClientKind::Cursor,
+            scope: Scope::Project,
+            path,
+            strategy: MergeStrategy::McpServers,
+            args: vec!["serve".into()],
+        }
+    }
+
+    #[test]
+    fn process_spec_creates_config_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = tmp.path().join("mcp.json");
+        let spec = project_spec(cfg.clone());
+
+        let step = process_spec(&spec, tmp.path(), false, false);
+        assert_eq!(step.status, IdeStatus::Created);
+        assert!(cfg.exists(), "config file written to disk");
+        let written = fs::read_to_string(&cfg).unwrap();
+        assert!(written.contains("mcpServers"), "wrote the mcpServers entry");
+        assert!(written.contains("cartog"), "wrote the cartog server");
+    }
+
+    #[test]
+    fn process_spec_unchanged_on_second_run() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = tmp.path().join("mcp.json");
+        let spec = project_spec(cfg);
+
+        let first = process_spec(&spec, tmp.path(), false, false);
+        assert_eq!(first.status, IdeStatus::Created);
+        let second = process_spec(&spec, tmp.path(), false, false);
+        assert_eq!(
+            second.status,
+            IdeStatus::Unchanged,
+            "re-running with identical config is a no-op"
+        );
+    }
+
+    #[test]
+    fn process_spec_dry_run_returns_diff_without_writing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = tmp.path().join("mcp.json");
+        let spec = project_spec(cfg.clone());
+
+        let step = process_spec(&spec, tmp.path(), false, true);
+        assert_eq!(step.status, IdeStatus::Created);
+        assert!(step.diff.is_some(), "dry-run carries a before/after diff");
+        assert!(!cfg.exists(), "dry-run must not write the file");
+    }
+
+    #[test]
+    fn process_spec_skips_user_scope_when_parent_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // A user-scoped path whose parent directory does not exist → the
+        // client is treated as not installed and skipped.
+        let cfg = tmp.path().join("no-such-dir").join("config.json");
+        let mut spec = project_spec(cfg.clone());
+        spec.scope = Scope::User;
+
+        let step = process_spec(&spec, tmp.path(), false, false);
+        assert_eq!(step.status, IdeStatus::Skipped);
+        assert!(!cfg.exists(), "nothing written for a not-installed client");
+    }
+
+    #[test]
+    fn process_spec_skips_when_existing_file_is_malformed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = tmp.path().join("mcp.json");
+        fs::write(&cfg, "{ this is not valid json").unwrap();
+        let spec = project_spec(cfg.clone());
+
+        let step = process_spec(&spec, tmp.path(), false, false);
+        assert_eq!(
+            step.status,
+            IdeStatus::Skipped,
+            "a malformed file is left untouched, not overwritten"
+        );
+        assert_eq!(
+            fs::read_to_string(&cfg).unwrap(),
+            "{ this is not valid json",
+            "original content preserved"
+        );
+    }
 }
