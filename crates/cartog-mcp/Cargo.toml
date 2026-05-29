@@ -27,3 +27,6 @@ lsp = ["dep:cartog-lsp", "cartog-indexer/lsp"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

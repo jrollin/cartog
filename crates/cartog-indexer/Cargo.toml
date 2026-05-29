@@ -29,3 +29,6 @@ lsp = ["dep:cartog-lsp"]
 [[bench]]
 name = "indexing"
 harness = false
+
+[lints]
+workspace = true
