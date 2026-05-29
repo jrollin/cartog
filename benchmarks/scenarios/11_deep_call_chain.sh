@@ -43,13 +43,16 @@ run_scenario() {
     local best_tok=$(count_tokens "$best_out")
 
     # ── Cartog: sequential callees for each hop ──
+    # Query the fixture's isolated index (see fixture_db_path).
+    local db
+    db=$(fixture_db_path "$fixture_dir")
     local cartog_out=""
     local cartog_json_out=""
     local cartog_cmds=${#chain[@]}
     for fn in "${chain[@]}"; do
         local c cj
-        c=$(cd "$fixture_dir" && $CARTOG callees "$fn" 2>/dev/null || true)
-        cj=$(cd "$fixture_dir" && $CARTOG --json callees "$fn" 2>/dev/null || true)
+        c=$(cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG callees "$fn" 2>/dev/null || true)
+        cj=$(cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG --json callees "$fn" 2>/dev/null || true)
         cartog_out="${cartog_out}${c}"
         cartog_json_out="${cartog_json_out}${cj}"
     done

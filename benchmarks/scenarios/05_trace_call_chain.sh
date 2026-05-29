@@ -40,18 +40,21 @@ run_scenario() {
     local best_cmds=3
 
     # ── Cartog: sequential callees (human-readable for tokens) ──
+    # Query the fixture's isolated index (see fixture_db_path).
+    local db
+    db=$(fixture_db_path "$fixture_dir")
     local c1 c2 c3 cj1 cj2 cj3
-    c1=$(cd "$fixture_dir" && $CARTOG callees "$entry_fn" 2>/dev/null || true)
-    c2=$(cd "$fixture_dir" && $CARTOG callees "$mid_fn" 2>/dev/null || true)
-    c3=$(cd "$fixture_dir" && $CARTOG callees "$leaf_fn" 2>/dev/null || true)
+    c1=$(cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG callees "$entry_fn" 2>/dev/null || true)
+    c2=$(cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG callees "$mid_fn" 2>/dev/null || true)
+    c3=$(cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG callees "$leaf_fn" 2>/dev/null || true)
     local cartog_out="${c1}${c2}${c3}"
     local cartog_tok=$(count_tokens "$cartog_out")
     local cartog_cmds=3
 
     # JSON for recall checking
-    cj1=$(cd "$fixture_dir" && $CARTOG --json callees "$entry_fn" 2>/dev/null || true)
-    cj2=$(cd "$fixture_dir" && $CARTOG --json callees "$mid_fn" 2>/dev/null || true)
-    cj3=$(cd "$fixture_dir" && $CARTOG --json callees "$leaf_fn" 2>/dev/null || true)
+    cj1=$(cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG --json callees "$entry_fn" 2>/dev/null || true)
+    cj2=$(cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG --json callees "$mid_fn" 2>/dev/null || true)
+    cj3=$(cd "$fixture_dir" && CARTOG_DB="$db" $CARTOG --json callees "$leaf_fn" 2>/dev/null || true)
     local cartog_json_out="${cj1}${cj2}${cj3}"
 
     # ── Recall: check expected chain links ──

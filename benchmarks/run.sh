@@ -71,6 +71,12 @@ fi
 echo ""
 
 # ── Index fixtures ──
+#
+# Each fixture indexes into its own DB under .indexes/ (see fixture_db_path).
+# Without this, `cartog index .` would walk up to the repo-root .cartog and the
+# fixtures would clobber one another's symbols, corrupting recall.
+
+mkdir -p "$BENCH_DIR/.indexes"
 
 echo -e "${BOLD}Indexing fixtures...${NC}"
 for fixture_dir in "$BENCH_DIR"/fixtures/*/; do
@@ -80,7 +86,7 @@ for fixture_dir in "$BENCH_DIR"/fixtures/*/; do
     should_skip_fixture "$fixture_name" && continue
 
     echo -n "  $fixture_name: "
-    (cd "$fixture_dir" && $CARTOG index . --force 2>&1 | head -1)
+    (cd "$fixture_dir" && CARTOG_DB="$(fixture_db_path "$fixture_dir")" $CARTOG index . --force 2>&1 | head -1)
 done
 echo ""
 

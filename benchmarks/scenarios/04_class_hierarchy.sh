@@ -59,8 +59,19 @@ run_scenario() {
 
 run_scenario "webapp_py" "BaseService" "class.*BaseService\|class.*(BaseService)\|class.*(AuthService)"
 run_scenario "webapp_ts" "BaseService" "class.*BaseService\|extends.*BaseService\|implements.*BaseService"
-run_scenario "webapp_go" "BaseService" "BaseService\|embed"
-run_scenario "webapp_rs" "AuthProvider" "impl.*AuthProvider\|trait AuthProvider"
 run_scenario "webapp_rb" "BaseService" "class.*BaseService\|class.*<.*BaseService\|class.*<.*AuthService"
 run_scenario "webapp_java" "BaseService" "class.*BaseService\|class.*extends.*BaseService\|class.*extends.*AuthService"
+
+# PHP has `extends BaseService` subclasses in source, but cartog only partially
+# resolves PHP inheritance: the error tree (e.g. TokenError -> App\AppError)
+# resolves while service-class extends do not, so this row currently
+# under-scores. See "Known cartog gaps" in benchmarks/README.md.
 run_scenario "webapp_php" "BaseService" "class.*BaseService\|class.*extends.*BaseService\|class.*extends.*AuthService"
+
+# Rust (traits, not class inheritance) and Go (struct embedding, not
+# inheritance) have no subclass hierarchy to resolve, so they are not part of
+# this scenario. Rust trait-impl / Go interface-satisfaction discovery is a
+# distinct capability cartog does not expose today. See
+# "Known cartog gaps" in benchmarks/README.md.
+echo -e "  ${YELLOW}[webapp_rs] skipped: Rust uses traits, not class inheritance${NC}" >&2
+echo -e "  ${YELLOW}[webapp_go] skipped: Go uses struct embedding, not class inheritance${NC}" >&2

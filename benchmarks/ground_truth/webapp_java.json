@@ -69,20 +69,24 @@
     ]
   },
   "04_class_hierarchy": {
-    "description": "Hierarchy of AppException",
-    "query": "hierarchy AppException",
+    "description": "Hierarchy of BaseService",
+    "query": "hierarchy BaseService",
     "expected": [
       {
-        "name": "ValidationException"
+        "child": "SessionService",
+        "parent": "BaseService"
       },
       {
-        "name": "TokenException"
+        "child": "UserService",
+        "parent": "BaseService"
       },
       {
-        "name": "AuthenticationException"
+        "child": "PaymentProcessor",
+        "parent": "BaseService"
       },
       {
-        "name": "PaymentException"
+        "child": "AuthenticationService",
+        "parent": "BaseService"
       }
     ]
   },
@@ -176,36 +180,76 @@
     "description": "Find all Token-related symbols",
     "query": "search Token",
     "expected": [
-      { "name": "TokenService" },
-      { "name": "TokenClaims" },
-      { "name": "TokenException" },
-      { "name": "ExpiredTokenException" },
-      { "name": "TOKEN_EXPIRY" },
-      { "name": "generateToken" },
-      { "name": "validateToken" },
-      { "name": "refreshToken" },
-      { "name": "revokeToken" },
-      { "name": "extractToken" }
+      {
+        "name": "TokenService"
+      },
+      {
+        "name": "TokenClaims"
+      },
+      {
+        "name": "TokenException"
+      },
+      {
+        "name": "ExpiredTokenException"
+      },
+      {
+        "name": "TOKEN_EXPIRY"
+      },
+      {
+        "name": "generateToken"
+      },
+      {
+        "name": "validateToken"
+      },
+      {
+        "name": "refreshToken"
+      },
+      {
+        "name": "revokeToken"
+      },
+      {
+        "name": "extractToken"
+      }
     ]
   },
   "09_ambiguous_symbol": {
     "description": "Where is 'validate' defined?",
     "query": "search validate",
     "expected": [
-      { "name": "validate", "file": "models/PaymentModel.java" },
-      { "name": "validate", "file": "models/UserModel.java" },
-      { "name": "validate", "file": "validators/PaymentValidator.java" },
-      { "name": "validate", "file": "validators/UserValidator.java" }
+      {
+        "name": "validate",
+        "file": "models/PaymentModel.java"
+      },
+      {
+        "name": "validate",
+        "file": "models/UserModel.java"
+      },
+      {
+        "name": "validate",
+        "file": "validators/PaymentValidator.java"
+      },
+      {
+        "name": "validate",
+        "file": "validators/UserValidator.java"
+      }
     ]
   },
   "10_high_fanout": {
     "description": "What inherits from AppException?",
     "query": "hierarchy AppException",
     "expected": [
-      { "name": "ValidationException" },
-      { "name": "TokenException" },
-      { "name": "AuthenticationException" },
-      { "name": "PaymentException" }
+      {
+        "name": "ValidationException"
+      },
+      {
+        "name": "TokenException"
+      },
+      {
+        "name": "AuthenticationException"
+      },
+      {
+        "name": "PaymentException"
+      }
     ]
   },
   "11_deep_call_chain": {
@@ -219,21 +263,66 @@
       "callees getConnection"
     ],
     "expected_chain": [
-      { "caller": "handleLogin", "callee": "UserValidator.validateLogin" },
-      { "caller": "handleLogin", "callee": "routes.handleLogin" },
-      { "caller": "authenticate", "callee": "requireInitialized" },
-      { "caller": "authenticate", "callee": "authService.login" },
-      { "caller": "authenticate", "callee": "db.insert" },
-      { "caller": "login", "callee": "tokenService.generateToken" },
-      { "caller": "login", "callee": "log.info" },
-      { "caller": "generateToken", "callee": "log.info" },
-      { "caller": "generateToken", "callee": "String.format" },
-      { "caller": "executeQuery", "callee": "pool.getConnection" },
-      { "caller": "executeQuery", "callee": "pool.releaseConnection" },
-      { "caller": "getConnection", "callee": "log.debug" },
-      { "caller": "getConnection", "callee": "conn.isInUse" },
-      { "caller": "getConnection", "callee": "conn.setInUse" },
-      { "caller": "getConnection", "callee": "log.error" }
+      {
+        "caller": "handleLogin",
+        "callee": "UserValidator.validateLogin"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "routes.handleLogin"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "requireInitialized"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "authService.login"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "db.insert"
+      },
+      {
+        "caller": "login",
+        "callee": "tokenService.generateToken"
+      },
+      {
+        "caller": "login",
+        "callee": "log.info"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "log.info"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "String.format"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "pool.getConnection"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "pool.releaseConnection"
+      },
+      {
+        "caller": "getConnection",
+        "callee": "log.debug"
+      },
+      {
+        "caller": "getConnection",
+        "callee": "conn.isInUse"
+      },
+      {
+        "caller": "getConnection",
+        "callee": "conn.setInUse"
+      },
+      {
+        "caller": "getConnection",
+        "callee": "log.error"
+      }
     ]
   },
   "12_deep_impact": {
@@ -259,13 +348,27 @@
     "description": "Semantic search: validate token",
     "query": "rag search \"validate token\"",
     "expected": [
-      { "name": "validateToken" },
-      { "name": "TokenException" },
-      { "name": "ExpiredTokenException" },
-      { "name": "extractToken" },
-      { "name": "generateToken" },
-      { "name": "refreshToken" },
-      { "name": "TokenService" }
+      {
+        "name": "validateToken"
+      },
+      {
+        "name": "TokenException"
+      },
+      {
+        "name": "ExpiredTokenException"
+      },
+      {
+        "name": "extractToken"
+      },
+      {
+        "name": "generateToken"
+      },
+      {
+        "name": "refreshToken"
+      },
+      {
+        "name": "TokenService"
+      }
     ]
   }
 }

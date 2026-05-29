@@ -44,6 +44,32 @@ All fixtures model the same domain (auth service, tokens, routes, middleware, da
 | 12 | "Deep impact at depth 5" | `impact --depth 5` (transitive BFS) vs flat grep |
 | 13 | "Find authentication logic" | `rag search` (FTS5 + vector KNN + reranker) vs grep keywords |
 
+## Index isolation
+
+The fixtures live inside the cartog repo, so a bare `cartog index .` walks up and
+writes to the repo-root `.cartog`, where every fixture would clobber the next and
+recall would be measured against whichever fixture indexed last. `run.sh` and the
+scenarios pin `CARTOG_DB` to a per-fixture file under `benchmarks/.indexes/`
+(gitignored) so each fixture stays isolated. Any new `cartog` invocation in a
+scenario must do the same — use `fixture_db_path "$fixture_dir"` from `lib/common.sh`.
+
+## Known cartog gaps
+
+Some scenarios deliberately keep ground truth at the *objectively correct* answer
+read from source, so cartog scores below 100% where its resolution is incomplete.
+These rows exist to track that — they should approach parity as the gaps close:
+
+- **PHP class inheritance (scenario 04)**: `hierarchy BaseService` returns nothing
+  even though `AuthService`/`AuthenticationService`/`PaymentProcessor` extend it.
+  PHP's *error* tree resolves (`TokenError -> App\AppError`), so this looks
+  namespace/`use`-related rather than a total miss.
+- **Rust traits / Go interfaces (excluded from scenario 04)**: Rust uses traits and
+  Go uses struct embedding, not class inheritance. cartog does not model
+  trait-impl or interface-satisfaction as a hierarchy, so "who implements this
+  contract?" is not answerable today. Those rows are skipped rather than scored 0.
+- **Dart mixins**: `hierarchy AuthResult` (sealed class) resolves, but `refs`
+  on a `mixin` (e.g. `TokenCache`) does not surface the `with`-ing classes.
+
 ## Usage
 
 ```bash
