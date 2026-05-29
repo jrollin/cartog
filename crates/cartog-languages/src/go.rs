@@ -3,7 +3,7 @@ use tree_sitter::{Language, Node, Parser};
 
 use cartog_core::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
-use super::{node_text, ExtractionResult, Extractor};
+use super::{last_segment, node_text, ExtractionResult, Extractor};
 
 pub struct GoExtractor {
     parser: Parser,
@@ -429,7 +429,7 @@ fn extract_import_spec(
     }
 
     // Use the last segment of the path as the imported name
-    let pkg_name = path_str.rsplit('/').next().unwrap_or(&path_str);
+    let pkg_name = last_segment(&path_str, "/");
 
     let sym_id = symbol_id(file_path, "import", &path_str, parent_qname);
     symbols.push(

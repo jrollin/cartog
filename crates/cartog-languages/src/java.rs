@@ -3,7 +3,7 @@ use tree_sitter::{Language, Node, Parser};
 
 use cartog_core::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
-use super::{node_text, ExtractionResult, Extractor};
+use super::{last_segment, node_text, ExtractionResult, Extractor};
 
 pub struct JavaExtractor {
     parser: Parser,
@@ -570,7 +570,7 @@ fn extract_import(
     );
 
     // The imported name is the last segment of the dotted path
-    let target = import_text.rsplit('.').next().unwrap_or(&import_text);
+    let target = last_segment(&import_text, ".");
     if target != "*" {
         edges.push(Edge::new(
             sym_id,
@@ -929,7 +929,7 @@ fn extract_simple_type_name(node: Node, source: &str) -> String {
         "scoped_type_identifier" => {
             // com.example.Foo → "Foo"
             let text = node_text(node, source);
-            text.rsplit('.').next().unwrap_or(text).to_string()
+            last_segment(text, ".").to_string()
         }
         "generic_type" => {
             // List<String> → extract just the outer type name

@@ -3,7 +3,7 @@ use tree_sitter::{Language, Node, Parser};
 
 use cartog_core::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
-use super::{node_text, ExtractionResult, Extractor};
+use super::{last_segment, node_text, ExtractionResult, Extractor};
 
 pub struct RustExtractor {
     parser: Parser,
@@ -544,7 +544,7 @@ fn collect_use_names_recursive(node: Node, source: &str, names: &mut Vec<String>
 
 fn last_path_segment(node: Node, source: &str) -> String {
     let text = node_text(node, source);
-    text.rsplit("::").next().unwrap_or(text).to_string()
+    last_segment(text, "::").to_string()
 }
 
 // ── Mod items ──
