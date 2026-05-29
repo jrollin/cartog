@@ -5,6 +5,7 @@
 //! [`cartog_db`]. Uses Merkle tree hashing for surgical symbol-level updates.
 
 use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -115,10 +116,10 @@ fn extract_with_cached(
 ) -> Option<Result<cartog_languages::ExtractionResult>> {
     THREAD_EXTRACTORS.with(|cell| {
         let mut map = cell.borrow_mut();
-        if !map.contains_key(lang) {
-            map.insert(lang, get_extractor(lang)?);
-        }
-        let extractor = map.get_mut(lang).expect("just inserted").as_mut();
+        let extractor = match map.entry(lang) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => e.insert(get_extractor(lang)?),
+        };
         Some(extractor.extract(source, rel_path))
     })
 }
