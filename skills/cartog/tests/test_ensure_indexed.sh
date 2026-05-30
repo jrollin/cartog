@@ -822,6 +822,7 @@ test_drift_warning_emitted_when_versions_differ() {
     # but DISCARDS stderr at exit 0. Capture stdout only (stderr → /dev/null)
     # and assert the line is still there — a regression to `>&2` would make the
     # warning invisible and fail here.
+    teardown # tear down the first env before re-arming, so TEST_DIR isn't leaked
     setup
     write_plugin_json "0.14.3"
     create_mock_cartog "0.14.1"

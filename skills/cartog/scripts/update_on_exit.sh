@@ -115,7 +115,10 @@ apply_pending_update() {
 # path for the cohort that lacks `cartog self update`. Returns non-zero only on
 # a genuine install failure (the caller writes last-error).
 upgrade_legacy() {
-    if [ -z "$PLUGIN_VERSION" ] || [ "$installed" = "$PLUGIN_VERSION" ]; then
+    # Only upgrade when the installed binary is strictly OLDER than the pin —
+    # a string `!=` would also "upgrade" (downgrade) a manually-installed newer
+    # legacy binary. version_gt PLUGIN > installed ⇔ installed < PLUGIN.
+    if [ -z "$PLUGIN_VERSION" ] || ! version_gt "$PLUGIN_VERSION" "$installed"; then
         return 0
     fi
     if rag_pipeline_running; then

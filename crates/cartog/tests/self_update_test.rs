@@ -1335,6 +1335,8 @@ fn apply_pending_network_failure_keeps_intent() {
     );
 }
 
+// Uses seeded_state_path, which is not implemented on Windows.
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn defer_refuses_dev_is_not_a_thing_dev_arms_like_release() {
     // Policy check (matches `cartog self update`): a dev build is treated as

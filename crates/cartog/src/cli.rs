@@ -467,7 +467,7 @@ pub enum SelfCommand {
 
         /// With `--defer`, arm exactly this `MAJOR.MINOR.PATCH` version instead
         /// of resolving the latest stable release. Used by `/cartog-install` to
-        /// arm the plugin's pinned version. Ignored without `--defer`.
+        /// arm the plugin's pinned version. Requires `--defer`.
         #[arg(long, value_name = "VERSION", requires = "defer")]
         to: Option<String>,
 

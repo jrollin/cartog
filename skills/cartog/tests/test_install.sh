@@ -73,6 +73,20 @@ MOCK
     chmod +x "$TEST_DIR/bin/cartog"
 }
 
+# Extract just the function/const definitions from install.sh (everything above
+# the `# === main ... ===` sentinel) so a test can source them without running
+# the install flow. Fails loudly if the sentinel was renamed — otherwise the
+# sed would silently emit the whole script and the test would behave oddly.
+extract_install_lib() {
+    local out="$1"
+    local anchor='# === main (release-only install) ==='
+    if ! grep -qF "$anchor" "$INSTALL_SCRIPT"; then
+        echo "FATAL: anchor '$anchor' not found in $INSTALL_SCRIPT (was it renamed?)." >&2
+        exit 1
+    fi
+    sed -n "1,/^${anchor}\$/p" "$INSTALL_SCRIPT" | sed '$d' > "$out"
+}
+
 create_mock_curl() {
     local log_file="$TEST_DIR/curl.log"
     cat > "$TEST_DIR/bin/curl" <<'MOCK'
@@ -300,8 +314,8 @@ MOCK
     teardown
 }
 
-test_unsupported_platform_fails_release_only() {
-    echo "TEST: no curl available → exit 1, never builds from source"
+test_download_failure_fails_release_only() {
+    echo "TEST: download fails (curl errors) → exit 1, never builds from source"
     setup
     # Shadow curl with a failing stub so the download path fails; no cargo
     # fallback exists anymore.
@@ -511,7 +525,7 @@ MOCK
     (
         # Strip lines below the function definitions so sourcing doesn't
         # trigger the actual install flow at the bottom of the script.
-        sed -n '1,/^# === main (release-only install) ===/p' "$INSTALL_SCRIPT" | sed '$d' > "$TEST_DIR/install-lib.sh"
+        extract_install_lib "$TEST_DIR/install-lib.sh"
         export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
         export HOME="$TEST_DIR/home"
         export CARTOG_INSTALL_DIR="$TEST_DIR/installdir"
@@ -542,7 +556,7 @@ MOCK
     chmod +x "$TEST_DIR/installdir/cartog"
 
     (
-        sed -n '1,/^# === main (release-only install) ===/p' "$INSTALL_SCRIPT" | sed '$d' > "$TEST_DIR/install-lib.sh"
+        extract_install_lib "$TEST_DIR/install-lib.sh"
         export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
         export HOME="$TEST_DIR/home"
         export CARTOG_INSTALL_DIR="$TEST_DIR/installdir"
@@ -584,7 +598,7 @@ test_no_arg_not_installed_installs_latest
 echo ""
 test_no_prebuilt_binary_fails_release_only
 echo ""
-test_unsupported_platform_fails_release_only
+test_download_failure_fails_release_only
 echo ""
 test_install_dir_prefers_local_bin_when_present
 echo ""

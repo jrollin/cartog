@@ -318,6 +318,25 @@ test_legacy_binary_in_sync_is_noop() {
     teardown
 }
 
+test_legacy_binary_newer_than_pin_is_not_downgraded() {
+    echo "TEST: legacy binary NEWER than plugin pin is not downgraded (semver gate, not string !=)"
+    setup
+    # Installed 0.13.9 (legacy: <0.14) but ahead of the plugin's 0.13.5.
+    write_plugin_json "0.13.5"
+    create_mock_cartog "0.13.9"
+    shadow_install_sh 0
+
+    run_update_on_exit > /dev/null
+    restore_install_sh
+
+    if [ -s "$TEST_DIR/install.log" ]; then
+        echo "  FAIL: install.sh ran — a newer legacy binary must not be downgraded"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: install.sh not invoked when installed > pin"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
 test_no_plugin_json_is_noop() {
     echo "TEST: missing plugin.json → noop (nothing to upgrade to)"
     setup
@@ -421,6 +440,8 @@ echo ""
 test_legacy_binary_outdated_routes_to_install_sh
 echo ""
 test_legacy_binary_in_sync_is_noop
+echo ""
+test_legacy_binary_newer_than_pin_is_not_downgraded
 echo ""
 test_no_plugin_json_is_noop
 echo ""
