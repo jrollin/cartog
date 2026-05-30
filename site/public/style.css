@@ -1045,9 +1045,14 @@ td .badge {
 
 /* ── Usage page ──────────────────────────────────── */
 
+/* Docs page widens past the global --max-width to fit the third (TOC) rail. */
+.container--docs {
+  max-width: 1320px;
+}
+
 .docs-layout {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: 220px minmax(0, 1fr) 220px;
   gap: 48px;
   padding-top: 40px;
   padding-bottom: 80px;
@@ -1064,39 +1069,118 @@ td .badge {
 .docs-sidebar nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
+/* Collapsible section group (native <details>). Closed by default; the active
+   group is opened by the scroll-spy script. */
 .docs-sidebar .sidebar-group {
-  margin-bottom: 16px;
+  margin-bottom: 4px;
 }
 
 .docs-sidebar .sidebar-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 1.2px;
-  color: var(--text-tertiary);
-  padding: 8px 12px 4px;
+  color: var(--text-secondary);
+  padding: 8px 12px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.docs-sidebar .sidebar-label::-webkit-details-marker {
+  display: none;
+}
+
+.docs-sidebar .sidebar-label:hover {
+  background: var(--bg-secondary);
+  color: var(--text);
+}
+
+/* Chevron, rotates when the group is open. */
+.docs-sidebar .sidebar-label::after {
+  content: "▸";
+  font-size: 10px;
+  color: var(--text-secondary);
+  transition: transform 0.15s ease;
+}
+
+.docs-sidebar .sidebar-group[open] > .sidebar-label::after {
+  transform: rotate(90deg);
 }
 
 .docs-sidebar a {
   display: block;
-  padding: 6px 12px;
+  padding: 6px 12px 6px 20px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--text);
   border-radius: 6px;
   transition: background 0.15s, color 0.15s;
 }
 
 .docs-sidebar a:hover {
   background: var(--bg-secondary);
-  color: var(--text);
+  color: var(--accent);
 }
 
 .docs-sidebar a.active {
   background: var(--accent-dim);
   color: var(--accent);
+}
+
+/* Right rail: "On this page" sub-heading TOC with scroll-spy. */
+.docs-toc {
+  position: sticky;
+  top: calc(var(--nav-height) + 24px);
+  align-self: start;
+  max-height: calc(100vh - var(--nav-height) - 48px);
+  overflow-y: auto;
+}
+
+.docs-toc.is-empty {
+  visibility: hidden;
+}
+
+.docs-toc-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: var(--text-tertiary);
+  padding: 8px 12px 8px;
+}
+
+.docs-toc-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 1px solid var(--border);
+}
+
+.docs-toc-nav a {
+  display: block;
+  padding: 5px 12px;
+  margin-left: -1px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  border-left: 1px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.docs-toc-nav a:hover {
+  color: var(--text-secondary);
+}
+
+.docs-toc-nav a.active {
+  color: var(--accent);
+  border-left-color: var(--accent);
 }
 
 .docs-content {
@@ -1242,6 +1326,17 @@ pre.example-output {
   color: var(--text-secondary);
   font-size: 12px;
   margin-bottom: 16px;
+}
+
+/* Drop the right TOC rail first when the viewport can't fit three columns. */
+@media (max-width: 1100px) {
+  .docs-layout {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .docs-toc {
+    display: none;
+  }
 }
 
 @media (max-width: 768px) {

@@ -10,31 +10,32 @@ import Base from "../layouts/Base.astro";
   footerVariant="docs"
 >
   <!-- ── Docs Layout ─────────────────────────────── -->
-  <div class="container">
+  <div class="container container--docs">
     <div class="docs-layout">
 
-      <!-- Sidebar -->
+      <!-- Left sidebar: collapsible section groups (closed by default; the
+           group holding the active section auto-opens via the script below) -->
       <aside class="docs-sidebar">
         <nav>
-          <div class="sidebar-group">
-            <div class="sidebar-label">Getting Started</div>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">Getting Started</summary>
             <a href="#quick-start">Quick Start</a>
             <a href="#search-modes">Search Modes</a>
             <a href="#workflow">Recommended Workflow</a>
-          </div>
-          <div class="sidebar-group">
-            <div class="sidebar-label">Configuration</div>
+          </details>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">Configuration</summary>
             <a href="#config">Config File</a>
             <a href="#config-providers">Embedding Providers</a>
-          </div>
-          <div class="sidebar-group">
-            <div class="sidebar-label">Semantic Search</div>
+          </details>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">Semantic Search</summary>
             <a href="#rag-setup">rag setup</a>
             <a href="#rag-index">rag index</a>
             <a href="#rag-search">rag search</a>
-          </div>
-          <div class="sidebar-group">
-            <div class="sidebar-label">Integration</div>
+          </details>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">Integration</summary>
             <a href="#agent-skill">Agent Skill</a>
             <a href="#mcp-server">MCP Server</a>
             <a href="#mcp-tools">Tools overview</a>
@@ -43,9 +44,9 @@ import Base from "../layouts/Base.astro";
             <a href="#mcp-ide">Bootstrap sequence</a>
             <a href="#mcp-clients">Manual setup</a>
             <a href="#teach-agent">Teach your agent</a>
-          </div>
-          <div class="sidebar-group">
-            <div class="sidebar-label">CLI Reference</div>
+          </details>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">CLI Reference</summary>
             <a href="#cmd-callees">cartog callees</a>
             <a href="#cmd-changes">cartog changes</a>
             <a href="#cmd-completions">cartog completions</a>
@@ -67,14 +68,14 @@ import Base from "../layouts/Base.astro";
             <a href="#cmd-stats">cartog stats</a>
             <a href="#cmd-savings">cartog savings</a>
             <a href="#cmd-watch">cartog watch</a>
-          </div>
-          <div class="sidebar-group">
-            <div class="sidebar-label">Reference</div>
+          </details>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">Reference</summary>
             <a href="#json-output">JSON Output</a>
             <a href="#token-budget">Token Budget</a>
             <a href="#languages">Languages</a>
             <a href="#performance">Performance</a>
-          </div>
+          </details>
         </nav>
       </aside>
 
@@ -936,32 +937,121 @@ cartog --tokens 200 outline src/db.rs</pre>
         </table>
 
       </main>
+
+      <!-- Right rail: "On this page" — the current section's sub-headings,
+           populated and scroll-spied by the script below. -->
+      <aside class="docs-toc" aria-label="On this page">
+        <div class="docs-toc-label">On this page</div>
+        <nav class="docs-toc-nav"></nav>
+      </aside>
     </div>
   </div>
 
   <script is:inline>
-    // Highlight active sidebar link on scroll
-    var links = document.querySelectorAll(".docs-sidebar a");
-    var sections = [];
-    links.forEach(function (link) {
-      var id = link.getAttribute("href").slice(1);
-      var el = document.getElementById(id);
-      if (el) sections.push({ id: id, el: el, link: link });
-    });
+    (function () {
+      var OFFSET = 90; // sticky-nav height + breathing room
 
-    window.addEventListener("scroll", function () {
-      var scrollTop = window.scrollY + 80;
-      var current = "";
-      sections.forEach(function (s) {
-        if (s.el.offsetTop <= scrollTop) current = s.id;
+      // Left-nav links keyed by their target id, for active highlighting.
+      var navLinks = {};
+      document.querySelectorAll(".docs-sidebar a").forEach(function (a) {
+        navLinks[a.getAttribute("href").slice(1)] = a;
       });
-      links.forEach(function (l) {
-        l.classList.remove("active");
-      });
-      if (current) {
-        var active = document.querySelector('.docs-sidebar a[href="#' + current + '"]');
-        if (active) active.classList.add("active");
+
+      // Build the section model: each h2 owns the h3s that follow it until the
+      // next h2. Drives the right "On this page" rail. h3s often ship without
+      // an id, so derive a stable slug so the rail can anchor + scroll-spy them.
+      var content = document.querySelector(".docs-content");
+      var headings = Array.prototype.slice.call(content.querySelectorAll("h2, h3"));
+
+      function slugify(text) {
+        return text
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
       }
-    });
+
+      var sections = [];
+      var current = null;
+      headings.forEach(function (h) {
+        if (!h.id) {
+          var base = slugify(h.textContent || "") || "section";
+          var id = base, n = 2;
+          while (document.getElementById(id)) id = base + "-" + n++;
+          h.id = id;
+        }
+        if (h.tagName === "H2") {
+          current = { id: h.id, el: h, subs: [] };
+          sections.push(current);
+        } else if (current) {
+          current.subs.push({ id: h.id, el: h });
+        }
+      });
+
+      var tocNav = document.querySelector(".docs-toc-nav");
+      var tocAside = document.querySelector(".docs-toc");
+      var renderedSection = null;
+
+      // Render the right rail for a given section's sub-headings.
+      function renderToc(section) {
+        if (renderedSection === section) return;
+        renderedSection = section;
+        tocNav.innerHTML = "";
+        if (!section || !section.subs.length) {
+          tocAside.classList.add("is-empty");
+          return;
+        }
+        tocAside.classList.remove("is-empty");
+        section.subs.forEach(function (s) {
+          var a = document.createElement("a");
+          a.href = "#" + s.id;
+          a.textContent = (s.el.textContent || "").trim();
+          a.dataset.id = s.id;
+          tocNav.appendChild(a);
+        });
+      }
+
+      function openGroupOf(link) {
+        var group = link && link.closest(".sidebar-group");
+        if (group && !group.open) group.open = true;
+      }
+
+      function update() {
+        var y = window.scrollY + OFFSET;
+
+        // Active h2 section = last one whose top is above the scroll line.
+        var activeSection = sections.length ? sections[0] : null;
+        sections.forEach(function (s) {
+          if (s.el.offsetTop <= y) activeSection = s;
+        });
+
+        // Active sub-heading within that section.
+        var activeSub = null;
+        if (activeSection) {
+          activeSection.subs.forEach(function (s) {
+            if (s.el.offsetTop <= y) activeSub = s;
+          });
+        }
+
+        // Left nav: highlight the active link (sub if present, else section)
+        // and auto-open its group.
+        var activeId = (activeSub && activeSub.id) || (activeSection && activeSection.id);
+        Object.keys(navLinks).forEach(function (id) {
+          navLinks[id].classList.toggle("active", id === activeId);
+        });
+        if (activeId && navLinks[activeId]) openGroupOf(navLinks[activeId]);
+
+        // Right rail: show the active section's subs, highlight current.
+        renderToc(activeSection);
+        if (renderedSection) {
+          tocNav.querySelectorAll("a").forEach(function (a) {
+            a.classList.toggle("active", activeSub && a.dataset.id === activeSub.id);
+          });
+        }
+      }
+
+      window.addEventListener("scroll", update, { passive: true });
+      window.addEventListener("resize", update);
+      update();
+    })();
   </script>
 </Base>
