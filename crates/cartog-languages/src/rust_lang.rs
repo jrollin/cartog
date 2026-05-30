@@ -175,7 +175,7 @@ fn extract_function(
     let signature = extract_fn_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent_qname);
     symbols.push(
         Symbol::new(
             name,
@@ -351,7 +351,7 @@ fn extract_impl(
     let impl_parent_id = existing_parent.unwrap_or_else(|| {
         // No prior struct/enum/trait — emit a Class symbol so edges have a valid source_id.
         // This happens for impl blocks on types defined in other files.
-        let id = symbol_id(file_path, "class", &impl_type, parent_qname);
+        let id = symbol_id(file_path, SymbolKind::Class, &impl_type, parent_qname);
         let end_line = node.end_position().row as u32 + 1;
         symbols.push(Symbol::new(
             impl_type.clone(),
@@ -427,7 +427,7 @@ fn extract_use(
         return;
     }
 
-    let sym_id = symbol_id(file_path, "import", &use_path, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Import, &use_path, parent_qname);
     symbols.push(
         Symbol::new(
             use_path.clone(),
@@ -566,7 +566,7 @@ fn extract_mod(
     let start_line = node.start_position().row as u32 + 1;
     let visibility = rust_visibility(node, source);
 
-    let sym_id = symbol_id(file_path, "module", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Module, &name, parent_qname);
 
     // Only emit a symbol if it has a body (inline module)
     if let Some(body) = node.child_by_field_name("body") {
@@ -623,7 +623,7 @@ fn extract_const(
     let start_line = node.start_position().row as u32 + 1;
     let visibility = rust_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
-    let sym_id = symbol_id(file_path, "variable", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Variable, &name, parent_qname);
 
     symbols.push(
         Symbol::new(

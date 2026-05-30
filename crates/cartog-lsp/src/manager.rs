@@ -213,32 +213,22 @@ impl LspManager {
             .is_some_and(|(c, _)| c.is_alive())
     }
 
-    /// Gracefully shut down all running servers.
+    /// Gracefully shut down all servers via the `shutdown`/`exit` handshake.
+    /// Reaping is left to [`LspClient`]'s `Drop` as each client leaves scope.
     pub fn shutdown_all(&mut self) {
         for (lang, (mut client, _)) in self.clients.drain() {
             if let Err(e) = client.send_request("shutdown", Value::Null) {
                 tracing::debug!("shutdown failed for {lang}: {e:#}");
-                let _ = client.child.kill();
-                let _ = client.child.wait();
-                continue;
+                continue; // Drop reaps the child
             }
             let _ = client.send_notification("exit", Value::Null);
 
-            // Poll for graceful exit, kill if it takes too long
+            // Wait briefly for clean exit; Drop force-kills if still alive.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                match client.child.try_wait() {
-                    Ok(Some(_)) => break, // exited
-                    Ok(None) if std::time::Instant::now() < deadline => {
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                    _ => {
-                        tracing::debug!("{lang} server did not exit, killing");
-                        let _ = client.child.kill();
-                        let _ = client.child.wait();
-                        break;
-                    }
-                }
+            while matches!(client.child.try_wait(), Ok(None))
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
     }

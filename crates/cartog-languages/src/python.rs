@@ -5,7 +5,7 @@ use tree_sitter::{Language, Node, Parser, QueryCursor};
 use cartog_core::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
 use super::queries::{is_inside_nested_scope, CachedQuery};
-use super::{node_text, ExtractionResult, Extractor};
+use super::{node_text, ExtractionResult, Extractor, ParentScope};
 
 pub struct PythonExtractor {
     parser: Parser,
@@ -96,8 +96,7 @@ impl Extractor for PythonExtractor {
             root,
             source,
             file_path,
-            None, // no parent
-            None, // no parent qualified name
+            ParentScope::default(),
             &mut symbols,
             &mut edges,
         );
@@ -106,41 +105,21 @@ impl Extractor for PythonExtractor {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn extract_node(
     queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
     match node.kind() {
         "function_definition" => {
-            extract_function(
-                queries,
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_function(queries, node, source, file_path, parent, symbols, edges);
         }
         "class_definition" => {
-            extract_class(
-                queries,
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_class(queries, node, source, file_path, parent, symbols, edges);
         }
         "decorated_definition" => {
             // Find the actual definition first to compute its symbol ID for decorator edges
@@ -150,13 +129,13 @@ fn extract_node(
                     if let Some(name_node) = child.child_by_field_name("name") {
                         let name = node_text(name_node, source);
                         let kind = if child.kind() == "class_definition" {
-                            "class"
-                        } else if parent_id.is_some() {
-                            "method"
+                            SymbolKind::Class
+                        } else if parent.id.is_some() {
+                            SymbolKind::Method
                         } else {
-                            "function"
+                            SymbolKind::Function
                         };
-                        def_sym_id = Some(symbol_id(file_path, kind, name, parent_qname));
+                        def_sym_id = Some(symbol_id(file_path, kind, name, parent.qname));
                     }
                 }
             }
@@ -167,65 +146,37 @@ fn extract_node(
                 } else if child.kind() == "function_definition"
                     || child.kind() == "class_definition"
                 {
-                    extract_node(
-                        queries,
-                        child,
-                        source,
-                        file_path,
-                        parent_id,
-                        parent_qname,
-                        symbols,
-                        edges,
-                    );
+                    extract_node(queries, child, source, file_path, parent, symbols, edges);
                 }
             }
         }
         "import_statement" | "import_from_statement" => {
-            extract_import(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_import(node, source, file_path, parent, symbols, edges);
         }
         "expression_statement" => {
             for child in node.named_children(&mut node.walk()) {
                 if child.kind() == "assignment" {
-                    extract_assignment(child, source, file_path, parent_id, parent_qname, symbols);
+                    extract_assignment(child, source, file_path, parent, symbols);
                 }
             }
             // Still walk children for call expressions
-            walk_for_calls_and_raises_q(queries, node, source, file_path, parent_id, edges);
+            walk_for_calls_and_raises_q(queries, node, source, file_path, parent.id, edges);
         }
         _ => {
             // Recurse into children
             for child in node.named_children(&mut node.walk()) {
-                extract_node(
-                    queries,
-                    child,
-                    source,
-                    file_path,
-                    parent_id,
-                    parent_qname,
-                    symbols,
-                    edges,
-                );
+                extract_node(queries, child, source, file_path, parent, symbols, edges);
             }
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn extract_function(
     queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -236,7 +187,7 @@ fn extract_function(
 
     let start_line = node.start_position().row as u32 + 1;
     let end_line = node.end_position().row as u32 + 1;
-    let is_method = parent_id.is_some();
+    let is_method = parent.id.is_some();
     let kind = if is_method {
         SymbolKind::Method
     } else {
@@ -269,7 +220,7 @@ fn extract_function(
     let signature = extract_signature(node, source);
     let docstring = extract_docstring(node, source);
 
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent.qname);
     let mut sym = Symbol::new(
         &name,
         kind,
@@ -278,9 +229,9 @@ fn extract_function(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_signature(signature);
     if visibility != Visibility::Public {
         sym = sym.with_visibility(visibility);
@@ -298,10 +249,11 @@ fn extract_function(
     if let Some(body) = node.child_by_field_name("body") {
         walk_for_calls_and_raises_q(queries, body, source, file_path, Some(&sym_id), edges);
         // Recurse for nested functions/classes
-        let child_qname = match parent_qname {
+        let child_qname = match parent.qname {
             Some(pq) => format!("{pq}.{name}"),
             None => name.clone(),
         };
+        let child_parent = ParentScope::nested(&sym_id, &child_qname);
         for child in body.named_children(&mut body.walk()) {
             match child.kind() {
                 "function_definition" | "class_definition" | "decorated_definition" => {
@@ -310,8 +262,7 @@ fn extract_function(
                         child,
                         source,
                         file_path,
-                        Some(&sym_id),
-                        Some(&child_qname),
+                        child_parent,
                         symbols,
                         edges,
                     );
@@ -322,14 +273,12 @@ fn extract_function(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn extract_class(
     queries: &Queries,
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -344,7 +293,7 @@ fn extract_class(
     let docstring = extract_docstring(node, source);
     let name = name_ref.to_string();
 
-    let sym_id = symbol_id(file_path, SymbolKind::Class.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Class, &name, parent.qname);
     let mut sym = Symbol::new(
         &name,
         SymbolKind::Class,
@@ -353,9 +302,9 @@ fn extract_class(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_docstring(docstring);
     if visibility != Visibility::Public {
         sym = sym.with_visibility(visibility);
@@ -380,18 +329,18 @@ fn extract_class(
 
     // Walk class body for methods, nested classes, assignments
     if let Some(body) = node.child_by_field_name("body") {
-        let child_qname = match parent_qname {
+        let child_qname = match parent.qname {
             Some(pq) => format!("{pq}.{name}"),
             None => name.clone(),
         };
+        let child_parent = ParentScope::nested(&sym_id, &child_qname);
         for child in body.named_children(&mut body.walk()) {
             extract_node(
                 queries,
                 child,
                 source,
                 file_path,
-                Some(&sym_id),
-                Some(&child_qname),
+                child_parent,
                 symbols,
                 edges,
             );
@@ -403,8 +352,7 @@ fn extract_import(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -416,12 +364,7 @@ fn extract_import(
         return;
     }
 
-    let sym_id = symbol_id(
-        file_path,
-        SymbolKind::Import.as_str(),
-        &module_name,
-        parent_qname,
-    );
+    let sym_id = symbol_id(file_path, SymbolKind::Import, &module_name, parent.qname);
     symbols.push(
         Symbol::new(
             &module_name,
@@ -431,9 +374,9 @@ fn extract_import(
             line,
             node.start_byte() as u32,
             node.end_byte() as u32,
-            parent_qname,
+            parent.qname,
         )
-        .with_parent(parent_id)
+        .with_parent(parent.id)
         .with_signature(Some(import_text)),
     );
 
@@ -454,8 +397,7 @@ fn extract_assignment(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
 ) {
     // Only extract simple name = value assignments (not unpacking, subscript, etc.)
@@ -474,9 +416,9 @@ fn extract_assignment(
                 node.end_position().row as u32 + 1,
                 node.start_byte() as u32,
                 node.end_byte() as u32,
-                parent_qname,
+                parent.qname,
             )
-            .with_parent(parent_id);
+            .with_parent(parent.id);
             if visibility != Visibility::Public {
                 sym = sym.with_visibility(visibility);
             }

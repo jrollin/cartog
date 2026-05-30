@@ -337,6 +337,21 @@ where
 /// Shared tail of the two `hybrid_search_tuned*` entry points: sort by
 /// (rerank_score → rrf_score → in_degree), apply `kind_filter`, truncate to
 /// `limit`, pack into a `HybridSearchResult`.
+/// Ranking order: rerank score desc, unscored last (fall back to RRF), ties by
+/// in-degree desc. Shared with tests so they exercise the real comparator.
+fn rerank_ordering(a: &SearchResult, b: &SearchResult) -> std::cmp::Ordering {
+    let score_cmp = match (a.rerank_score, b.rerank_score) {
+        (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => b
+            .rrf_score
+            .partial_cmp(&a.rrf_score)
+            .unwrap_or(std::cmp::Ordering::Equal),
+    };
+    score_cmp.then(b.symbol.in_degree.cmp(&a.symbol.in_degree))
+}
+
 fn sort_filter_and_pack(
     mut candidates: Vec<SearchResult>,
     counts: (u32, u32, u32),
@@ -344,18 +359,7 @@ fn sort_filter_and_pack(
     kind_filter: KindFilter,
 ) -> HybridSearchResult {
     // 5b. Stable tiebreaker: within same score, prefer higher in-degree (more referenced).
-    candidates.sort_by(|a, b| {
-        let score_cmp = match (a.rerank_score, b.rerank_score) {
-            (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => b
-                .rrf_score
-                .partial_cmp(&a.rrf_score)
-                .unwrap_or(std::cmp::Ordering::Equal),
-        };
-        score_cmp.then(b.symbol.in_degree.cmp(&a.symbol.in_degree))
-    });
+    candidates.sort_by(rerank_ordering);
 
     // 6. Apply kind filter + limit on (re-ranked) candidates.
     let mut results = Vec::new();
@@ -1431,20 +1435,14 @@ mod tests {
     }
 
     #[test]
-    fn test_rerank_sort_reorders_by_score_descending() {
+    fn rerank_ordering_sorts_by_rerank_score_descending() {
         let mut candidates = [
             make_result("low", 0.9, Some(1.0), Some("low content")),
             make_result("high", 0.5, Some(9.0), Some("high content")),
             make_result("mid", 0.7, Some(5.0), Some("mid content")),
         ];
 
-        // Simulate what rerank_candidates does after scoring: just sort
-        candidates.sort_by(|a, b| match (a.rerank_score, b.rerank_score) {
-            (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
+        candidates.sort_by(rerank_ordering);
 
         assert_eq!(candidates[0].symbol.name, "high");
         assert_eq!(candidates[1].symbol.name, "mid");
@@ -1452,45 +1450,50 @@ mod tests {
     }
 
     #[test]
-    fn test_rerank_sort_scored_before_unscored() {
+    fn rerank_ordering_ranks_scored_before_unscored() {
         let mut candidates = [
             make_result("no_content", 0.9, None, None),
             make_result("scored", 0.3, Some(2.0), Some("content")),
             make_result("also_no_content", 0.8, None, None),
         ];
 
-        candidates.sort_by(|a, b| match (a.rerank_score, b.rerank_score) {
-            (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
+        candidates.sort_by(rerank_ordering);
 
         assert_eq!(candidates[0].symbol.name, "scored");
-        // Unscored maintain relative order (stable sort)
+        // Unscored candidates fall back to RRF score: 0.9 before 0.8.
         assert_eq!(candidates[1].symbol.name, "no_content");
         assert_eq!(candidates[2].symbol.name, "also_no_content");
     }
 
     #[test]
-    fn test_rerank_sort_all_unscored_preserves_order() {
+    fn rerank_ordering_falls_back_to_rrf_score_when_all_unscored() {
         let mut candidates = [
             make_result("first", 0.9, None, None),
             make_result("second", 0.5, None, None),
             make_result("third", 0.3, None, None),
         ];
 
-        candidates.sort_by(|a, b| match (a.rerank_score, b.rerank_score) {
-            (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        });
+        candidates.sort_by(rerank_ordering);
 
-        // No rerank scores → original (RRF) order preserved
+        // No rerank scores → RRF score descending.
         assert_eq!(candidates[0].symbol.name, "first");
         assert_eq!(candidates[1].symbol.name, "second");
         assert_eq!(candidates[2].symbol.name, "third");
+    }
+
+    #[test]
+    fn rerank_ordering_breaks_score_ties_by_in_degree() {
+        // Two candidates with identical rerank score: higher in-degree wins.
+        let mut a = make_result("less_referenced", 0.5, Some(5.0), Some("c"));
+        let mut b = make_result("more_referenced", 0.5, Some(5.0), Some("c"));
+        a.symbol.in_degree = 1;
+        b.symbol.in_degree = 9;
+        let mut candidates = [a, b];
+
+        candidates.sort_by(rerank_ordering);
+
+        assert_eq!(candidates[0].symbol.name, "more_referenced");
+        assert_eq!(candidates[1].symbol.name, "less_referenced");
     }
 
     #[test]

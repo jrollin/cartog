@@ -134,7 +134,7 @@ fn extract_class_like(
     } else {
         SymbolKind::Class
     };
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent_qname);
     let class_qname = match parent_qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
@@ -216,7 +216,7 @@ fn extract_interface(
     let visibility = java_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "interface", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Interface, &name, parent_qname);
     let iface_qname = match parent_qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
@@ -380,7 +380,7 @@ fn extract_method(
     let signature = extract_method_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "method", &name, Some(parent_qname));
+    let sym_id = symbol_id(file_path, SymbolKind::Method, &name, Some(parent_qname));
     let mut sym = Symbol::new(
         name,
         SymbolKind::Method,
@@ -436,7 +436,7 @@ fn extract_constructor(
     let signature = extract_constructor_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "method", &name, Some(parent_qname));
+    let sym_id = symbol_id(file_path, SymbolKind::Method, &name, Some(parent_qname));
     let mut sym = Symbol::new(
         name,
         SymbolKind::Method,
@@ -497,7 +497,7 @@ fn extract_field(
                 Some(format!("{type_text} {name}"))
             };
 
-            let sym_id = symbol_id(file_path, "variable", &name, Some(parent_qname));
+            let sym_id = symbol_id(file_path, SymbolKind::Variable, &name, Some(parent_qname));
             let mut sym = Symbol::new(
                 name,
                 SymbolKind::Variable,
@@ -548,7 +548,7 @@ fn extract_import(
         return;
     }
 
-    let sym_id = symbol_id(file_path, "import", &import_text, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Import, &import_text, parent_qname);
     symbols.push(
         Symbol::new(
             import_text.clone(),

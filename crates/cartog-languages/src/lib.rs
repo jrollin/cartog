@@ -51,6 +51,32 @@ pub(crate) fn last_segment<'a>(s: &'a str, sep: &str) -> &'a str {
     s.rsplit(sep).next().unwrap_or(s)
 }
 
+/// Enclosing scope while extracting: `id` becomes the child's `parent_id`,
+/// `qname` its `parent_name`. Top level: `id` is `None`, `qname` the namespace.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ParentScope<'a> {
+    pub id: Option<&'a str>,
+    pub qname: Option<&'a str>,
+}
+
+impl<'a> ParentScope<'a> {
+    /// Top-level scope, optionally within a namespace.
+    pub fn top_level(namespace: Option<&'a str>) -> Self {
+        Self {
+            id: None,
+            qname: namespace,
+        }
+    }
+
+    /// Scope nested inside a symbol identified by `id` + `qname`.
+    pub fn nested(id: &'a str, qname: &'a str) -> Self {
+        Self {
+            id: Some(id),
+            qname: Some(qname),
+        }
+    }
+}
+
 pub use cartog_core::detect_language;
 
 /// Get the extractor for a language name.

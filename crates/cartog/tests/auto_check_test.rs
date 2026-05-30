@@ -63,6 +63,29 @@ fn spawn_canned_github_response(json_body: String) -> String {
     format!("http://127.0.0.1:{port}/")
 }
 
+/// Canned response that stalls `server_delay` before replying — lets a test
+/// prove `spawn_check` returns before the network call could complete.
+fn spawn_delayed_github_response(json_body: String, server_delay: Duration) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            std::thread::sleep(server_delay);
+            let body = json_body.as_bytes();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body);
+            let _ = stream.flush();
+        }
+    });
+    format!("http://127.0.0.1:{port}/")
+}
+
 fn wait_for<F: FnMut() -> bool>(mut pred: F, timeout: Duration) -> bool {
     let start = Instant::now();
     while start.elapsed() < timeout {
@@ -119,13 +142,12 @@ fn spawn_check_run_once_marks_not_outdated_when_current() {
 
 #[test]
 fn spawn_check_returns_immediately_without_blocking() {
-    // The main process should not wait on the worker. We verify by
-    // measuring the call duration: spawning a thread is microseconds, the
-    // network probe takes ~10ms+, so a 50ms ceiling clearly proves we
-    // didn't synchronously wait for completion.
+    // Server stalls 1s; a non-blocking spawn must return before that. The
+    // full-second margin is load-proof, unlike a fixed sub-50ms ceiling.
     let dir = tempfile::TempDir::new().unwrap();
     let state_path = dir.path().join("state.toml");
-    let url = spawn_canned_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string());
+    let server_delay = Duration::from_secs(1);
+    let url = spawn_delayed_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string(), server_delay);
 
     let start = Instant::now();
     spawn_check(
@@ -134,16 +156,22 @@ fn spawn_check_returns_immediately_without_blocking() {
         env!("CARGO_PKG_VERSION").to_string(),
     );
     let spawn_elapsed = start.elapsed();
+
+    // State absent on return proves the check did not run synchronously.
     assert!(
-        spawn_elapsed < Duration::from_millis(50),
-        "spawn_check returned in {:?}; should not have blocked on the network call",
-        spawn_elapsed
+        !state_path.exists(),
+        "spawn_check ran the check synchronously: state.toml already exists on return"
+    );
+    assert!(
+        spawn_elapsed < server_delay,
+        "spawn_check returned in {spawn_elapsed:?}, after the {server_delay:?} server delay; \
+         it must return before the network call could complete"
     );
 
     // The worker should eventually finish and write the state file.
     assert!(
-        wait_for(|| state_path.exists(), Duration::from_secs(2)),
-        "worker thread should have produced state.toml within 2s"
+        wait_for(|| state_path.exists(), Duration::from_secs(5)),
+        "worker thread should have produced state.toml after the server replied"
     );
 }
 

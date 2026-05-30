@@ -155,7 +155,7 @@ fn extract_function(
     let signature = extract_fn_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "function", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Function, &name, parent_qname);
     let mut sym = Symbol::new(
         name,
         SymbolKind::Function,
@@ -207,7 +207,7 @@ fn extract_method(
     let signature = extract_method_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "method", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Method, &name, parent_qname);
     let mut sym = Symbol::new(
         name,
         SymbolKind::Method,
@@ -310,7 +310,7 @@ fn extract_type_spec(
         _ => SymbolKind::TypeAlias,
     };
 
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent_qname);
     let mut sym = Symbol::new(
         name.clone(),
         kind,
@@ -431,7 +431,7 @@ fn extract_import_spec(
     // Use the last segment of the path as the imported name
     let pkg_name = last_segment(&path_str, "/");
 
-    let sym_id = symbol_id(file_path, "import", &path_str, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Import, &path_str, parent_qname);
     symbols.push(
         Symbol::new(
             path_str.clone(),
@@ -540,7 +540,7 @@ fn extract_const_spec(
             let name = node_text(child, source).to_string();
             let line = child.start_position().row as u32 + 1;
             let visibility = go_visibility(&name);
-            let id = symbol_id(file_path, "variable", &name, parent_qname);
+            let id = symbol_id(file_path, SymbolKind::Variable, &name, parent_qname);
             if sym_id.is_none() {
                 sym_id = Some(id);
             }
@@ -632,7 +632,7 @@ fn extract_var_spec(
             let name = node_text(child, source).to_string();
             let line = child.start_position().row as u32 + 1;
             let visibility = go_visibility(&name);
-            let id = symbol_id(file_path, "variable", &name, parent_qname);
+            let id = symbol_id(file_path, SymbolKind::Variable, &name, parent_qname);
             if sym_id.is_none() {
                 sym_id = Some(id);
             }

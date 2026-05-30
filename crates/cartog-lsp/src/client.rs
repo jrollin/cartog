@@ -186,6 +186,17 @@ impl LspClient {
     }
 }
 
+impl Drop for LspClient {
+    /// Reap the child: `std::process::Child` does not kill/wait on drop, so a
+    /// client dropped before `shutdown_all` (e.g. failed init) would orphan it.
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
 /// A server-initiated request has both `id` and `method`.
 fn is_server_request(msg: &Value) -> bool {
     msg.get("id").is_some() && msg.get("method").is_some()
@@ -309,5 +320,36 @@ mod tests {
         let error = response.get("error").unwrap();
         let message = error.get("message").and_then(|m| m.as_str()).unwrap();
         assert_eq!(message, "Invalid Request");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_reaps_child_so_an_un_shutdown_client_does_not_leak() {
+        use std::process::{Command, Stdio};
+
+        // `sleep 600` stands in for an LSP server; it outlives the test if Drop doesn't kill it.
+        let mut child = Command::new("sleep")
+            .arg("600")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+        assert!(
+            matches!(child.try_wait(), Ok(None)),
+            "child should be alive before client owns it"
+        );
+
+        let client = LspClient::new(child).expect("client over live child");
+        drop(client);
+
+        // `kill -0` fails once the child is reaped.
+        let still_alive = Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(!still_alive, "Drop must kill+reap the child (pid {pid})");
     }
 }

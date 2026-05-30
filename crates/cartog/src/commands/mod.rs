@@ -731,117 +731,8 @@ pub fn cmd_pull(
     remote::pull_index(db_path, config, cli_remote, force, no_sign_request, json)
 }
 
-/// Project label shown above the savings report. Strips the SQLite filename
-/// and walks up to the closest meaningful directory (typically the git root)
-/// so users see `cartog · my-project · 5 queries` rather than the full path.
-///
-/// Returns an empty string when nothing recognizable can be extracted (no
-/// parent, non-UTF-8 path component). The caller renders a header without a
-/// scope segment in that case — see [`render_savings`].
-fn savings_scope_label(db_path: &Path) -> String {
-    db_path
-        .parent()
-        .and_then(|p| {
-            // `.../<project>/.cartog/db.sqlite` → walk past `.cartog` to the
-            // project dir. `.../<project>/.cartog.db` → just take the parent.
-            if p.file_name().is_some_and(|n| n == ".cartog") {
-                p.parent()
-            } else {
-                Some(p)
-            }
-        })
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .map(|n| n.to_string())
-        .unwrap_or_default()
-}
-
-/// Format a token count as `~1.4k`, `~28.5k`, etc. Matches the CCE-style
-/// compact display so the table stays narrow. Counts under 1,000 render as
-/// the raw integer.
-fn fmt_tokens(n: u64) -> String {
-    if n < 1_000 {
-        format!("{n}")
-    } else if n < 1_000_000 {
-        format!("~{:.1}k", n as f64 / 1_000.0)
-    } else {
-        format!("~{:.1}M", n as f64 / 1_000_000.0)
-    }
-}
-
-/// Render the savings report — header / bar / with-vs-without table / per-tool
-/// breakdown / footer. Pulled out of `cmd_stats` so the formatter is unit-
-/// testable independent of the DB.
-fn render_savings(scope: &str, r: &cartog_db::SavingsReport) -> String {
-    use cartog_db::{TOKENS_PER_QUERY_CARTOG, TOKENS_PER_QUERY_GREP};
-
-    let mut out = String::new();
-    if r.total_queries == 0 {
-        out.push_str(
-            "No queries logged yet. Run `cartog search`, `cartog refs`, … or \
-             point an MCP-aware editor at this index, then re-run.\n",
-        );
-        return out;
-    }
-
-    // Header: `cartog · my-project · N queries`
-    if scope.is_empty() {
-        out.push_str(&format!("cartog · {} queries\n\n", r.total_queries));
-    } else {
-        out.push_str(&format!(
-            "cartog · {scope} · {} queries\n\n",
-            r.total_queries
-        ));
-    }
-
-    // 10-cell bar with round-to-nearest. `percent_saved` is 0..=100; mapping
-    // `(p + 5) / 10` gives [0,4]→0 cells, [5,14]→1 cell, …, [95,100]→10
-    // cells, so the bar covers the full range. Previously `(p / 10).min(10)`
-    // capped at 9 cells (because `percent_saved` was clamped to 99), making
-    // 90% and 99% visually identical.
-    let filled = ((r.percent_saved as usize + 5) / 10).min(10);
-    let bar: String = "█".repeat(filled) + &"░".repeat(10 - filled);
-    out.push_str(&format!("{bar}  ~{}% tokens saved\n\n", r.percent_saved));
-
-    // With/without/saved table. Column widths chosen so the numbers line up
-    // for any plausible value: `Without cartog  ~999.9k tokens   (~1,700 / query)`.
-    let with = fmt_tokens(r.tokens_used_cartog);
-    let without = fmt_tokens(r.tokens_used_grep);
-    let saved = fmt_tokens(r.estimated_tokens_saved);
-    out.push_str(&format!(
-        "Without cartog  {without:>7} tokens   (~{TOKENS_PER_QUERY_GREP} / query)\n"
-    ));
-    out.push_str(&format!(
-        "With cartog     {with:>7} tokens   (~{TOKENS_PER_QUERY_CARTOG} / query)\n"
-    ));
-    out.push_str("──────────────────────────────────────────────\n");
-    out.push_str(&format!(
-        "Saved           {saved:>7} tokens   (~{} / query)\n\n",
-        r.baseline_delta
-    ));
-
-    // Per-tool counts with annotation so the reader knows the numbers are
-    // call counts, not per-tool token savings (the multiplier is flat).
-    out.push_str("By tool (call counts):\n");
-    for (tool, count) in &r.by_tool {
-        out.push_str(&format!("  {count:>4}  {tool}\n"));
-    }
-
-    if r.by_source.len() > 1 {
-        out.push_str("\nBy source:\n");
-        for (source, count) in &r.by_source {
-            out.push_str(&format!("  {count:>4}  {source}\n"));
-        }
-    }
-
-    out.push_str(&format!(
-        "\nBaseline: ~{TOKENS_PER_QUERY_GREP} tokens for an equivalent grep+read sweep \
-         vs cartog's ~{TOKENS_PER_QUERY_CARTOG}.\n\
-         Measured across 13 benchmark scenarios (see crates/cartog/benches/queries.rs).\n"
-    ));
-
-    out
-}
+mod savings;
+use savings::{render_savings, savings_scope_label};
 
 /// Index statistics summary.
 pub fn cmd_stats(
@@ -1323,699 +1214,11 @@ pub fn cmd_rag_search(
     })
 }
 
-/// Display the current configuration with default-value indicators.
-pub fn cmd_config(
-    config: &CartogConfig,
-    config_path: Option<&Path>,
-    config_rejected: bool,
-    db_path: &Path,
-    json: bool,
-) -> Result<()> {
-    // When the config file was found but rejected at parse time, `config`
-    // is the empty default — displaying it as the active config would
-    // silently lie. Show an explicit error and bail with the path so the
-    // user knows which file to fix.
-    if config_rejected {
-        // Invariant: ConfigLoad::Rejected always carries a path, and main
-        // propagates it as `config_path`. Bail explicitly so this surfaces
-        // even if the invariant ever changes.
-        let p = config_path
-            .ok_or_else(|| anyhow::anyhow!("config rejected but path missing — invariant break"))?;
-        anyhow::bail!(
-            "configuration file {} was rejected (see earlier stderr for the \
-             underlying reason). `cartog config` cannot display a meaningful \
-             view until the file is fixed.",
-            p.display()
-        );
-    }
-    use crate::config::{
-        DEFAULT_EMBEDDING_PROVIDER, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL,
-        DEFAULT_RERANKER_PROVIDER,
-    };
+mod config_display;
+pub use config_display::cmd_config;
 
-    let embed = config.embedding.as_ref();
-    let ollama = embed.and_then(|e| e.ollama.as_ref());
-    let local = embed.and_then(|e| e.local.as_ref());
-    let reranker = config.reranker.as_ref();
-    let rag = config.rag.as_ref();
-    let tuning_defaults = cartog_rag::search::SearchTuning::default();
-    // `to_search_tuning()` applies the clamps (retrieval_multiplier.max(1),
-    // rerank_min.min(rerank_max)) so what we show matches what the search
-    // pipeline will actually use.
-    let effective_tuning = rag.map(|r| r.to_search_tuning()).unwrap_or(tuning_defaults);
-
-    let rag_value = |set: Option<u32>, effective: u32, default: u32| ValueDisplay {
-        value: effective.to_string(),
-        is_default: set.is_none(),
-        default: default.to_string(),
-    };
-
-    let display = ConfigDisplay {
-        config_file: config_path.map(|p| p.to_string_lossy().into_owned()),
-        db_path: db_path.to_string_lossy().into_owned(),
-        embedding: EmbeddingDisplay {
-            provider: ValueDisplay {
-                value: embed.map_or(DEFAULT_EMBEDDING_PROVIDER.into(), |e| {
-                    e.provider().to_string()
-                }),
-                is_default: embed.map_or(true, |e| e.provider.is_none()),
-                default: DEFAULT_EMBEDDING_PROVIDER.into(),
-            },
-            model: embed.and_then(|e| e.model.clone()),
-            dimension: embed.and_then(|e| e.dimension),
-            local: LocalEmbeddingDisplay {
-                query_prefix: local.and_then(|l| l.query_prefix.clone()),
-                document_prefix: local.and_then(|l| l.document_prefix.clone()),
-            },
-            ollama: OllamaDisplay {
-                base_url: ValueDisplay {
-                    value: ollama
-                        .map_or(DEFAULT_OLLAMA_BASE_URL.into(), |o| o.base_url().to_string()),
-                    is_default: ollama.map_or(true, |o| o.base_url.is_none()),
-                    default: DEFAULT_OLLAMA_BASE_URL.into(),
-                },
-                model: ValueDisplay {
-                    value: ollama.map_or(DEFAULT_OLLAMA_MODEL.into(), |o| o.model().to_string()),
-                    is_default: ollama.map_or(true, |o| o.model.is_none()),
-                    default: DEFAULT_OLLAMA_MODEL.into(),
-                },
-            },
-        },
-        reranker: RerankerDisplay {
-            provider: ValueDisplay {
-                value: reranker.map_or(DEFAULT_RERANKER_PROVIDER.into(), |r| {
-                    r.provider().to_string()
-                }),
-                is_default: reranker.map_or(true, |r| r.provider.is_none()),
-                default: DEFAULT_RERANKER_PROVIDER.into(),
-            },
-        },
-        rag: RagDisplay {
-            retrieval_multiplier: rag_value(
-                rag.and_then(|r| r.retrieval_multiplier),
-                effective_tuning.retrieval_multiplier,
-                tuning_defaults.retrieval_multiplier,
-            ),
-            retrieval_floor: rag_value(
-                rag.and_then(|r| r.retrieval_floor),
-                effective_tuning.retrieval_floor,
-                tuning_defaults.retrieval_floor,
-            ),
-            rerank_max: rag_value(
-                rag.and_then(|r| r.rerank_max),
-                effective_tuning.rerank_max,
-                tuning_defaults.rerank_max,
-            ),
-            rerank_min: rag_value(
-                rag.and_then(|r| r.rerank_min),
-                effective_tuning.rerank_min,
-                tuning_defaults.rerank_min,
-            ),
-        },
-    };
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&display)?);
-    } else {
-        print!("{}", format_config_human(&display));
-    }
-    Ok(())
-}
-
-fn format_value(v: &ValueDisplay) -> String {
-    if v.is_default {
-        format!("{} (default)", v.value)
-    } else {
-        format!("{} (default: {})", v.value, v.default)
-    }
-}
-
-fn format_optional(v: &Option<String>) -> &str {
-    match v {
-        Some(s) => s.as_str(),
-        None => "-",
-    }
-}
-
-fn format_config_human(d: &ConfigDisplay) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-
-    writeln!(
-        out,
-        "Config file: {}",
-        d.config_file.as_deref().unwrap_or("none")
-    )
-    .unwrap();
-    writeln!(out, "Database:    {}", d.db_path).unwrap();
-
-    writeln!(out, "\n[embedding]").unwrap();
-    writeln!(
-        out,
-        "  provider:          {}",
-        format_value(&d.embedding.provider)
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "  model:             {}",
-        format_optional(&d.embedding.model)
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "  dimension:         {}",
-        d.embedding.dimension.map_or("-".into(), |v| v.to_string())
-    )
-    .unwrap();
-
-    writeln!(out, "\n[embedding.local]").unwrap();
-    writeln!(
-        out,
-        "  query_prefix:      {}",
-        format_optional(&d.embedding.local.query_prefix)
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "  document_prefix:   {}",
-        format_optional(&d.embedding.local.document_prefix)
-    )
-    .unwrap();
-
-    writeln!(out, "\n[embedding.ollama]").unwrap();
-    writeln!(
-        out,
-        "  base_url:          {}",
-        format_value(&d.embedding.ollama.base_url)
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "  model:             {}",
-        format_value(&d.embedding.ollama.model)
-    )
-    .unwrap();
-
-    writeln!(out, "\n[reranker]").unwrap();
-    writeln!(
-        out,
-        "  provider:          {}",
-        format_value(&d.reranker.provider)
-    )
-    .unwrap();
-
-    writeln!(out, "\n[rag]").unwrap();
-    writeln!(
-        out,
-        "  retrieval_multiplier: {}",
-        format_value(&d.rag.retrieval_multiplier)
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "  retrieval_floor:      {}",
-        format_value(&d.rag.retrieval_floor)
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "  rerank_max:           {}",
-        format_value(&d.rag.rerank_max)
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "  rerank_min:           {}",
-        format_value(&d.rag.rerank_min)
-    )
-    .unwrap();
-
-    out
-}
-
-#[derive(Serialize)]
-struct ConfigDisplay {
-    config_file: Option<String>,
-    db_path: String,
-    embedding: EmbeddingDisplay,
-    reranker: RerankerDisplay,
-    rag: RagDisplay,
-}
-
-#[derive(Serialize)]
-struct RagDisplay {
-    retrieval_multiplier: ValueDisplay,
-    retrieval_floor: ValueDisplay,
-    rerank_max: ValueDisplay,
-    rerank_min: ValueDisplay,
-}
-
-#[derive(Serialize)]
-struct EmbeddingDisplay {
-    provider: ValueDisplay,
-    model: Option<String>,
-    dimension: Option<usize>,
-    local: LocalEmbeddingDisplay,
-    ollama: OllamaDisplay,
-}
-
-#[derive(Serialize)]
-struct LocalEmbeddingDisplay {
-    query_prefix: Option<String>,
-    document_prefix: Option<String>,
-}
-
-#[derive(Serialize)]
-struct OllamaDisplay {
-    base_url: ValueDisplay,
-    model: ValueDisplay,
-}
-
-#[derive(Serialize)]
-struct RerankerDisplay {
-    provider: ValueDisplay,
-}
-
-#[derive(Serialize)]
-struct ValueDisplay {
-    value: String,
-    is_default: bool,
-    default: String,
-}
-
-// ── Doctor Command ──
-
-#[derive(Serialize)]
-struct CheckResult {
-    name: String,
-    status: CheckStatus,
-    message: String,
-}
-
-#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-enum CheckStatus {
-    Ok,
-    Warn,
-    Error,
-}
-
-impl CheckStatus {
-    fn icon(self) -> &'static str {
-        match self {
-            CheckStatus::Ok => "+",
-            CheckStatus::Warn => "!",
-            CheckStatus::Error => "x",
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct DoctorReport {
-    checks: Vec<CheckResult>,
-    summary: DoctorSummary,
-}
-
-#[derive(Serialize)]
-struct DoctorSummary {
-    total: usize,
-    ok: usize,
-    warn: usize,
-    error: usize,
-}
-
-fn check_git_repo() -> CheckResult {
-    let mut dir = std::env::current_dir().unwrap_or_default();
-    loop {
-        if dir.join(".git").exists() {
-            return CheckResult {
-                name: "git".into(),
-                status: CheckStatus::Ok,
-                message: format!("git repository at {}", dir.display()),
-            };
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    CheckResult {
-        name: "git".into(),
-        status: CheckStatus::Error,
-        message: "not inside a git repository".into(),
-    }
-}
-
-fn check_config(config_path: Option<&Path>, rejected: bool) -> CheckResult {
-    match (config_path, rejected) {
-        (Some(p), true) => CheckResult {
-            name: "config".into(),
-            status: CheckStatus::Error,
-            message: format!(
-                "{} was REJECTED (see stderr at startup for the reason). \
-                 cartog is running with defaults; other check rows below \
-                 reflect defaults, not your config file.",
-                p.display()
-            ),
-        },
-        (Some(p), false) => CheckResult {
-            name: "config".into(),
-            status: CheckStatus::Ok,
-            message: format!("loaded from {}", p.display()),
-        },
-        (None, _) => CheckResult {
-            name: "config".into(),
-            status: CheckStatus::Warn,
-            message: "no .cartog.toml found (using defaults)".into(),
-        },
-    }
-}
-
-fn check_database(db_path: &Path, embedding_dim: usize) -> CheckResult {
-    if !db_path.exists() {
-        return CheckResult {
-            name: "database".into(),
-            status: CheckStatus::Warn,
-            message: format!(
-                "database not found at {}, run 'cartog index'",
-                db_path.display()
-            ),
-        };
-    }
-    match Database::open(db_path, embedding_dim) {
-        Ok(db) => match db.stats() {
-            Ok(stats) if stats.num_files > 0 => CheckResult {
-                name: "database".into(),
-                status: CheckStatus::Ok,
-                message: format!(
-                    "{} files, {} symbols at {}",
-                    stats.num_files,
-                    stats.num_symbols,
-                    db_path.display()
-                ),
-            },
-            Ok(_) => CheckResult {
-                name: "database".into(),
-                status: CheckStatus::Warn,
-                message: format!(
-                    "database exists but is empty, run 'cartog index' ({})",
-                    db_path.display()
-                ),
-            },
-            Err(e) => CheckResult {
-                name: "database".into(),
-                status: CheckStatus::Error,
-                message: format!("failed to query database at {}: {e}", db_path.display()),
-            },
-        },
-        Err(e) => CheckResult {
-            name: "database".into(),
-            status: CheckStatus::Error,
-            message: format!("failed to open database at {}: {e}", db_path.display()),
-        },
-    }
-}
-
-/// Parse "http://host:port" into a "host:port" string for TCP probing.
-fn parse_host_port(url: &str) -> Option<String> {
-    let without_scheme = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))?;
-    let host_port = without_scheme.trim_end_matches('/');
-    if host_port.contains(':') {
-        Some(host_port.to_string())
-    } else {
-        Some(format!("{host_port}:80"))
-    }
-}
-
-fn check_embedding_provider(config: &rag::EmbeddingProviderConfig) -> CheckResult {
-    match config.provider.as_str() {
-        "local" => {
-            if rag::is_embedding_model_cached() {
-                CheckResult {
-                    name: "embedding".into(),
-                    status: CheckStatus::Ok,
-                    message: "local model cached".into(),
-                }
-            } else {
-                CheckResult {
-                    name: "embedding".into(),
-                    status: CheckStatus::Warn,
-                    message: "local model not downloaded, run 'cartog rag setup'".into(),
-                }
-            }
-        }
-        "ollama" => {
-            let base_url = config
-                .base_url
-                .as_deref()
-                .unwrap_or(rag::providers::DEFAULT_OLLAMA_BASE_URL);
-            match parse_host_port(base_url) {
-                Some(addr) => {
-                    let resolve_result: Result<std::net::SocketAddr, _> =
-                        std::net::ToSocketAddrs::to_socket_addrs(&addr.as_str())
-                            .map(|mut addrs| addrs.next())
-                            .and_then(|opt| {
-                                opt.ok_or_else(|| {
-                                    std::io::Error::new(
-                                        std::io::ErrorKind::AddrNotAvailable,
-                                        format!("no addresses resolved for {addr}"),
-                                    )
-                                })
-                            });
-                    let socket_addr = match resolve_result {
-                        Ok(sa) => sa,
-                        Err(e) => {
-                            return CheckResult {
-                                name: "embedding".into(),
-                                status: CheckStatus::Error,
-                                message: format!("cannot resolve ollama host '{addr}': {e}"),
-                            };
-                        }
-                    };
-                    match std::net::TcpStream::connect_timeout(&socket_addr, Duration::from_secs(3))
-                    {
-                        Ok(_) => CheckResult {
-                            name: "embedding".into(),
-                            status: CheckStatus::Ok,
-                            message: format!("ollama reachable at {base_url}"),
-                        },
-                        Err(e) => CheckResult {
-                            name: "embedding".into(),
-                            status: CheckStatus::Error,
-                            message: format!("cannot reach ollama at {base_url}: {e}"),
-                        },
-                    }
-                }
-                None => CheckResult {
-                    name: "embedding".into(),
-                    status: CheckStatus::Error,
-                    message: format!("cannot parse ollama URL: {base_url}"),
-                },
-            }
-        }
-        other => CheckResult {
-            name: "embedding".into(),
-            status: CheckStatus::Error,
-            message: format!("unknown provider '{other}'"),
-        },
-    }
-}
-
-fn check_reranker(config: &rag::EmbeddingProviderConfig) -> CheckResult {
-    match config.reranker_provider.as_str() {
-        "none" => CheckResult {
-            name: "reranker".into(),
-            status: CheckStatus::Ok,
-            message: "disabled".into(),
-        },
-        "local" => {
-            if rag::is_reranker_model_cached() {
-                CheckResult {
-                    name: "reranker".into(),
-                    status: CheckStatus::Ok,
-                    message: "local model cached".into(),
-                }
-            } else {
-                CheckResult {
-                    name: "reranker".into(),
-                    status: CheckStatus::Warn,
-                    message: "local model not downloaded, run 'cartog rag setup'".into(),
-                }
-            }
-        }
-        other => CheckResult {
-            name: "reranker".into(),
-            status: CheckStatus::Error,
-            message: format!("unknown provider '{other}'"),
-        },
-    }
-}
-
-/// Doctor check for the optional `[remote]` S3-compatible sync.
-///
-/// Status semantics:
-/// - **Ok** when `[remote]` is unset (the default — feature is inert; no
-///   network traffic happens unless the user opts in). We do not warn here:
-///   the absence of remote config is the expected baseline.
-/// - **Ok** when `[remote].url` resolves and a HEAD against the configured
-///   object succeeds (200 or 404 — both prove the bucket + creds work).
-/// - **Warn** for any reachability failure (creds missing, wrong region,
-///   network unreachable, 403). Push/pull would fail with the same error;
-///   doctor surfaces it before the user discovers it the hard way.
-/// - **Error** only when the feature was disabled at build time but a
-///   `[remote]` section exists — config will be silently ignored otherwise.
-fn check_remote(config: &CartogConfig, config_rejected: bool) -> CheckResult {
-    // When the config file itself was rejected, the `config.remote` view is
-    // always None (default). Reporting "not configured" here would be
-    // misleading — the user might have had a perfectly valid [remote]
-    // section before some other unrelated key got rejected. Surface this
-    // explicitly so doctor doesn't lie.
-    if config_rejected {
-        return CheckResult {
-            name: "remote".into(),
-            status: CheckStatus::Warn,
-            message: "[remote] status unknown — config file was rejected; \
-                      fix the config and re-run doctor"
-                .into(),
-        };
-    }
-    let remote = match config.remote.as_ref() {
-        Some(r) => r,
-        None => {
-            return CheckResult {
-                name: "remote".into(),
-                status: CheckStatus::Ok,
-                message: "not configured (local-only)".into(),
-            }
-        }
-    };
-
-    if remote.url.as_deref().unwrap_or("").is_empty() {
-        return CheckResult {
-            name: "remote".into(),
-            status: CheckStatus::Warn,
-            message: "[remote] section present but `url` is empty".into(),
-        };
-    }
-
-    #[cfg(not(feature = "remote-s3"))]
-    {
-        let _ = remote; // url presence already checked above
-        CheckResult {
-            name: "remote".into(),
-            status: CheckStatus::Error,
-            message: "[remote] configured but cartog was built without `remote-s3` feature".into(),
-        }
-    }
-
-    #[cfg(feature = "remote-s3")]
-    match remote::check_remote_reachable(remote) {
-        Ok(()) => CheckResult {
-            name: "remote".into(),
-            status: CheckStatus::Ok,
-            message: format!("{} reachable", remote.url.as_deref().unwrap_or("<unset>")),
-        },
-        Err(e) => CheckResult {
-            name: "remote".into(),
-            status: CheckStatus::Warn,
-            message: format!("unreachable: {e}"),
-        },
-    }
-}
-
-fn build_report(checks: Vec<CheckResult>) -> DoctorReport {
-    let ok = checks
-        .iter()
-        .filter(|c| c.status == CheckStatus::Ok)
-        .count();
-    let warn = checks
-        .iter()
-        .filter(|c| c.status == CheckStatus::Warn)
-        .count();
-    let error = checks
-        .iter()
-        .filter(|c| c.status == CheckStatus::Error)
-        .count();
-
-    DoctorReport {
-        summary: DoctorSummary {
-            total: checks.len(),
-            ok,
-            warn,
-            error,
-        },
-        checks,
-    }
-}
-
-fn format_report_human(report: &DoctorReport) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-
-    for check in &report.checks {
-        writeln!(
-            out,
-            "  [{}] {}: {}",
-            check.status.icon(),
-            check.name,
-            check.message,
-        )
-        .unwrap();
-    }
-    writeln!(out).unwrap();
-
-    let s = &report.summary;
-    if s.error > 0 {
-        writeln!(
-            out,
-            "{} checks passed, {} warnings, {} errors",
-            s.ok, s.warn, s.error
-        )
-        .unwrap();
-    } else if s.warn > 0 {
-        writeln!(out, "{} checks passed, {} warnings", s.ok, s.warn).unwrap();
-    } else {
-        writeln!(out, "All {} checks passed", s.ok).unwrap();
-    }
-
-    out
-}
-
-/// Check that requirements are met and everything is working.
-pub fn cmd_doctor(
-    config: &CartogConfig,
-    config_path: Option<&Path>,
-    config_rejected: bool,
-    db_path: &Path,
-    json: bool,
-    embedding_dim: usize,
-    provider_config: &rag::EmbeddingProviderConfig,
-) -> Result<()> {
-    let checks = vec![
-        check_git_repo(),
-        check_config(config_path, config_rejected),
-        check_database(db_path, embedding_dim),
-        check_embedding_provider(provider_config),
-        check_reranker(provider_config),
-        check_remote(config, config_rejected),
-    ];
-
-    let report = build_report(checks);
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        print!("{}", format_report_human(&report));
-    }
-
-    if report.summary.error > 0 {
-        std::process::exit(1);
-    }
-
-    Ok(())
-}
+mod doctor;
+pub use doctor::cmd_doctor;
 
 /// Watch for file changes and auto-re-index.
 #[allow(clippy::too_many_arguments)]
@@ -2055,149 +1258,6 @@ pub use self_cmd::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
-
-    // ── savings formatter helpers ─────────────────────────────────────
-
-    #[test]
-    fn fmt_tokens_under_thousand_renders_raw_integer() {
-        assert_eq!(fmt_tokens(0), "0");
-        assert_eq!(fmt_tokens(1), "1");
-        assert_eq!(fmt_tokens(999), "999");
-    }
-
-    #[test]
-    fn fmt_tokens_thousands_renders_one_decimal_k() {
-        assert_eq!(fmt_tokens(1_000), "~1.0k");
-        assert_eq!(fmt_tokens(1_420), "~1.4k");
-        assert_eq!(fmt_tokens(8_500), "~8.5k");
-        assert_eq!(fmt_tokens(999_999), "~1000.0k");
-    }
-
-    #[test]
-    fn fmt_tokens_millions_renders_one_decimal_m() {
-        assert_eq!(fmt_tokens(1_000_000), "~1.0M");
-        assert_eq!(fmt_tokens(2_500_000), "~2.5M");
-    }
-
-    #[test]
-    fn fmt_tokens_handles_u64_max_without_panicking() {
-        // Cosmetic — f64 loses precision near u64::MAX, but the call must
-        // not overflow or panic. Anchor a substring to catch obvious breakage.
-        let s = fmt_tokens(u64::MAX);
-        assert!(s.starts_with("~"));
-        assert!(s.ends_with("M"));
-    }
-
-    #[test]
-    fn savings_scope_label_handles_cartog_dir_layout() {
-        // The canonical layout: `<project>/.cartog/db.sqlite` — walk past
-        // `.cartog` to get the project dir.
-        assert_eq!(
-            savings_scope_label(Path::new("/home/user/myproject/.cartog/db.sqlite")),
-            "myproject"
-        );
-    }
-
-    #[test]
-    fn savings_scope_label_handles_legacy_layout() {
-        // The legacy layout: `<project>/.cartog.db` directly under the
-        // project root — parent is the project dir.
-        assert_eq!(
-            savings_scope_label(Path::new("/home/user/myproject/.cartog.db")),
-            "myproject"
-        );
-    }
-
-    #[test]
-    fn savings_scope_label_empty_on_unrecognizable_path() {
-        // Bare filename with no parent. render_savings drops the segment.
-        assert_eq!(savings_scope_label(Path::new("db.sqlite")), "");
-        // Root path — no parent above `.cartog`.
-        assert_eq!(savings_scope_label(Path::new("/.cartog/db.sqlite")), "");
-    }
-
-    #[test]
-    fn render_savings_zero_queries_emits_helpful_hint() {
-        let report = cartog_db::SavingsReport {
-            by_tool: Vec::new(),
-            by_source: Vec::new(),
-            total_queries: 0,
-            tokens_used_cartog: 0,
-            tokens_used_grep: 0,
-            estimated_tokens_saved: 0,
-            percent_saved: 0,
-            baseline_delta: cartog_db::TOKENS_SAVED_PER_QUERY,
-        };
-        let out = render_savings("myproject", &report);
-        assert!(out.contains("No queries logged yet"));
-        assert!(out.contains("cartog search"));
-    }
-
-    #[test]
-    fn render_savings_includes_header_bar_and_breakdown() {
-        let report = cartog_db::SavingsReport {
-            by_tool: vec![("search".to_string(), 3), ("refs".to_string(), 1)],
-            by_source: vec![("cli".to_string(), 4)],
-            total_queries: 4,
-            tokens_used_cartog: 1_120,
-            tokens_used_grep: 6_800,
-            estimated_tokens_saved: 5_680,
-            percent_saved: 83,
-            baseline_delta: cartog_db::TOKENS_SAVED_PER_QUERY,
-        };
-        let out = render_savings("myproject", &report);
-        // Header carries scope + query count.
-        assert!(out.contains("cartog · myproject · 4 queries"));
-        // ~83% → round-to-nearest gives 8 cells filled, 2 empty.
-        assert!(out.contains("████████░░"));
-        assert!(out.contains("~83% tokens saved"));
-        // With / without / saved rows present and formatted.
-        assert!(out.contains("Without cartog"));
-        assert!(out.contains("With cartog"));
-        assert!(out.contains("Saved"));
-        // Per-tool block labelled as call counts (no per-tool token figures).
-        assert!(out.contains("By tool (call counts):"));
-        assert!(out.contains("3  search"));
-    }
-
-    #[test]
-    fn render_savings_bar_at_99_percent_shows_full_ten_cells() {
-        // Regression for F4: previously `99 / 10 = 9` made 90% and 99%
-        // indistinguishable. Round-to-nearest fixes this.
-        let report = cartog_db::SavingsReport {
-            by_tool: vec![("search".into(), 1)],
-            by_source: vec![("cli".into(), 1)],
-            total_queries: 1,
-            tokens_used_cartog: 17,
-            tokens_used_grep: 1_700,
-            estimated_tokens_saved: 1_683,
-            percent_saved: 99,
-            baseline_delta: 1_420,
-        };
-        let out = render_savings("p", &report);
-        assert!(
-            out.contains("██████████"),
-            "99% must render 10 filled cells, got: {out}"
-        );
-    }
-
-    #[test]
-    fn render_savings_empty_scope_drops_label_segment() {
-        let report = cartog_db::SavingsReport {
-            by_tool: vec![("search".into(), 1)],
-            by_source: vec![("cli".into(), 1)],
-            total_queries: 1,
-            tokens_used_cartog: 280,
-            tokens_used_grep: 1_700,
-            estimated_tokens_saved: 1_420,
-            percent_saved: 83,
-            baseline_delta: 1_420,
-        };
-        let out = render_savings("", &report);
-        // Falls back to `cartog · N queries` without the scope segment.
-        assert!(out.starts_with("cartog · 1 queries"), "got: {out}");
-    }
 
     #[test]
     fn capitalized_index_phase_labels() {
@@ -2334,140 +1394,6 @@ mod tests {
         assert_eq!(result, "abcd");
     }
 
-    // ── Config display tests ──
-
-    fn default_config_display() -> ConfigDisplay {
-        use crate::config::{
-            DEFAULT_EMBEDDING_PROVIDER, DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL,
-            DEFAULT_RERANKER_PROVIDER,
-        };
-        ConfigDisplay {
-            config_file: None,
-            db_path: "/tmp/test.db".into(),
-            embedding: EmbeddingDisplay {
-                provider: ValueDisplay {
-                    value: DEFAULT_EMBEDDING_PROVIDER.into(),
-                    is_default: true,
-                    default: DEFAULT_EMBEDDING_PROVIDER.into(),
-                },
-                model: None,
-                dimension: None,
-                local: LocalEmbeddingDisplay {
-                    query_prefix: None,
-                    document_prefix: None,
-                },
-                ollama: OllamaDisplay {
-                    base_url: ValueDisplay {
-                        value: DEFAULT_OLLAMA_BASE_URL.into(),
-                        is_default: true,
-                        default: DEFAULT_OLLAMA_BASE_URL.into(),
-                    },
-                    model: ValueDisplay {
-                        value: DEFAULT_OLLAMA_MODEL.into(),
-                        is_default: true,
-                        default: DEFAULT_OLLAMA_MODEL.into(),
-                    },
-                },
-            },
-            reranker: RerankerDisplay {
-                provider: ValueDisplay {
-                    value: DEFAULT_RERANKER_PROVIDER.into(),
-                    is_default: true,
-                    default: DEFAULT_RERANKER_PROVIDER.into(),
-                },
-            },
-            rag: {
-                let t = cartog_rag::search::SearchTuning::default();
-                let v = |n: u32| ValueDisplay {
-                    value: n.to_string(),
-                    is_default: true,
-                    default: n.to_string(),
-                };
-                RagDisplay {
-                    retrieval_multiplier: v(t.retrieval_multiplier),
-                    retrieval_floor: v(t.retrieval_floor),
-                    rerank_max: v(t.rerank_max),
-                    rerank_min: v(t.rerank_min),
-                }
-            },
-        }
-    }
-
-    #[test]
-    fn test_format_config_human_all_defaults() {
-        let d = default_config_display();
-        let out = format_config_human(&d);
-        assert!(out.contains("Config file: none"));
-        assert!(out.contains("Database:    /tmp/test.db"));
-        assert!(out.contains("local (default)"));
-        assert!(out.contains("model:             -"));
-        assert!(out.contains("dimension:         -"));
-        assert!(out.contains("query_prefix:      -"));
-        assert!(out.contains("document_prefix:   -"));
-    }
-
-    #[test]
-    fn test_format_config_human_custom_values() {
-        let mut d = default_config_display();
-        d.config_file = Some("/project/.cartog.toml".into());
-        d.embedding.provider = ValueDisplay {
-            value: "ollama".into(),
-            is_default: false,
-            default: "local".into(),
-        };
-        d.embedding.model = Some("nomic-embed-text".into());
-        d.embedding.dimension = Some(768);
-
-        let out = format_config_human(&d);
-        assert!(out.contains("Config file: /project/.cartog.toml"));
-        assert!(out.contains("ollama (default: local)"));
-        assert!(out.contains("model:             nomic-embed-text"));
-        assert!(out.contains("dimension:         768"));
-    }
-
-    #[test]
-    fn test_format_value_default() {
-        let v = ValueDisplay {
-            value: "local".into(),
-            is_default: true,
-            default: "local".into(),
-        };
-        assert_eq!(format_value(&v), "local (default)");
-    }
-
-    #[test]
-    fn test_format_value_overridden() {
-        let v = ValueDisplay {
-            value: "ollama".into(),
-            is_default: false,
-            default: "local".into(),
-        };
-        assert_eq!(format_value(&v), "ollama (default: local)");
-    }
-
-    #[test]
-    fn test_format_optional_some() {
-        let v = Some("value".to_string());
-        assert_eq!(format_optional(&v), "value");
-    }
-
-    #[test]
-    fn test_format_optional_none() {
-        let v: Option<String> = None;
-        assert_eq!(format_optional(&v), "-");
-    }
-
-    #[test]
-    fn test_config_display_json_serialization() {
-        let d = default_config_display();
-        let json = serde_json::to_value(&d).unwrap();
-        assert_eq!(json["db_path"], "/tmp/test.db");
-        assert_eq!(json["embedding"]["provider"]["value"], "local");
-        assert_eq!(json["embedding"]["provider"]["is_default"], true);
-        assert!(json["config_file"].is_null());
-        assert!(json["embedding"]["model"].is_null());
-    }
-
     #[test]
     fn test_truncate_to_budget_unicode() {
         // Each emoji is 4 bytes
@@ -2475,394 +1401,6 @@ mod tests {
         let result = truncate_to_budget(text, 5);
         assert!(result.ends_with("... (truncated to fit token budget)"));
         // Should not panic on char boundary issues
-    }
-
-    // ── Doctor check tests ──
-
-    #[test]
-    #[serial]
-    fn test_check_git_repo_inside_git() {
-        let dir = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir(dir.path().join(".git")).unwrap();
-        let subdir = dir.path().join("sub");
-        std::fs::create_dir(&subdir).unwrap();
-
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&subdir).unwrap();
-        let result = check_git_repo();
-        std::env::set_current_dir(original).unwrap();
-
-        assert_eq!(result.status, CheckStatus::Ok);
-        assert_eq!(result.name, "git");
-    }
-
-    #[test]
-    #[serial]
-    fn test_check_git_repo_outside_git() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
-        let result = check_git_repo();
-        std::env::set_current_dir(original).unwrap();
-
-        assert_eq!(result.status, CheckStatus::Error);
-    }
-
-    #[test]
-    fn test_check_config_present() {
-        let result = check_config(Some(Path::new("/project/.cartog.toml")), false);
-        assert_eq!(result.status, CheckStatus::Ok);
-        assert!(result.message.contains(".cartog.toml"));
-    }
-
-    #[test]
-    fn test_check_config_absent() {
-        let result = check_config(None, false);
-        assert_eq!(result.status, CheckStatus::Warn);
-        assert!(result.message.contains("defaults"));
-    }
-
-    #[test]
-    fn test_check_config_rejected_reports_error() {
-        let result = check_config(Some(Path::new("/project/.cartog.toml")), true);
-        assert_eq!(result.status, CheckStatus::Error);
-        assert!(result.message.contains("REJECTED"));
-    }
-
-    #[test]
-    fn test_check_database_missing() {
-        let result = check_database(Path::new("/nonexistent/path.db"), 384);
-        assert_eq!(result.status, CheckStatus::Warn);
-        assert!(result.message.contains("not found"));
-    }
-
-    #[test]
-    fn test_check_database_empty() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test.db");
-        let _db = Database::open(&db_path, 384).unwrap();
-        let result = check_database(&db_path, 384);
-        assert_eq!(result.status, CheckStatus::Warn);
-        assert!(result.message.contains("empty"));
-    }
-
-    #[test]
-    fn test_check_reranker_disabled() {
-        let config = rag::EmbeddingProviderConfig {
-            reranker_provider: "none".into(),
-            ..Default::default()
-        };
-        let result = check_reranker(&config);
-        assert_eq!(result.status, CheckStatus::Ok);
-        assert!(result.message.contains("disabled"));
-    }
-
-    #[test]
-    fn test_check_reranker_unknown_provider() {
-        let config = rag::EmbeddingProviderConfig {
-            reranker_provider: "foobar".into(),
-            ..Default::default()
-        };
-        let result = check_reranker(&config);
-        assert_eq!(result.status, CheckStatus::Error);
-        assert!(result.message.contains("foobar"));
-    }
-
-    #[test]
-    fn test_check_embedding_unknown_provider() {
-        let config = rag::EmbeddingProviderConfig {
-            provider: "unknown".into(),
-            ..Default::default()
-        };
-        let result = check_embedding_provider(&config);
-        assert_eq!(result.status, CheckStatus::Error);
-        assert!(result.message.contains("unknown"));
-    }
-
-    #[test]
-    fn test_check_embedding_ollama_unreachable() {
-        let config = rag::EmbeddingProviderConfig {
-            provider: "ollama".into(),
-            base_url: Some("http://127.0.0.1:19999".into()),
-            ..Default::default()
-        };
-        let result = check_embedding_provider(&config);
-        assert_eq!(result.status, CheckStatus::Error);
-        assert!(result.message.contains("cannot reach"));
-    }
-
-    #[test]
-    fn test_check_status_icons() {
-        assert_eq!(CheckStatus::Ok.icon(), "+");
-        assert_eq!(CheckStatus::Warn.icon(), "!");
-        assert_eq!(CheckStatus::Error.icon(), "x");
-    }
-
-    #[test]
-    fn test_parse_host_port_standard() {
-        assert_eq!(
-            parse_host_port("http://localhost:11434"),
-            Some("localhost:11434".into())
-        );
-    }
-
-    #[test]
-    fn test_parse_host_port_no_port() {
-        assert_eq!(
-            parse_host_port("http://example.com"),
-            Some("example.com:80".into())
-        );
-    }
-
-    #[test]
-    fn test_parse_host_port_https() {
-        assert_eq!(
-            parse_host_port("https://example.com:443"),
-            Some("example.com:443".into())
-        );
-    }
-
-    #[test]
-    fn test_parse_host_port_trailing_slash() {
-        assert_eq!(
-            parse_host_port("http://localhost:11434/"),
-            Some("localhost:11434".into())
-        );
-    }
-
-    #[test]
-    fn test_parse_host_port_no_scheme() {
-        assert_eq!(parse_host_port("localhost:11434"), None);
-    }
-
-    #[test]
-    fn test_doctor_report_json_serialization() {
-        let report = DoctorReport {
-            checks: vec![
-                CheckResult {
-                    name: "git".into(),
-                    status: CheckStatus::Ok,
-                    message: "git repository".into(),
-                },
-                CheckResult {
-                    name: "config".into(),
-                    status: CheckStatus::Warn,
-                    message: "no config".into(),
-                },
-            ],
-            summary: DoctorSummary {
-                total: 2,
-                ok: 1,
-                warn: 1,
-                error: 0,
-            },
-        };
-        let json = serde_json::to_value(&report).unwrap();
-        assert_eq!(json["checks"][0]["status"], "ok");
-        assert_eq!(json["checks"][1]["status"], "warn");
-        assert_eq!(json["summary"]["total"], 2);
-        assert_eq!(json["summary"]["ok"], 1);
-    }
-
-    // ── build_report tests ──
-
-    #[test]
-    fn test_build_report_all_ok() {
-        let checks = vec![
-            CheckResult {
-                name: "a".into(),
-                status: CheckStatus::Ok,
-                message: "ok".into(),
-            },
-            CheckResult {
-                name: "b".into(),
-                status: CheckStatus::Ok,
-                message: "ok".into(),
-            },
-        ];
-        let report = build_report(checks);
-        assert_eq!(report.summary.total, 2);
-        assert_eq!(report.summary.ok, 2);
-        assert_eq!(report.summary.warn, 0);
-        assert_eq!(report.summary.error, 0);
-    }
-
-    #[test]
-    fn test_build_report_mixed() {
-        let checks = vec![
-            CheckResult {
-                name: "a".into(),
-                status: CheckStatus::Ok,
-                message: "fine".into(),
-            },
-            CheckResult {
-                name: "b".into(),
-                status: CheckStatus::Warn,
-                message: "meh".into(),
-            },
-            CheckResult {
-                name: "c".into(),
-                status: CheckStatus::Error,
-                message: "bad".into(),
-            },
-        ];
-        let report = build_report(checks);
-        assert_eq!(report.summary.total, 3);
-        assert_eq!(report.summary.ok, 1);
-        assert_eq!(report.summary.warn, 1);
-        assert_eq!(report.summary.error, 1);
-    }
-
-    #[test]
-    fn test_build_report_empty() {
-        let report = build_report(vec![]);
-        assert_eq!(report.summary.total, 0);
-        assert_eq!(report.summary.ok, 0);
-        assert_eq!(report.summary.warn, 0);
-        assert_eq!(report.summary.error, 0);
-    }
-
-    // ── format_report_human tests ──
-
-    #[test]
-    fn test_format_report_human_all_ok() {
-        let report = build_report(vec![
-            CheckResult {
-                name: "git".into(),
-                status: CheckStatus::Ok,
-                message: "git repository".into(),
-            },
-            CheckResult {
-                name: "db".into(),
-                status: CheckStatus::Ok,
-                message: "42 files".into(),
-            },
-        ]);
-        let out = format_report_human(&report);
-        assert!(out.contains("[+] git: git repository"));
-        assert!(out.contains("[+] db: 42 files"));
-        assert!(out.contains("All 2 checks passed"));
-    }
-
-    #[test]
-    fn test_format_report_human_with_warnings() {
-        let report = build_report(vec![
-            CheckResult {
-                name: "git".into(),
-                status: CheckStatus::Ok,
-                message: "ok".into(),
-            },
-            CheckResult {
-                name: "config".into(),
-                status: CheckStatus::Warn,
-                message: "missing".into(),
-            },
-        ]);
-        let out = format_report_human(&report);
-        assert!(out.contains("[!] config: missing"));
-        assert!(out.contains("1 checks passed, 1 warnings"));
-        assert!(!out.contains("errors"));
-    }
-
-    #[test]
-    fn test_format_report_human_with_errors() {
-        let report = build_report(vec![
-            CheckResult {
-                name: "git".into(),
-                status: CheckStatus::Ok,
-                message: "ok".into(),
-            },
-            CheckResult {
-                name: "embed".into(),
-                status: CheckStatus::Warn,
-                message: "not cached".into(),
-            },
-            CheckResult {
-                name: "db".into(),
-                status: CheckStatus::Error,
-                message: "broken".into(),
-            },
-        ]);
-        let out = format_report_human(&report);
-        assert!(out.contains("[x] db: broken"));
-        assert!(out.contains("1 checks passed, 1 warnings, 1 errors"));
-    }
-
-    // ── check_database with indexed data ──
-
-    #[test]
-    fn test_check_database_with_data() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("test.db");
-        let db = Database::open(&db_path, 384).unwrap();
-        // Insert a minimal file so stats.num_files > 0
-        db.upsert_file(&cartog_core::FileInfo {
-            path: "test.py".into(),
-            last_modified: 0.0,
-            hash: "abc123".into(),
-            language: "python".into(),
-            num_symbols: 0,
-        })
-        .unwrap();
-        drop(db);
-
-        let result = check_database(&db_path, 384);
-        assert_eq!(result.status, CheckStatus::Ok);
-        assert!(result.message.contains("1 files"));
-    }
-
-    // ── check_embedding_provider local variants ──
-
-    #[test]
-    fn test_check_embedding_local_cached() {
-        // This test reflects actual machine state — the local model is cached on CI/dev
-        let config = rag::EmbeddingProviderConfig::default();
-        let result = check_embedding_provider(&config);
-        // Either Ok (cached) or Warn (not cached) — never Error for "local"
-        assert_ne!(result.status, CheckStatus::Error);
-        assert_eq!(result.name, "embedding");
-    }
-
-    #[test]
-    fn test_check_reranker_local() {
-        let config = rag::EmbeddingProviderConfig::default();
-        let result = check_reranker(&config);
-        // Either Ok (cached) or Warn (not cached) — never Error for "local"
-        assert_ne!(result.status, CheckStatus::Error);
-        assert_eq!(result.name, "reranker");
-    }
-
-    // ── check_embedding_provider ollama with bad URL ──
-
-    #[test]
-    fn test_check_embedding_ollama_bad_url() {
-        let config = rag::EmbeddingProviderConfig {
-            provider: "ollama".into(),
-            base_url: Some("not-a-url".into()),
-            ..Default::default()
-        };
-        let result = check_embedding_provider(&config);
-        assert_eq!(result.status, CheckStatus::Error);
-        assert!(result.message.contains("cannot parse"));
-    }
-
-    // ── check_embedding_provider ollama with default URL (unreachable in test) ──
-
-    #[test]
-    fn test_check_embedding_ollama_default_url() {
-        let config = rag::EmbeddingProviderConfig {
-            provider: "ollama".into(),
-            base_url: None,
-            ..Default::default()
-        };
-        let result = check_embedding_provider(&config);
-        // On machines without ollama running, this will be Error
-        // On machines with ollama running, this will be Ok
-        assert_eq!(result.name, "embedding");
-        assert!(
-            result.status == CheckStatus::Ok || result.status == CheckStatus::Error,
-            "ollama check should be Ok or Error, not Warn"
-        );
     }
 
     // ── cmd_* command bodies over a real indexed DB ───────────────────
@@ -2910,61 +1448,86 @@ def main():
         (tmp, db_path)
     }
 
-    #[test]
-    fn cmd_outline_renders_symbols_and_logs_query() {
-        let (_tmp, db) = indexed_db();
-        cmd_outline(&db, "lib.py", false, None, 384).expect("outline ok");
-        // outline of a populated file logs a query; savings reflects it.
-        let report = Database::open(&db, 384)
+    /// Logged query count — a delta proves a command hit the query layer
+    /// (commands print to stdout, so rendered content can't be asserted here).
+    fn queries_logged(db_path: &std::path::Path) -> u64 {
+        Database::open(db_path, 384)
             .unwrap()
             .savings_breakdown()
-            .unwrap();
-        assert!(report.total_queries >= 1, "outline should log one query");
+            .unwrap()
+            .total_queries
     }
 
     #[test]
-    fn cmd_outline_json_branch_is_ok() {
+    fn cmd_outline_runs_a_query_for_a_populated_file() {
+        let (_tmp, db) = indexed_db();
+        let before = queries_logged(&db);
+        cmd_outline(&db, "lib.py", false, None, 384).expect("outline ok");
+        assert_eq!(
+            queries_logged(&db),
+            before + 1,
+            "outline of a populated file must run exactly one query"
+        );
+    }
+
+    #[test]
+    fn cmd_outline_json_branch_does_not_error() {
         let (_tmp, db) = indexed_db();
         cmd_outline(&db, "lib.py", true, None, 384).expect("outline --json ok");
     }
 
     #[test]
-    fn cmd_outline_unknown_file_is_ok() {
+    fn cmd_outline_unknown_file_does_not_error() {
         let (_tmp, db) = indexed_db();
         cmd_outline(&db, "missing.py", false, None, 384).expect("outline of unknown file is ok");
     }
 
     #[test]
-    fn cmd_refs_renders_and_filters_by_kind() {
+    fn cmd_refs_runs_a_query_per_invocation_with_and_without_kind_filter() {
         let (_tmp, db) = indexed_db();
+        let before = queries_logged(&db);
         cmd_refs(&db, "helper", None, false, None, 384).expect("refs ok");
         cmd_refs(&db, "helper", Some(EdgeKindFilter::Calls), false, None, 384)
             .expect("refs --kind calls ok");
+        assert_eq!(
+            queries_logged(&db),
+            before + 2,
+            "each refs invocation must run a query"
+        );
     }
 
     #[test]
-    fn cmd_refs_unknown_name_renders_did_you_mean() {
+    fn cmd_refs_near_miss_name_takes_the_did_you_mean_branch_without_error() {
         let (_tmp, db) = indexed_db();
         // Empty result triggers the did_you_mean / empty_index_hint branch.
         cmd_refs(&db, "helpe", None, false, None, 384).expect("refs of near-miss name is ok");
     }
 
     #[test]
-    fn cmd_callees_renders_over_populated_db() {
+    fn cmd_callees_logs_a_query_only_when_it_finds_results() {
         let (_tmp, db) = indexed_db();
+        let before = queries_logged(&db);
         cmd_callees(&db, "main", false, None, 384).expect("callees ok");
+        let after_hit = queries_logged(&db);
         cmd_callees(&db, "no_such_symbol", false, None, 384).expect("empty callees is ok");
+        let after_miss = queries_logged(&db);
+
+        assert_eq!(after_hit, before + 1, "a callees hit logs one query");
+        assert_eq!(
+            after_miss, after_hit,
+            "an empty callees result must not log a query"
+        );
     }
 
     #[test]
-    fn cmd_impact_renders_with_depth() {
+    fn cmd_impact_plain_and_json_branches_do_not_error() {
         let (_tmp, db) = indexed_db();
         cmd_impact(&db, "helper", 3, false, None, 384).expect("impact ok");
         cmd_impact(&db, "helper", 3, true, None, 384).expect("impact --json ok");
     }
 
     #[test]
-    fn cmd_hierarchy_renders_plain_json_and_mermaid() {
+    fn cmd_hierarchy_plain_json_and_mermaid_branches_do_not_error() {
         let (_tmp, db) = indexed_db();
         cmd_hierarchy(&db, "Dog", false, false, None, 384).expect("hierarchy ok");
         cmd_hierarchy(&db, "Dog", true, false, None, 384).expect("hierarchy --json ok");
@@ -2972,15 +1535,16 @@ def main():
     }
 
     #[test]
-    fn cmd_deps_renders_plain_and_mermaid() {
+    fn cmd_deps_plain_and_mermaid_branches_do_not_error() {
         let (_tmp, db) = indexed_db();
         cmd_deps(&db, "lib.py", false, false, None, 384).expect("deps ok");
         cmd_deps(&db, "lib.py", false, true, None, 384).expect("deps --mermaid ok");
     }
 
     #[test]
-    fn cmd_search_renders_filters_and_budget() {
+    fn cmd_search_runs_a_query_for_each_filter_and_budget_branch() {
         let (_tmp, db) = indexed_db();
+        let before = queries_logged(&db);
         cmd_search(&db, "Anim", None, None, 30, false, None, 384).expect("search ok");
         cmd_search(
             &db,
@@ -2995,17 +1559,22 @@ def main():
         .expect("search with kind + file filter ok");
         // Token-budget branch.
         cmd_search(&db, "e", None, None, 30, false, Some(50), 384).expect("search --tokens ok");
+        assert_eq!(
+            queries_logged(&db),
+            before + 3,
+            "each search invocation must run a query"
+        );
     }
 
     #[test]
-    fn cmd_search_empty_result_is_ok() {
+    fn cmd_search_empty_result_does_not_error() {
         let (_tmp, db) = indexed_db();
         cmd_search(&db, "zzz_no_match", None, None, 30, false, None, 384)
             .expect("empty search is ok");
     }
 
     #[test]
-    fn cmd_stats_renders_plain_json_and_savings() {
+    fn cmd_stats_plain_json_and_savings_branches_do_not_error() {
         let (_tmp, db) = indexed_db();
         cmd_stats(&db, false, None, 384, false).expect("stats ok");
         cmd_stats(&db, true, None, 384, false).expect("stats --json ok");
@@ -3013,7 +1582,7 @@ def main():
     }
 
     #[test]
-    fn cmd_map_renders_plain_json_and_mermaid() {
+    fn cmd_map_plain_json_and_mermaid_branches_do_not_error() {
         let (_tmp, db) = indexed_db();
         cmd_map(&db, 1000, false, false, 384).expect("map ok");
         cmd_map(&db, 1000, true, false, 384).expect("map --json ok");

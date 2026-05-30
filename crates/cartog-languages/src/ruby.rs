@@ -3,7 +3,7 @@ use tree_sitter::{Language, Node, Parser};
 
 use cartog_core::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
-use super::{last_segment, node_text, ExtractionResult, Extractor};
+use super::{last_segment, node_text, ExtractionResult, Extractor, ParentScope};
 
 /// Extracts symbols and edges from Ruby source files.
 pub struct RubyExtractor {
@@ -40,8 +40,7 @@ impl Extractor for RubyExtractor {
             tree.root_node(),
             source,
             file_path,
-            None,
-            None,
+            ParentScope::default(),
             &mut symbols,
             &mut edges,
         );
@@ -54,81 +53,32 @@ fn extract_node(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
     match node.kind() {
         "method" => {
-            extract_method(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_method(node, source, file_path, parent, symbols, edges);
         }
         "singleton_method" => {
-            extract_singleton_method(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_singleton_method(node, source, file_path, parent, symbols, edges);
         }
         "class" => {
-            extract_class(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_class(node, source, file_path, parent, symbols, edges);
         }
         "module" => {
-            extract_module(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_module(node, source, file_path, parent, symbols, edges);
         }
         "call" => {
-            extract_top_level_call(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_top_level_call(node, source, file_path, parent, symbols, edges);
         }
         "assignment" => {
-            extract_assignment(node, source, file_path, parent_id, parent_qname, symbols);
+            extract_assignment(node, source, file_path, parent, symbols);
         }
         _ => {
             for child in node.named_children(&mut node.walk()) {
-                extract_node(
-                    child,
-                    source,
-                    file_path,
-                    parent_id,
-                    parent_qname,
-                    symbols,
-                    edges,
-                );
+                extract_node(child, source, file_path, parent, symbols, edges);
             }
         }
     }
@@ -140,8 +90,7 @@ fn extract_method(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -152,7 +101,7 @@ fn extract_method(
 
     let start_line = node.start_position().row as u32 + 1;
     let end_line = node.end_position().row as u32 + 1;
-    let is_method = parent_id.is_some();
+    let is_method = parent.id.is_some();
     let kind = if is_method {
         SymbolKind::Method
     } else {
@@ -163,7 +112,7 @@ fn extract_method(
     let signature = extract_method_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent.qname);
     let mut sym = Symbol::new(
         &name,
         kind,
@@ -172,9 +121,9 @@ fn extract_method(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_signature(signature)
     .with_docstring(docstring);
     if visibility != Visibility::Public {
@@ -185,7 +134,7 @@ fn extract_method(
     // Walk the method body for calls, raises, rescue refs
     if let Some(body) = node.child_by_field_name("body") {
         walk_for_calls_and_raises(body, source, file_path, &sym_id, edges);
-        let child_qname = match parent_qname {
+        let child_qname = match parent.qname {
             Some(pq) => format!("{pq}.{name}"),
             None => name.clone(),
         };
@@ -197,8 +146,7 @@ fn extract_method(
                         child,
                         source,
                         file_path,
-                        Some(&sym_id),
-                        Some(&child_qname),
+                        ParentScope::nested(&sym_id, &child_qname),
                         symbols,
                         edges,
                     );
@@ -213,8 +161,7 @@ fn extract_singleton_method(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -226,7 +173,7 @@ fn extract_singleton_method(
     let start_line = node.start_position().row as u32 + 1;
     let end_line = node.end_position().row as u32 + 1;
 
-    let kind = if parent_id.is_some() {
+    let kind = if parent.id.is_some() {
         SymbolKind::Method
     } else {
         SymbolKind::Function
@@ -235,7 +182,7 @@ fn extract_singleton_method(
     let signature = extract_method_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent.qname);
     let mut sym = Symbol::new(
         &name,
         kind,
@@ -244,9 +191,9 @@ fn extract_singleton_method(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_signature(signature)
     .with_docstring(docstring);
     let visibility = ruby_visibility(&name);
@@ -257,7 +204,7 @@ fn extract_singleton_method(
 
     if let Some(body) = node.child_by_field_name("body") {
         walk_for_calls_and_raises(body, source, file_path, &sym_id, edges);
-        let child_qname = match parent_qname {
+        let child_qname = match parent.qname {
             Some(pq) => format!("{pq}.{name}"),
             None => name.clone(),
         };
@@ -268,8 +215,7 @@ fn extract_singleton_method(
                         child,
                         source,
                         file_path,
-                        Some(&sym_id),
-                        Some(&child_qname),
+                        ParentScope::nested(&sym_id, &child_qname),
                         symbols,
                         edges,
                     );
@@ -286,8 +232,7 @@ fn extract_class(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -303,8 +248,8 @@ fn extract_class(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "class", &name, parent_qname);
-    let child_qname = match parent_qname {
+    let sym_id = symbol_id(file_path, SymbolKind::Class, &name, parent.qname);
+    let child_qname = match parent.qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
     };
@@ -316,9 +261,9 @@ fn extract_class(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_docstring(docstring);
     symbols.push(sym);
 
@@ -343,8 +288,7 @@ fn extract_class(
                 child,
                 source,
                 file_path,
-                Some(&sym_id),
-                Some(&child_qname),
+                ParentScope::nested(&sym_id, &child_qname),
                 symbols,
                 edges,
             );
@@ -358,8 +302,7 @@ fn extract_module(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -375,8 +318,8 @@ fn extract_module(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "module", &name, parent_qname);
-    let child_qname = match parent_qname {
+    let sym_id = symbol_id(file_path, SymbolKind::Module, &name, parent.qname);
+    let child_qname = match parent.qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
     };
@@ -388,9 +331,9 @@ fn extract_module(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_docstring(docstring);
     symbols.push(sym);
 
@@ -401,8 +344,7 @@ fn extract_module(
                 child,
                 source,
                 file_path,
-                Some(&sym_id),
-                Some(&child_qname),
+                ParentScope::nested(&sym_id, &child_qname),
                 symbols,
                 edges,
             );
@@ -416,8 +358,7 @@ fn extract_top_level_call(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -430,20 +371,11 @@ fn extract_top_level_call(
 
     match method_name {
         "require" | "require_relative" => {
-            extract_require(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                method_name,
-                symbols,
-                edges,
-            );
+            extract_require(node, source, file_path, parent, method_name, symbols, edges);
         }
         "include" | "extend" | "prepend" => {
             // include/extend/prepend ModuleName → inherits edge
-            if let Some(ctx) = parent_id {
+            if let Some(ctx) = parent.id {
                 if let Some(args) = node.child_by_field_name("arguments") {
                     for arg in args.named_children(&mut args.walk()) {
                         let name = extract_constant_name(arg, source);
@@ -455,7 +387,7 @@ fn extract_top_level_call(
             }
         }
         "raise" | "fail" => {
-            if let Some(ctx) = parent_id {
+            if let Some(ctx) = parent.id {
                 extract_raise_from_call(node, source, file_path, ctx, edges);
             }
         }
@@ -468,13 +400,11 @@ fn extract_top_level_call(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn extract_require(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     method_name: &str,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
@@ -504,7 +434,7 @@ fn extract_require(
             .map(|(_, r)| r)
             .unwrap_or(&arg_text)
     );
-    let sym_id = symbol_id(file_path, "import", &arg_text, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Import, &arg_text, parent.qname);
 
     symbols.push(
         Symbol::new(
@@ -515,9 +445,9 @@ fn extract_require(
             line,
             node.start_byte() as u32,
             node.end_byte() as u32,
-            parent_qname,
+            parent.qname,
         )
-        .with_parent(parent_id)
+        .with_parent(parent.id)
         .with_signature(Some(import_text)),
     );
 
@@ -538,8 +468,7 @@ fn extract_assignment(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
 ) {
     if let Some(left) = node.child_by_field_name("left") {
@@ -563,9 +492,9 @@ fn extract_assignment(
             node.end_position().row as u32 + 1,
             node.start_byte() as u32,
             node.end_byte() as u32,
-            parent_qname,
+            parent.qname,
         )
-        .with_parent(parent_id);
+        .with_parent(parent.id);
         if visibility != Visibility::Public {
             sym = sym.with_visibility(visibility);
         }
