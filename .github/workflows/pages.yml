@@ -11,6 +11,7 @@ on:
     tags: ["v*"]
 
 permissions:
+  contents: read
   pages: write
   id-token: write
 
@@ -38,19 +39,32 @@ jobs:
           elif [ "${{ github.event_name }}" = "push" ]; then
             target="${{ github.ref }}"
           else
-            target=$(git describe --tags --abbrev=0)
+            # Latest release by version, not by commit reachability — avoids
+            # picking up non-release tags (e.g. safety/*) or an older ancestor.
+            target=$(git tag -l 'v*' | sort -V | tail -1)
           fi
+          [ -n "$target" ] || { echo "no deploy ref resolved"; exit 1; }
           echo "target=$target" >> "$GITHUB_OUTPUT"
           echo "Deploying site from $target"
 
       - name: Checkout deploy ref
         run: git checkout "${{ steps.ref.outputs.target }}" -- site
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build Astro site
+        working-directory: site
+        run: |
+          npm ci
+          npm run build
+
       - uses: actions/configure-pages@v6
 
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: site
+          path: site/dist
 
       - id: deployment
         uses: actions/deploy-pages@v5
