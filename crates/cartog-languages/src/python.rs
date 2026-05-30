@@ -150,11 +150,11 @@ fn extract_node(
                     if let Some(name_node) = child.child_by_field_name("name") {
                         let name = node_text(name_node, source);
                         let kind = if child.kind() == "class_definition" {
-                            "class"
+                            SymbolKind::Class
                         } else if parent_id.is_some() {
-                            "method"
+                            SymbolKind::Method
                         } else {
-                            "function"
+                            SymbolKind::Function
                         };
                         def_sym_id = Some(symbol_id(file_path, kind, name, parent_qname));
                     }
@@ -269,7 +269,7 @@ fn extract_function(
     let signature = extract_signature(node, source);
     let docstring = extract_docstring(node, source);
 
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent_qname);
     let mut sym = Symbol::new(
         &name,
         kind,
@@ -344,7 +344,7 @@ fn extract_class(
     let docstring = extract_docstring(node, source);
     let name = name_ref.to_string();
 
-    let sym_id = symbol_id(file_path, SymbolKind::Class.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Class, &name, parent_qname);
     let mut sym = Symbol::new(
         &name,
         SymbolKind::Class,
@@ -416,12 +416,7 @@ fn extract_import(
         return;
     }
 
-    let sym_id = symbol_id(
-        file_path,
-        SymbolKind::Import.as_str(),
-        &module_name,
-        parent_qname,
-    );
+    let sym_id = symbol_id(file_path, SymbolKind::Import, &module_name, parent_qname);
     symbols.push(
         Symbol::new(
             &module_name,

@@ -173,7 +173,7 @@ fn extract_class_like(
     let docstring = extract_doc_comment(node, source);
     let signature = build_signature_until_body(node, source);
 
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent_qname);
     let qname = qualified(parent_qname, &name);
 
     let mut sym = Symbol::new(
@@ -363,7 +363,7 @@ fn extract_method_decl(
     let docstring = extract_doc_comment(node, source);
     let signature = build_signature_until_body(node, source);
 
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent_qname);
 
     let mut sym = Symbol::new(
         name.clone(),
@@ -486,7 +486,7 @@ fn extract_declaration(
             let docstring = extract_doc_comment(node, source);
             let signature = Some(node_text(node, source).trim().to_string());
 
-            let sym_id = symbol_id(file_path, "method", &name, parent_qname);
+            let sym_id = symbol_id(file_path, SymbolKind::Method, &name, parent_qname);
             let mut sym = Symbol::new(
                 name,
                 SymbolKind::Method,
@@ -557,7 +557,7 @@ fn extract_declaration(
                             end_line,
                             symbols,
                         );
-                        let ctx = symbol_id(file_path, "variable", &name, parent_qname);
+                        let ctx = symbol_id(file_path, SymbolKind::Variable, &name, parent_qname);
                         walk_for_calls(spec, source, file_path, &ctx, edges);
                     }
                 }
@@ -667,7 +667,7 @@ fn extract_function(
         .map(|b| node_text(b, source).trim_start().starts_with("async"))
         .unwrap_or(false);
 
-    let sym_id = symbol_id(file_path, "function", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Function, &name, parent_qname);
     let mut sym = Symbol::new(
         name,
         SymbolKind::Function,
@@ -716,7 +716,7 @@ fn extract_enum(
     let docstring = extract_doc_comment(node, source);
     let signature = build_signature_until_body(node, source);
 
-    let sym_id = symbol_id(file_path, "enum", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Enum, &name, parent_qname);
     let qname = qualified(parent_qname, &name);
 
     let mut sym = Symbol::new(
@@ -803,7 +803,7 @@ fn extract_type_alias(
     let visibility = dart_visibility(&name);
     let signature = Some(node_text(node, source).trim().to_string());
 
-    let sym_id = symbol_id(file_path, "type_alias", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::TypeAlias, &name, parent_qname);
     let mut sym = Symbol::new(
         name,
         SymbolKind::TypeAlias,
@@ -850,7 +850,7 @@ fn extract_directive(
     let signature = Some(node_text(node, source).trim().to_string());
     let pkg_name = uri_short_name(&uri);
 
-    let sym_id = symbol_id(file_path, "import", &uri, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Import, &uri, parent_qname);
     symbols.push(
         Symbol::new(
             uri.clone(),
@@ -962,7 +962,7 @@ fn extract_top_level_var(
                         // Walk only this spec's initializer for Calls, so multi-
                         // declarator decls (`var a = f1(), b = f2();`) attribute
                         // each call to its own variable.
-                        let ctx = symbol_id(file_path, "variable", &name, parent_qname);
+                        let ctx = symbol_id(file_path, SymbolKind::Variable, &name, parent_qname);
                         walk_for_calls(spec, source, file_path, &ctx, edges);
                     }
                 }
@@ -1078,7 +1078,7 @@ fn walk_for_nested_decls(
                     .map(|b| node_text(b, source).trim_start().starts_with("async"))
                     .unwrap_or(false);
 
-                let sym_id = symbol_id(file_path, "method", &name, parent_qname);
+                let sym_id = symbol_id(file_path, SymbolKind::Method, &name, parent_qname);
                 let mut sym = Symbol::new(
                     name,
                     SymbolKind::Method,

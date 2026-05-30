@@ -252,7 +252,7 @@ fn extract_function(
     let signature = extract_signature(node, source);
     let docstring = extract_jsdoc(node, source);
 
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent_qname);
     symbols.push(
         Symbol::new(
             &name,
@@ -331,7 +331,7 @@ fn extract_variable_declaration(
             let signature = extract_signature(val, source);
             let docstring = extract_jsdoc(node, source);
 
-            let sym_id = symbol_id(file_path, "function", &name, parent_qname);
+            let sym_id = symbol_id(file_path, SymbolKind::Function, &name, parent_qname);
             symbols.push(
                 Symbol::new(
                     &name,
@@ -411,7 +411,7 @@ fn extract_class(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_jsdoc(node, source);
 
-    let sym_id = symbol_id(file_path, "class", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Class, &name, parent_qname);
     let class_qname = match parent_qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
@@ -533,7 +533,7 @@ fn extract_method(
     let docstring = extract_jsdoc(node, source);
     let visibility = js_visibility_from_node(node, source);
 
-    let sym_id = symbol_id(file_path, "method", &name, Some(class_qname));
+    let sym_id = symbol_id(file_path, SymbolKind::Method, &name, Some(class_qname));
     symbols.push(
         Symbol::new(
             &name,
@@ -614,7 +614,7 @@ fn extract_import(
         return;
     }
 
-    let sym_id = symbol_id(file_path, "import", &module_name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Import, &module_name, parent_qname);
     symbols.push(
         Symbol::new(
             &module_name,
@@ -707,7 +707,7 @@ fn extract_interface(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_jsdoc(node, source);
 
-    let sym_id = symbol_id(file_path, "interface", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Interface, &name, parent_qname);
     symbols.push(
         Symbol::new(
             &name,

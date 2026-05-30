@@ -225,7 +225,7 @@ fn extract_use_clause_edge(
         return;
     }
     let line = clause.start_position().row as u32 + 1;
-    let sym_id = symbol_id(file_path, "import", &fqcn, None);
+    let sym_id = symbol_id(file_path, SymbolKind::Import, &fqcn, None);
     symbols.push(Symbol::new(
         fqcn.clone(),
         SymbolKind::Import,
@@ -404,7 +404,7 @@ fn extract_class(
     let visibility = php_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "class", &name, parent.qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Class, &name, parent.qname);
     let class_qname = match parent.qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
@@ -489,7 +489,7 @@ fn extract_interface(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "interface", &name, parent.qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Interface, &name, parent.qname);
     let iface_qname = match parent.qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
@@ -558,7 +558,7 @@ fn extract_trait(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "trait", &name, parent.qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Trait, &name, parent.qname);
     let trait_qname = match parent.qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
@@ -612,7 +612,7 @@ fn extract_enum(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "enum", &name, parent.qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Enum, &name, parent.qname);
     let enum_qname = match parent.qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
@@ -722,7 +722,7 @@ fn extract_method(
     let signature = build_method_signature(node, source, &name, visibility);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "method", &name, parent.qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Method, &name, parent.qname);
     let mut sym = Symbol::new(
         name.clone(),
         SymbolKind::Method,
@@ -893,7 +893,7 @@ fn extract_function(
         .map(|p| format!("function {}{}", name, node_text(p, source)));
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "function", &name, parent.qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Function, &name, parent.qname);
     let sym = Symbol::new(
         name,
         SymbolKind::Function,

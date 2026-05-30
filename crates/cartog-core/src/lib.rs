@@ -53,7 +53,7 @@ impl Symbol {
         parent_name: Option<&str>,
     ) -> Self {
         let name = name.into();
-        let id = symbol_id(file_path, kind.as_str(), &name, parent_name);
+        let id = symbol_id(file_path, kind, &name, parent_name);
         Self {
             id,
             name,
@@ -310,9 +310,17 @@ pub struct ChangesResult {
 /// - Method in class:    `src/auth.py:method:TokenService.validate`
 /// - Nested class:       `src/auth.py:class:Outer.Inner`
 ///
-/// This ID is stable across line movements within a file.
+/// This ID is stable across line movements within a file. `kind` is the typed
+/// [`SymbolKind`] (not a raw string) so a mistyped kind fails to compile rather
+/// than silently producing an ID that edge resolution can never match.
 #[must_use]
-pub fn symbol_id(file_path: &str, kind: &str, name: &str, parent_name: Option<&str>) -> String {
+pub fn symbol_id(
+    file_path: &str,
+    kind: SymbolKind,
+    name: &str,
+    parent_name: Option<&str>,
+) -> String {
+    let kind = kind.as_str();
     match parent_name {
         Some(pn) => format!("{file_path}:{kind}:{pn}.{name}"),
         None => format!("{file_path}:{kind}:{name}"),
@@ -346,7 +354,7 @@ mod tests {
     #[test]
     fn stable_id_top_level() {
         assert_eq!(
-            symbol_id("src/auth.py", "function", "validate", None),
+            symbol_id("src/auth.py", SymbolKind::Function, "validate", None),
             "src/auth.py:function:validate"
         );
     }
@@ -354,7 +362,12 @@ mod tests {
     #[test]
     fn stable_id_with_parent() {
         assert_eq!(
-            symbol_id("src/auth.py", "method", "validate", Some("TokenService")),
+            symbol_id(
+                "src/auth.py",
+                SymbolKind::Method,
+                "validate",
+                Some("TokenService")
+            ),
             "src/auth.py:method:TokenService.validate"
         );
     }
@@ -362,7 +375,12 @@ mod tests {
     #[test]
     fn stable_id_nested_parent() {
         assert_eq!(
-            symbol_id("src/auth.py", "method", "do_work", Some("Outer.Inner")),
+            symbol_id(
+                "src/auth.py",
+                SymbolKind::Method,
+                "do_work",
+                Some("Outer.Inner")
+            ),
             "src/auth.py:method:Outer.Inner.do_work"
         );
     }
@@ -394,9 +412,34 @@ mod tests {
 
     #[test]
     fn stable_id_differs_by_kind() {
-        let func_id = symbol_id("f.py", "function", "foo", None);
-        let var_id = symbol_id("f.py", "variable", "foo", None);
+        let func_id = symbol_id("f.py", SymbolKind::Function, "foo", None);
+        let var_id = symbol_id("f.py", SymbolKind::Variable, "foo", None);
         assert_ne!(func_id, var_id);
+    }
+
+    #[test]
+    fn symbol_id_matches_symbol_new_id_for_the_same_kind() {
+        // Extractors build edge-source ids via symbol_id() that must equal the
+        // owning symbol's own .id, or edge resolution silently fails to link.
+        let sym = Symbol::new(
+            "validate",
+            SymbolKind::Method,
+            "src/auth.py",
+            10,
+            20,
+            100,
+            500,
+            Some("TokenService"),
+        );
+        assert_eq!(
+            sym.id,
+            symbol_id(
+                "src/auth.py",
+                SymbolKind::Method,
+                "validate",
+                Some("TokenService")
+            )
+        );
     }
 
     #[test]

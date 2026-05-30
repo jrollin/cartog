@@ -163,7 +163,7 @@ fn extract_method(
     let signature = extract_method_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent_qname);
     let mut sym = Symbol::new(
         &name,
         kind,
@@ -235,7 +235,7 @@ fn extract_singleton_method(
     let signature = extract_method_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, kind.as_str(), &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent_qname);
     let mut sym = Symbol::new(
         &name,
         kind,
@@ -303,7 +303,7 @@ fn extract_class(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "class", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Class, &name, parent_qname);
     let child_qname = match parent_qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
@@ -375,7 +375,7 @@ fn extract_module(
     let end_line = node.end_position().row as u32 + 1;
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, "module", &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Module, &name, parent_qname);
     let child_qname = match parent_qname {
         Some(pq) => format!("{pq}.{name}"),
         None => name.clone(),
@@ -504,7 +504,7 @@ fn extract_require(
             .map(|(_, r)| r)
             .unwrap_or(&arg_text)
     );
-    let sym_id = symbol_id(file_path, "import", &arg_text, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Import, &arg_text, parent_qname);
 
     symbols.push(
         Symbol::new(
