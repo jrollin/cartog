@@ -214,31 +214,26 @@ impl LspManager {
     }
 
     /// Gracefully shut down all running servers.
+    ///
+    /// Sends the LSP `shutdown`/`exit` handshake and waits briefly for a clean
+    /// exit. Reaping the process (the `kill`/`wait` if it hangs, or on the
+    /// shutdown-request failure path) is left to [`LspClient`]'s `Drop`, which
+    /// runs as each drained client leaves scope.
     pub fn shutdown_all(&mut self) {
         for (lang, (mut client, _)) in self.clients.drain() {
             if let Err(e) = client.send_request("shutdown", Value::Null) {
                 tracing::debug!("shutdown failed for {lang}: {e:#}");
-                let _ = client.child.kill();
-                let _ = client.child.wait();
-                continue;
+                continue; // Drop reaps the child
             }
             let _ = client.send_notification("exit", Value::Null);
 
-            // Poll for graceful exit, kill if it takes too long
+            // Give the server a moment to exit cleanly; Drop force-kills any
+            // process still alive after the deadline.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                match client.child.try_wait() {
-                    Ok(Some(_)) => break, // exited
-                    Ok(None) if std::time::Instant::now() < deadline => {
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                    _ => {
-                        tracing::debug!("{lang} server did not exit, killing");
-                        let _ = client.child.kill();
-                        let _ = client.child.wait();
-                        break;
-                    }
-                }
+            while matches!(client.child.try_wait(), Ok(None))
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
     }

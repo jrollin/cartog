@@ -1,3 +1,5 @@
+use std::path::Path;
+
 /// Specification for a language server binary.
 pub struct ServerSpec {
     /// cartog language name (matches `detect_language()` output)
@@ -105,13 +107,64 @@ pub fn find_servers(language: &str) -> Vec<&'static ServerSpec> {
 }
 
 /// Check if a binary is available on PATH.
+///
+/// Resolves directly against `$PATH` (and `%PATHEXT%` on Windows) rather than
+/// shelling out to `which`/`where` — the former is Unix-only and was silently
+/// disabling LSP on Windows, where `lsp` is a default feature.
 pub fn is_binary_available(binary: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(binary)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let pathext = std::env::var_os("PATHEXT");
+    found_on_path(binary, &path, pathext.as_deref())
+}
+
+/// PATH-resolution core, factored out so it can be tested without depending on
+/// which binaries happen to exist on the test host.
+///
+/// On Windows, a bare candidate name (no extension) is also probed against each
+/// `PATHEXT` suffix (`.EXE`, `.CMD`, …) so `rust-analyzer` matches
+/// `rust-analyzer.exe`.
+fn found_on_path(binary: &str, path: &std::ffi::OsStr, pathext: Option<&std::ffi::OsStr>) -> bool {
+    let exts = executable_extensions(pathext);
+    std::env::split_paths(path).any(|dir| {
+        if dir.as_os_str().is_empty() {
+            return false;
+        }
+        exts.iter().any(|ext| {
+            let mut name = std::ffi::OsString::from(binary);
+            name.push(ext);
+            is_executable_file(&dir.join(&name))
+        })
+    })
+}
+
+/// Candidate executable suffixes to try for a bare name. Always includes the
+/// empty suffix (the name as-given); on Windows it also expands `%PATHEXT%`.
+fn executable_extensions(pathext: Option<&std::ffi::OsStr>) -> Vec<std::ffi::OsString> {
+    let mut exts = vec![std::ffi::OsString::new()];
+    if cfg!(windows) {
+        let raw = pathext
+            .map(std::ffi::OsStr::to_owned)
+            .unwrap_or_else(|| std::ffi::OsString::from(".COM;.EXE;.BAT;.CMD"));
+        if let Some(s) = raw.to_str() {
+            for e in s.split(';').filter(|e| !e.is_empty()) {
+                exts.push(std::ffi::OsString::from(e));
+            }
+        }
+    }
+    exts
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(test)]
@@ -160,5 +213,55 @@ mod tests {
         assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].binary, "intelephense");
         assert_eq!(specs[1].binary, "phpactor");
+    }
+
+    #[cfg(unix)]
+    fn touch_executable(dir: &Path, name: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn finds_executable_present_in_a_path_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        touch_executable(dir.path(), "rust-analyzer");
+        let path = dir.path().as_os_str();
+
+        assert!(found_on_path("rust-analyzer", path, None));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reports_missing_when_binary_not_on_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().as_os_str();
+
+        assert!(!found_on_path("rust-analyzer", path, None));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignores_non_executable_file_of_the_same_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("rust-analyzer"), b"not executable").unwrap();
+        let path = dir.path().as_os_str();
+
+        assert!(!found_on_path("rust-analyzer", path, None));
+    }
+
+    #[test]
+    fn pathext_expansion_is_windows_only() {
+        // The empty (as-given) suffix is always present; PATHEXT entries are
+        // appended only on Windows, so a non-Windows host sees exactly one.
+        let exts = executable_extensions(Some(std::ffi::OsStr::new(".EXE;.CMD")));
+        if cfg!(windows) {
+            assert!(exts.iter().any(|e| e == std::ffi::OsStr::new(".EXE")));
+        } else {
+            assert_eq!(exts.len(), 1);
+            assert_eq!(exts[0], std::ffi::OsString::new());
+        }
     }
 }
