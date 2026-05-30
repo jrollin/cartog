@@ -5,7 +5,7 @@ use tree_sitter::{Language, Node, Parser};
 
 use cartog_core::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
-use super::{node_text, ExtractionResult, Extractor};
+use super::{node_text, ExtractionResult, Extractor, ParentScope};
 
 /// Tree-sitter-based extractor for PHP source files.
 ///
@@ -70,37 +70,6 @@ impl FileContext {
             return format!("{ns}\\{name}");
         }
         name.to_string()
-    }
-}
-
-/// Lexical scope of the symbol enclosing the declaration being extracted.
-///
-/// The `id` is the cartog symbol id of the enclosing class/interface/trait/enum (used
-/// as the `parent_id` on child symbols), and `qname` is the qualified name used both
-/// as the `parent_name` segment of [`symbol_id`] and as the prefix when building child
-/// qualified names. At the top level of a file, `id` is `None` and `qname` carries the
-/// PHP namespace (if any) so cross-namespace symbol ids don't collide.
-#[derive(Clone, Copy, Default)]
-struct ParentScope<'a> {
-    id: Option<&'a str>,
-    qname: Option<&'a str>,
-}
-
-impl<'a> ParentScope<'a> {
-    /// Scope at the top level of a (possibly empty) PHP namespace.
-    fn top_level(namespace: Option<&'a str>) -> Self {
-        Self {
-            id: None,
-            qname: namespace,
-        }
-    }
-
-    /// Scope nested inside a class/interface/trait/enum identified by `id` + `qname`.
-    fn nested(id: &'a str, qname: &'a str) -> Self {
-        Self {
-            id: Some(id),
-            qname: Some(qname),
-        }
     }
 }
 

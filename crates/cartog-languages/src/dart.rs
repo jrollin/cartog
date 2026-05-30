@@ -3,7 +3,7 @@ use tree_sitter::{Language, Node, Parser};
 
 use cartog_core::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
-use super::{last_segment, node_text, ExtractionResult, Extractor};
+use super::{last_segment, node_text, ExtractionResult, Extractor, ParentScope};
 
 /// Tree-sitter–based extractor for Dart source files.
 pub struct DartExtractor {
@@ -43,8 +43,7 @@ impl Extractor for DartExtractor {
             tree.root_node(),
             source,
             file_path,
-            None,
-            None,
+            ParentScope::default(),
             &mut symbols,
             &mut edges,
         );
@@ -57,89 +56,32 @@ fn extract_node(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
     match node.kind() {
         "class_declaration" | "mixin_declaration" | "extension_declaration" => {
-            extract_class_like(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_class_like(node, source, file_path, parent, symbols, edges);
         }
         "enum_declaration" => {
-            extract_enum(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_enum(node, source, file_path, parent, symbols, edges);
         }
         "function_declaration" => {
-            extract_function(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_function(node, source, file_path, parent, symbols, edges);
         }
         "type_alias" => {
-            extract_type_alias(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_type_alias(node, source, file_path, parent, symbols, edges);
         }
         "import_or_export" | "part_directive" => {
-            extract_directive(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_directive(node, source, file_path, parent, symbols, edges);
         }
         "top_level_variable_declaration" => {
-            extract_top_level_var(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_top_level_var(node, source, file_path, parent, symbols, edges);
         }
         _ => {
             for child in node.named_children(&mut node.walk()) {
-                extract_node(
-                    child,
-                    source,
-                    file_path,
-                    parent_id,
-                    parent_qname,
-                    symbols,
-                    edges,
-                );
+                extract_node(child, source, file_path, parent, symbols, edges);
             }
         }
     }
@@ -151,8 +93,7 @@ fn extract_class_like(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -173,8 +114,8 @@ fn extract_class_like(
     let docstring = extract_doc_comment(node, source);
     let signature = build_signature_until_body(node, source);
 
-    let sym_id = symbol_id(file_path, kind, &name, parent_qname);
-    let qname = qualified(parent_qname, &name);
+    let sym_id = symbol_id(file_path, kind, &name, parent.qname);
+    let qname = qualified(parent.qname, &name);
 
     let mut sym = Symbol::new(
         name.clone(),
@@ -184,9 +125,9 @@ fn extract_class_like(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_docstring(docstring)
     .with_signature(signature);
     if visibility != Visibility::Public {
@@ -209,8 +150,7 @@ fn extract_class_like(
                         inner,
                         source,
                         file_path,
-                        Some(&sym_id),
-                        Some(&qname),
+                        ParentScope::nested(&sym_id, &qname),
                         symbols,
                         edges,
                     );
@@ -220,8 +160,7 @@ fn extract_class_like(
                     child,
                     source,
                     file_path,
-                    Some(&sym_id),
-                    Some(&qname),
+                    ParentScope::nested(&sym_id, &qname),
                     symbols,
                     edges,
                 );
@@ -300,36 +239,19 @@ fn extract_member(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
     match node.kind() {
         "method_declaration" => {
-            extract_method_decl(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_method_decl(node, source, file_path, parent, symbols, edges);
         }
         "declaration" => {
             // `declaration` wraps either a field (with initialized_identifier_list /
             // static_final_declaration_list), a constructor_signature, a getter/setter
             // signature, or an abstract method signature.
-            extract_declaration(
-                node,
-                source,
-                file_path,
-                parent_id,
-                parent_qname,
-                symbols,
-                edges,
-            );
+            extract_declaration(node, source, file_path, parent, symbols, edges);
         }
         _ => {}
     }
@@ -339,8 +261,7 @@ fn extract_method_decl(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -363,7 +284,7 @@ fn extract_method_decl(
     let docstring = extract_doc_comment(node, source);
     let signature = build_signature_until_body(node, source);
 
-    let sym_id = symbol_id(file_path, kind, &name, parent_qname);
+    let sym_id = symbol_id(file_path, kind, &name, parent.qname);
 
     let mut sym = Symbol::new(
         name.clone(),
@@ -373,9 +294,9 @@ fn extract_method_decl(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_docstring(docstring)
     .with_signature(signature)
     .with_async(is_async);
@@ -391,7 +312,17 @@ fn extract_method_decl(
         .find(|c| c.kind() == "function_body")
     {
         walk_for_calls(body, source, file_path, &sym_id, edges);
-        walk_for_nested_decls(body, source, file_path, Some(&sym_id), None, symbols, edges);
+        walk_for_nested_decls(
+            body,
+            source,
+            file_path,
+            ParentScope {
+                id: Some(&sym_id),
+                qname: None,
+            },
+            symbols,
+            edges,
+        );
     }
 }
 
@@ -459,8 +390,7 @@ fn extract_declaration(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -486,7 +416,7 @@ fn extract_declaration(
             let docstring = extract_doc_comment(node, source);
             let signature = Some(node_text(node, source).trim().to_string());
 
-            let sym_id = symbol_id(file_path, SymbolKind::Method, &name, parent_qname);
+            let sym_id = symbol_id(file_path, SymbolKind::Method, &name, parent.qname);
             let mut sym = Symbol::new(
                 name,
                 SymbolKind::Method,
@@ -495,9 +425,9 @@ fn extract_declaration(
                 end_line,
                 node.start_byte() as u32,
                 node.end_byte() as u32,
-                parent_qname,
+                parent.qname,
             )
-            .with_parent(parent_id)
+            .with_parent(parent.id)
             .with_docstring(docstring)
             .with_signature(signature);
             if visibility != Visibility::Public {
@@ -528,7 +458,17 @@ fn extract_declaration(
                 .find(|c| c.kind() == "function_body")
             {
                 walk_for_calls(body, source, file_path, &sym_id, edges);
-                walk_for_nested_decls(body, source, file_path, Some(&sym_id), None, symbols, edges);
+                walk_for_nested_decls(
+                    body,
+                    source,
+                    file_path,
+                    ParentScope {
+                        id: Some(&sym_id),
+                        qname: None,
+                    },
+                    symbols,
+                    edges,
+                );
             }
         }
         return;
@@ -547,17 +487,8 @@ fn extract_declaration(
                         .find(|c| c.kind() == "identifier");
                     if let Some(id) = id {
                         let name = node_text(id, source).to_string();
-                        push_variable(
-                            id,
-                            source,
-                            file_path,
-                            parent_id,
-                            parent_qname,
-                            line,
-                            end_line,
-                            symbols,
-                        );
-                        let ctx = symbol_id(file_path, SymbolKind::Variable, &name, parent_qname);
+                        push_variable(id, source, file_path, parent, line, end_line, symbols);
+                        let ctx = symbol_id(file_path, SymbolKind::Variable, &name, parent.qname);
                         walk_for_calls(spec, source, file_path, &ctx, edges);
                     }
                 }
@@ -596,13 +527,11 @@ fn decl_signature_name(node: Node, source: &str) -> Option<String> {
     None
 }
 
-#[allow(clippy::too_many_arguments)]
 fn push_variable(
     id_node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     line: u32,
     end_line: u32,
     symbols: &mut Vec<Symbol>,
@@ -620,9 +549,9 @@ fn push_variable(
         end_line,
         id_node.start_byte() as u32,
         id_node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id);
+    .with_parent(parent.id);
     if visibility != Visibility::Public {
         sym = sym.with_visibility(visibility);
     }
@@ -635,8 +564,7 @@ fn extract_function(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -667,7 +595,7 @@ fn extract_function(
         .map(|b| node_text(b, source).trim_start().starts_with("async"))
         .unwrap_or(false);
 
-    let sym_id = symbol_id(file_path, SymbolKind::Function, &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Function, &name, parent.qname);
     let mut sym = Symbol::new(
         name,
         SymbolKind::Function,
@@ -676,9 +604,9 @@ fn extract_function(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_docstring(docstring)
     .with_signature(signature)
     .with_async(is_async);
@@ -690,7 +618,17 @@ fn extract_function(
     collect_signature_type_refs(sig, source, file_path, &sym_id, edges);
     if let Some(b) = body {
         walk_for_calls(b, source, file_path, &sym_id, edges);
-        walk_for_nested_decls(b, source, file_path, Some(&sym_id), None, symbols, edges);
+        walk_for_nested_decls(
+            b,
+            source,
+            file_path,
+            ParentScope {
+                id: Some(&sym_id),
+                qname: None,
+            },
+            symbols,
+            edges,
+        );
     }
 }
 
@@ -700,8 +638,7 @@ fn extract_enum(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -716,8 +653,8 @@ fn extract_enum(
     let docstring = extract_doc_comment(node, source);
     let signature = build_signature_until_body(node, source);
 
-    let sym_id = symbol_id(file_path, SymbolKind::Enum, &name, parent_qname);
-    let qname = qualified(parent_qname, &name);
+    let sym_id = symbol_id(file_path, SymbolKind::Enum, &name, parent.qname);
+    let qname = qualified(parent.qname, &name);
 
     let mut sym = Symbol::new(
         name.clone(),
@@ -727,9 +664,9 @@ fn extract_enum(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_docstring(docstring)
     .with_signature(signature);
     if visibility != Visibility::Public {
@@ -752,8 +689,7 @@ fn extract_enum(
                             id,
                             source,
                             file_path,
-                            Some(&sym_id),
-                            Some(&qname),
+                            ParentScope::nested(&sym_id, &qname),
                             child.start_position().row as u32 + 1,
                             child.end_position().row as u32 + 1,
                             symbols,
@@ -766,8 +702,7 @@ fn extract_enum(
                             inner,
                             source,
                             file_path,
-                            Some(&sym_id),
-                            Some(&qname),
+                            ParentScope::nested(&sym_id, &qname),
                             symbols,
                             edges,
                         );
@@ -785,8 +720,7 @@ fn extract_type_alias(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -803,7 +737,7 @@ fn extract_type_alias(
     let visibility = dart_visibility(&name);
     let signature = Some(node_text(node, source).trim().to_string());
 
-    let sym_id = symbol_id(file_path, SymbolKind::TypeAlias, &name, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::TypeAlias, &name, parent.qname);
     let mut sym = Symbol::new(
         name,
         SymbolKind::TypeAlias,
@@ -812,9 +746,9 @@ fn extract_type_alias(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        parent_qname,
+        parent.qname,
     )
-    .with_parent(parent_id)
+    .with_parent(parent.id)
     .with_signature(signature);
     if visibility != Visibility::Public {
         sym = sym.with_visibility(visibility);
@@ -837,8 +771,7 @@ fn extract_directive(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -850,7 +783,7 @@ fn extract_directive(
     let signature = Some(node_text(node, source).trim().to_string());
     let pkg_name = uri_short_name(&uri);
 
-    let sym_id = symbol_id(file_path, SymbolKind::Import, &uri, parent_qname);
+    let sym_id = symbol_id(file_path, SymbolKind::Import, &uri, parent.qname);
     symbols.push(
         Symbol::new(
             uri.clone(),
@@ -860,9 +793,9 @@ fn extract_directive(
             line,
             node.start_byte() as u32,
             node.end_byte() as u32,
-            parent_qname,
+            parent.qname,
         )
-        .with_parent(parent_id)
+        .with_parent(parent.id)
         .with_signature(signature),
     );
 
@@ -933,8 +866,7 @@ fn extract_top_level_var(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -949,20 +881,11 @@ fn extract_top_level_var(
                         .find(|c| c.kind() == "identifier");
                     if let Some(id) = id {
                         let name = node_text(id, source).to_string();
-                        push_variable(
-                            id,
-                            source,
-                            file_path,
-                            parent_id,
-                            parent_qname,
-                            line,
-                            end_line,
-                            symbols,
-                        );
+                        push_variable(id, source, file_path, parent, line, end_line, symbols);
                         // Walk only this spec's initializer for Calls, so multi-
                         // declarator decls (`var a = f1(), b = f2();`) attribute
                         // each call to its own variable.
-                        let ctx = symbol_id(file_path, SymbolKind::Variable, &name, parent_qname);
+                        let ctx = symbol_id(file_path, SymbolKind::Variable, &name, parent.qname);
                         walk_for_calls(spec, source, file_path, &ctx, edges);
                     }
                 }
@@ -1044,8 +967,7 @@ fn walk_for_nested_decls(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: Option<&str>,
-    parent_qname: Option<&str>,
+    parent: ParentScope<'_>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -1078,7 +1000,7 @@ fn walk_for_nested_decls(
                     .map(|b| node_text(b, source).trim_start().starts_with("async"))
                     .unwrap_or(false);
 
-                let sym_id = symbol_id(file_path, SymbolKind::Method, &name, parent_qname);
+                let sym_id = symbol_id(file_path, SymbolKind::Method, &name, parent.qname);
                 let mut sym = Symbol::new(
                     name,
                     SymbolKind::Method,
@@ -1087,9 +1009,9 @@ fn walk_for_nested_decls(
                     end_line,
                     child.start_byte() as u32,
                     child.end_byte() as u32,
-                    parent_qname,
+                    parent.qname,
                 )
-                .with_parent(parent_id)
+                .with_parent(parent.id)
                 .with_signature(signature)
                 .with_async(is_async);
                 if visibility != Visibility::Public {
@@ -1104,23 +1026,17 @@ fn walk_for_nested_decls(
                         b,
                         source,
                         file_path,
-                        Some(&sym_id),
-                        None,
+                        ParentScope {
+                            id: Some(&sym_id),
+                            qname: None,
+                        },
                         symbols,
                         edges,
                     );
                 }
             }
             _ => {
-                walk_for_nested_decls(
-                    child,
-                    source,
-                    file_path,
-                    parent_id,
-                    parent_qname,
-                    symbols,
-                    edges,
-                );
+                walk_for_nested_decls(child, source, file_path, parent, symbols, edges);
             }
         }
     }
