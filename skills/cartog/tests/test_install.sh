@@ -89,9 +89,29 @@ extract_install_lib() {
 
 create_mock_curl() {
     local log_file="$TEST_DIR/curl.log"
+    # Honors `-o <file>`: writes placeholder bytes for a tarball download and a
+    # plausible SHA256SUMS line for the SHA fetch; otherwise emits the
+    # latest-release JSON on stdout (the `releases/latest` query). Tests that
+    # exercise the download path set CARTOG_NO_VERIFY=1 so the placeholder bytes
+    # need not hash-match; the dedicated SHA tests use create_mock_curl_sha.
     cat > "$TEST_DIR/bin/curl" <<'MOCK'
 #!/usr/bin/env bash
 echo "$@" >> LOGFILE
+out=""
+prev=""
+url=""
+for a in "$@"; do
+    if [ "$prev" = "-o" ]; then out="$a"; fi
+    case "$a" in -*) ;; *) url="$a" ;; esac
+    prev="$a"
+done
+if [ -n "$out" ]; then
+    case "$url" in
+        *SHA256SUMS) printf '%s  cartog-%s.tar.gz\n' "deadbeef" "x" > "$out" ;;
+        *)           printf 'placeholder-archive\n' > "$out" ;;
+    esac
+    exit 0
+fi
 echo '{ "tag_name": "v0.9.0" }'
 MOCK
     sed -i'' -e "s|LOGFILE|$log_file|" "$TEST_DIR/bin/curl"
@@ -99,12 +119,19 @@ MOCK
 }
 
 create_mock_tar() {
+    # install.sh now extracts from a file (`tar xz -C dir -f archive`), not a
+    # pipe, so the mock writes a runnable cartog into the install dir (-C arg)
+    # to mimic a successful extraction. No stdin to drain.
     cat > "$TEST_DIR/bin/tar" <<'MOCK'
 #!/usr/bin/env bash
-# Drain stdin so the upstream `curl` doesn't get SIGPIPE under bash pipefail
-# (real `tar xz` reads stdin; a mock that exits without reading races and
-# makes `curl | tar` return 141 ~30% of the time on macOS).
-cat >/dev/null
+dir="."
+prev=""
+for a in "$@"; do
+    if [ "$prev" = "-C" ]; then dir="$a"; fi
+    prev="$a"
+done
+printf '#!/usr/bin/env bash\necho "cartog 0.9.0"\n' > "$dir/cartog"
+chmod +x "$dir/cartog" 2>/dev/null || true
 exit 0
 MOCK
     chmod +x "$TEST_DIR/bin/tar"
@@ -127,6 +154,10 @@ run_install() {
         export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         export CARGO_HOME="$TEST_DIR/cargo_home"
         export HOME="$TEST_DIR/home"
+        # These tests exercise version/install-dir logic, not download
+        # integrity (the mock curl serves placeholder bytes). Skip the real
+        # SHA check; the dedicated SHA tests verify the integrity path.
+        export CARTOG_NO_VERIFY="${CARTOG_NO_VERIFY:-1}"
         mkdir -p "$CARGO_HOME/bin" "$HOME"
         bash "$INSTALL_SCRIPT" "$@" 2>&1
     )
@@ -141,6 +172,7 @@ run_install_fresh() {
         mkdir -p "$HOME"
         # Intentionally do not export CARGO_HOME unless the caller did — the
         # test sets it via env when needed.
+        export CARTOG_NO_VERIFY="${CARTOG_NO_VERIFY:-1}"
         bash "$INSTALL_SCRIPT" "$@" 2>&1
     )
 }
@@ -334,6 +366,83 @@ MOCK
     teardown
 }
 
+# sha256 of a string, using whatever verifier is available (matches install.sh).
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then printf '%s' "$1" | sha256sum | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+    else printf '%s' "$1" | openssl dgst -sha256 | awk '{print $NF}'; fi
+}
+
+# Mock curl serving a real archive body + a SHA256SUMS whose entry is either the
+# matching digest ($1=good) or a wrong one ($1=bad). The archive-download call
+# records the requested archive basename to a sidecar; the SHA256SUMS call reads
+# it back so the SHA entry's filename matches the host target install.sh chose.
+create_mock_curl_sha() {
+    local mode="$1" body="real-archive-bytes" sum
+    if [ "$mode" = good ]; then sum="$(sha256_of "$body")"; else sum="$(printf '%064d' 0)"; fi
+    cat > "$TEST_DIR/bin/curl" <<MOCK
+#!/usr/bin/env bash
+nameref="$TEST_DIR/archive-name"
+out=""; prev=""; url=""
+for a in "\$@"; do
+    if [ "\$prev" = "-o" ]; then out="\$a"; fi
+    case "\$a" in -*) ;; *) url="\$a" ;; esac
+    prev="\$a"
+done
+if [ -n "\$out" ]; then
+    case "\$url" in
+        *SHA256SUMS)
+            archive="\$(cat "\$nameref" 2>/dev/null || echo cartog-unknown.tar.gz)"
+            printf '%s  %s\n' "$sum" "\$archive" > "\$out" ;;
+        *cartog-*.tar.gz)
+            basename "\$url" > "\$nameref"
+            printf '%s' "$body" > "\$out" ;;
+        *)  printf '%s' "$body" > "\$out" ;;
+    esac
+    exit 0
+fi
+echo '{ "tag_name": "v0.9.0" }'
+MOCK
+    chmod +x "$TEST_DIR/bin/curl"
+}
+
+test_sha_mismatch_aborts_install() {
+    echo "TEST: SHA-256 mismatch aborts the install (no binary written)"
+    setup
+    create_mock_curl_sha bad
+    create_mock_tar
+
+    local output exit_code=0
+    output=$(
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"; mkdir -p "$HOME"
+        # NOTE: no CARTOG_NO_VERIFY — exercise the real check.
+        bash "$INSTALL_SCRIPT" "0.9.0" 2>&1
+    ) || exit_code=$?
+
+    assert_eq "exits non-zero on mismatch" "1" "$exit_code"
+    assert_contains "names the mismatch" "SHA-256 mismatch" "$output"
+    teardown
+}
+
+test_sha_match_allows_install() {
+    echo "TEST: matching SHA-256 lets the install proceed"
+    setup
+    create_mock_curl_sha good
+    create_mock_tar
+
+    local output exit_code=0
+    output=$(
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"; mkdir -p "$HOME"
+        bash "$INSTALL_SCRIPT" "0.9.0" 2>&1
+    ) || exit_code=$?
+
+    assert_contains "verified + installed" "cartog installed to" "$output"
+    assert_not_contains "no mismatch" "SHA-256 mismatch" "$output"
+    teardown
+}
+
 test_install_dir_prefers_local_bin_when_present() {
     echo "TEST: ~/.local/bin exists → install dir is ~/.local/bin (not ~/.cargo/bin)"
     setup
@@ -475,6 +584,8 @@ WRAP
         export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         export HOME="$TEST_DIR/home"
         export CARGO_HOME="$TEST_DIR/cargo_home"
+        # Install-dir-selection test, not an integrity test (placeholder bytes).
+        export CARTOG_NO_VERIFY=1
         mkdir -p "$CARGO_HOME/bin"
         bash "$wrapper"
     ) || true
@@ -599,6 +710,10 @@ echo ""
 test_no_prebuilt_binary_fails_release_only
 echo ""
 test_download_failure_fails_release_only
+echo ""
+test_sha_mismatch_aborts_install
+echo ""
+test_sha_match_allows_install
 echo ""
 test_install_dir_prefers_local_bin_when_present
 echo ""

@@ -77,6 +77,16 @@ apply_pending_update() {
         return 0
     fi
 
+    # Auto-arm the pin on drift so a PASSIVE user (who never runs /cartog-install)
+    # still converges to the plugin's pinned version. We pin via --to so no
+    # network fetch is needed and the apply can't overshoot; `cartog self update`
+    # decide_apply blocks any downgrade, and --defer is idempotent (re-arming the
+    # same target, or arming when already current, is harmless). Only arm when
+    # the binary is strictly OLDER than the pin (installed < PLUGIN_VERSION).
+    if [ -n "$PLUGIN_VERSION" ] && version_gt "$PLUGIN_VERSION" "$installed"; then
+        cartog self update --defer --to "$PLUGIN_VERSION" --quiet || true
+    fi
+
     local rc=0
     cartog self update --apply-pending || rc=$?
     case "$rc" in
@@ -102,9 +112,15 @@ apply_pending_update() {
             printf 'cartog update failed verification (smoke test) and was rolled back; it will not retry automatically. Run `cartog self update` in a terminal or /cartog-install. See %s.\n' \
                 "$SESSION_LOG" > "$LAST_ERROR_FILE"
             ;;
+        3)
+            # Cargo-installed binary — self update cannot swap it. Give the
+            # cohort the command that actually works, not a generic failure.
+            printf 'cartog was installed via cargo and cannot be auto-updated; run `cargo install cartog --force` to upgrade. See %s.\n' \
+                "$SESSION_LOG" > "$LAST_ERROR_FILE"
+            ;;
         *)
-            # 3 (cargo) / 4 (checksum) — terminal for this target; intent
-            # cleared by the binary.
+            # 4 (checksum) and any other terminal failure — intent cleared by
+            # the binary where applicable.
             printf 'cartog self update --apply-pending failed (exit %d). See %s.\n' \
                 "$rc" "$SESSION_LOG" > "$LAST_ERROR_FILE"
             ;;

@@ -122,14 +122,16 @@ version_lt() {
 # stderr when the hook exits 0. A drift notice on stderr would be invisible.
 warn_if_drifted() {
     [ -n "$PLUGIN_VERSION" ] || return 0
-    local info installed pending
+    local info installed pending source
     info="$(cartog self version --json 2>/dev/null)" || info=""
     if [ -n "$info" ]; then
         installed="$(printf '%s' "$info" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
         pending="$(printf '%s' "$info" | sed -n 's/.*"target_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+        source="$(printf '%s' "$info" | sed -n 's/.*"install_source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
     else
         installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')"
         pending=""
+        source=""
     fi
     [ -n "$installed" ] || return 0
     # Only an OLDER binary is "drifted". Equal or ahead → nothing to do.
@@ -146,6 +148,13 @@ warn_if_drifted() {
             # Tell the user the armed target is stale and how to re-arm.
             echo "cartog has a deferred update to $pending armed, but the plugin now wants $PLUGIN_VERSION — run /cartog-install to re-arm."
         fi
+        return 0
+    fi
+    # A cargo-installed binary cannot be swapped by /cartog-install (self update
+    # refuses with exit 3); give that cohort the command that actually works
+    # rather than a dead-end nudge.
+    if [ "$source" = "cargo" ]; then
+        echo "cartog binary $installed is out of sync with plugin $PLUGIN_VERSION; it was installed via cargo — run \`cargo install cartog --force\` to upgrade."
         return 0
     fi
     echo "cartog binary $installed is out of sync with plugin $PLUGIN_VERSION (run /cartog-install to update)."

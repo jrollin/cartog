@@ -451,6 +451,37 @@ fn success_result(text: String, structured: Option<serde_json::Value>) -> CallTo
     result
 }
 
+/// Discover the plugin's pinned version so `cartog_update` can arm the PIN
+/// rather than the latest stable release (which could overshoot the pin).
+///
+/// Reads the `"version"` field of the plugin manifest, located via
+/// `CARTOG_PLUGIN_JSON` (explicit override) or `CLAUDE_PLUGIN_ROOT`
+/// (`<root>/.claude-plugin/plugin.json`, set by Claude Code for plugin hooks).
+/// Returns `None` when no manifest is discoverable (e.g. a non-plugin install),
+/// in which case the caller falls back to arming the latest stable release.
+fn discover_plugin_pin() -> Option<String> {
+    let manifest = match std::env::var_os("CARTOG_PLUGIN_JSON") {
+        Some(p) if !p.is_empty() => PathBuf::from(p),
+        _ => {
+            let root = std::env::var_os("CLAUDE_PLUGIN_ROOT").filter(|v| !v.is_empty())?;
+            PathBuf::from(root)
+                .join(".claude-plugin")
+                .join("plugin.json")
+        }
+    };
+    let text = std::fs::read_to_string(&manifest).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let version = parsed.get("version")?.as_str()?;
+    // Only accept a bare MAJOR.MINOR.PATCH — a malformed pin must fall back to
+    // latest, not arm garbage.
+    let parts: Vec<&str> = version.split('.').collect();
+    let bare = parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    bare.then(|| version.to_string())
+}
+
 /// Map the JSON envelope from `cartog self update --defer --json` to an
 /// [`UpdateResult`]. The CLI is the single source of truth for arming
 /// behavior and exit semantics; this only reshapes its output for MCP.
@@ -1293,14 +1324,14 @@ impl CartogServer {
     /// `self update --defer`, which records the target and exits without
     /// touching the binary; the boundary swap happens at SessionEnd.
     #[tool(
-        description = "Arm a deferred cartog self-update to the LATEST stable release. Does NOT upgrade in this session — the running server keeps its current binary; the new version becomes active after this session ends (or the next restart). Use when the user confirms they want to update cartog. NOTE: if cartog was installed as a Claude Code plugin (pinned version), prefer the /cartog-install skill, which arms the plugin's PINNED version instead of latest. Not for: indexing or search. Returns: {current, target, status, apply, message}.",
+        description = "Arm a deferred cartog self-update. Does NOT upgrade in this session — the running server keeps its current binary; the new version becomes active after this session ends (or the next restart). Use when the user confirms they want to update cartog. When cartog is installed as a Claude Code plugin, this arms the plugin's PINNED version (discovered from the plugin manifest); otherwise it arms the latest stable release. Not for: indexing or search. Returns: {current, target, status, apply, message}.",
         annotations(
             title = "Update cartog",
             read_only_hint = false,
             destructive_hint = false,
-            // Not idempotent: each call re-fetches the latest tag and rewrites
-            // armed_at / last_update_check timestamps, so repeated calls change
-            // state.toml even when the armed target is unchanged.
+            // Not idempotent: a latest-release arm re-fetches the tag and each
+            // arm rewrites armed_at / last_update_check timestamps, so repeated
+            // calls change state.toml even when the armed target is unchanged.
             idempotent_hint = false,
             open_world_hint = true
         ),
@@ -1311,8 +1342,16 @@ impl CartogServer {
             debug!("update (arm deferred)");
             let exe = std::env::current_exe()
                 .map_err(|e| mcp_err(format!("cannot resolve cartog binary: {e}")))?;
+            // Arm the plugin's pinned version when discoverable so we can't
+            // overshoot the pin; fall back to latest stable otherwise.
+            let mut args = vec!["self", "update", "--defer", "--json"];
+            let pin = discover_plugin_pin();
+            if let Some(ref v) = pin {
+                args.push("--to");
+                args.push(v);
+            }
             let output = std::process::Command::new(exe)
-                .args(["self", "update", "--defer", "--json"])
+                .args(&args)
                 .output()
                 .map_err(|e| mcp_err(format!("failed to run self update --defer: {e}")))?;
 
@@ -2309,6 +2348,70 @@ mod tests {
                 .expect("run true"),
             stdout: stdout.as_bytes().to_vec(),
             stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    // ── discover_plugin_pin tests (cartog_update arms the pin) ──
+    // Serialized via SERIAL because they mutate process-global env vars.
+
+    #[test]
+    fn discover_plugin_pin_reads_explicit_manifest() {
+        let _g = test_validate_call_counter::SERIAL.blocking_lock();
+        let prev_json = std::env::var_os("CARTOG_PLUGIN_JSON");
+        let prev_root = std::env::var_os("CLAUDE_PLUGIN_ROOT");
+        std::env::remove_var("CLAUDE_PLUGIN_ROOT");
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let manifest = dir.path().join("plugin.json");
+        std::fs::write(&manifest, r#"{"name":"cartog","version":"0.20.0"}"#).unwrap();
+        std::env::set_var("CARTOG_PLUGIN_JSON", &manifest);
+        assert_eq!(discover_plugin_pin().as_deref(), Some("0.20.0"));
+
+        // Malformed (non-bare) version → None (fall back to latest).
+        std::fs::write(&manifest, r#"{"version":"v0.20.0"}"#).unwrap();
+        assert_eq!(
+            discover_plugin_pin(),
+            None,
+            "non-bare-semver pin must be rejected"
+        );
+
+        // No manifest discoverable → None.
+        std::env::remove_var("CARTOG_PLUGIN_JSON");
+        assert_eq!(discover_plugin_pin(), None);
+
+        match prev_json {
+            Some(v) => std::env::set_var("CARTOG_PLUGIN_JSON", v),
+            None => std::env::remove_var("CARTOG_PLUGIN_JSON"),
+        }
+        if let Some(v) = prev_root {
+            std::env::set_var("CLAUDE_PLUGIN_ROOT", v);
+        }
+    }
+
+    #[test]
+    fn discover_plugin_pin_reads_claude_plugin_root() {
+        let _g = test_validate_call_counter::SERIAL.blocking_lock();
+        let prev_json = std::env::var_os("CARTOG_PLUGIN_JSON");
+        let prev_root = std::env::var_os("CLAUDE_PLUGIN_ROOT");
+        std::env::remove_var("CARTOG_PLUGIN_JSON");
+
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
+        std::fs::write(
+            dir.path().join(".claude-plugin").join("plugin.json"),
+            r#"{"version":"0.21.0"}"#,
+        )
+        .unwrap();
+        std::env::set_var("CLAUDE_PLUGIN_ROOT", dir.path());
+        assert_eq!(discover_plugin_pin().as_deref(), Some("0.21.0"));
+
+        match prev_json {
+            Some(v) => std::env::set_var("CARTOG_PLUGIN_JSON", v),
+            None => std::env::remove_var("CARTOG_PLUGIN_JSON"),
+        }
+        match prev_root {
+            Some(v) => std::env::set_var("CLAUDE_PLUGIN_ROOT", v),
+            None => std::env::remove_var("CLAUDE_PLUGIN_ROOT"),
         }
     }
 

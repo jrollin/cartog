@@ -165,6 +165,44 @@ test_modern_binary_runs_apply_pending() {
     teardown
 }
 
+test_modern_binary_drift_auto_arms_pin() {
+    echo "TEST: drifted modern binary auto-arms the pin (--defer --to PIN) so a passive user converges"
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.14.0" 0   # installed 0.14.0 < pin 0.14.3 → drifted
+
+    run_update_on_exit > /dev/null
+
+    if grep -q 'self update --defer --to 0.14.3' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: auto-armed the pin on drift"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: did not auto-arm the pin on drift"; FAIL=$((FAIL + 1))
+    fi
+    # And still runs apply-pending afterward.
+    if grep -qx 'self update --apply-pending' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: apply-pending still invoked after auto-arm"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: apply-pending not invoked after auto-arm"; FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
+test_modern_binary_in_sync_does_not_auto_arm() {
+    echo "TEST: modern binary == pin does NOT auto-arm (no spurious --defer)"
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.14.3" 0   # installed == pin → not drifted
+
+    run_update_on_exit > /dev/null
+
+    if grep -q 'self update --defer' "$CARTOG_TEST_LOG"; then
+        echo "  FAIL: auto-armed when already at the pin"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: no auto-arm when at the pin"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
 test_apply_pending_exit_6_is_not_error() {
     echo "TEST: apply-pending exit 6 (peer running) is not an error"
     setup
@@ -219,6 +257,20 @@ test_apply_pending_exit_7_smoke_writes_actionable_last_error() {
     else
         echo "  PASS: smoke failure not labelled transient"; PASS=$((PASS + 1))
     fi
+    teardown
+}
+
+test_apply_pending_exit_3_cargo_writes_cargo_command() {
+    echo "TEST: apply-pending exit 3 (cargo) writes the cargo-install command, not a generic failure"
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.14.0" 3
+
+    run_update_on_exit > /dev/null
+
+    local err
+    err=$(cat "$CARTOG_LOG_DIR/last-error" 2>/dev/null || echo "")
+    assert_contains "names the cargo command" "cargo install cartog --force" "$err"
     teardown
 }
 
@@ -425,11 +477,17 @@ test_missing_binary_is_noop
 echo ""
 test_modern_binary_runs_apply_pending
 echo ""
+test_modern_binary_drift_auto_arms_pin
+echo ""
+test_modern_binary_in_sync_does_not_auto_arm
+echo ""
 test_apply_pending_exit_6_is_not_error
 echo ""
 test_apply_pending_exit_4_writes_last_error
 echo ""
 test_apply_pending_exit_7_smoke_writes_actionable_last_error
+echo ""
+test_apply_pending_exit_3_cargo_writes_cargo_command
 echo ""
 test_apply_pending_exit_2_writes_transient_last_error
 echo ""

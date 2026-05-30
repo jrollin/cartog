@@ -42,6 +42,28 @@ fi
 
 has_cmd() { command -v "$1" &>/dev/null; }
 
+# Verify a file's SHA-256 against an expected hex digest. Mirrors the public
+# installer (scripts/install.sh). Returns non-zero on mismatch or when no
+# verifier is available; the caller aborts the install on failure.
+verify_sha256() {
+    local file="$1" expected="$2" actual=""
+    if has_cmd sha256sum; then
+        actual="$(sha256sum "$file" | awk '{print $1}')"
+    elif has_cmd shasum; then
+        actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+    elif has_cmd openssl; then
+        actual="$(openssl dgst -sha256 "$file" | awk '{print $NF}')"
+    else
+        echo "Error: no SHA-256 verifier found (need sha256sum, shasum, or openssl)." >&2
+        echo "Set CARTOG_NO_VERIFY=1 to bypass (NOT recommended)." >&2
+        return 1
+    fi
+    if [ "$actual" != "$expected" ]; then
+        echo "Error: SHA-256 mismatch for $file: expected $expected, got $actual." >&2
+        return 1
+    fi
+}
+
 # Pick the install directory. Preference order:
 #   1. $CARTOG_INSTALL_DIR — explicit override
 #   2. Directory of an existing cartog on PATH — upgrades in place, no duplicates
@@ -128,13 +150,46 @@ install_from_github() {
         fi
     fi
 
-    local url="https://github.com/${REPO}/releases/download/${tag}/cartog-${target}.tar.gz"
+    local archive="cartog-${target}.tar.gz"
+    local base="https://github.com/${REPO}/releases/download/${tag}"
+    local url="${base}/${archive}"
     local install_dir
     install_dir="$(pick_install_dir)"
     mkdir -p "$install_dir"
 
+    # Download to a temp dir, verify SHA-256 against the release's SHA256SUMS,
+    # THEN extract. A bare `curl | tar` would execute unverified bytes — this is
+    # the plugin's sole install route, so it must match the public installer's
+    # integrity check. CARTOG_NO_VERIFY=1 bypasses (NOT recommended).
+    local tmp
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/cartog-install.XXXXXX")" || return 1
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" RETURN
+
     echo "Downloading cartog ${tag} for ${target}..."
-    if curl -fsSL "$url" | tar xz -C "$install_dir"; then
+    if ! curl -fsSL "$url" -o "$tmp/$archive"; then
+        return 1
+    fi
+
+    if [ -z "${CARTOG_NO_VERIFY:-}" ]; then
+        if ! curl -fsSL "${base}/SHA256SUMS" -o "$tmp/SHA256SUMS"; then
+            echo "Error: could not download SHA256SUMS for ${tag}." >&2
+            return 1
+        fi
+        local expected
+        expected="$(awk -v f="$archive" '$2 == f || $2 == "*"f {print $1}' "$tmp/SHA256SUMS")"
+        if [ -z "$expected" ]; then
+            echo "Error: no SHA-256 entry for $archive in SHA256SUMS." >&2
+            return 1
+        fi
+        if ! verify_sha256 "$tmp/$archive" "$expected"; then
+            return 1
+        fi
+    else
+        echo "Skipping SHA-256 verification (CARTOG_NO_VERIFY is set)."
+    fi
+
+    if tar xz -C "$install_dir" -f "$tmp/$archive"; then
         chmod +x "${install_dir}/cartog"
         echo "cartog installed to ${install_dir}/cartog"
         printf '%s\n' "$install_dir" > "$INSTALL_DIR_MARKER"

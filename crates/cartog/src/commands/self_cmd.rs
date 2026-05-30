@@ -565,10 +565,12 @@ enum UpgradeError {
 
 /// How long `--apply-pending` waits for a peer `serve`/`watch` lock to clear
 /// before giving up and deferring to the next session. At a session boundary
-/// the serve process is already exiting and unlinks its PID file within
-/// milliseconds of dropping its `ProcessLock`, so this only has to absorb
-/// normal teardown lag.
-const APPLY_PEER_WAIT: Duration = Duration::from_secs(3);
+/// the serve process is already exiting and unlinks its PID file shortly after
+/// dropping its `ProcessLock`. The exact SessionEnd-vs-MCP-teardown ordering in
+/// Claude Code is not contractually guaranteed, so this budget is generous (it
+/// matches the secondary-promoter takeover window) to absorb teardown lag and
+/// land the swap on the same boundary rather than deferring a session.
+const APPLY_PEER_WAIT: Duration = Duration::from_secs(10);
 
 /// Poll interval while waiting for peers to clear in [`wait_for_no_peer`].
 const APPLY_PEER_POLL: Duration = Duration::from_millis(200);
