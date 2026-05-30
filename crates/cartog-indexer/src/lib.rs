@@ -2273,38 +2273,39 @@ We use PostgreSQL with connection pooling via pgbouncer.
         assert_eq!(r_none.edges_added, r_some.edges_added);
     }
 
-    /// Realistic-repo smoke. Opt in by setting CARTOG_INTEGRATION_FIXTURE
-    /// to a directory containing real source (e.g. the cartog repo itself
-    /// or any sibling project on the local machine). Skipped otherwise so
-    /// CI and tree-clean runs never depend on external paths.
+    /// The progress callback must emit Walking first, then Parsing and Storing
+    /// with positive file totals. Runs against the in-repo fixture so it
+    /// actually executes in CI (it previously gated on CARTOG_INTEGRATION_FIXTURE
+    /// — set nowhere — and silently passed as a no-op).
     #[test]
-    fn progress_callback_realistic_repo() {
+    fn progress_callback_emits_walking_then_parsing_and_storing() {
         use cartog_db::Database;
         use std::sync::Mutex;
 
-        let Ok(fixture) = std::env::var("CARTOG_INTEGRATION_FIXTURE") else {
-            eprintln!("skipped: CARTOG_INTEGRATION_FIXTURE not set");
-            return;
-        };
-        let root = PathBuf::from(fixture);
-        if !root.is_dir() {
-            eprintln!("skipped: CARTOG_INTEGRATION_FIXTURE is not a directory");
-            return;
-        }
-
+        let (_tmp, root) = tiny_python_project();
         let db = Database::open_memory().unwrap();
         let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
         let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
         index_directory(&db, &root, true, false, Some(&cb), None).unwrap();
 
         let events = events.into_inner().unwrap();
-        assert!(matches!(events.first(), Some(ProgressUpdate::Walking)));
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, ProgressUpdate::Parsing { total } if *total > 0)));
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, ProgressUpdate::Storing { total } if *total > 0)));
+        assert!(
+            matches!(events.first(), Some(ProgressUpdate::Walking)),
+            "first progress event must be Walking, got {:?}",
+            events.first()
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ProgressUpdate::Parsing { total } if *total > 0)),
+            "must emit a Parsing event with a positive total"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ProgressUpdate::Storing { total } if *total > 0)),
+            "must emit a Storing event with a positive total"
+        );
     }
 
     #[test]
