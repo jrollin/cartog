@@ -2048,7 +2048,9 @@ pub fn cmd_watch(
 }
 
 mod self_cmd;
-pub use self_cmd::{cmd_self_migrate_db, cmd_self_rollback, cmd_self_update, cmd_self_version};
+pub use self_cmd::{
+    cmd_self_migrate_db, cmd_self_rollback, cmd_self_update, cmd_self_version, UpdateMode,
+};
 
 #[cfg(test)]
 mod tests {

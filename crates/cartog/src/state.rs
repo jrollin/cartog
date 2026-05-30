@@ -41,6 +41,36 @@ pub struct State {
     /// the hot path.
     #[serde(default, skip_serializing_if = "is_false")]
     pub update_check_disabled: bool,
+
+    /// A deferred binary upgrade armed in-session, applied at the next safe
+    /// boundary. `None` means nothing is armed.
+    ///
+    /// Written by `cartog self update --defer` (which skips the running-peer
+    /// check so it can arm while a `cartog serve`/`watch` holds the lock),
+    /// consumed and cleared by `--apply-pending` once no peer is live.
+    ///
+    /// Concurrency: the background update probe (`auto_check::run_check_once`)
+    /// does load → mutate three fields → save, so it preserves any
+    /// `pending_update` it read. The arm path runs synchronously in the
+    /// foreground while the probe is a 24h-gated background thread, so the
+    /// interleave window is the same negligible one the other fields already
+    /// accept; `save_to`'s per-PID temp file prevents torn writes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_update: Option<PendingUpdate>,
+}
+
+/// Intent to swap the binary to `target_version` once no peer lock is held.
+/// Written by the arm path, consumed and cleared by the boundary-apply path.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingUpdate {
+    /// Bare `MAJOR.MINOR.PATCH` the boundary swap should install.
+    pub target_version: String,
+    /// Version of the binary that armed this, for stale detection and logging.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armed_from: Option<String>,
+    /// RFC3339 timestamp the intent was armed (debugging / staleness logging).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub armed_at: Option<String>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -276,10 +306,118 @@ mod tests {
             last_known_latest: Some("0.14.0".to_string()),
             last_known_outdated: true,
             update_check_disabled: false,
+            pending_update: None,
         };
         original.save_to(&path).expect("save");
         let loaded = State::load_from(&path);
         assert_eq!(loaded, original);
+    }
+
+    #[test]
+    fn pending_update_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state.toml");
+        let original = State {
+            pending_update: Some(PendingUpdate {
+                target_version: "0.20.0".to_string(),
+                armed_from: Some("0.19.0".to_string()),
+                armed_at: Some("2026-05-29T10:00:00Z".to_string()),
+            }),
+            ..Default::default()
+        };
+        original.save_to(&path).expect("save");
+        let loaded = State::load_from(&path);
+        assert_eq!(loaded, original);
+    }
+
+    #[test]
+    fn default_state_omits_pending_update() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state.toml");
+        State::default().save_to(&path).expect("save");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("pending_update"),
+            "default state should not write pending_update, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn update_check_mutation_preserves_pending_update() {
+        // Models the auto_check::run_check_once load→mutate-3-fields→save path:
+        // a deferred update armed by `--defer` must survive a concurrent
+        // background update-check that only touches last_*.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state.toml");
+        State {
+            pending_update: Some(PendingUpdate {
+                target_version: "0.20.0".to_string(),
+                armed_from: Some("0.19.0".to_string()),
+                armed_at: None,
+            }),
+            ..Default::default()
+        }
+        .save_to(&path)
+        .expect("seed armed state");
+
+        // The probe's exact sequence.
+        let mut state = State::load_from(&path);
+        state.last_update_check = Some("2026-05-29T12:00:00Z".to_string());
+        state.last_known_latest = Some("0.20.0".to_string());
+        state.last_known_outdated = true;
+        state.save_to(&path).expect("probe save");
+
+        let loaded = State::load_from(&path);
+        assert_eq!(
+            loaded
+                .pending_update
+                .as_ref()
+                .map(|p| p.target_version.as_str()),
+            Some("0.20.0"),
+            "the armed pending_update must survive the update-check save"
+        );
+        assert_eq!(loaded.last_known_latest.as_deref(), Some("0.20.0"));
+    }
+
+    #[test]
+    fn pending_update_inner_optionals_skip_when_none() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state.toml");
+        State {
+            pending_update: Some(PendingUpdate {
+                target_version: "0.20.0".to_string(),
+                armed_from: None,
+                armed_at: None,
+            }),
+            ..Default::default()
+        }
+        .save_to(&path)
+        .expect("save");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("target_version"), "got: {text:?}");
+        assert!(
+            !text.contains("armed_from") && !text.contains("armed_at"),
+            "None inner fields must be omitted, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_fields_alongside_pending_update_still_load() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("state.toml");
+        std::fs::write(
+            &path,
+            "future_field = \"hello\"\n\n[pending_update]\ntarget_version = \"0.21.0\"\n",
+        )
+        .unwrap();
+        let state = State::load_from(&path);
+        assert_eq!(
+            state
+                .pending_update
+                .as_ref()
+                .map(|p| p.target_version.as_str()),
+            Some("0.21.0")
+        );
     }
 
     #[test]

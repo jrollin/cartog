@@ -74,24 +74,90 @@ if ! mkdir -p "$SESSION_LOG_DIR" 2>/dev/null; then
 fi
 SESSION_LOG="$SESSION_LOG_DIR/session.log"
 LAST_ERROR_FILE="$SESSION_LOG_DIR/last-error"
+# Breadcrumb written by `cartog self update --apply-pending` on a successful
+# boundary swap; surfaced once here to confirm the deferred update landed.
+LAST_UPDATE_FILE="$SESSION_LOG_DIR/last-update"
 
 # F1: surface any error from the previous session's background pipeline.
+# stdout (not stderr): SessionStart stdout reaches the user via the model's
+# context; stderr is discarded when the hook exits 0.
 if [ -f "$LAST_ERROR_FILE" ]; then
-    echo "Previous cartog background task failed:" >&2
-    cat "$LAST_ERROR_FILE" >&2
+    echo "Previous cartog background task failed:"
+    cat "$LAST_ERROR_FILE" 2>/dev/null || true
     rm -f "$LAST_ERROR_FILE"
 fi
 
-# F3: passive drift warning. Compares the installed binary version against
-# the plugin's pinned version. The actual update is the user's call via
-# /cartog-install (or, for <0.14.0, the SessionEnd transitional hook).
+# F1b: surface (and clear) a completed deferred update from the last session.
+# Guard the cat: under `set -e`, an unreadable file that still passes -f would
+# otherwise abort the whole hook before indexing runs.
+if [ -f "$LAST_UPDATE_FILE" ]; then
+    cat "$LAST_UPDATE_FILE" 2>/dev/null || true
+    rm -f "$LAST_UPDATE_FILE"
+fi
+
+# Semver compare: returns 0 iff $1 < $2 component-wise (pre-release suffix
+# stripped). Mirrors version_gt in update_on_exit.sh.
+version_lt() {
+    local IFS=.
+    local -a a b
+    read -ra a <<< "${1%%-*}"
+    read -ra b <<< "${2%%-*}"
+    local i
+    for ((i=0; i<${#a[@]} || i<${#b[@]}; i++)); do
+        local ai="${a[i]:-0}" bi="${b[i]:-0}"
+        if [ "$ai" -lt "$bi" ] 2>/dev/null; then return 0; fi
+        if [ "$ai" -gt "$bi" ] 2>/dev/null; then return 1; fi
+    done
+    return 1
+}
+
+# F3: passive drift warning. Warns only when the installed binary is OLDER than
+# the plugin's pinned version — an equal or newer binary (e.g. a deliberate
+# manual install ahead of the pin) is left alone. Pending-aware: if a deferred
+# update is already armed, it says so instead of nagging to run /cartog-install.
+# The actual swap happens at SessionEnd (>=0.14) or via /cartog-install.
+#
+# Notices go to STDOUT, not stderr: Claude Code injects a SessionStart hook's
+# stdout into the model's context (so it surfaces to the user), but discards
+# stderr when the hook exits 0. A drift notice on stderr would be invisible.
 warn_if_drifted() {
     [ -n "$PLUGIN_VERSION" ] || return 0
-    local installed
-    installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')"
+    local info installed pending source
+    info="$(cartog self version --json 2>/dev/null)" || info=""
+    if [ -n "$info" ]; then
+        installed="$(printf '%s' "$info" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+        pending="$(printf '%s' "$info" | sed -n 's/.*"target_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+        source="$(printf '%s' "$info" | sed -n 's/.*"install_source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    else
+        installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')"
+        pending=""
+        source=""
+    fi
     [ -n "$installed" ] || return 0
-    [ "$installed" = "$PLUGIN_VERSION" ] && return 0
-    echo "cartog binary $installed is out of sync with plugin $PLUGIN_VERSION (run /cartog-install to update)." >&2
+    # Only an OLDER binary is "drifted". Equal or ahead → nothing to do.
+    version_lt "$installed" "$PLUGIN_VERSION" || return 0
+    if [ -n "$pending" ]; then
+        if [ "$pending" = "$PLUGIN_VERSION" ]; then
+            # Armed for the current pin. The apply runs at SessionEnd, but only
+            # once no other cartog session/watch holds the lock — say so, so a
+            # user with a second window open isn't left wondering why nothing
+            # changed.
+            echo "cartog $pending will be applied when this session ends (once any other cartog sessions close)."
+        else
+            # A deferred update is armed, but the plugin pin has since moved.
+            # Tell the user the armed target is stale and how to re-arm.
+            echo "cartog has a deferred update to $pending armed, but the plugin now wants $PLUGIN_VERSION — run /cartog-install to re-arm."
+        fi
+        return 0
+    fi
+    # A cargo-installed binary cannot be swapped by /cartog-install (self update
+    # refuses with exit 3); give that cohort the command that actually works
+    # rather than a dead-end nudge.
+    if [ "$source" = "cargo" ]; then
+        echo "cartog binary $installed is out of sync with plugin $PLUGIN_VERSION; it was installed via cargo — run \`cargo install cartog --force\` to upgrade."
+        return 0
+    fi
+    echo "cartog binary $installed is out of sync with plugin $PLUGIN_VERSION (run /cartog-install to update)."
 }
 
 # Background pipeline (steady-state): RAG setup → RAG index.
@@ -254,8 +320,8 @@ if ! command -v cartog >/dev/null 2>&1; then
     if ! fork_background run_install_pipeline "$_has_toml"; then
         # Lock held by another process AND binary is missing — the user's
         # "MCP tools available next session" promise won't hold. Surface
-        # this so they don't wait forever.
-        echo "Another cartog session is already installing or indexing. If this persists, remove $LOCK_DIR and run /cartog-install." >&2
+        # this (stdout → model context → user) so they don't wait forever.
+        echo "Another cartog session is already installing or indexing. If this persists, remove $LOCK_DIR and run /cartog-install."
         printf 'SessionStart could not start install: lock %s held by another process. If stale, remove it and run /cartog-install.\n' \
             "$LOCK_DIR" > "$LAST_ERROR_FILE"
     fi

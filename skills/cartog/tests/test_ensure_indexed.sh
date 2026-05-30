@@ -111,10 +111,45 @@ create_mock_cartog() {
     local rag_setup_exit="${2:-0}"
     local rag_setup_stderr="${3:-}"
     local self_update_exit="${4:-0}"
+    # $5 (optional): a pending_update target_version reported by
+    # `self version --json`, so drift tests can exercise the pending-aware path.
+    local pending_target="${5:-}"
+    # $6 (optional): install_source reported by `self version --json`
+    # (release-tarball|cargo|dev), so drift tests can exercise the cargo cohort.
+    local install_source="${6:-release-tarball}"
     cat > "$TEST_DIR/bin/cartog" <<MOCK
 #!/usr/bin/env bash
 if [ "\$1" = "--version" ]; then
     echo "cartog $mock_version"
+    exit 0
+fi
+if [ "\$1" = "self" ] && [ "\$2" = "version" ]; then
+    # Mirror the real binary's serde_json::to_string_pretty output (one key per
+    # line, nested block) so the hook's sed parse is exercised against the
+    # shape it sees in production, not a single-line shortcut.
+    if [ -n "$pending_target" ]; then
+        cat <<JSON
+{
+  "version": "$mock_version",
+  "target": "some-triple",
+  "install_source": "$install_source",
+  "last_update_check": null,
+  "pending_update": {
+    "target_version": "$pending_target",
+    "armed_from": "$mock_version"
+  }
+}
+JSON
+    else
+        cat <<JSON
+{
+  "version": "$mock_version",
+  "target": "some-triple",
+  "install_source": "$install_source",
+  "last_update_check": null
+}
+JSON
+    fi
     exit 0
 fi
 echo "\$@" >> "$CARTOG_TEST_LOG"
@@ -191,18 +226,38 @@ run_ensure_indexed() {
 }
 
 # Wait until the background pipeline finishes so log assertions are stable.
+# Wait for the forked background pipeline to FINISH writing its log.
+#
+# The authoritative, path-independent signal is the terminal "=== pipeline
+# exit N ===" line that BOTH pipelines (run_background_pipeline and
+# run_install_pipeline) write to session.log as their last body line — present
+# whether the run indexed or skipped B1/B2/B3 under the no-toml gate. The old
+# wait grepped CARTOG_TEST_LOG for "rag index", which never appears on the
+# no-toml/PATH-failure paths, so it fell through early and raced the session.log
+# write. After the marker, also wait for the lock to release so a subsequent
+# test (or the lock-cleanup assertion) doesn't race.
+#
+# The cap is generous (~30s) to absorb CPU contention; each loop exits as soon
+# as its condition holds, so it's fast in the common case. A timeout is loud
+# (stderr) so a genuine hang is distinguishable from a slow-but-fine run.
 wait_for_rag_index() {
-    local i=0
-    while ! grep -q '^rag index ' "$CARTOG_TEST_LOG" 2>/dev/null && [ "$i" -lt 50 ]; do
+    local i=0 cap=300
+    local sess="${CARTOG_LOG_DIR:-}/session.log"
+    while ! grep -q '=== .*pipeline exit ' "$sess" 2>/dev/null && [ "$i" -lt "$cap" ]; do
         sleep 0.1
         i=$((i + 1))
     done
-    # Also wait for the lock to release so subsequent tests don't race.
+    if [ "$i" -ge "$cap" ]; then
+        echo "wait_for_rag_index: timed out (${cap}00ms) waiting for pipeline-exit marker in $sess" >&2
+    fi
     i=0
-    while [ -d "${CARTOG_LOCK_DIR:-}" ] && [ "$i" -lt 50 ]; do
+    while [ -d "${CARTOG_LOCK_DIR:-}" ] && [ "$i" -lt "$cap" ]; do
         sleep 0.1
         i=$((i + 1))
     done
+    if [ "$i" -ge "$cap" ]; then
+        echo "wait_for_rag_index: timed out (${cap}00ms) waiting for lock ${CARTOG_LOCK_DIR:-} to release" >&2
+    fi
 }
 
 # Read the background session log (stdout/stderr from the background pipeline).
@@ -773,7 +828,7 @@ test_install_to_unreachable_dir_records_last_error() {
 # --- tests: drift warning (passive — actual update happens in SessionEnd hook) ---
 
 test_drift_warning_emitted_when_versions_differ() {
-    echo "TEST: drift warning printed to stderr when installed != plugin"
+    echo "TEST: drift warning emitted on STDOUT (visible to user) when installed < plugin"
     setup
     write_plugin_json "0.14.3"
     create_mock_cartog "0.14.1"
@@ -784,6 +839,31 @@ test_drift_warning_emitted_when_versions_differ() {
 
     assert_contains "warns about version drift" "out of sync with plugin 0.14.3" "$output"
     assert_contains "points at /cartog-install" "run /cartog-install to update" "$output"
+
+    # Visibility guarantee: the notice MUST be on stdout. Claude Code injects a
+    # SessionStart hook's stdout into the model's context (so the user sees it)
+    # but DISCARDS stderr at exit 0. Capture stdout only (stderr → /dev/null)
+    # and assert the line is still there — a regression to `>&2` would make the
+    # warning invisible and fail here.
+    teardown # tear down the first env before re-arming, so TEST_DIR isn't leaked
+    setup
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.14.1"
+    local stdout_only
+    stdout_only=$(
+        (
+            export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            export HOME="$TEST_DIR/home"
+            mkdir -p "$HOME"
+            mkdir -p "$TEST_DIR/workdir"
+            cd "$TEST_DIR/workdir"
+            bash "$ENSURE_SCRIPT" 2>/dev/null
+        )
+    )
+    wait_for_rag_index
+    assert_contains "drift notice is on stdout (not the discarded stderr)" \
+        "out of sync with plugin 0.14.3" "$stdout_only"
+
     # Crucially: SessionStart must NOT actually update.
     if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
         echo "  FAIL: 'self update' ran during SessionStart drift warning"
@@ -809,6 +889,23 @@ test_drift_warning_silent_when_versions_match() {
     teardown
 }
 
+test_drift_warning_silent_when_binary_newer_than_pin() {
+    echo "TEST: no drift warning when installed binary is NEWER than the plugin pin"
+    setup
+    # Installed 0.21.0 (e.g. a manual install) is ahead of the plugin's 0.14.3.
+    # The pin is a floor, not a ceiling — do NOT nag the user to "update".
+    write_plugin_json "0.14.3"
+    create_mock_cartog "0.21.0"
+
+    local output
+    output=$(run_ensure_indexed 2>&1)
+    wait_for_rag_index
+
+    assert_not_contains "no drift warning when ahead of pin" "out of sync with plugin" "$output"
+    assert_not_contains "does not nag /cartog-install when ahead" "run /cartog-install to update" "$output"
+    teardown
+}
+
 test_drift_warning_silent_when_no_plugin_json() {
     echo "TEST: no drift warning when plugin.json is missing"
     setup
@@ -820,6 +917,75 @@ test_drift_warning_silent_when_no_plugin_json() {
     wait_for_rag_index
 
     assert_not_contains "no drift warning" "out of sync with plugin" "$output"
+    teardown
+}
+
+test_drift_warning_cargo_cohort_gets_cargo_command() {
+    echo "TEST: a cargo-installed drifted binary is told 'cargo install --force', not /cartog-install"
+    setup
+    write_plugin_json "0.14.3"
+    # installed 0.14.1 < pin, install_source=cargo
+    create_mock_cartog "0.14.1" 0 "" 0 "" "cargo"
+
+    local output
+    output=$(run_ensure_indexed 2>&1)
+    wait_for_rag_index
+
+    assert_contains "names the cargo command" "cargo install cartog --force" "$output"
+    assert_not_contains "does not dead-end at /cartog-install" "run /cartog-install to update" "$output"
+    teardown
+}
+
+test_drift_warning_pending_aware_when_armed() {
+    echo "TEST: drift line says 'applied when session ends' when a matching update is armed"
+    setup
+    write_plugin_json "0.14.3"
+    # Installed 0.14.1, but a deferred update to 0.14.3 (== plugin) is armed.
+    create_mock_cartog "0.14.1" 0 "" 0 "0.14.3"
+
+    local output
+    output=$(run_ensure_indexed 2>&1)
+    wait_for_rag_index
+
+    assert_contains "announces pending apply" "will be applied when this session ends" "$output"
+    assert_not_contains "does not nag /cartog-install" "run /cartog-install to update" "$output"
+    teardown
+}
+
+test_drift_warning_acknowledges_stale_armed_after_repin() {
+    echo "TEST: drift line acknowledges a stale armed target when the plugin pin moved"
+    setup
+    # Plugin re-pinned to 0.21.0, but an older deferred update to 0.20.0 is armed.
+    write_plugin_json "0.21.0"
+    create_mock_cartog "0.19.0" 0 "" 0 "0.20.0"
+
+    local output
+    output=$(run_ensure_indexed 2>&1)
+    wait_for_rag_index
+
+    assert_contains "names the stale armed target" "deferred update to 0.20.0 armed" "$output"
+    assert_contains "names the new pin" "plugin now wants 0.21.0" "$output"
+    assert_contains "points at re-arm" "/cartog-install to re-arm" "$output"
+    teardown
+}
+
+test_last_update_surfaced_and_cleared() {
+    echo "TEST: last-update breadcrumb is surfaced and cleared"
+    setup
+    create_mock_cartog "0.14.1"
+    mkdir -p "$CARTOG_LOG_DIR"
+    echo "cartog updated to 0.14.3." > "$CARTOG_LOG_DIR/last-update"
+
+    local output
+    output=$(run_ensure_indexed 2>&1)
+    wait_for_rag_index
+
+    assert_contains "surfaces completed update" "cartog updated to 0.14.3." "$output"
+    if [ ! -f "$CARTOG_LOG_DIR/last-update" ]; then
+        echo "  PASS: last-update file cleared after surfacing"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: last-update file still exists after surfacing"; FAIL=$((FAIL + 1))
+    fi
     teardown
 }
 
@@ -1581,7 +1747,17 @@ test_drift_warning_emitted_when_versions_differ
 echo ""
 test_drift_warning_silent_when_versions_match
 echo ""
+test_drift_warning_silent_when_binary_newer_than_pin
+echo ""
 test_drift_warning_silent_when_no_plugin_json
+echo ""
+test_drift_warning_cargo_cohort_gets_cargo_command
+echo ""
+test_drift_warning_pending_aware_when_armed
+echo ""
+test_drift_warning_acknowledges_stale_armed_after_repin
+echo ""
+test_last_update_surfaced_and_cleared
 echo ""
 test_toml_cwd_database_path
 echo ""

@@ -449,12 +449,34 @@ pub enum RagCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum SelfCommand {
-    /// Upgrade cartog in place (or check for an update with --check)
+    /// Upgrade cartog in place (or check, defer, or apply a deferred update)
     Update {
         /// Report whether an update is available without modifying anything.
         /// Exit codes: 0 up to date, 1 update available, 2 network/parse error.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["defer", "apply_pending"])]
         check: bool,
+
+        /// Arm a deferred update: record the target version in the state file
+        /// and exit WITHOUT swapping the binary. Succeeds even while a peer
+        /// `cartog serve`/`watch` is running — the swap happens later via
+        /// `--apply-pending` once the peer has exited. This is the right call
+        /// from inside a Claude Code session, where the MCP server is the peer.
+        /// Targets the latest stable release unless `--to` pins a version.
+        #[arg(long, conflicts_with_all = ["check", "apply_pending"])]
+        defer: bool,
+
+        /// With `--defer`, arm exactly this `MAJOR.MINOR.PATCH` version instead
+        /// of resolving the latest stable release. Used by `/cartog-install` to
+        /// arm the plugin's pinned version. Requires `--defer`.
+        #[arg(long, value_name = "VERSION", requires = "defer")]
+        to: Option<String>,
+
+        /// Apply a previously-armed deferred update (see `--defer`). Reads the
+        /// pending target from the state file, waits briefly for any peer lock
+        /// to clear, performs the swap, and clears the pending intent. Intended
+        /// to run from the SessionEnd hook once the serve process has exited.
+        #[arg(long, conflicts_with_all = ["check", "defer"])]
+        apply_pending: bool,
 
         /// Suppress all output; the exit code is the sole signal.
         #[arg(long)]

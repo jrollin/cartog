@@ -341,9 +341,17 @@ fn main() -> Result<()> {
                 .map_err(Into::into)
         }
         Command::Self_(sub) => match sub {
-            SelfCommand::Update { check, quiet } => {
-                commands::cmd_self_update(check, quiet, cli.json)
-            }
+            SelfCommand::Update {
+                check,
+                defer,
+                to,
+                apply_pending,
+                quiet,
+            } => commands::cmd_self_update(
+                commands::UpdateMode::from_flags(check, defer, to, apply_pending),
+                quiet,
+                cli.json,
+            ),
             SelfCommand::Version => commands::cmd_self_version(cli.json),
             SelfCommand::Rollback => commands::cmd_self_rollback(),
             SelfCommand::MigrateDb { dry_run } => {

@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Install cartog binary
-# 1. Try downloading pre-built binary from GitHub Releases (requires curl + tar)
-# 2. Fallback to cargo install (requires Rust 1.70+)
+# Install cartog binary by downloading a pre-built release tarball from GitHub
+# Releases (requires curl + tar). Release-only: there is no cargo-install
+# fallback — if no matching pre-built binary is available, the script fails
+# with a clear message rather than silently building from source.
 
 REPO="jrollin/cartog"
-MIN_RUST_MAJOR=1
-MIN_RUST_MINOR=70
 REQUESTED_VERSION="${1:-}"
 
 # Marker hands the chosen install dir from the writer to verify_install.
@@ -43,20 +42,26 @@ fi
 
 has_cmd() { command -v "$1" &>/dev/null; }
 
-check_rust_version() {
-    if ! has_cmd rustc; then
+# Verify a file's SHA-256 against an expected hex digest. Mirrors the public
+# installer (scripts/install.sh). Returns non-zero on mismatch or when no
+# verifier is available; the caller aborts the install on failure.
+verify_sha256() {
+    local file="$1" expected="$2" actual=""
+    if has_cmd sha256sum; then
+        actual="$(sha256sum "$file" | awk '{print $1}')"
+    elif has_cmd shasum; then
+        actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+    elif has_cmd openssl; then
+        actual="$(openssl dgst -sha256 "$file" | awk '{print $NF}')"
+    else
+        echo "Error: no SHA-256 verifier found (need sha256sum, shasum, or openssl)." >&2
+        echo "Set CARTOG_NO_VERIFY=1 to bypass (NOT recommended)." >&2
         return 1
     fi
-    local version
-    version="$(rustc --version | sed -E 's/rustc ([0-9]+\.[0-9]+).*/\1/')"
-    local major minor
-    major="${version%%.*}"
-    minor="${version##*.}"
-    if [ "$major" -gt "$MIN_RUST_MAJOR" ] || { [ "$major" -eq "$MIN_RUST_MAJOR" ] && [ "$minor" -ge "$MIN_RUST_MINOR" ]; }; then
-        return 0
+    if [ "$actual" != "$expected" ]; then
+        echo "Error: SHA-256 mismatch for $file: expected $expected, got $actual." >&2
+        return 1
     fi
-    echo "Warning: Rust $version found, but cartog requires >= $MIN_RUST_MAJOR.$MIN_RUST_MINOR"
-    return 1
 }
 
 # Pick the install directory. Preference order:
@@ -145,13 +150,46 @@ install_from_github() {
         fi
     fi
 
-    local url="https://github.com/${REPO}/releases/download/${tag}/cartog-${target}.tar.gz"
+    local archive="cartog-${target}.tar.gz"
+    local base="https://github.com/${REPO}/releases/download/${tag}"
+    local url="${base}/${archive}"
     local install_dir
     install_dir="$(pick_install_dir)"
     mkdir -p "$install_dir"
 
+    # Download to a temp dir, verify SHA-256 against the release's SHA256SUMS,
+    # THEN extract. A bare `curl | tar` would execute unverified bytes — this is
+    # the plugin's sole install route, so it must match the public installer's
+    # integrity check. CARTOG_NO_VERIFY=1 bypasses (NOT recommended).
+    local tmp
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/cartog-install.XXXXXX")" || return 1
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" RETURN
+
     echo "Downloading cartog ${tag} for ${target}..."
-    if curl -fsSL "$url" | tar xz -C "$install_dir"; then
+    if ! curl -fsSL "$url" -o "$tmp/$archive"; then
+        return 1
+    fi
+
+    if [ -z "${CARTOG_NO_VERIFY:-}" ]; then
+        if ! curl -fsSL "${base}/SHA256SUMS" -o "$tmp/SHA256SUMS"; then
+            echo "Error: could not download SHA256SUMS for ${tag}." >&2
+            return 1
+        fi
+        local expected
+        expected="$(awk -v f="$archive" '$2 == f || $2 == "*"f {print $1}' "$tmp/SHA256SUMS")"
+        if [ -z "$expected" ]; then
+            echo "Error: no SHA-256 entry for $archive in SHA256SUMS." >&2
+            return 1
+        fi
+        if ! verify_sha256 "$tmp/$archive" "$expected"; then
+            return 1
+        fi
+    else
+        echo "Skipping SHA-256 verification (CARTOG_NO_VERIFY is set)."
+    fi
+
+    if tar xz -C "$install_dir" -f "$tmp/$archive"; then
         chmod +x "${install_dir}/cartog"
         echo "cartog installed to ${install_dir}/cartog"
         printf '%s\n' "$install_dir" > "$INSTALL_DIR_MARKER"
@@ -201,34 +239,31 @@ verify_install() {
     return 1
 }
 
-# Try pre-built binary first
-if target="$(detect_target)"; then
-    if install_from_github "$target"; then
-        verify_install
-        exit 0
+# === main (release-only install) ===
+# Everything above is function/const definitions; the executable flow starts
+# here. The sentinel comment on the line above is a stable anchor for
+# test_install.sh, which sources only the definitions — keep it in sync if you
+# rename it.
+#
+# Download a pre-built binary from GitHub Releases. There is no cargo-install
+# fallback — a failure here is surfaced, not silently worked around by building
+# from source.
+if ! target="$(detect_target)"; then
+    echo "Error: unsupported platform — no pre-built cartog binary for this OS/arch."
+    echo "Build from source instead: https://github.com/${REPO}#install"
+    exit 1
+fi
+
+if ! install_from_github "$target"; then
+    echo "Error: could not download a pre-built cartog binary for ${target}."
+    if [ -n "$REQUESTED_VERSION" ]; then
+        echo "Check that release v${REQUESTED_VERSION} publishes an asset for ${target}:"
+        echo "  https://github.com/${REPO}/releases/tag/v${REQUESTED_VERSION}"
+    else
+        echo "Check your network/proxy, or see https://github.com/${REPO}/releases"
     fi
-    echo "Pre-built binary not available, falling back to cargo install..."
-fi
-
-# Fallback to cargo install
-if ! has_cmd cargo; then
-    echo "Error: could not download pre-built binary and cargo not found."
-    echo "Install Rust from https://rustup.rs/ then run:"
-    echo "  cargo install cartog"
+    echo "To build from source instead: https://github.com/${REPO}#install"
     exit 1
 fi
 
-if ! check_rust_version; then
-    echo "Error: Rust toolchain too old. Update with: rustup update"
-    exit 1
-fi
-
-echo "Installing cartog via cargo..."
-if [ -n "$REQUESTED_VERSION" ]; then
-    cargo install "cartog@${REQUESTED_VERSION}"
-else
-    cargo install cartog
-fi
-# cargo install resolves its target dir as: CARGO_INSTALL_ROOT > CARGO_HOME > ~/.cargo
-printf '%s\n' "${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin" > "$INSTALL_DIR_MARKER"
 verify_install

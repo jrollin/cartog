@@ -950,3 +950,783 @@ fn truncated_archive_download_aborts_with_network_error() {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+// ── deferred update: --defer (arm) / --apply-pending (boundary) ────────
+//
+// These exercise the split-update mechanism the Claude Code plugin relies
+// on: `--defer` arms a pending update while a peer (the MCP serve process)
+// is alive, and `--apply-pending` performs the swap at the session boundary
+// once the peer has exited.
+
+/// Spawn `cartog self update <mode>` (`--defer` or `--apply-pending`) in an
+/// isolated HOME with a mocked GitHub API and a black-holed download base.
+fn run_self_update_mode(
+    mode: &str,
+    state_dir: &std::path::Path,
+    api_url: &str,
+    extra_env: &[(&str, &str)],
+) -> std::process::Output {
+    let mut cmd = Command::new(cartog_bin());
+    cmd.arg("self")
+        .arg("update")
+        .arg(mode)
+        .env("HOME", state_dir)
+        .env("XDG_STATE_HOME", state_dir.join("state"))
+        .env("XDG_DATA_HOME", state_dir.join("data"))
+        .env("XDG_CONFIG_HOME", state_dir.join("config"))
+        .env("CARTOG_GITHUB_API_URL", api_url)
+        .env(
+            "CARTOG_GITHUB_DOWNLOAD_BASE",
+            "http://127.0.0.1:1/blackhole",
+        )
+        .env_remove("CARGO_HOME");
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    cmd.output().expect("failed to spawn cartog")
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn defer_arms_pending_and_exits_zero() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let api = spawn_canned_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string());
+    let out = run_self_update_mode(
+        "--defer",
+        dir.path(),
+        &api,
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "arming must exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let state = std::fs::read_to_string(seeded_state_path(dir.path()))
+        .expect("state.toml should exist after --defer");
+    assert!(
+        state.contains("[pending_update]") && state.contains("999.0.0"),
+        "state must record the pending target, got: {state}"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn defer_succeeds_even_with_live_peer() {
+    // The core regression guard: arming MUST NOT refuse (exit 6) just
+    // because a peer serve/watch holds the lock — that is the entire point.
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock_dir = isolated_lock_dir(dir.path());
+    std::fs::create_dir_all(&lock_dir).unwrap();
+    std::fs::write(lock_dir.join("serve.pid"), std::process::id().to_string()).unwrap();
+
+    let api = spawn_canned_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string());
+    let out = run_self_update_mode(
+        "--defer",
+        dir.path(),
+        &api,
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "arming must succeed with a live peer (NOT exit 6); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let state = std::fs::read_to_string(seeded_state_path(dir.path()))
+        .expect("state.toml should exist after --defer");
+    assert!(
+        state.contains("999.0.0"),
+        "pending target must be armed despite the peer, got: {state}"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn defer_up_to_date_does_not_arm() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let api = spawn_canned_github_response(format!(
+        "{{\"tag_name\":\"v{}\"}}",
+        env!("CARGO_PKG_VERSION")
+    ));
+    let out = run_self_update_mode(
+        "--defer",
+        dir.path(),
+        &api,
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let state_path = seeded_state_path(dir.path());
+    if let Ok(text) = std::fs::read_to_string(&state_path) {
+        assert!(
+            !text.contains("[pending_update]"),
+            "up-to-date --defer must not arm anything, got: {text}"
+        );
+    }
+}
+
+#[test]
+fn defer_refuses_cargo() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = run_self_update_mode(
+        "--defer",
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "cargo")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "cargo source must refuse --defer (exit 3); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// `cartog self update --defer --to <version>` in an isolated HOME. The API is
+/// black-holed to prove `--to` arms WITHOUT contacting GitHub for "latest".
+#[cfg(not(target_os = "windows"))]
+fn run_defer_to(
+    version: &str,
+    state_dir: &std::path::Path,
+    extra_env: &[(&str, &str)],
+) -> std::process::Output {
+    let mut cmd = Command::new(cartog_bin());
+    cmd.arg("self")
+        .arg("update")
+        .arg("--defer")
+        .arg("--to")
+        .arg(version)
+        .env("HOME", state_dir)
+        .env("XDG_STATE_HOME", state_dir.join("state"))
+        .env("XDG_DATA_HOME", state_dir.join("data"))
+        .env("XDG_CONFIG_HOME", state_dir.join("config"))
+        // Black hole: --to must NOT fetch latest. Any network attempt fails.
+        .env("CARTOG_GITHUB_API_URL", "http://127.0.0.1:1/blackhole")
+        .env(
+            "CARTOG_GITHUB_DOWNLOAD_BASE",
+            "http://127.0.0.1:1/blackhole",
+        )
+        .env_remove("CARGO_HOME");
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    cmd.output().expect("failed to spawn cartog")
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn defer_to_pins_exact_version_without_fetching_latest() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = run_defer_to(
+        "0.99.0",
+        dir.path(),
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "--to must arm the pin without a network call; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let state = std::fs::read_to_string(seeded_state_path(dir.path()))
+        .expect("state.toml should exist after --defer --to");
+    assert!(
+        state.contains("[pending_update]") && state.contains("0.99.0"),
+        "must arm exactly the pinned target, got: {state}"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn defer_to_rejects_non_semver_target() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = run_defer_to(
+        "v0.99.0",
+        dir.path(),
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a non-bare-semver --to must be rejected (exit 2); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    // Nothing armed.
+    let state_path = seeded_state_path(dir.path());
+    if let Ok(text) = std::fs::read_to_string(&state_path) {
+        assert!(
+            !text.contains("[pending_update]"),
+            "a rejected --to must not arm anything, got: {text}"
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn apply_pending_noop_when_nothing_armed() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = run_self_update_mode(
+        "--apply-pending",
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "nothing armed → clean no-op; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn apply_pending_skips_and_clears_when_already_at_target() {
+    // Seed a pending intent whose target equals the running version: the
+    // swap already happened (or the user moved past it). Apply must clear
+    // the intent and no-op.
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = seeded_state_path(dir.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        format!(
+            "[pending_update]\ntarget_version = \"{}\"\n",
+            env!("CARGO_PKG_VERSION")
+        ),
+    )
+    .unwrap();
+
+    let out = run_self_update_mode(
+        "--apply-pending",
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let text = std::fs::read_to_string(&state_path).unwrap();
+    assert!(
+        !text.contains("[pending_update]"),
+        "stale/satisfied intent must be cleared, got: {text}"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn apply_pending_refuses_when_peer_held() {
+    // A pending target is armed, but a peer is still live at apply time.
+    // Apply must NOT swap, must exit 6, and must KEEP the intent so the
+    // next boundary retries. A short wait budget keeps the test fast.
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = seeded_state_path(dir.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        "[pending_update]\ntarget_version = \"999.0.0\"\n",
+    )
+    .unwrap();
+    let lock_dir = isolated_lock_dir(dir.path());
+    std::fs::create_dir_all(&lock_dir).unwrap();
+    std::fs::write(lock_dir.join("serve.pid"), std::process::id().to_string()).unwrap();
+
+    let out = run_self_update_mode(
+        "--apply-pending",
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[
+            ("CARTOG_TEST_INSTALL_SOURCE", "release-tarball"),
+            ("CARTOG_TEST_APPLY_PEER_WAIT_MS", "100"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(6),
+        "live peer at apply time must exit 6; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let text = std::fs::read_to_string(&state_path).unwrap();
+    assert!(
+        text.contains("999.0.0"),
+        "intent must be kept for retry, got: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_pending_checksum_failure_clears_intent() {
+    // Pending target armed, no peer, but the release mock serves a tarball
+    // whose SHA does not match SHA256SUMS. Apply reaches perform_upgrade,
+    // exits 4, and CLEARS the intent (a checksum mismatch will not self-heal).
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = seeded_state_path(dir.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        "[pending_update]\ntarget_version = \"99.0.0\"\n",
+    )
+    .unwrap();
+
+    let target = cartog_target_triple();
+    let archive_name = format!("cartog-{target}.tar.gz");
+    let bad_hash = "0".repeat(64);
+    let sums = format!("{bad_hash}  {archive_name}\n");
+    let (api, dl_base) = spawn_release_mock("99.0.0", b"not a real tarball".to_vec(), sums);
+
+    let out = Command::new(cartog_bin())
+        .arg("self")
+        .arg("update")
+        .arg("--apply-pending")
+        .env("HOME", dir.path())
+        .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("XDG_DATA_HOME", dir.path().join("data"))
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
+        .env("CARTOG_GITHUB_API_URL", &api)
+        .env("CARTOG_GITHUB_DOWNLOAD_BASE", &dl_base)
+        .env("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")
+        .env_remove("CARGO_HOME")
+        .output()
+        .expect("spawn cartog");
+
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "checksum mismatch must exit 4; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let text = std::fs::read_to_string(&state_path).unwrap();
+    assert!(
+        !text.contains("[pending_update]"),
+        "checksum failure must clear the intent (no retry loop), got: {text}"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn apply_pending_network_failure_keeps_intent() {
+    // Pending target armed, no peer, download base is a black hole. Apply
+    // reaches perform_upgrade, the fetch fails (exit 2), and the intent is
+    // KEPT so the next boundary retries.
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = seeded_state_path(dir.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        "[pending_update]\ntarget_version = \"999.0.0\"\n",
+    )
+    .unwrap();
+
+    let out = run_self_update_mode(
+        "--apply-pending",
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "download failure must exit 2; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let text = std::fs::read_to_string(&state_path).unwrap();
+    assert!(
+        text.contains("999.0.0"),
+        "transient network failure must keep the intent, got: {text}"
+    );
+}
+
+// Uses seeded_state_path, which is not implemented on Windows.
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn defer_refuses_dev_is_not_a_thing_dev_arms_like_release() {
+    // Policy check (matches `cartog self update`): a dev build is treated as
+    // upgradeable, so --defer arms it. Only cargo installs are refused.
+    let dir = tempfile::TempDir::new().unwrap();
+    let api = spawn_canned_github_response(r#"{"tag_name":"v999.0.0"}"#.to_string());
+    let out = run_self_update_mode(
+        "--defer",
+        dir.path(),
+        &api,
+        &[("CARTOG_TEST_INSTALL_SOURCE", "dev")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "dev source must arm (only cargo is refused); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let state = std::fs::read_to_string(seeded_state_path(dir.path()))
+        .expect("state.toml should exist after --defer");
+    assert!(
+        state.contains("999.0.0"),
+        "dev build must arm, got: {state}"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn defer_network_error_exits_2() {
+    // Mock GitHub returns 500 → fetch fails → arm reports exit 2.
+    let dir = tempfile::TempDir::new().unwrap();
+    let api = spawn_500_github_response();
+    let out = run_self_update_mode(
+        "--defer",
+        dir.path(),
+        &api,
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "fetch failure must exit 2; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn apply_pending_cargo_refuses_and_clears_intent() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = seeded_state_path(dir.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        "[pending_update]\ntarget_version = \"999.0.0\"\n",
+    )
+    .unwrap();
+
+    let out = run_self_update_mode(
+        "--apply-pending",
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "cargo")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "cargo source must refuse apply (exit 3); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let text = std::fs::read_to_string(&state_path).unwrap();
+    assert!(
+        !text.contains("[pending_update]"),
+        "cargo refusal at apply must clear the un-appliable intent, got: {text}"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn apply_pending_refuses_when_only_watch_peer_held() {
+    // Regression guard: apply must wait for the WATCH lock too, not just serve.
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = seeded_state_path(dir.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        "[pending_update]\ntarget_version = \"999.0.0\"\n",
+    )
+    .unwrap();
+    let lock_dir = isolated_lock_dir(dir.path());
+    std::fs::create_dir_all(&lock_dir).unwrap();
+    // Only a watch peer (no serve.pid).
+    std::fs::write(lock_dir.join("watch.pid"), std::process::id().to_string()).unwrap();
+
+    let out = run_self_update_mode(
+        "--apply-pending",
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[
+            ("CARTOG_TEST_INSTALL_SOURCE", "release-tarball"),
+            ("CARTOG_TEST_APPLY_PEER_WAIT_MS", "100"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(6),
+        "a live watch peer must block apply (exit 6); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        std::fs::read_to_string(&state_path)
+            .unwrap()
+            .contains("999.0.0"),
+        "intent kept while watch peer holds the lock"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn self_version_json_exposes_pending_update() {
+    // The SessionStart hook reads the armed target from `self version --json`;
+    // assert the real binary emits it (not just the mocked shell output).
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = seeded_state_path(dir.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        "[pending_update]\ntarget_version = \"0.20.0\"\narmed_from = \"0.19.0\"\n",
+    )
+    .unwrap();
+
+    let out = run_self_version(&["--json"], dir.path());
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert_eq!(
+        parsed["pending_update"]["target_version"].as_str(),
+        Some("0.20.0"),
+        "self version --json must expose the armed target, got: {stdout}"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn self_version_json_omits_pending_update_when_none() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = run_self_version(&["--json"], dir.path());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    assert!(
+        parsed.get("pending_update").is_none(),
+        "pending_update must be omitted when nothing armed, got: {stdout}"
+    );
+}
+
+// ── apply-pending success E2E (real download + swap) ──────────────────
+//
+// Unix-only: exercises the full reload→clear→breadcrumb path of
+// run_apply_pending against a sandboxed cartog copy, with a release mock
+// serving a valid .tar.gz whose contained `cartog` is a stub that passes
+// the `--version` smoke test.
+
+#[cfg(unix)]
+fn make_valid_cartog_tarball(stub_version: &str) -> Vec<u8> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    let stub = format!("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"cartog {stub_version}\"; exit 0; fi\nexit 0\n");
+    let stub_bytes = stub.into_bytes();
+    let mut tar_buf = Vec::new();
+    {
+        let mut builder = tar::Builder::new(&mut tar_buf);
+        let mut header = tar::Header::new_gnu();
+        header.set_path("cartog").unwrap();
+        header.set_size(stub_bytes.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder.append(&header, &stub_bytes[..]).unwrap();
+        builder.finish().unwrap();
+    }
+    let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+    use std::io::Write as _;
+    gz.write_all(&tar_buf).unwrap();
+    gz.finish().unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_pending_success_swaps_clears_intent_and_writes_breadcrumb() {
+    use sha2::{Digest, Sha256};
+
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    let log_dir = tempfile::TempDir::new().unwrap();
+
+    // Sandboxed cartog copy whose own --apply-pending we run.
+    let bin = copy_cartog_into(install_dir.path());
+
+    // Seed the armed intent at the path the binary reads (CARTOG_LOG_DIR is set
+    // below, but state.toml still resolves via HOME/XDG).
+    let state_path = seeded_state_path(home.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        "[pending_update]\ntarget_version = \"99.0.0\"\n",
+    )
+    .unwrap();
+
+    // Release mock: valid tarball + matching SHA256SUMS.
+    let target = cartog_target_triple();
+    let archive_name = format!("cartog-{target}.tar.gz");
+    let archive_bytes = make_valid_cartog_tarball("99.0.0");
+    let sha = {
+        let mut h = Sha256::new();
+        h.update(&archive_bytes);
+        format!("{:x}", h.finalize())
+    };
+    let sums = format!("{sha}  {archive_name}\n");
+    let (api, dl_base) = spawn_release_mock("99.0.0", archive_bytes, sums);
+
+    let out = Command::new(&bin)
+        .arg("self")
+        .arg("update")
+        .arg("--apply-pending")
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path().join("state"))
+        .env("XDG_DATA_HOME", home.path().join("data"))
+        .env("XDG_CONFIG_HOME", home.path().join("config"))
+        .env("CARTOG_LOG_DIR", log_dir.path())
+        .env("CARTOG_GITHUB_API_URL", &api)
+        .env("CARTOG_GITHUB_DOWNLOAD_BASE", &dl_base)
+        .env("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")
+        .env_remove("CARGO_HOME")
+        .output()
+        .expect("spawn sandboxed cartog");
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "successful apply must exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    // The binary was swapped to the stub.
+    let swapped = std::fs::read_to_string(&bin).unwrap();
+    assert!(
+        swapped.starts_with("#!/bin/sh"),
+        "binary must be replaced by the stub from the tarball"
+    );
+    // The previous binary is preserved as .old.
+    assert!(
+        install_dir.path().join("cartog.old").exists(),
+        "previous binary must be saved as <bin>.old"
+    );
+    // Intent cleared.
+    let state = std::fs::read_to_string(&state_path).unwrap();
+    assert!(
+        !state.contains("[pending_update]"),
+        "intent must be cleared after a successful swap, got: {state}"
+    );
+    // Breadcrumb written where the hook reads it.
+    let breadcrumb = std::fs::read_to_string(log_dir.path().join("last-update")).unwrap();
+    assert_eq!(breadcrumb, "cartog updated to 99.0.0.\n");
+}
+
+/// A .tar.gz whose `cartog` exits non-zero on `--version` — fails the smoke test.
+#[cfg(unix)]
+fn make_smoke_failing_cartog_tarball() -> Vec<u8> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    let stub = b"#!/bin/sh\nexit 1\n";
+    let mut tar_buf = Vec::new();
+    {
+        let mut builder = tar::Builder::new(&mut tar_buf);
+        let mut header = tar::Header::new_gnu();
+        header.set_path("cartog").unwrap();
+        header.set_size(stub.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder.append(&header, &stub[..]).unwrap();
+        builder.finish().unwrap();
+    }
+    let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+    use std::io::Write as _;
+    gz.write_all(&tar_buf).unwrap();
+    gz.finish().unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_pending_smoke_failure_exits_7_restores_and_clears_intent() {
+    use sha2::{Digest, Sha256};
+
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    let bin = copy_cartog_into(install_dir.path());
+    // Remember the original (real cartog) bytes to assert restoration.
+    let original_len = std::fs::metadata(&bin).unwrap().len();
+
+    let state_path = seeded_state_path(home.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        "[pending_update]\ntarget_version = \"99.0.0\"\n",
+    )
+    .unwrap();
+
+    let target = cartog_target_triple();
+    let archive_name = format!("cartog-{target}.tar.gz");
+    let archive_bytes = make_smoke_failing_cartog_tarball();
+    let sha = {
+        let mut h = Sha256::new();
+        h.update(&archive_bytes);
+        format!("{:x}", h.finalize())
+    };
+    let sums = format!("{sha}  {archive_name}\n");
+    let (api, dl_base) = spawn_release_mock("99.0.0", archive_bytes, sums);
+
+    let out = Command::new(&bin)
+        .arg("self")
+        .arg("update")
+        .arg("--apply-pending")
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path().join("state"))
+        .env("XDG_DATA_HOME", home.path().join("data"))
+        .env("XDG_CONFIG_HOME", home.path().join("config"))
+        .env("CARTOG_GITHUB_API_URL", &api)
+        .env("CARTOG_GITHUB_DOWNLOAD_BASE", &dl_base)
+        .env("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")
+        .env_remove("CARGO_HOME")
+        .output()
+        .expect("spawn sandboxed cartog");
+
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "smoke failure must exit 7 (distinct from 5); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    // Previous binary restored (the real cartog, not the 1-line stub).
+    assert_eq!(
+        std::fs::metadata(&bin).unwrap().len(),
+        original_len,
+        "previous binary must be restored after a smoke failure"
+    );
+    // Deterministic failure → intent cleared so it won't retry-loop.
+    let state = std::fs::read_to_string(&state_path).unwrap();
+    assert!(
+        !state.contains("[pending_update]"),
+        "smoke failure must clear the intent (deterministic), got: {state}"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn apply_pending_skips_when_another_apply_holds_the_lock() {
+    // Plant a live apply-update lock (our own PID). A second --apply-pending
+    // must see Held → no-op exit 0 WITHOUT swapping, and leave the intent armed
+    // for the in-flight apply to finish. Network points at a black hole to
+    // prove no download is attempted past the lock.
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = seeded_state_path(dir.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        "[pending_update]\ntarget_version = \"999.0.0\"\n",
+    )
+    .unwrap();
+    let lock_dir = isolated_lock_dir(dir.path());
+    std::fs::create_dir_all(&lock_dir).unwrap();
+    std::fs::write(
+        lock_dir.join("apply-update.pid"),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+
+    let out = run_self_update_mode(
+        "--apply-pending",
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a held apply-update lock must yield a clean no-op (exit 0); stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        std::fs::read_to_string(&state_path)
+            .unwrap()
+            .contains("999.0.0"),
+        "intent must be kept for the in-flight apply to complete"
+    );
+}
