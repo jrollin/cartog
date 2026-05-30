@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.19.0] - 2026-05-28
+## [0.20.0] - 2026-05-30
 
 ### Bug Fixes
 
@@ -93,6 +93,14 @@
 - **review**: Adversarial-review findings on the unpushed diff ([`faf9794`](https://github.com/jrollin/cartog/commit/faf9794d2c4a3349907d8641037a0ae83a6bfa44))
 - **benchmarks**: Wire Java and PHP fixtures into the suite ([`8d71ece`](https://github.com/jrollin/cartog/commit/8d71ece18e67355932dae6b41c0ad9ed79e8175c))
 - **languages**: Address Dart extractor PR review ([`50919c2`](https://github.com/jrollin/cartog/commit/50919c20a8c14c93a2bbaca151b4b3f2fdd4ba99))
+- **db**: Preserve multi-char lowercase mappings in normalize_symbol_name ([`2bd3895`](https://github.com/jrollin/cartog/commit/2bd3895d12ce14eddffe9cb43be1a7c9500097d2))
+- **indexer**: Skip files with no registered extractor instead of panicking ([`7e0fef5`](https://github.com/jrollin/cartog/commit/7e0fef5adf94daaa01ee4816f5ec13354398c8c8))
+- **benchmarks**: Correct recall matching and unify the fixture filter ([`4490daf`](https://github.com/jrollin/cartog/commit/4490daf9edbcd559b26cce6ece2ed5f877afa123))
+- **benchmarks**: Isolate per-fixture indexes and correct scenario 04 ([`935aeae`](https://github.com/jrollin/cartog/commit/935aeae7b4cfe2b7a85fc5fdaf91b0fb22ebf019))
+- **benchmarks**: Address PR review (credentials, rag warnings, dart row) ([`8d7dc66`](https://github.com/jrollin/cartog/commit/8d7dc660c723b2ee537e9d920c96c071378a3031))
+- **mcp**: Address CodeRabbit review on output schemas ([`11613c2`](https://github.com/jrollin/cartog/commit/11613c26d1b67a8371ce80585bcaa01accdf0422))
+- **self-update**: Address PR #79 review ([`0680551`](https://github.com/jrollin/cartog/commit/068055126803864408071feb6485563550d4ec09))
+- **self-update**: Make plugin bumps seamless for all cohorts ([`8dbc79c`](https://github.com/jrollin/cartog/commit/8dbc79ce50ba51656e9d38cf5872b173d664ef90))
 
 ### Documentation
 
@@ -138,6 +146,9 @@
 - Explain Claude Code --watch asymmetry, document cartog install alias ([`8a73027`](https://github.com/jrollin/cartog/commit/8a73027974e4f989a0f7bd97f7823559ce09c3aa))
 - **usage**: Surface Configuration, RAG, and Integration before CLI list ([`5cfa4ca`](https://github.com/jrollin/cartog/commit/5cfa4ca07698575a0799b6c2f1a83971baee813b))
 - Remove spec files and references ([`58872bd`](https://github.com/jrollin/cartog/commit/58872bda755bbce92319a612e61e1c5d70cca0ef))
+- **agents**: Add Rust standard section to coding conventions ([`e095870`](https://github.com/jrollin/cartog/commit/e09587007335afb6f9a03bbc8ac8ab4222fb598f))
+- **usage**: Note that unknown provider values are rejected at load ([`2ccf4be`](https://github.com/jrollin/cartog/commit/2ccf4be5b2091f6876dd1585c5fa98dbab00ba3c))
+- **site**: Document MCP tool annotations and structured output ([`63a0dc4`](https://github.com/jrollin/cartog/commit/63a0dc45a747fd5c09950a341f1aa403d7e1664c))
 
 ### Features
 
@@ -228,6 +239,10 @@
 - **cli**: Cartog install takes positional clients (brew/npm convention) ([`bf7988d`](https://github.com/jrollin/cartog/commit/bf7988d5d4d959bc79ab9b8453f41046eaf37a77))
 - **savings**: With/without/saved breakdown + per-tool call counts ([`0b646d2`](https://github.com/jrollin/cartog/commit/0b646d2804fe058fd26524ea4b79bb636c720b44))
 - **languages**: Add Dart extractor ([`4376b30`](https://github.com/jrollin/cartog/commit/4376b305fa82ac3aaaee8f1ad4d5c19da370be86))
+- **config**: Reject unknown embedding/reranker provider at load time ([`470393b`](https://github.com/jrollin/cartog/commit/470393b9801e26abfbc1c4ea9233d255be2fce11))
+- **mcp**: Add readOnlyHint and title annotations to all tools ([`0377202`](https://github.com/jrollin/cartog/commit/0377202f9c8c5c1f3223c4f79e45ba920a4285f8))
+- **mcp**: Emit outputSchema and structuredContent for read tools ([`2fad86e`](https://github.com/jrollin/cartog/commit/2fad86ecc5084f1338538ed9334d93b6560a3f3b))
+- **self-update**: Defer in-session updates to the session boundary ([`cfca42c`](https://github.com/jrollin/cartog/commit/cfca42c9eec405b2152489691b84159a60037a8c))
 
 ### Miscellaneous
 
@@ -252,6 +267,7 @@
 ### Performance
 
 - **skill**: Move heavy session-start work to background pipeline ([`490a1b3`](https://github.com/jrollin/cartog/commit/490a1b3ec1c95cb7638a8c3946bfeffd5988b478))
+- **rag**: Drop per-batch string clones in embedding flush ([`6150f53`](https://github.com/jrollin/cartog/commit/6150f53bcefad8928be3b9089e769a99755b5401))
 
 ### Refactor
 
@@ -267,6 +283,9 @@
 - **self-update**: Apply CodeRabbit findings (valid subset) ([`f33910b`](https://github.com/jrollin/cartog/commit/f33910b2df5124d2abbd170477415fed55231aec))
 - **cli**: Cartog init is now config-only ([`3a1c15d`](https://github.com/jrollin/cartog/commit/3a1c15d4fea6ae774e297fabc4f22a2e18fb7e2a))
 - **docs**: Hoist bootstrap, fix language count rule, add decision matrix ([`169a91f`](https://github.com/jrollin/cartog/commit/169a91f104004cddbd1f29054425f619ce5bbb04))
+- **core**: Add #[must_use] to Symbol/Edge constructors and accessors ([`7faf1ad`](https://github.com/jrollin/cartog/commit/7faf1ad2a2ad8711c398827ebdb1e582b7bad928))
+- **languages**: Extract shared last_segment helper ([`724be34`](https://github.com/jrollin/cartog/commit/724be34783381d1f1d74021335b10100c7ccb4f1))
+- **indexer**: Use Entry API in extract_with_cached ([`0504ce8`](https://github.com/jrollin/cartog/commit/0504ce83e955c5f40b9a07164f47d606e2573bf5))
 
 ### Testing
 
@@ -276,6 +295,12 @@
 - **self-update**: Unit-test pure helpers for in-process coverage ([`63d1b9d`](https://github.com/jrollin/cartog/commit/63d1b9d1cbb279846da32c763b2a8f28aa152aa1))
 - **remote**: Close deferred gaps from round-3 review ([`5e17ce9`](https://github.com/jrollin/cartog/commit/5e17ce9e52c0877c6335375cc8e4d539ca1ac562))
 - **skill**: Match optional CARTOG_PROGRESS=1 prefix in DB-path patch ([`629d420`](https://github.com/jrollin/cartog/commit/629d42067e5a706ae010d341a37cca4465562ac1))
+- **mcp**: Cover read-tool handlers over a real indexed DB ([`6e41a00`](https://github.com/jrollin/cartog/commit/6e41a007f9ea94a545c5654031732a5059aadf67))
+- **cli**: Cover read-command bodies over a real indexed DB ([`d20d9b4`](https://github.com/jrollin/cartog/commit/d20d9b43b432aa635f25e10d8a39478db186f8b4))
+- **rag**: Cover lazy hybrid-search factory gating ([`feed1f1`](https://github.com/jrollin/cartog/commit/feed1f16bf781bd191058ed31b545d926ba8474f))
+- **watch**: Cover validate_pid_lock_config branches ([`19c89be`](https://github.com/jrollin/cartog/commit/19c89bedc79ae5a43438b916261b1fc14fbcd0bd))
+- **ide**: Cover process_spec merge + write core ([`a1f0d39`](https://github.com/jrollin/cartog/commit/a1f0d3985647fddfc692b3a28453cace946cd492))
+- **remote**: Cover region resolution and S3 error helpers ([`308e944`](https://github.com/jrollin/cartog/commit/308e9444bdfebc484d41b494314762df2befcf90))
 
 ## [0.3.1] - 2026-02-26
 
