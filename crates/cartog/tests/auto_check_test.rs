@@ -63,11 +63,8 @@ fn spawn_canned_github_response(json_body: String) -> String {
     format!("http://127.0.0.1:{port}/")
 }
 
-/// Like [`spawn_canned_github_response`] but stalls `server_delay` before
-/// replying. Lets a test prove `spawn_check` returns without waiting on the
-/// network: a non-blocking spawn returns far sooner than the server responds,
-/// regardless of host load (the margin is the whole `server_delay`, not a few
-/// absolute milliseconds).
+/// Canned response that stalls `server_delay` before replying — lets a test
+/// prove `spawn_check` returns before the network call could complete.
 fn spawn_delayed_github_response(json_body: String, server_delay: Duration) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
     let port = listener.local_addr().unwrap().port();
@@ -145,11 +142,8 @@ fn spawn_check_run_once_marks_not_outdated_when_current() {
 
 #[test]
 fn spawn_check_returns_immediately_without_blocking() {
-    // The main process must not wait on the worker. The server stalls 1s before
-    // replying; a non-blocking spawn returns long before that. We assert the
-    // call returns before the server could have responded — a full-second
-    // margin, so this stays green even under load/instrumentation (unlike a
-    // fixed sub-50ms wall-clock ceiling, which flakes).
+    // Server stalls 1s; a non-blocking spawn must return before that. The
+    // full-second margin is load-proof, unlike a fixed sub-50ms ceiling.
     let dir = tempfile::TempDir::new().unwrap();
     let state_path = dir.path().join("state.toml");
     let server_delay = Duration::from_secs(1);
@@ -163,8 +157,7 @@ fn spawn_check_returns_immediately_without_blocking() {
     );
     let spawn_elapsed = start.elapsed();
 
-    // State must not exist yet — proves spawn_check did not run the check
-    // synchronously (the worker is still blocked on the 1s server delay).
+    // State absent on return proves the check did not run synchronously.
     assert!(
         !state_path.exists(),
         "spawn_check ran the check synchronously: state.toml already exists on return"

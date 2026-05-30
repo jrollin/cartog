@@ -853,13 +853,9 @@ mod tests {
         drop(lock);
     }
 
-    // Quarantined: flakes non-deterministically under load. The production race
-    // it guarded (a loser seeing Io(AlreadyExists) from the empty-target window)
-    // is fixed; the residual flake is a benign re-read window on acquire's final
-    // retry attempt that a busy host can still hit, which trips the panic below.
-    // Per the testing rule (fix-or-quarantine, never retry-into-green), it is
-    // #[ignore]d until the retry loop is hardened to never surface that transient
-    // as an error. Run explicitly with `--ignored` to exercise it.
+    // Quarantined: load-sensitive flake (benign re-read window on the final
+    // retry trips the panic below). Guarded race is already fixed; #[ignore]d
+    // rather than rerun-into-green, pending retry-loop hardening.
     #[ignore = "timing-sensitive under load; pending retry-loop hardening"]
     #[test]
     fn concurrent_acquires_never_observe_empty_target() {

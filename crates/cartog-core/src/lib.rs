@@ -310,9 +310,8 @@ pub struct ChangesResult {
 /// - Method in class:    `src/auth.py:method:TokenService.validate`
 /// - Nested class:       `src/auth.py:class:Outer.Inner`
 ///
-/// This ID is stable across line movements within a file. `kind` is the typed
-/// [`SymbolKind`] (not a raw string) so a mistyped kind fails to compile rather
-/// than silently producing an ID that edge resolution can never match.
+/// This ID is stable across line movements within a file. `kind` is typed so a
+/// mistyped kind fails to compile rather than silently mis-forming the ID.
 #[must_use]
 pub fn symbol_id(
     file_path: &str,
@@ -419,8 +418,7 @@ mod tests {
 
     #[test]
     fn symbol_id_matches_symbol_new_id_for_the_same_kind() {
-        // Extractors build edge-source ids via symbol_id() that must equal the
-        // owning symbol's own .id, or edge resolution silently fails to link.
+        // Extractor-built edge-source ids must equal the symbol's own .id.
         let sym = Symbol::new(
             "validate",
             SymbolKind::Method,

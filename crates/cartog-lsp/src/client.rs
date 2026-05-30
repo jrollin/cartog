@@ -187,11 +187,8 @@ impl LspClient {
 }
 
 impl Drop for LspClient {
-    /// Reap the child LSP server. `std::process::Child` does NOT kill or wait
-    /// on drop, so without this a client dropped before reaching
-    /// `LspManager::shutdown_all` (e.g. an `initialize()` that timed out) would
-    /// orphan a heavyweight server process. Graceful `shutdown`/`exit` is the
-    /// manager's job; this is the unconditional safety net.
+    /// Reap the child: `std::process::Child` does not kill/wait on drop, so a
+    /// client dropped before `shutdown_all` (e.g. failed init) would orphan it.
     fn drop(&mut self) {
         if matches!(self.child.try_wait(), Ok(None)) {
             let _ = self.child.kill();
@@ -330,9 +327,7 @@ mod tests {
     fn drop_reaps_child_so_an_un_shutdown_client_does_not_leak() {
         use std::process::{Command, Stdio};
 
-        // A long-lived child stands in for an LSP server whose initialize()
-        // failed before the manager could insert it for graceful shutdown.
-        // `sleep 600` would outlive the test if Drop did not kill it.
+        // `sleep 600` stands in for an LSP server; it outlives the test if Drop doesn't kill it.
         let mut child = Command::new("sleep")
             .arg("600")
             .stdin(Stdio::piped())
@@ -348,8 +343,7 @@ mod tests {
         let client = LspClient::new(child).expect("client over live child");
         drop(client);
 
-        // After Drop, the PID must be reaped (no zombie, not running). On Unix
-        // a reaped child's PID is freed; `kill -0` returning Err confirms it.
+        // `kill -0` fails once the child is reaped.
         let still_alive = Command::new("kill")
             .args(["-0", &pid.to_string()])
             .stderr(Stdio::null())

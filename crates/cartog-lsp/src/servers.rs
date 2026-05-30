@@ -106,23 +106,16 @@ pub fn find_servers(language: &str) -> Vec<&'static ServerSpec> {
     SERVERS.iter().filter(|s| s.language == language).collect()
 }
 
-/// Check if a binary is available on PATH.
-///
-/// Resolves directly against `$PATH` (and `%PATHEXT%` on Windows) rather than
-/// shelling out to `which`/`where` — the former is Unix-only and was silently
-/// disabling LSP on Windows, where `lsp` is a default feature.
+/// Check if a binary is available on PATH (resolved directly, not via the
+/// Unix-only `which` — that silently disabled LSP on Windows).
 pub fn is_binary_available(binary: &str) -> bool {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let pathext = std::env::var_os("PATHEXT");
     found_on_path(binary, &path, pathext.as_deref())
 }
 
-/// PATH-resolution core, factored out so it can be tested without depending on
-/// which binaries happen to exist on the test host.
-///
-/// On Windows, a bare candidate name (no extension) is also probed against each
-/// `PATHEXT` suffix (`.EXE`, `.CMD`, …) so `rust-analyzer` matches
-/// `rust-analyzer.exe`.
+/// PATH-resolution core, separated from env lookup so it's testable without
+/// depending on host binaries. On Windows also tries each `PATHEXT` suffix.
 fn found_on_path(binary: &str, path: &std::ffi::OsStr, pathext: Option<&std::ffi::OsStr>) -> bool {
     let exts = executable_extensions(pathext);
     std::env::split_paths(path).any(|dir| {
@@ -137,8 +130,7 @@ fn found_on_path(binary: &str, path: &std::ffi::OsStr, pathext: Option<&std::ffi
     })
 }
 
-/// Candidate executable suffixes to try for a bare name. Always includes the
-/// empty suffix (the name as-given); on Windows it also expands `%PATHEXT%`.
+/// Suffixes to try for a bare name: empty (as-given), plus `%PATHEXT%` on Windows.
 fn executable_extensions(pathext: Option<&std::ffi::OsStr>) -> Vec<std::ffi::OsString> {
     let mut exts = vec![std::ffi::OsString::new()];
     if cfg!(windows) {

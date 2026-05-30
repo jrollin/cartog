@@ -337,12 +337,8 @@ where
 /// Shared tail of the two `hybrid_search_tuned*` entry points: sort by
 /// (rerank_score → rrf_score → in_degree), apply `kind_filter`, truncate to
 /// `limit`, pack into a `HybridSearchResult`.
-/// Ranking order for hybrid-search results, applied after cross-encoder
-/// re-ranking. Reranked candidates sort by rerank score descending; candidates
-/// without a rerank score (no content to embed) sink below all scored ones and
-/// fall back to RRF score; ties break toward higher in-degree (more-referenced
-/// symbols first). Used by both [`sort_filter_and_pack`] and its tests so the
-/// tests exercise the real comparator rather than a copy.
+/// Ranking order: rerank score desc, unscored last (fall back to RRF), ties by
+/// in-degree desc. Shared with tests so they exercise the real comparator.
 fn rerank_ordering(a: &SearchResult, b: &SearchResult) -> std::cmp::Ordering {
     let score_cmp = match (a.rerank_score, b.rerank_score) {
         (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal),

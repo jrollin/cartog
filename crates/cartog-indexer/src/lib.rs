@@ -2273,10 +2273,9 @@ We use PostgreSQL with connection pooling via pgbouncer.
         assert_eq!(r_none.edges_added, r_some.edges_added);
     }
 
-    /// The progress callback must emit Walking first, then Parsing and Storing
-    /// with positive file totals. Runs against the in-repo fixture so it
-    /// actually executes in CI (it previously gated on CARTOG_INTEGRATION_FIXTURE
-    /// — set nowhere — and silently passed as a no-op).
+    /// Progress callback emits Walking, then Parsing and Storing with positive
+    /// totals. Uses the in-repo fixture (the old env gate was set nowhere, so
+    /// the test was a silent no-op).
     #[test]
     fn progress_callback_emits_walking_then_parsing_and_storing() {
         use cartog_db::Database;

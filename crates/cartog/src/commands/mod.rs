@@ -2910,11 +2910,8 @@ def main():
         (tmp, db_path)
     }
 
-    /// Count queries the DB has logged so far. Read commands record one query
-    /// per invocation, so a delta of N proves the command actually hit the
-    /// query layer (not just returned Ok before doing any work). This is the
-    /// strongest observable behavior available — the commands print to stdout,
-    /// so rendered *content* can't be asserted from here.
+    /// Logged query count — a delta proves a command hit the query layer
+    /// (commands print to stdout, so rendered content can't be asserted here).
     fn queries_logged(db_path: &std::path::Path) -> u64 {
         Database::open(db_path, 384)
             .unwrap()
