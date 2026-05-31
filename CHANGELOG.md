@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.20.0] - 2026-05-30
+## [0.21.0] - 2026-05-31
 
 ### Bug Fixes
 
@@ -101,6 +101,8 @@
 - **mcp**: Address CodeRabbit review on output schemas ([`11613c2`](https://github.com/jrollin/cartog/commit/11613c26d1b67a8371ce80585bcaa01accdf0422))
 - **self-update**: Address PR #79 review ([`0680551`](https://github.com/jrollin/cartog/commit/068055126803864408071feb6485563550d4ec09))
 - **self-update**: Make plugin bumps seamless for all cohorts ([`8dbc79c`](https://github.com/jrollin/cartog/commit/8dbc79ce50ba51656e9d38cf5872b173d664ef90))
+- **lsp**: Reap child on Drop and detect binaries cross-platform ([`8ea5d3b`](https://github.com/jrollin/cartog/commit/8ea5d3b90893baf1b6bb352535539045cbedc182))
+- **site**: A11y accessible names + SEO metadata ([`419a8c2`](https://github.com/jrollin/cartog/commit/419a8c23ef194532d7de09108b8331c5235ef79e))
 
 ### Documentation
 
@@ -243,6 +245,8 @@
 - **mcp**: Add readOnlyHint and title annotations to all tools ([`0377202`](https://github.com/jrollin/cartog/commit/0377202f9c8c5c1f3223c4f79e45ba920a4285f8))
 - **mcp**: Emit outputSchema and structuredContent for read tools ([`2fad86e`](https://github.com/jrollin/cartog/commit/2fad86ecc5084f1338538ed9334d93b6560a3f3b))
 - **self-update**: Defer in-session updates to the session boundary ([`cfca42c`](https://github.com/jrollin/cartog/commit/cfca42c9eec405b2152489691b84159a60037a8c))
+- **site**: Migrate landing page to Astro static site ([`06c3be8`](https://github.com/jrollin/cartog/commit/06c3be8b5ec84fc04f127625b0ccbfa655484637))
+- **site**: Collapsible docs sidebar + on-this-page rail ([`5abe23a`](https://github.com/jrollin/cartog/commit/5abe23a8490d1f85859932ec0e60603318755d1e))
 
 ### Miscellaneous
 
@@ -286,6 +290,13 @@
 - **core**: Add #[must_use] to Symbol/Edge constructors and accessors ([`7faf1ad`](https://github.com/jrollin/cartog/commit/7faf1ad2a2ad8711c398827ebdb1e582b7bad928))
 - **languages**: Extract shared last_segment helper ([`724be34`](https://github.com/jrollin/cartog/commit/724be34783381d1f1d74021335b10100c7ccb4f1))
 - **indexer**: Use Entry API in extract_with_cached ([`0504ce8`](https://github.com/jrollin/cartog/commit/0504ce83e955c5f40b9a07164f47d606e2573bf5))
+- **core**: Make symbol_id take a typed SymbolKind ([`e9b1b14`](https://github.com/jrollin/cartog/commit/e9b1b147b25b0185a3276c2e386829a9a0030547))
+- **languages**: Thread ParentScope instead of positional parent pair ([`a6e7e55`](https://github.com/jrollin/cartog/commit/a6e7e5560f7f8c8940ea8d32eebe29809cb743e6))
+- **db**: Split the 6210-line lib.rs Database impl into store/ submodules ([`7c342f0`](https://github.com/jrollin/cartog/commit/7c342f0a9aeefa41ffb7311958eddebe1b15f5b3))
+- **mcp**: Extract single-writer election into single_writer.rs ([`ca93b0d`](https://github.com/jrollin/cartog/commit/ca93b0d09a6eb5da18844b84eb59fedfd63eb16f))
+- **cli**: Extract doctor command into commands/doctor.rs ([`fa49e31`](https://github.com/jrollin/cartog/commit/fa49e3108f6e3e3ece89c366cf3e28f8749994ad))
+- **cli**: Extract config and savings rendering from commands/mod.rs ([`b7e99c2`](https://github.com/jrollin/cartog/commit/b7e99c2be81350ac8df0bd4c383605660fd5059a))
+- **indexer**: Split merkle, git, and content into submodules ([`cbc0871`](https://github.com/jrollin/cartog/commit/cbc0871944595546ca054473a8be12de6d6efb3b))
 
 ### Testing
 
@@ -301,6 +312,9 @@
 - **watch**: Cover validate_pid_lock_config branches ([`19c89be`](https://github.com/jrollin/cartog/commit/19c89bedc79ae5a43438b916261b1fc14fbcd0bd))
 - **ide**: Cover process_spec merge + write core ([`a1f0d39`](https://github.com/jrollin/cartog/commit/a1f0d3985647fddfc692b3a28453cace946cd492))
 - **remote**: Cover region resolution and S3 error helpers ([`308e944`](https://github.com/jrollin/cartog/commit/308e9444bdfebc484d41b494314762df2befcf90))
+- Assert real behavior instead of padding coverage ([`1708dc5`](https://github.com/jrollin/cartog/commit/1708dc511b9f4713350cbb0dcb1e41bd37567526))
+- Remove flake and no-op patterns from the suite ([`457bb95`](https://github.com/jrollin/cartog/commit/457bb9524caf58624c913891efcaea1b6b033456))
+- Remove duplicate auth fixture under crates/cartog ([`ba69ff5`](https://github.com/jrollin/cartog/commit/ba69ff57bf962a0dfd21aaf884102c93465f4cf1))
 
 ## [0.3.1] - 2026-02-26
 
