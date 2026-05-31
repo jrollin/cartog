@@ -1,0 +1,1057 @@
+---
+import Base from "../layouts/Base.astro";
+---
+
+<Base
+  title="Cartog Docs — CLI Reference, MCP Server & Semantic Search Setup"
+  description="Cartog documentation: install, the cartog CLI (search, refs, impact, map), MCP server wiring for Claude Code, Cursor & VS Code, embedding providers, and hybrid semantic search."
+  ogType="article"
+  ogUrl="https://jrollin.github.io/cartog/usage.html"
+  footerVariant="docs"
+>
+  <!-- ── Docs Layout ─────────────────────────────── -->
+  <div class="container container--docs">
+    <div class="docs-layout">
+
+      <!-- Left sidebar: collapsible section groups (closed by default; the
+           group holding the active section auto-opens via the script below) -->
+      <aside class="docs-sidebar">
+        <nav>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">Getting Started</summary>
+            <a href="#quick-start">Quick Start</a>
+            <a href="#search-modes">Search Modes</a>
+            <a href="#workflow">Recommended Workflow</a>
+          </details>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">Configuration</summary>
+            <a href="#config">Config File</a>
+            <a href="#config-providers">Embedding Providers</a>
+          </details>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">Semantic Search</summary>
+            <a href="#rag-setup">rag setup</a>
+            <a href="#rag-index">rag index</a>
+            <a href="#rag-search">rag search</a>
+          </details>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">Integration</summary>
+            <a href="#agent-skill">Agent Skill</a>
+            <a href="#mcp-server">MCP Server</a>
+            <a href="#mcp-tools">Tools overview</a>
+            <a href="#mcp-tool-shape">Tool metadata &amp; output</a>
+            <a href="#mcp-quickstart">Wiring editors: cartog ide</a>
+            <a href="#mcp-ide">Bootstrap sequence</a>
+            <a href="#mcp-clients">Manual setup</a>
+            <a href="#teach-agent">Teach your agent</a>
+          </details>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">CLI Reference</summary>
+            <a href="#cmd-callees">cartog callees</a>
+            <a href="#cmd-changes">cartog changes</a>
+            <a href="#cmd-completions">cartog completions</a>
+            <a href="#cmd-config">cartog config</a>
+            <a href="#cmd-deps">cartog deps</a>
+            <a href="#cmd-doctor">cartog doctor</a>
+            <a href="#cmd-hierarchy">cartog hierarchy</a>
+            <a href="#cmd-ide">cartog ide</a>
+            <a href="#cmd-impact">cartog impact</a>
+            <a href="#cmd-index">cartog index</a>
+            <a href="#cmd-init">cartog init</a>
+            <a href="#cmd-manpage">cartog manpage</a>
+            <a href="#cmd-map">cartog map</a>
+            <a href="#cmd-outline">cartog outline</a>
+            <a href="#cmd-refs">cartog refs</a>
+            <a href="#cmd-search">cartog search</a>
+            <a href="#cmd-self">cartog self</a>
+            <a href="#cmd-serve">cartog serve</a>
+            <a href="#cmd-stats">cartog stats</a>
+            <a href="#cmd-savings">cartog savings</a>
+            <a href="#cmd-watch">cartog watch</a>
+          </details>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">Reference</summary>
+            <a href="#json-output">JSON Output</a>
+            <a href="#token-budget">Token Budget</a>
+            <a href="#languages">Languages</a>
+            <a href="#performance">Performance</a>
+          </details>
+        </nav>
+      </aside>
+
+      <!-- Content -->
+      <main class="docs-content">
+
+        <p style="margin-bottom: 24px;">
+          <a href="https://github.com/jrollin/cartog/releases/latest" class="badge" style="text-decoration: none;">Latest release</a>
+          <a href="https://github.com/jrollin/cartog/releases" style="margin-left: 8px; font-size: 13px;">View changelog →</a>
+        </p>
+
+        <h2 id="quick-start">Quick Start</h2>
+        <pre>cargo install cartog
+cd your-project
+cartog init                  <span class="comment"># 1. scaffold .cartog.toml</span>
+cartog index                 <span class="comment"># 2. build the graph (~95ms for 4k LOC)</span>
+
+cartog search validate       <span class="comment"># find symbols by name (sub-ms)</span>
+cartog refs validate_token   <span class="comment"># who calls/imports/references this?</span>
+cartog impact validate_token <span class="comment"># what breaks if I change this?</span>
+
+<span class="comment"># Optional — wire cartog into your editor for AI agents</span>
+cartog ide                   <span class="comment"># Cursor, VS Code, Claude Desktop, Codex CLI, ...</span></pre>
+        <p>Two commands to start: <code>init</code> writes <code>.cartog.toml</code>, <code>index</code> builds the graph. Add <code>cartog ide</code> only if you want MCP wired into an editor — CLI users can skip it.</p>
+
+        <h3>Add semantic search (optional, still fully local)</h3>
+        <pre>cartog rag setup             <span class="comment"># download models (~1.2GB, one-time)</span>
+cartog rag index .           <span class="comment"># embed all symbols + documents</span>
+cartog rag search "authentication token validation"</pre>
+        <p>Indexes both <strong>code</strong> (functions, classes, methods) and <strong>Markdown documents</strong> (READMEs, design docs, API docs). Models are downloaded once to <code>~/.cache/cartog/models/</code> and run locally via ONNX Runtime. No API keys needed.</p>
+        <p><strong>Using Ollama instead?</strong> Add this to your <code>.cartog.toml</code> and skip <code>rag setup</code>:</p>
+        <pre>[embedding]
+provider = "ollama"</pre>
+        <p>See <a href="#config-providers">Embedding Providers</a> for full setup.</p>
+
+        <h2 id="search-modes">Search Modes</h2>
+        <p>Cartog offers two search modes that complement each other:</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Query type</th>
+              <th>Command</th>
+              <th>Speed</th>
+              <th>Best for</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Symbol name</td>
+              <td><code>cartog search parse</code></td>
+              <td>sub-ms</td>
+              <td>You know the name</td>
+            </tr>
+            <tr>
+              <td>Natural language</td>
+              <td><code>cartog rag search "error handling"</code></td>
+              <td>~150-500ms</td>
+              <td>You know the behavior</td>
+            </tr>
+            <tr>
+              <td>Broad / unsure</td>
+              <td>Run both in parallel</td>
+              <td>sub-ms + ~300ms</td>
+              <td>Catch names + semantics</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 id="workflow">Recommended Workflow</h2>
+        <pre>cartog index .          <span class="comment"># 1. build the graph</span>
+cartog search foo       <span class="comment"># 2. discover exact symbol names</span>
+cartog refs foo         <span class="comment"># 3. find all usages</span>
+cartog callees foo      <span class="comment"># 4. see what it depends on</span>
+cartog impact foo       <span class="comment"># 5. assess blast radius</span>
+cartog index .          <span class="comment"># 6. re-index after changes</span></pre>
+
+        <!-- ── Configuration ─────────────────────── -->
+
+        <h2 id="config">Configuration</h2>
+        <p>Cartog works with zero configuration. Optionally, place a <code>.cartog.toml</code> at your project root to customize database path, embedding provider, and re-ranking.</p>
+        <pre><span class="comment"># .cartog.toml — full reference</span>
+
+[database]
+path = "~/.local/share/cartog/myproject.db"
+
+<span class="comment"># Embedding provider (optional — defaults to local ONNX)</span>
+[embedding]
+provider = "local"               <span class="comment"># "local" (default) or "ollama"</span>
+model = "BAAI/bge-small-en-v1.5" <span class="comment"># model name (provider-specific)</span>
+dimension = 384                  <span class="comment"># auto-detected for built-in models</span>
+
+<span class="comment"># Local provider: asymmetric model prefixes</span>
+[embedding.local]
+query_prefix = "search_query: "
+document_prefix = "search_document: "
+
+<span class="comment"># Ollama provider settings</span>
+[embedding.ollama]
+base_url = "http://localhost:11434"
+model = "nomic-embed-text"
+
+<span class="comment"># Reranker (optional — defaults to local cross-encoder)</span>
+[reranker]
+provider = "local"               <span class="comment"># "local" (default) or "none"</span></pre>
+
+        <p>Database path resolution priority: <code>--db</code> flag / <code>CARTOG_DB</code> env > <code>.cartog.toml</code> > git root auto-detection > cwd fallback.</p>
+
+        <h2 id="config-providers">Embedding Providers</h2>
+        <p>Semantic search requires an embedding provider. Two options:</p>
+        <table>
+          <thead>
+            <tr><th>Provider</th><th>Config</th><th>Setup</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>local</strong> (default)</td>
+              <td>No config needed</td>
+              <td><code>cartog rag setup</code></td>
+              <td>ONNX Runtime via fastembed. ~1.2GB model download. Runs on CPU.</td>
+            </tr>
+            <tr>
+              <td><strong>ollama</strong></td>
+              <td><code>[embedding]<br>provider = "ollama"</code></td>
+              <td><code>ollama pull nomic-embed-text</code></td>
+              <td>HTTP API. GPU acceleration via Ollama. No model download by cartog.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Example: Ollama with GPU acceleration</h3>
+        <pre><span class="comment"># 1. Install cartog (Ollama provider is included by default)</span>
+cargo install cartog
+
+<span class="comment"># 2. Start Ollama and pull a model</span>
+ollama serve
+ollama pull nomic-embed-text
+
+<span class="comment"># 3. Configure .cartog.toml</span>
+cat > .cartog.toml &lt;&lt;EOF
+[embedding]
+provider = "ollama"
+model = "nomic-embed-text"
+
+[embedding.ollama]
+base_url = "http://localhost:11434"
+EOF
+
+<span class="comment"># 4. Index and search — no rag setup needed</span>
+cartog index .
+cartog rag index .
+cartog rag search "authentication flow"</pre>
+
+        <h3>Example: Local with a different model</h3>
+        <pre><span class="comment"># Use a larger model for better quality</span>
+cat > .cartog.toml &lt;&lt;EOF
+[embedding]
+provider = "local"
+model = "BAAI/bge-base-en-v1.5"
+EOF
+
+cartog rag setup     <span class="comment"># downloads the configured model</span>
+cartog rag index .
+cartog rag search "error handling"</pre>
+
+        <h3>Example: Disable re-ranking</h3>
+        <pre><span class="comment"># Skip the 1.1GB reranker model download</span>
+cat > .cartog.toml &lt;&lt;EOF
+[reranker]
+provider = "none"
+EOF
+
+cartog rag setup     <span class="comment"># only downloads embedding model (~80MB)</span></pre>
+
+        <!-- ── Semantic Search ───────────────────── -->
+
+        <h2 id="rag-setup"><code>cartog rag setup</code></h2>
+        <p>Download embedding and re-ranker models from HuggingFace. Run once before using semantic search with the <strong>local</strong> provider.</p>
+        <pre>cartog rag setup</pre>
+        <p>Downloads ~1.2GB of ONNX models (embedding ~80MB + reranker ~1.1GB). Cached in <code>~/.cache/cartog/models/</code>.</p>
+        <p><strong>Note:</strong> When using Ollama, skip this — models are managed by the Ollama server.</p>
+        <pre><span class="comment"># To also skip the reranker download:</span>
+[reranker]
+provider = "none"</pre>
+
+        <h2 id="rag-index"><code>cartog rag index</code></h2>
+        <p>Build the embedding index for semantic search. Indexes both code symbols and Markdown documents (<code>.md</code> files). Requires <code>cartog index</code> first. For the local provider, also requires <code>cartog rag setup</code>.</p>
+        <pre>cartog rag index              <span class="comment"># embed all symbols + documents</span>
+cartog rag index src/         <span class="comment"># embed subdirectory</span>
+cartog rag index --force      <span class="comment"># re-embed all</span></pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">Embedded 697 symbols in 3.1s (224/s)
+RAG index ready: 697 vectors, 384 dimensions, sqlite-vec</pre>
+
+        <h2 id="rag-search"><code>cartog rag search &lt;query&gt;</code></h2>
+        <p>Semantic search — use natural language to find code by behavior or concept. Returns code only by default; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
+        <pre>cartog rag search "validate authentication tokens"
+cartog rag search "error handling" --kind function
+cartog rag search "database connection" --limit 5
+cartog rag search "deployment architecture" --kind document</pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">Found 1 results (FTS: 1, vector: 0, merged: 1)
+
+1. function auth_middleware  middleware/auth_mw.py:15-37  [fts5] score=0.0164
+    def auth_middleware(request: Dict[str, Any]) -&gt; Dict[str, Any]:
+        """Verify authentication token and attach user context."""
+        validate_request(request)</pre>
+        <p>Combines keyword (BM25/FTS5) and vector similarity, merged via RRF, then re-ranked by a cross-encoder. By default, returns code only; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
+        <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>, <code>all</code>.</p>
+
+        <!-- ── Integration ───────────────────────── -->
+
+        <h2 id="agent-skill">Agent Skill</h2>
+        <p>Install cartog as an agent skill for Claude Code, Cursor, Copilot, and other compatible agents:</p>
+        <pre>npx skills add jrollin/cartog</pre>
+        <p>Or install manually:</p>
+        <pre>cp -r skills/cartog ~/.claude/skills/</pre>
+        <p>The skill teaches your AI agent when and how to use cartog — including search routing, refactoring workflows, and fallback heuristics.</p>
+
+        <h3>Claude Plugin</h3>
+        <p>For Claude Code users, the simplest setup. Run each command separately:</p>
+        <pre>/plugin marketplace add jrollin/cartog</pre>
+        <pre>/plugin install cartog@cartog-plugins</pre>
+
+        <h2 id="mcp-server">MCP Server</h2>
+        <p><code>cartog serve</code> runs cartog as a <a href="https://modelcontextprotocol.io">Model Context Protocol</a> server over stdio, exposing the code graph as 13 tools any MCP-compatible client (Claude Code, Cursor, VS Code, Codex CLI, …) can call. No HTTP port, no daemon to manage — the client launches <code>cartog serve</code> as a subprocess and talks JSON-RPC over stdin/stdout.</p>
+        <pre>cartog serve                  <span class="comment"># MCP server only</span>
+cartog serve --watch          <span class="comment"># + background file watcher (auto re-index)</span>
+cartog serve --watch --rag    <span class="comment"># + watcher + deferred semantic embedding</span></pre>
+        <p>Most users never run <code>cartog serve</code> by hand: <a href="#mcp-quickstart"><code>cartog ide</code></a> writes it into your editor's MCP config and the editor spawns it on demand. Run it directly only when wiring a client cartog doesn't know about, or to debug the JSON-RPC stream.</p>
+
+        <h3 id="mcp-tools">The 13 tools</h3>
+        <p>11 are read-only (safe to run without an approval prompt); 2 mutate the index. Each ships with a description telling the agent <em>when</em> to reach for it.</p>
+        <table>
+          <thead>
+            <tr><th>Tool</th><th>Kind</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>cartog_index</code></td><td>write</td><td>Build/update the code graph</td></tr>
+            <tr><td><code>cartog_map</code></td><td>read</td><td>Codebase orientation: file list + top symbols (call first in a new repo)</td></tr>
+            <tr><td><code>cartog_search</code></td><td>read</td><td>Find symbols by partial name</td></tr>
+            <tr><td><code>cartog_outline</code></td><td>read</td><td>File structure (symbols, line ranges)</td></tr>
+            <tr><td><code>cartog_refs</code></td><td>read</td><td>All references to a symbol</td></tr>
+            <tr><td><code>cartog_callees</code></td><td>read</td><td>What a symbol calls</td></tr>
+            <tr><td><code>cartog_impact</code></td><td>read</td><td>Transitive impact analysis</td></tr>
+            <tr><td><code>cartog_hierarchy</code></td><td>read</td><td>Inheritance tree</td></tr>
+            <tr><td><code>cartog_deps</code></td><td>read</td><td>File-level imports</td></tr>
+            <tr><td><code>cartog_stats</code></td><td>read</td><td>Index summary</td></tr>
+            <tr><td><code>cartog_changes</code></td><td>read</td><td>Symbols affected by recent git changes</td></tr>
+            <tr><td><code>cartog_rag_index</code></td><td>write</td><td>Build embedding index</td></tr>
+            <tr><td><code>cartog_rag_search</code></td><td>read</td><td>Semantic search</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="mcp-tool-shape">Tool metadata &amp; output</h3>
+        <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 11 read-only tools declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
+
+        <table>
+          <thead>
+            <tr><th>Field</th><th>Read tools (search, refs, map, …)</th><th>Write tools (<code>cartog_index</code>, <code>cartog_rag_index</code>)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>title</code></td><td>e.g. "Search symbols", "Find references"</td><td>e.g. "Index codebase"</td></tr>
+            <tr><td><code>readOnlyHint</code></td><td><code>true</code> — client can run without an approval prompt</td><td><code>false</code> — mutates the index</td></tr>
+            <tr><td><code>openWorldHint</code></td><td><code>false</code> — closed domain (the local index)</td><td><code>false</code></td></tr>
+            <tr><td><code>outputSchema</code></td><td>present — typed result schema</td><td>—</td></tr>
+          </tbody>
+        </table>
+
+        <p class="example-label"><code>tools/list</code> entry for <code>cartog_search</code></p>
+        <pre class="example-output">&#123;
+  "name": "cartog_search",
+  "annotations": &#123;
+    "title": "Search symbols",
+    "readOnlyHint": true,
+    "openWorldHint": false
+  &#125;,
+  "outputSchema": &#123;
+    "type": "object",
+    "properties": &#123; "results": &#123; "type": "array", "items": &#123; "$ref": "#/$defs/Symbol" &#125; &#125; &#125;,
+    "required": ["results"]
+  &#125;
+&#125;</pre>
+
+        <p>Read tools return <strong>structured content</strong>: the typed result (matching <code>outputSchema</code>) is mirrored in <code>structuredContent</code> alongside the human-readable text block, so schema-aware clients get validated, machine-readable data without re-parsing text.</p>
+
+        <p class="example-label"><code>tools/call</code> result for <code>cartog_search</code> (query "validate")</p>
+        <pre class="example-output">&#123;
+  "content": [&#123; "type": "text", "text": "[ … pretty-printed JSON … ]" &#125;],
+  "structuredContent": &#123;
+    "results": [
+      &#123;
+        "name": "validate",
+        "kind": "function",
+        "file_path": "api/v1/auth.py",
+        "start_line": 16,
+        "end_line": 22
+      &#125;
+    ]
+  &#125;
+&#125;</pre>
+
+        <p style="font-size: 13px; color: var(--text-tertiary);">The size cap (<code>CARTOG_MCP_MAX_BYTES</code>, default 64&nbsp;KB) counts the text block plus the structured copy: <code>structuredContent</code> is dropped when the combined size would exceed the cap, so an oversized payload can't blow the caller's context window. The two write tools have no <code>outputSchema</code> and report <code>readOnlyHint: false</code> with <code>destructiveHint: false</code> (they only add to the index).</p>
+
+        <p><strong>Progress notifications:</strong> <code>cartog_index</code> and <code>cartog_rag_index</code> emit standard MCP <code>notifications/progress</code> when the client includes a <code>progressToken</code> in the request's <code>_meta</code>. <code>cartog_index</code> emits 3 phase events (<code>walking</code>, <code>parsing N files</code>, <code>storing N files</code>) plus an optional fourth (<code>resolving with LSP</code>) when the LSP pass runs. <code>cartog_rag_index</code> emits <code>preparing</code>, one <code>embedding processed/total</code> per ~512-symbol batch, then <code>storing</code>. The <code>message</code> field is human-readable, not a contract. Clients that don't supply a <code>progressToken</code> see no notifications.</p>
+
+        <h3 id="mcp-quickstart">Wiring cartog into editors: <code>cartog ide</code></h3>
+        <p><code>cartog ide</code> is the only verb that writes MCP configs. Run it once per machine, plus any time you install a new editor.</p>
+        <pre>cartog ide                          <span class="comment"># all installed clients, all scopes</span>
+cartog ide --scope project          <span class="comment"># .mcp.json, .cursor/, .vscode/</span>
+cartog ide --scope user             <span class="comment"># user-scope clients only</span>
+cartog ide --client cursor          <span class="comment"># one client</span>
+cartog ide --dry-run                <span class="comment"># preview with before/after diff</span></pre>
+        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. User-scope clients whose config directory is missing are skipped (treated as "not installed"). Codex stores all servers in one global <code>~/.codex/config.toml</code>, so cartog writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section. Idempotent: existing servers in each file are preserved.</p>
+        <p><strong>Known limitation:</strong> configs containing JSON-with-comments (JSONC) are left untouched and reported as skipped. Configure those clients manually using the snippets below.</p>
+
+        <h3 id="mcp-ide">Bootstrap sequence</h3>
+        <p>Two commands to start; the third is optional.</p>
+        <pre>cartog init                  <span class="comment"># 1. scaffold .cartog.toml (config only)</span>
+cartog index                 <span class="comment"># 2. build the code graph</span>
+
+cartog ide                   <span class="comment"># optional — wire MCP into installed editors</span></pre>
+        <p>Edit <code>.cartog.toml</code> between steps 1 and 2 to change DB path or embedding provider before any heavy work runs. CLI-only users stop after step 2; run <code>cartog ide</code> only if you want cartog wired into MCP-aware editors.</p>
+
+        <h2 id="mcp-clients">Manual setup (per client)</h2>
+        <p>Each block below shows the <code>cartog ide</code> one-liner that writes the right file, plus the manual JSON / TOML if you prefer to edit by hand.</p>
+
+        <details class="mcp-client">
+          <summary><strong>Claude Code</strong> — project <code>.mcp.json</code> + user <code>~/.claude/settings.json</code></summary>
+          <pre>cartog ide --client claude-code
+<span class="comment"># or:</span>
+claude mcp add cartog -- cartog serve --watch                       <span class="comment"># user scope</span>
+claude mcp add --scope project cartog -- cartog serve --watch       <span class="comment"># project scope</span></pre>
+          <p>Manual:</p>
+          <pre>&#123;
+  "mcpServers": &#123;
+    "cartog": &#123; "command": "cartog", "args": ["serve", "--watch"] &#125;
+  &#125;
+&#125;</pre>
+          <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px;">Only Claude Code gets <code>--watch</code> by default — other clients ship plain <code>["serve"]</code>. Agent-driven flows churn files faster than human-driven editor flows, so the in-process file watcher pays off. Drop it with <code>cartog ide --no-watch</code>.</p>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Cursor</strong> — project <code>.cursor/mcp.json</code></summary>
+          <pre>cartog ide --client cursor</pre>
+          <p>Manual:</p>
+          <pre>&#123;
+  "mcpServers": &#123;
+    "cartog": &#123; "command": "cartog", "args": ["serve"] &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Codex CLI</strong> — user-global <code>~/.codex/config.toml</code></summary>
+          <pre>cartog ide --client codex</pre>
+          <p>Codex stores all MCP servers in this one user-global file (no per-project config), so <code>cartog ide</code> writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section.</p>
+          <pre>[mcp_servers.cartog]
+command = "cartog"
+args = ["serve"]</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Windsurf</strong> — <code>~/.codeium/windsurf/mcp_config.json</code></summary>
+          <pre>cartog ide --client windsurf</pre>
+          <pre>&#123;
+  "mcpServers": &#123;
+    "cartog": &#123; "command": "cartog", "args": ["serve"] &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>VS Code (Copilot)</strong> — <code>.vscode/mcp.json</code></summary>
+          <pre>cartog ide --client vscode</pre>
+          <p>Note: top-level key is <code>servers</code>, not <code>mcpServers</code>.</p>
+          <pre>&#123;
+  "servers": &#123;
+    "cartog": &#123; "type": "stdio", "command": "cartog", "args": ["serve"] &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Zed</strong> — <code>~/.config/zed/settings.json</code></summary>
+          <pre>cartog ide --client zed</pre>
+          <pre>&#123;
+  "context_servers": &#123;
+    "cartog": &#123; "command": "cartog", "args": ["serve"] &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>OpenCode</strong> — <code>~/.config/opencode/opencode.json</code></summary>
+          <pre>cartog ide --client opencode</pre>
+          <pre>&#123;
+  "mcp": &#123;
+    "cartog": &#123;
+      "type": "local",
+      "command": ["cartog", "serve"],
+      "enabled": true
+    &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Gemini CLI</strong> — <code>~/.gemini/settings.json</code></summary>
+          <pre>cartog ide --client gemini</pre>
+          <pre>&#123;
+  "mcpServers": &#123;
+    "cartog": &#123; "command": "cartog", "args": ["serve"] &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Claude Desktop</strong> — <code>claude_desktop_config.json</code></summary>
+          <pre>cartog ide --client claude-desktop</pre>
+          <p>macOS: <code>~/Library/Application Support/Claude/</code>. Windows: <code>%APPDATA%\Claude\</code>. Restart Claude Desktop after editing.</p>
+          <pre>&#123;
+  "mcpServers": &#123;
+    "cartog": &#123; "command": "cartog", "args": ["serve"] &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Any other MCP client</strong></summary>
+          <p>Point your client at <code>cartog serve</code> over stdio. Command: <code>cartog</code>, args: <code>["serve"]</code>.</p>
+        </details>
+
+        <h2 id="teach-agent">Teach your agent to use cartog</h2>
+        <p>Wiring MCP is half the job. The other half is telling the LLM <strong>when</strong> to prefer cartog over grep + read. Drop the snippet from <a href="https://github.com/jrollin/cartog/blob/main/docs/agent-snippet.md">docs/agent-snippet.md</a> into your project's <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursor/rules/</code>, or equivalent, and the agent will route navigation questions through cartog's 13 MCP tools instead of flooding context with raw text.</p>
+        <p>Maps the natural-language question to the right tool:</p>
+        <ul>
+          <li>"where is X defined?" → <code>cartog_search</code></li>
+          <li>"who calls / imports / inherits X?" → <code>cartog_refs</code></li>
+          <li>"what does X call?" → <code>cartog_callees</code></li>
+          <li>"what breaks if I change X?" → <code>cartog_impact</code></li>
+          <li>"find code about &lt;concept&gt;" → <code>cartog_rag_search</code></li>
+          <li>"orient me in this repo" → <code>cartog_map</code></li>
+        </ul>
+        <p>Falls back to grep / Read for string literals, comments, config values, or anything outside the indexed root.</p>
+
+        <!-- ── CLI Reference ─────────────────────── -->
+
+        <h2 id="cmd-index"><code>cartog index &lt;path&gt;</code></h2>
+        <p>Build or update the code graph. Run this first, then again after code changes.</p>
+        <pre>cartog index .              <span class="comment"># index current directory</span>
+cartog index src/           <span class="comment"># index a subdirectory</span>
+cartog index . --force      <span class="comment"># full re-index</span>
+cartog index . --no-lsp     <span class="comment"># heuristic-only (~1-4s)</span></pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">Indexed 70 files (0 skipped, 0 removed)
+  697 symbols, 1921 edges (1019 resolved)
+  1 files in unsupported languages not indexed (1 .toml)</pre>
+        <p>Incremental by default — skips unchanged files (git + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. The LSP pass skips edges already classified as unresolvable (typo, dyn dispatch, macro) or external (stdlib, deps, node_modules); both auto-retry when a matching symbol is added in-tree. <code>--force</code> resets those markers for a clean retry.</p>
+        <p>Files in unsupported languages are reported, not silently dropped: on a mixed repo the summary adds a line like <code>12 files in unsupported languages not indexed (8 .dart, 4 .swift)</code> (also as <code>files_unsupported</code> / <code>unsupported_by_ext</code> under <code>--json</code>).</p>
+
+        <h2 id="cmd-search"><code>cartog search &lt;query&gt;</code></h2>
+        <p>Find symbols by partial name. Results ranked: exact match → prefix → substring.</p>
+        <pre>cartog search validate                   <span class="comment"># prefix + substring match</span>
+cartog search validate --kind function   <span class="comment"># functions only</span>
+cartog search config --file src/db.rs    <span class="comment"># scoped to one file</span>
+cartog search parse --limit 5            <span class="comment"># cap results</span></pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">function  validate           api/v1/auth.py:16
+function  validate_token     auth/tokens.py:38
+function  validate_request   utils/helpers.py:16
+function  validate_login     validators/user.py:41
+function  validate_email     validators/common.py:15
+method    _validate_payment  services/payment/processor.py:122
+document  Validate           README.md:8</pre>
+        <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>.</p>
+
+        <h2 id="cmd-outline"><code>cartog outline &lt;file&gt;</code></h2>
+        <p>Show all symbols in a file with types, signatures, and line ranges. Use this instead of reading a file when you need structure.</p>
+        <pre>cartog outline auth/tokens.py</pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">from datetime import datetime, timedelta  L3
+from typing import Optional  L4
+from models.user import User  L7
+from config import SECRET_KEY, TOKEN_EXPIRY  L9
+class TokenError  L12-15
+class ExpiredTokenError  L18-21
+function generate_token(user: User, expires_in: int = TOKEN_EXPIRY) -&gt; str  L30-35
+function validate_token(token: str) -&gt; Optional[User]  L38-52
+function refresh_token(old_token: str) -&gt; str  L60-64
+function revoke_token(token: str) -&gt; bool  L67-73</pre>
+
+        <h2 id="cmd-refs"><code>cartog refs &lt;name&gt;</code></h2>
+        <p>All references to a symbol — calls, imports, inherits, type references.</p>
+        <pre>cartog refs UserService                  <span class="comment"># all reference types</span>
+cartog refs validate_token --kind calls  <span class="comment"># only call sites</span></pre>
+        <p class="example-label">Example output (<code>cartog refs validate_token</code>)</p>
+        <pre class="example-output">imports  ..auth.tokens     middleware/auth_mw.py:7
+calls    auth_middleware   middleware/auth_mw.py:28
+imports  auth.tokens       auth/service.py:5
+calls    get_current_user  auth/service.py:44
+calls    change_password   auth/service.py:52
+imports  .tokens           auth/__init__.py:4
+calls    refresh_token     auth/tokens.py:62</pre>
+        <p>Available <code>--kind</code> values: <code>calls</code>, <code>imports</code>, <code>inherits</code>, <code>references</code>, <code>raises</code>, <code>implements</code>, <code>type-of</code>.</p>
+
+        <h2 id="cmd-callees"><code>cartog callees &lt;name&gt;</code></h2>
+        <p>Find what a function calls — answers "what does this depend on?".</p>
+        <pre>cartog callees validate_token</pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">lookup_session    auth/tokens.py:45
+TokenError        auth/tokens.py:47
+datetime.utcnow   auth/tokens.py:49
+ExpiredTokenError auth/tokens.py:50</pre>
+
+        <h2 id="cmd-impact"><code>cartog impact &lt;name&gt;</code></h2>
+        <p>Transitive impact analysis — follows the caller chain up to N hops (default 3).</p>
+        <pre>cartog impact validate_token --depth 3</pre>
+        <p class="example-label">Example output (indentation shows hop depth)</p>
+        <pre class="example-output">  imports  middleware/auth_mw.py:7
+  calls    auth_middleware           middleware/auth_mw.py:28
+  imports  auth/service.py:5
+  calls    AuthService.get_current_user  auth/service.py:44
+  calls    AuthService.change_password   auth/service.py:52
+  calls    refresh_token             auth/tokens.py:62
+    calls  auth_required.wrapper     auth/middleware.py:21
+    calls  get_current_user          auth/middleware.py:61</pre>
+        <p>Answers "what breaks if I change this?".</p>
+
+        <h2 id="cmd-hierarchy"><code>cartog hierarchy &lt;class&gt; [--mermaid]</code></h2>
+        <p>Show inheritance relationships — both parents and children. Add <code>--mermaid</code> for a <code>graph TD</code> diagram you can paste into a PR description, doc, or mermaid.live.</p>
+        <pre>cartog hierarchy AuthService
+cartog hierarchy AuthService --mermaid</pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">AuthService -&gt; BaseService
+AdminService -&gt; AuthService</pre>
+        <p class="example-label">With <code>--mermaid</code></p>
+        <pre class="example-output">graph TD
+    AuthService["AuthService"] --&gt; BaseService["BaseService"]
+    AdminService["AdminService"] --&gt; AuthService["AuthService"]</pre>
+
+        <h2 id="cmd-deps"><code>cartog deps &lt;file&gt; [--mermaid]</code></h2>
+        <p>List symbols imported by a file — answers "what does this file depend on?". Add <code>--mermaid</code> for a <code>graph LR</code> diagram rooted at the file.</p>
+        <pre>cartog deps auth/service.py
+cartog deps auth/service.py --mermaid</pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">Optional         L3
+validate_token   L5
+generate_token   L5
+revoke_token     L5
+User             L6
+get_logger       L7</pre>
+        <p class="example-label">With <code>--mermaid</code></p>
+        <pre class="example-output">graph LR
+    auth_service_py["auth/service.py"]
+    auth_service_py --&gt; validate_token["validate_token (L5)"]
+    auth_service_py --&gt; generate_token["generate_token (L5)"]
+    auth_service_py --&gt; User["User (L6)"]</pre>
+
+        <h2 id="cmd-stats"><code>cartog stats [--savings]</code></h2>
+        <p>Summary of the index — file count, symbol count, edge resolution rate. On an unindexed repo all counts are <code>0</code> and the output ends with a hint to run <code>cartog index .</code>. Pass <code>--savings</code> to show per-tool query counts and estimated tokens saved instead (or use the <a href="#cmd-savings"><code>cartog savings</code></a> alias).</p>
+        <pre>cartog stats
+cartog stats --savings</pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">Files:    70
+Symbols:  697
+Edges:    1921 (1019 resolved)
+Languages:
+  python: 69 files
+  markdown: 1 files
+Symbols by kind:
+  import: 256
+  method: 217
+  function: 90
+  variable: 80
+  class: 52</pre>
+
+        <h2 id="cmd-savings"><code>cartog savings</code></h2>
+        <p>Shows tokens used by cartog vs an equivalent grep+read flow, plus the saved delta and a per-tool call-count breakdown. Visible alias of <code>cartog stats --savings</code>; shipped as a top-level verb so the retention hook is one keystroke away.</p>
+        <pre>cartog savings
+cartog --json savings</pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">cartog · my-project · 5 queries
+
+████████░░  ~83% tokens saved
+
+Without cartog    ~8.5k tokens   (~1700 / query)
+With cartog       ~1.4k tokens   (~280 / query)
+──────────────────────────────────────────────
+Saved             ~7.1k tokens   (~1420 / query)
+
+By tool (call counts):
+     2  search
+     1  impact
+     1  map
+     1  refs
+
+Baseline: ~1700 tokens for an equivalent grep+read sweep vs cartog's ~280.
+Measured across 13 benchmark scenarios (see crates/cartog/benches/queries.rs).</pre>
+        <p>The header reads <code>cartog · &lt;project&gt; · &lt;N&gt; queries</code>. <strong>By tool</strong> lists <em>call counts</em> — every tool uses the same flat baseline (1,420 tokens saved per call), so the breakdown shows which navigation patterns you rely on, not which tool saved the most.</p>
+        <p>Only queries returning a non-empty result count toward the totals. Empty-index calls, typo'd symbol names, and outline against missing files are skipped so the figure reflects real work.</p>
+        <p>Data comes from a local <code>query_log</code> table inside <code>.cartog/db.sqlite</code>. Nothing leaves the machine; no query payloads are recorded — only the tool name, call surface (<code>cli</code> / <code>mcp</code>), and a timestamp. Secondary read-only MCP attaches can't write, so multi-MCP-server setups under-report secondary traffic rather than double-counting it.</p>
+
+        <h2 id="cmd-doctor"><code>cartog doctor</code></h2>
+        <p>Validate that all requirements are met and everything is working. Checks git repo, config, database, embedding provider, and reranker.</p>
+        <pre>cartog doctor                 <span class="comment"># check all requirements</span>
+cartog --json doctor          <span class="comment"># structured JSON output</span></pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">  [+] git: git repository at /your/repo
+  [+] config: loaded from /your/repo/.cartog.toml
+  [+] database: 70 files, 697 symbols at .cartog/db.sqlite
+  [+] embedding: local model cached
+  [+] reranker: local model cached
+  [+] remote: not configured (local-only)
+
+All 6 checks passed</pre>
+        <p>Each check reports <strong>OK</strong>, <strong>Warn</strong>, or <strong>Error</strong>. Exits with code 1 if any check is an error. Run this when commands fail unexpectedly or after first setup.</p>
+
+        <h2 id="cmd-map"><code>cartog map</code></h2>
+        <p>Token-budget-aware codebase summary — file tree + top symbols ranked by reference count. Add <code>--mermaid</code> for a <code>graph TD</code> rooted at "Repo"; the token budget still applies (renderer stops adding nodes before it overflows).</p>
+        <pre>cartog map                    <span class="comment"># default 4000 tokens</span>
+cartog map --tokens 2000      <span class="comment"># compact</span>
+cartog map --tokens 8000      <span class="comment"># detailed</span>
+cartog map --mermaid          <span class="comment"># paste-into-PR diagram</span></pre>
+        <p class="example-label">Example output (truncated)</p>
+        <pre class="example-output"># Codebase Map (70 files)
+
+  README.md
+  api/v1/auth.py
+  api/v1/payments.py
+  api/v2/auth.py
+  app.py
+  auth/middleware.py
+  auth/service.py
+  auth/tokens.py
+  ...</pre>
+        <p class="example-label">With <code>--mermaid</code> (truncated)</p>
+        <pre class="example-output">graph TD
+    repo["Repo"]
+    repo --&gt; README_md["README.md"]
+    repo --&gt; auth_service_py["auth/service.py"]
+    repo --&gt; auth_tokens_py["auth/tokens.py"]
+    auth_tokens_py --&gt; auth_tokens_py__validate_token["validate_token (function)"]
+    auth_tokens_py --&gt; auth_tokens_py__generate_token["generate_token (function)"]
+    ...</pre>
+        <p style="font-size: 13px; color: var(--text-tertiary);"><code>--json</code> wins over <code>--mermaid</code> when both are passed.</p>
+
+        <h2 id="cmd-changes"><code>cartog changes</code></h2>
+        <p>Show symbols affected by recent git changes.</p>
+        <pre>cartog changes                    <span class="comment"># last 5 commits + working tree</span>
+cartog changes --commits 10       <span class="comment"># last 10 commits</span>
+cartog changes --kind function    <span class="comment"># only functions</span></pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">20 files changed in last 5 commits, 2 symbols affected
+
+README.md:
+  document webapp_py# webapp_py       L1-7
+  document Validate## Validate        L8-13</pre>
+
+        <h2 id="cmd-config"><code>cartog config</code></h2>
+        <p>Print the resolved configuration (merged defaults, <code>.cartog.toml</code>, and env overrides). Useful for verifying <code>[rag]</code> tuning, watch debounce, and provider selection.</p>
+        <pre>cartog config              <span class="comment"># human-readable</span>
+cartog config --json       <span class="comment"># JSON for scripts</span></pre>
+        <p class="example-label">Example output (truncated)</p>
+        <pre class="example-output">Config file: /your/repo/.cartog.toml
+Database:    /your/repo/.cartog/db.sqlite
+
+[embedding]
+  provider:          local (default)
+  model:             -
+  dimension:         -
+
+[embedding.ollama]
+  base_url:          http://localhost:11434 (default)
+  model:             nomic-embed-text (default)
+  ...</pre>
+
+        <h2 id="cmd-watch"><code>cartog watch</code></h2>
+        <p>Watch for file changes and auto-re-index. Keeps the graph fresh during development.</p>
+        <pre>cartog watch                       <span class="comment"># watch CWD</span>
+cartog watch src/                  <span class="comment"># watch subdirectory</span>
+cartog watch --rag                 <span class="comment"># also auto-embed</span>
+cartog watch --rag --rag-delay 60  <span class="comment"># embed after 60s idle</span>
+cartog watch --debounce 10         <span class="comment"># 10s debounce window</span>
+cartog watch --json                <span class="comment"># NDJSON event stream</span></pre>
+        <p>Refuses to start if another watch holds the lock for this database — fail-fast prevents two writers stomping each other:</p>
+        <pre class="example-output">Error: another cartog process holds the watch lock for this database
+       (slot watch-a902bb89f9a6b484, PID 64311); stop it before running `cartog watch`</pre>
+
+        <h2 id="cmd-serve"><code>cartog serve</code></h2>
+        <p>Start cartog as an MCP server over stdio. No banner — stdio is reserved for JSON-RPC traffic between the client and the server. Run <code>cartog stats</code> in another shell to confirm it's up; <code>role: primary</code> means the writer, <code>role: read-only</code> means an attached secondary. See <a href="#mcp-server">MCP Server</a> for the full tool list and client wiring.</p>
+        <pre>cartog serve                  <span class="comment"># MCP server only</span>
+cartog serve --watch          <span class="comment"># + background file watcher</span>
+cartog serve --watch --rag    <span class="comment"># + watcher + auto RAG</span></pre>
+
+        <h2 id="cmd-init"><code>cartog init</code></h2>
+        <p>Scaffold a <code>.cartog.toml</code> template in the current project. That's all it does — config only, no editor wiring, no indexing. The next-steps hint points at <code>cartog ide</code> and <code>cartog index</code>.</p>
+        <pre>cartog init                  <span class="comment"># scaffold .cartog.toml</span>
+cartog init --dry-run        <span class="comment"># preview without writing</span></pre>
+        <p class="example-label">Example output (already-initialized project, <code>--dry-run</code>)</p>
+        <pre class="example-output">+ .cartog.toml (/your/repo/.cartog.toml): already present, left untouched
+
+Dry run only. Re-run without --dry-run to apply.</pre>
+        <p>Never overwrites an existing <code>.cartog.toml</code>. Re-running is a no-op (still prints the next-steps hint).</p>
+
+        <h2 id="cmd-ide"><code>cartog ide</code> / <code>cartog install</code></h2>
+        <p>Wire <code>cartog serve</code> into one or all MCP-compatible editors. Two shapes:</p>
+        <ul>
+          <li><strong><code>cartog install &lt;client&gt;...</code></strong> — positional, brew/npm/pip convention, always non-interactive. Safe for scripts and agents.</li>
+          <li><strong><code>cartog ide</code></strong> — original, supports an interactive multi-select picker (bare) and the long-form flags below.</li>
+        </ul>
+        <pre>cartog install cursor                 <span class="comment"># one editor</span>
+cartog install cursor vscode codex    <span class="comment"># several at once</span>
+cartog install                        <span class="comment"># all detected editors</span>
+cartog install cursor --dry-run       <span class="comment"># preview</span>
+
+cartog ide                            <span class="comment"># interactive picker (TTY only)</span>
+cartog ide --client cursor            <span class="comment"># single client via flag</span>
+cartog ide --scope project            <span class="comment"># only project-scoped (.mcp.json, .cursor/, .vscode/)</span>
+cartog ide --dry-run                  <span class="comment"># preview with before/after diff</span>
+cartog ide --no-watch                 <span class="comment"># drop --watch from Claude Code args</span></pre>
+        <p class="example-label">Example output (<code>cartog ide --client cursor --dry-run</code>)</p>
+        <pre class="example-output">+ cursor (project, /your/repo/.cursor/mcp.json): would create
+  --- after ---
+    &#123;
+      "mcpServers": &#123;
+        "cartog": &#123;
+          "command": "cartog",
+          "args": ["serve"]
+        &#125;
+      &#125;
+    &#125;
+
+1 clients: 1 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+Dry run only. Re-run without --dry-run to apply.</pre>
+        <p class="example-label">Example output (<code>cartog install cursor vscode --dry-run</code>)</p>
+        <pre class="example-output">+ cursor (project, /your/repo/.cursor/mcp.json): would create
+  --- after ---
+    &#123;
+      "mcpServers": &#123;
+        "cartog": &#123; "command": "cartog", "args": ["serve"] &#125;
+      &#125;
+    &#125;
++ vscode (project, /your/repo/.vscode/mcp.json): would create
+  --- after ---
+    &#123;
+      "servers": &#123;
+        "cartog": &#123; "type": "stdio", "command": "cartog", "args": ["serve"] &#125;
+      &#125;
+    &#125;
+
+2 clients: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+Dry run only. Re-run without --dry-run to apply.</pre>
+        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. See the <a href="#mcp-ide">Bootstrap sequence</a> for the recommended verb order.</p>
+
+        <h2 id="cmd-self"><code>cartog self &lt;update|version|rollback|migrate-db&gt;</code></h2>
+        <p>Manage the installed cartog binary in place: upgrade, inspect, or roll back. <code>cargo install cartog</code> users get an exit-3 refusal pointing at <code>cargo install cartog --force</code>; release-tarball installs swap atomically with SHA256 verification and a <code>&lt;bin&gt;.old</code> rollback slot.</p>
+        <pre>cartog self update              <span class="comment"># upgrade to the latest stable</span>
+cartog self update --check      <span class="comment"># exit 1 if outdated, 0 if current</span>
+cartog self version             <span class="comment"># target + install source + last check</span>
+cartog self rollback            <span class="comment"># restore the previous binary</span>
+cartog self migrate-db          <span class="comment"># move legacy .cartog.db into .cartog/db.sqlite</span>
+cartog self migrate-db --dry-run <span class="comment"># preview the move without touching disk</span></pre>
+        <p class="example-label">Example output (<code>cartog self version</code>)</p>
+        <pre class="example-output">cartog 0.18.0
+  target:            aarch64-apple-darwin
+  install source:    release-tarball
+  last update check: 2026-05-27T14:50:47Z</pre>
+        <p>Auto-check runs at most once per 24h on interactive sessions; suppressed under <code>CARTOG_NO_UPDATE_CHECK=1</code>, non-TTY stdout, and inside <code>cartog serve</code>/<code>watch</code>. <code>migrate-db</code> refuses to overwrite an existing <code>.cartog/db.sqlite</code>, refuses to run while a peer process holds the lock <strong>for this project's database</strong> (a peer on an unrelated project does not block it), and refuses symlinked sources. See <a href="https://github.com/jrollin/cartog/blob/main/docs/updates.md">docs/updates.md</a> for the full exit-code matrix and state file location.</p>
+
+        <h2 id="cmd-completions"><code>cartog completions &lt;shell&gt;</code></h2>
+        <p>Generate shell completion scripts for <code>bash</code>, <code>zsh</code>, <code>fish</code>, <code>powershell</code>, or <code>elvish</code>.</p>
+        <pre>cartog completions zsh   &gt; ~/.zfunc/_cartog
+cartog completions bash  &gt; /usr/local/etc/bash_completion.d/cartog
+cartog completions fish  &gt; ~/.config/fish/completions/cartog.fish</pre>
+        <p class="example-label">Example output (first lines of <code>cartog completions zsh</code>)</p>
+        <pre class="example-output">#compdef cartog
+
+autoload -U is-at-least
+
+_cartog() &#123;
+  ...</pre>
+
+        <h2 id="cmd-manpage"><code>cartog manpage</code></h2>
+        <p>Emit a <code>roff</code>-formatted man page on stdout. Intended for packagers and distro maintainers.</p>
+        <p>The output filename <strong>must</strong> end in <code>.1</code> (the section-1 extension <code>man</code> looks for) and the target directory must exist:</p>
+        <pre>sudo mkdir -p /usr/local/share/man/man1
+cartog manpage | sudo tee /usr/local/share/man/man1/cartog.1 &gt; /dev/null
+man cartog</pre>
+        <p class="example-label">Example output (first lines)</p>
+        <pre class="example-output">.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH cartog 1  "cartog 0.18.0"
+.SH NAME
+cartog \- Map your codebase. Navigate by graph, not grep.
+  ...</pre>
+
+        <!-- ── Reference ─────────────────────────── -->
+
+        <h2 id="json-output">JSON Output</h2>
+        <p>All commands accept <code>--json</code> for structured output:</p>
+        <pre>cartog --json refs validate_token
+cartog refs validate_token --json    <span class="comment"># equivalent</span>
+cartog --json stats</pre>
+
+        <h2 id="token-budget">Token Budget</h2>
+        <p>All query commands accept <code>--tokens N</code> to limit output:</p>
+        <pre>cartog --tokens 500 search validate
+cartog --tokens 200 outline src/db.rs</pre>
+        <p>Uses <code>len / 4</code> byte-to-token approximation. Ignored when <code>--json</code> is used.</p>
+
+        <h2 id="languages">Supported Languages</h2>
+        <table>
+          <thead>
+            <tr><th>Language</th><th>Extensions</th><th>Symbols</th><th>Edges</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Python</td><td>.py, .pyi</td><td>functions, classes, methods, imports, variables</td><td>calls, imports, inherits, raises, type refs</td></tr>
+            <tr><td>TypeScript</td><td>.ts, .tsx</td><td>functions, classes, methods, imports, variables</td><td>calls, imports, inherits, type refs, new</td></tr>
+            <tr><td>JavaScript</td><td>.js, .jsx, .mjs, .cjs</td><td>functions, classes, methods, imports, variables</td><td>calls, imports, inherits, new</td></tr>
+            <tr><td>Rust</td><td>.rs</td><td>functions, structs, traits, impls, imports</td><td>calls, imports, inherits, type refs</td></tr>
+            <tr><td>Go</td><td>.go</td><td>functions, structs, interfaces, imports</td><td>calls, imports, type refs</td></tr>
+            <tr><td>Ruby</td><td>.rb</td><td>functions, classes, modules, imports</td><td>calls, imports, inherits, raises, rescue types</td></tr>
+            <tr><td>Java</td><td>.java</td><td>classes, interfaces, enums, methods, imports</td><td>calls, imports, inherits, raises, type refs, new</td></tr>
+            <tr><td>PHP</td><td>.php</td><td>classes, interfaces, traits, enums, methods, functions, imports</td><td>calls, imports, inherits, implements, references (traits, new)</td></tr>
+            <tr><td>Dart</td><td>.dart</td><td>classes, mixins, extensions, enums, methods, functions, typedefs, imports</td><td>calls, imports, inherits, implements, type refs</td></tr>
+            <tr><td>Markdown</td><td>.md</td><td>document sections (chunked by heading)</td><td>—</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="performance">Performance</h2>
+        <p>Indexing: <strong>69 files / 4k LOC in 95ms</strong> (Python fixture, release build).</p>
+        <table>
+          <thead>
+            <tr><th>Query type</th><th>Latency</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>outline</td><td>8-14 μs</td></tr>
+            <tr><td>hierarchy</td><td>8-9 μs</td></tr>
+            <tr><td>deps</td><td>25 μs</td></tr>
+            <tr><td>stats</td><td>32 μs</td></tr>
+            <tr><td>search</td><td>81-102 μs</td></tr>
+            <tr><td>callees</td><td>177-180 μs</td></tr>
+            <tr><td>refs</td><td>258-471 μs</td></tr>
+            <tr><td>impact (depth 3)</td><td>2.7-17 ms</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Edge Resolution: Heuristic vs LSP</h3>
+        <table>
+          <thead>
+            <tr><th>Project</th><th>Language</th><th>Heuristic</th><th>With LSP</th><th>Time</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>TS microservice (230 files)</td><td>TypeScript</td><td>37%</td><td><span class="badge">81%</span></td><td>13s</td></tr>
+            <tr><td>Vue.js SPA (739 files)</td><td>Vue/TS/JS</td><td>31%</td><td><span class="badge">72%</span></td><td>25s</td></tr>
+            <tr><td>Rust CLI (358 files)</td><td>Rust</td><td>25%</td><td><span class="badge">44%</span></td><td>72s</td></tr>
+            <tr><td>PHP webapp fixture (25 files)</td><td>PHP</td><td>82%</td><td><span class="badge">84%</span></td><td>22s</td></tr>
+          </tbody>
+        </table>
+
+      </main>
+
+      <!-- Right rail: "On this page" — the current section's sub-headings,
+           populated and scroll-spied by the script below. -->
+      <aside class="docs-toc" aria-label="On this page">
+        <div class="docs-toc-label">On this page</div>
+        <nav class="docs-toc-nav"></nav>
+      </aside>
+    </div>
+  </div>
+
+  <script is:inline>
+    (function () {
+      var OFFSET = 90; // sticky-nav height + breathing room
+
+      // Left-nav links keyed by their target id, for active highlighting.
+      var navLinks = {};
+      document.querySelectorAll(".docs-sidebar a").forEach(function (a) {
+        navLinks[a.getAttribute("href").slice(1)] = a;
+      });
+
+      // Build the section model: each h2 owns the h3s that follow it until the
+      // next h2. Drives the right "On this page" rail. h3s often ship without
+      // an id, so derive a stable slug so the rail can anchor + scroll-spy them.
+      var content = document.querySelector(".docs-content");
+      var headings = Array.prototype.slice.call(content.querySelectorAll("h2, h3"));
+
+      function slugify(text) {
+        return text
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+      }
+
+      var sections = [];
+      var current = null;
+      headings.forEach(function (h) {
+        if (!h.id) {
+          var base = slugify(h.textContent || "") || "section";
+          var id = base, n = 2;
+          while (document.getElementById(id)) id = base + "-" + n++;
+          h.id = id;
+        }
+        if (h.tagName === "H2") {
+          current = { id: h.id, el: h, subs: [] };
+          sections.push(current);
+        } else if (current) {
+          current.subs.push({ id: h.id, el: h });
+        }
+      });
+
+      var tocNav = document.querySelector(".docs-toc-nav");
+      var tocAside = document.querySelector(".docs-toc");
+      var renderedSection = null;
+
+      // Render the right rail for a given section's sub-headings.
+      function renderToc(section) {
+        if (renderedSection === section) return;
+        renderedSection = section;
+        tocNav.innerHTML = "";
+        if (!section || !section.subs.length) {
+          tocAside.classList.add("is-empty");
+          return;
+        }
+        tocAside.classList.remove("is-empty");
+        section.subs.forEach(function (s) {
+          var a = document.createElement("a");
+          a.href = "#" + s.id;
+          a.textContent = (s.el.textContent || "").trim();
+          a.dataset.id = s.id;
+          tocNav.appendChild(a);
+        });
+      }
+
+      function openGroupOf(link) {
+        var group = link && link.closest(".sidebar-group");
+        if (group && !group.open) group.open = true;
+      }
+
+      function update() {
+        var y = window.scrollY + OFFSET;
+
+        // Active h2 section = last one whose top is above the scroll line.
+        var activeSection = sections.length ? sections[0] : null;
+        sections.forEach(function (s) {
+          if (s.el.offsetTop <= y) activeSection = s;
+        });
+
+        // Active sub-heading within that section.
+        var activeSub = null;
+        if (activeSection) {
+          activeSection.subs.forEach(function (s) {
+            if (s.el.offsetTop <= y) activeSub = s;
+          });
+        }
+
+        // Left nav: highlight the active link (sub if present, else section)
+        // and auto-open its group.
+        var activeId = (activeSub && activeSub.id) || (activeSection && activeSection.id);
+        Object.keys(navLinks).forEach(function (id) {
+          navLinks[id].classList.toggle("active", id === activeId);
+        });
+        if (activeId && navLinks[activeId]) openGroupOf(navLinks[activeId]);
+
+        // Right rail: show the active section's subs, highlight current.
+        renderToc(activeSection);
+        if (renderedSection) {
+          tocNav.querySelectorAll("a").forEach(function (a) {
+            a.classList.toggle("active", activeSub && a.dataset.id === activeSub.id);
+          });
+        }
+      }
+
+      window.addEventListener("scroll", update, { passive: true });
+      window.addEventListener("resize", update);
+      update();
+    })();
+  </script>
+</Base>

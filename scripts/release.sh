@@ -99,8 +99,8 @@ if [[ -f "$INSTALL_SKILL" ]]; then
   fi
 fi
 
-# update site version references (footers + badges)
-for f in site/index.html site/usage.html; do
+# update site version references (footers + badges) in the Astro page sources
+for f in site/src/pages/index.astro site/src/pages/usage.astro; do
   if [[ -f "$f" ]]; then
     sed "s/v${CURRENT}/v${NEW}/g" "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   fi

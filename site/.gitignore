@@ -1,0 +1,4 @@
+# Astro build output + deps (site/ is now an Astro project)
+dist/
+node_modules/
+.astro/

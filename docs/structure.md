@@ -13,7 +13,7 @@ cartog/
 ├── benchmarks/         # Benchmark runner, fixtures, ground truth, 13 scenarios
 ├── tests/fixtures/     # Shared fixtures referenced by crate tests
 ├── scripts/            # release.sh, install.sh (canonical) + site mirror
-├── site/               # GitHub Pages content (install.sh mirror, landing page)
+├── site/               # Astro project for GitHub Pages (landing page + docs; install.sh mirror in public/)
 ├── docs/               # This documentation
 └── target/             # Cargo build output (gitignored)
 ```

@@ -112,7 +112,7 @@ the per-language wiring is shallow and the bulk of the work is the benchmark fix
     typo, dyn dispatch, macro) and `edges_marked_external` (LSP located the
     target outside the indexed root: stdlib, deps, node_modules) from `--json`
     output. If the LSP gain is meaningful, add a row to the recall table in
-    `README.md` and `site/usage.html`.
+    `README.md` and `site/src/pages/usage.astro`.
 
 ### 4. Documentation
 
@@ -124,7 +124,7 @@ At minimum:
 - `docs/troubleshooting.md` — LSP server enumeration
 - `skills/cartog/SKILL.md` — supported languages + supported servers
 - `crates/cartog-languages/README.md`
-- `site/index.html` and `site/usage.html` — language cards and tables
+- `site/src/pages/index.astro` and `site/src/pages/usage.astro` — language cards and tables
 - `crates/cartog-mcp/src/lib.rs` — tool description language list (if mentioned)
 
 Grep before committing:
@@ -152,12 +152,29 @@ The animated demo on the README and the landing page is produced by
 brew install vhs            # or: go install github.com/charmbracelet/vhs@latest
 cargo build --release       # so `cartog` resolves to the current build
 PATH="$PWD/target/release:$PATH" vhs docs/demo.tape
-cp docs/demo.gif site/demo.gif   # keep the site mirror in sync
+cp docs/demo.gif site/public/demo.gif   # keep the site mirror in sync
 ```
 
 Bump the `?v=N` query string on `<img src="demo.gif?v=N">` in
-`site/index.html` whenever the gif changes so browsers pick up the new
-asset.
+`site/src/pages/index.astro` whenever the gif changes so browsers pick up the
+new asset.
+
+## Building the site
+
+The landing page lives in `site/` as an [Astro](https://astro.build) project.
+GitHub Pages builds it on tag push via `.github/workflows/pages.yml`.
+
+```bash
+cd site
+npm ci            # install pinned deps (package-lock.json)
+npm run build     # static output → site/dist/
+npm run dev       # local preview at http://localhost:4321
+```
+
+Page sources are `site/src/pages/{index,usage}.astro`; shared nav/footer/head
+live in `site/src/components/` and `site/src/layouts/Base.astro`. Static files
+served verbatim (`style.css`, `demo.gif`, `install.sh`, `assets/`) are in
+`site/public/`.
 
 ## Code of Conduct
 
