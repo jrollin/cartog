@@ -88,6 +88,7 @@ locally with `make bench-criterion`.
 | Async boundary | Manual `tokio::Runtime` for `serve` only | 95% of commands are sync. Avoids async overhead for index/search/refs. `spawn_blocking` offloads sync SQLite calls from the async MCP handler |
 | DB concurrency | `Arc<Mutex<Database>>` | Single connection, not a pool. MCP serves one agent session — contention is negligible. `std::sync::Mutex` (not tokio) because lock is never held across `.await` |
 | Path security | Canonical CWD validation | MCP tool parameters come from LLM agents. Rejects paths outside CWD subtree via `canonicalize` + `starts_with`. Defense-in-depth against prompt injection |
+| Secret redaction | Default-on, best-effort | Scrubs common secret patterns from stored symbol text and skips sensitive files. See [Secret redaction](#secret-redaction) below |
 | Watch mode | Debounced re-index + deferred RAG | 5s debounce, 30s RAG delay. Embedding only fires after editing stops — avoids embedding code that changes seconds later |
 | Vector search | sqlite-vec (opt-in) | Embedded in SQLite, no external infra. Models downloaded via `cartog rag setup` |
 | Model cache | `~/.cache/cartog/models` | XDG-compliant shared cache avoids downloading ~1.2 GB of models per project. Precedence: `FASTEMBED_CACHE_DIR` > `XDG_CACHE_HOME/cartog/models` > `~/.cache/cartog/models` |
@@ -99,6 +100,39 @@ locally with `make bench-criterion`.
 | Workspace | Cargo workspace (10 crates) | Incremental compilation, explicit dependency boundaries, independent crate reuse. See [structure.md](structure.md) for layout and dependency graph |
 | Monorepo | Deferred | Index from CWD, user can `cd` into subproject |
 | Remote index sync | Opt-in S3-compatible push/pull (default-on feature, inert without config) | `remote-s3` feature ON by default — single distributable binary, no rebuild from source for teams. Inert until `[remote]` is set or `--remote` passed: no network traffic, no impact on air-gapped use. Credentials resolved from the AWS env chain only; `.cartog.toml` rejects credential-shaped keys at parse time. `rust-s3` (~5 MB) over `aws-sdk-s3` (~18 MB) for binary size. See [usage.md](usage.md#cartog-push---remote-s3-url) |
+
+### Secret redaction
+
+cartog stores symbol text on disk (the `symbols` table, the `symbol_content`
+FTS5 source, and RAG embeddings derived from it). To keep hardcoded secrets out
+of that index, redaction is **on by default** (`[security] redact_secrets`).
+
+**Best-effort, not a guarantee.** Detection uses anchored, length-bounded
+`regex` patterns for common vendor token shapes (AWS access key IDs, GitHub
+PATs, Slack tokens, Stripe keys, JWTs) plus a quoted `key = value` assignment
+scan keyed on `password`/`secret`/`token`/`api_key`. Matches are replaced with
+`[REDACTED_SECRET]`. It favours precision (not mangling real code) over recall,
+so some secrets slip through, notably bare high-entropy strings not behind a
+recognised keyword and AWS secret keys outside an `aws_secret_access_key`
+assignment. Treat it as mitigation, not a vault.
+
+**Surfaces covered.** Redaction is applied to the extracted value strings only,
+never the source buffer (byte offsets back symbol slicing and Merkle hashing):
+`symbol_content.content` (feeds FTS5 + embeddings + search results + reranker)
+and each symbol's `signature`/`docstring` (returned directly by `cartog search`
+/ `cartog outline`). Hashes key off the raw source, so the redaction flag never
+perturbs incremental change detection.
+
+**Sensitive files** (`.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`,
+`id_rsa`, `id_ed25519`, `credentials.json`, `secrets.yml`, ...) are excluded
+from indexing entirely, **always**, independent of `redact_secrets`. Most lack
+a code extension and were already skipped; the deny-list is the explicit,
+documented guarantee and also catches code-extension'd sensitive names.
+
+**Toggling on an existing index.** Hashes ignore the redaction flag, so enabling
+redaction on a populated index would otherwise be a no-op. cartog records the
+policy in `metadata` and force-reindexes every file on the next run when it
+changes, scrubbing already-stored content, and prints a one-time notice.
 
 ## RAG Pipeline Design
 

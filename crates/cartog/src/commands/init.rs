@@ -30,6 +30,12 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # [rag]
 # fts_weight = 0.5
 # vector_weight = 0.5
+
+# [security]
+# Redact common secret patterns (API keys, tokens, JWTs) from stored symbol
+# text. On by default. Sensitive files (.env, *.pem, id_rsa, ...) are always
+# excluded regardless of this setting.
+# redact_secrets = true
 "##;
 
 #[derive(Debug, Serialize)]

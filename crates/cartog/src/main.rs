@@ -115,6 +115,7 @@ fn main() -> Result<()> {
 
     let db_path = config::resolve_db_path(cli.db.clone(), &cartog_config);
     let provider_config = config::to_provider_config(&cartog_config);
+    let redact = config::to_redaction_config(&cartog_config);
     let embedding_dim = provider_config.resolved_dimension();
     let search_tuning = cartog_config
         .rag
@@ -171,7 +172,15 @@ fn main() -> Result<()> {
             path,
             force,
             no_lsp,
-        } => commands::cmd_index(&db_path, &path, force, !no_lsp, cli.json, embedding_dim),
+        } => commands::cmd_index(
+            &db_path,
+            &path,
+            force,
+            !no_lsp,
+            cli.json,
+            embedding_dim,
+            redact,
+        ),
         Command::Outline { file } => {
             commands::cmd_outline(&db_path, &file, cli.json, token_budget, embedding_dim)
         }
@@ -280,6 +289,7 @@ fn main() -> Result<()> {
             rag,
             rag_delay,
             provider_config,
+            redact,
             cli.json,
         ),
         Command::Init { dry_run } => commands::init::cmd_init(dry_run, cli.json),
@@ -309,12 +319,19 @@ fn main() -> Result<()> {
                 pid_lock_dir,
                 pid_lock_slot,
             };
-            runtime.block_on(mcp::run_server(&db_path, watch, rag, provider_config, opts))
+            runtime.block_on(mcp::run_server(
+                &db_path,
+                watch,
+                rag,
+                provider_config,
+                redact,
+                opts,
+            ))
         }
         Command::Rag(rag_cmd) => match rag_cmd {
             RagCommand::Setup => commands::cmd_rag_setup(cli.json),
             RagCommand::Index { path, force } => {
-                commands::cmd_rag_index(&db_path, &path, force, cli.json, &provider_config)
+                commands::cmd_rag_index(&db_path, &path, force, cli.json, &provider_config, redact)
             }
             RagCommand::Search { query, kind, limit } => commands::cmd_rag_search(
                 &db_path,

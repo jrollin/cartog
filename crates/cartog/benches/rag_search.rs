@@ -72,8 +72,16 @@ impl EmbeddingProvider for StubEmbeddingProvider {
 /// Index the Python fixture and embed every symbol with the stub provider.
 fn setup_db() -> Database {
     let db = Database::open_memory().expect("open in-memory DB");
-    index_directory(&db, &bench_support::fixture_path(), true, false, None, None)
-        .expect("index fixture");
+    index_directory(
+        &db,
+        &bench_support::fixture_path(),
+        true,
+        false,
+        None,
+        None,
+        cartog::indexer::RedactionConfig::disabled(),
+    )
+    .expect("index fixture");
     let mut provider = StubEmbeddingProvider;
     index_embeddings(&db, &mut provider, true, None, None).expect("embed fixture");
     db

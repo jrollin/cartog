@@ -273,6 +273,7 @@ pub fn cmd_index(
     lsp: bool,
     json: bool,
     embedding_dim: usize,
+    redact: indexer::RedactionConfig,
 ) -> Result<()> {
     let root = Path::new(path);
     let db = open_db(db_path, embedding_dim)?;
@@ -285,10 +286,16 @@ pub fn cmd_index(
     let cb = spinner_callback(&spinner, indexer::ProgressUpdate::label);
     let cb_ref: Option<indexer::ProgressCallback<'_>> =
         cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
-    let result = indexer::index_directory(&db, root, force, lsp, cb_ref, None);
+    let result = indexer::index_directory(&db, root, force, lsp, cb_ref, None, redact);
     drop(cb);
     stop_spinner(spinner);
     let result = result?;
+
+    if !json && result.redaction_backfilled {
+        eprintln!(
+            "note: secret redaction was newly enabled; re-indexed all files to scrub stored content"
+        );
+    }
 
     // No-op run: nothing was added or removed this pass. The delta counters
     // are all zero, so the standard "0 symbols, 0 edges" line reads like a
@@ -1072,6 +1079,7 @@ pub fn cmd_rag_index(
     force: bool,
     json: bool,
     provider_config: &rag::EmbeddingProviderConfig,
+    redact: indexer::RedactionConfig,
 ) -> Result<()> {
     let root = Path::new(path);
     let mut provider = rag::create_embedding_provider(provider_config)?;
@@ -1087,7 +1095,7 @@ pub fn cmd_rag_index(
     let ix_cb = spinner_callback(&spinner, indexer::ProgressUpdate::label);
     let ix_cb_ref: Option<indexer::ProgressCallback<'_>> =
         ix_cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
-    let index_res = indexer::index_directory(&db, root, false, false, ix_cb_ref, None);
+    let index_res = indexer::index_directory(&db, root, false, false, ix_cb_ref, None, redact);
     drop(ix_cb);
     stop_spinner(spinner);
     let _index_result = index_res?;
@@ -1229,6 +1237,7 @@ pub fn cmd_watch(
     rag: bool,
     rag_delay: u64,
     provider_config: rag::EmbeddingProviderConfig,
+    redact: indexer::RedactionConfig,
     json: bool,
 ) -> Result<()> {
     let mut config = WatchConfig::new(PathBuf::from(path));
@@ -1236,6 +1245,7 @@ pub fn cmd_watch(
     config.rag = rag;
     config.rag_delay = Duration::from_secs(rag_delay);
     config.rag_config = provider_config;
+    config.redact = redact;
     config.json_events = json;
     // pid_lock_dir/slot must be both-or-neither: a sandboxed host with no
     // resolvable state dir falls back to untracked mode rather than hard-
@@ -1443,7 +1453,16 @@ def main():
         std::fs::write(root.join("lib.py"), CMD_FIXTURE_SRC).unwrap();
         let db_path = tmp.path().join("cartog.db");
         let db = Database::open(&db_path, 384).unwrap();
-        indexer::index_directory(&db, &root, true, false, None, None).expect("fixture indexes");
+        indexer::index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            None,
+            None,
+            indexer::RedactionConfig::disabled(),
+        )
+        .expect("fixture indexes");
         drop(db);
         (tmp, db_path)
     }

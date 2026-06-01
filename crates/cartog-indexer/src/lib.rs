@@ -52,6 +52,7 @@ fn parse_one_file(
     lang: &'static str,
     force: bool,
     stored_hash: Option<&str>,
+    redact: RedactionConfig,
 ) -> ParseOutput {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -92,6 +93,12 @@ fn parse_one_file(
     dedup_symbol_ids(&mut extraction.symbols, &mut extraction.edges);
     compute_merkle_hashes(&mut extraction.symbols, &source);
 
+    // Redact after hashing so content_hash stays keyed on raw signature: the
+    // redaction flag never perturbs Merkle identity or stable IDs.
+    if redact.enabled {
+        redact_symbol_fields(&mut extraction.symbols, redact);
+    }
+
     ParseOutput::Parsed {
         rel_path: rel_path.to_string(),
         lang,
@@ -122,6 +129,25 @@ fn extract_with_cached(
         };
         Some(extractor.extract(source, rel_path))
     })
+}
+
+/// Redact secrets from each symbol's `signature` and `docstring` in place.
+///
+/// These fields are returned verbatim by `cartog search`/`outline`, so they are
+/// an agent-facing leak surface independent of the RAG content store.
+fn redact_symbol_fields(symbols: &mut [Symbol], redact: RedactionConfig) {
+    for sym in symbols.iter_mut() {
+        if let Some(sig) = &sym.signature {
+            if let std::borrow::Cow::Owned(r) = redact.redact(sig) {
+                sym.signature = Some(r);
+            }
+        }
+        if let Some(doc) = &sym.docstring {
+            if let std::borrow::Cow::Owned(r) = redact.redact(doc) {
+                sym.docstring = Some(r);
+            }
+        }
+    }
 }
 
 /// Summary of an indexing operation.
@@ -162,6 +188,19 @@ pub struct IndexResult {
     /// Each entry is `(extension_without_dot, count)`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unsupported_by_ext: Vec<(String, u32)>,
+    /// Files skipped because their name matched the sensitive-file deny-list
+    /// (`.env`, `*.pem`, `id_rsa`, ...). Never read, parsed, or stored.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub files_redacted_skipped: u32,
+    /// True when redaction was newly enabled on an index that already held
+    /// content predating it; the run was promoted to a full re-index to scrub
+    /// stored secrets. Surfaced so callers can warn the user.
+    #[serde(skip_serializing_if = "is_false")]
+    pub redaction_backfilled: bool,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -233,6 +272,7 @@ pub fn index_directory(
     lsp: bool,
     progress: Option<ProgressCallback<'_>>,
     cancel: Option<CancelProbe<'_>>,
+    redact: RedactionConfig,
 ) -> Result<IndexResult> {
     let emit = |u: ProgressUpdate| {
         if let Some(cb) = progress {
@@ -249,6 +289,25 @@ pub fn index_directory(
     let mut result = IndexResult::default();
 
     let root = root.canonicalize().context("Failed to resolve root path")?;
+
+    // Redaction policy change forces a full re-index so stored content predating
+    // the new policy gets scrubbed (hashes key off raw source, so a plain run
+    // would skip every file and leave plaintext behind). Must run before the
+    // skip-by-hash / git-diff reads below so they observe the forced value.
+    let stored_redact = db.get_metadata("redact_secrets")?;
+    let policy_changed = stored_redact
+        .as_deref()
+        .is_some_and(|v| v != redact.enabled.to_string());
+    let mut force = force;
+    if policy_changed {
+        force = true;
+        if redact.enabled {
+            result.redaction_backfilled = true;
+        }
+        // Stale vectors were built from pre-redaction content; drop them so the
+        // next `rag index` re-embeds the scrubbed text.
+        db.clear_all_embeddings()?;
+    }
 
     // Collect files that should be indexed
     let mut current_files = std::collections::HashSet::new();
@@ -303,6 +362,17 @@ pub fn index_directory(
             Ok(p) => p.to_string_lossy().to_string(),
             Err(_) => continue,
         };
+
+        // Sensitive files (.env, *.pem, id_rsa, ...) are never indexed, always.
+        // Checked before detect_language so it also catches files with no code
+        // extension, and so they count as redacted-skips rather than
+        // unsupported. Dropping before current_files.insert lets the removal
+        // sweep delete any rows from a prior un-gated index.
+        if redact::is_sensitive_file(&rel_path) {
+            result.files_redacted_skipped += 1;
+            continue;
+        }
+
         let lang = match detect_language(Path::new(&rel_path)) {
             Some(l) => l,
             None => {
@@ -318,6 +388,7 @@ pub fn index_directory(
                 continue;
             }
         };
+
         current_files.insert(rel_path.clone());
 
         // Git-based skip: files not in the changed set and already indexed stay put.
@@ -351,6 +422,7 @@ pub fn index_directory(
                 lang,
                 force,
                 stored_hashes.get(rel).map(String::as_str),
+                redact,
             )
         })
         .collect();
@@ -406,10 +478,12 @@ pub fn index_directory(
             } => (rel_path, lang, source, hash, modified, symbols, edges),
         };
 
-        // Try Merkle diff against stored hashes
+        // Force skips Merkle diff: source is unchanged on a policy-change
+        // re-index, so a diff would find nothing dirty and skip the content
+        // rewrite, leaving stale (un-redacted) rows.
         let old_hashes = db.get_symbol_hashes_for_file(&rel_path)?;
         let has_old_hashes =
-            !old_hashes.is_empty() && old_hashes.iter().any(|(_, ch, _)| ch.is_some());
+            !force && !old_hashes.is_empty() && old_hashes.iter().any(|(_, ch, _)| ch.is_some());
 
         if has_old_hashes {
             // Merkle diff: surgical updates
@@ -453,9 +527,9 @@ pub fn index_directory(
                 .map(|&i| &symbols[i])
                 .filter(|sym| sym.kind != cartog_core::SymbolKind::Import)
                 .filter_map(|sym| {
-                    extract_symbol_content(&source, sym).map(|(content, header)| {
-                        (sym.id.clone(), sym.name.clone(), content, header)
-                    })
+                    extract_symbol_content_redacted(&source, sym, redact).map(
+                        |(content, header)| (sym.id.clone(), sym.name.clone(), content, header),
+                    )
                 })
                 .collect();
             if !contents.is_empty() {
@@ -480,9 +554,9 @@ pub fn index_directory(
                 .iter()
                 .filter(|sym| sym.kind != cartog_core::SymbolKind::Import)
                 .filter_map(|sym| {
-                    extract_symbol_content(&source, sym).map(|(content, header)| {
-                        (sym.id.clone(), sym.name.clone(), content, header)
-                    })
+                    extract_symbol_content_redacted(&source, sym, redact).map(
+                        |(content, header)| (sym.id.clone(), sym.name.clone(), content, header),
+                    )
                 })
                 .collect();
             if !contents.is_empty() {
@@ -565,6 +639,10 @@ pub fn index_directory(
     if let Some(commit) = git_head_commit(&root) {
         db.set_metadata("last_commit", &commit)?;
     }
+
+    // Record the redaction policy this index was built under so the next run
+    // can detect a toggle and force a re-index.
+    db.set_metadata("redact_secrets", &redact.enabled.to_string())?;
 
     result.dirty_files = dirty_files.len() as u32;
     tx.commit()?;
@@ -712,11 +790,13 @@ fn dedup_symbol_ids(symbols: &mut [Symbol], edges: &mut [cartog_core::Edge]) {
 mod content;
 mod git;
 mod merkle;
+mod redact;
 
-pub(crate) use content::extract_symbol_content;
+pub(crate) use content::extract_symbol_content_redacted;
 pub use git::git_recently_changed_files;
 pub(crate) use git::{git_changed_files, git_head_commit};
 pub(crate) use merkle::{compute_merkle_hashes, merkle_diff};
+pub use redact::RedactionConfig;
 
 /// Shared scenario bodies for the indexing benchmarks.
 ///
@@ -800,7 +880,16 @@ pub mod bench_support {
     /// in a benchmark, not recoverable conditions.
     pub fn full_force(fixture: &Path) -> IndexResult {
         let db = Database::open_memory().expect("open in-memory DB");
-        index_directory(&db, fixture, true, false, None, None).expect("full index")
+        index_directory(
+            &db,
+            fixture,
+            true,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .expect("full index")
     }
 
     /// Open an in-memory DB and full-index the fixture, returning the DB.
@@ -814,7 +903,16 @@ pub mod bench_support {
     #[must_use]
     pub fn seed(fixture: &Path) -> Database {
         let db = Database::open_memory().expect("open in-memory DB");
-        index_directory(&db, fixture, true, false, None, None).expect("seed index");
+        index_directory(
+            &db,
+            fixture,
+            true,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .expect("seed index");
         db
     }
 
@@ -824,7 +922,16 @@ pub mod bench_support {
     ///
     /// Panics if re-indexing fails (a setup invariant).
     pub fn noop(db: &Database, fixture: &Path) -> IndexResult {
-        index_directory(db, fixture, false, false, None, None).expect("noop re-index")
+        index_directory(
+            db,
+            fixture,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .expect("noop re-index")
     }
 
     /// Invalidate one file's stored hash, then re-index so it re-parses and
@@ -842,7 +949,16 @@ pub mod bench_support {
             num_symbols: 0,
         })
         .expect("invalidate file hash");
-        index_directory(db, fixture, false, false, None, None).expect("incremental re-index")
+        index_directory(
+            db,
+            fixture,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .expect("incremental re-index")
     }
 }
 
@@ -1012,7 +1128,16 @@ mod tests {
         std::fs::write(dir.join(".cartog.db-wal"), "x").unwrap();
 
         let db = Database::open_memory().unwrap();
-        let r = index_directory(&db, &dir, true, false, None, None).unwrap();
+        let r = index_directory(
+            &db,
+            &dir,
+            true,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
         assert_eq!(r.files_indexed, 1, "only a.rs is supported");
         assert_eq!(
@@ -1035,12 +1160,30 @@ mod tests {
 
         if fixtures.exists() {
             // First index
-            let r1 = index_directory(&db, &fixtures, false, false, None, None).unwrap();
+            let r1 = index_directory(
+                &db,
+                &fixtures,
+                false,
+                false,
+                None,
+                None,
+                crate::RedactionConfig::disabled(),
+            )
+            .unwrap();
             assert!(r1.files_indexed > 0);
             assert!(r1.dirty_files > 0);
 
             // Second index without force — should skip all files (no-op)
-            let r2 = index_directory(&db, &fixtures, false, false, None, None).unwrap();
+            let r2 = index_directory(
+                &db,
+                &fixtures,
+                false,
+                false,
+                None,
+                None,
+                crate::RedactionConfig::disabled(),
+            )
+            .unwrap();
             assert_eq!(r2.files_indexed, 0);
             assert!(r2.files_skipped > 0);
             assert_eq!(
@@ -1053,7 +1196,16 @@ mod tests {
             );
 
             // Force re-index — dirty_files matches files_indexed
-            let r3 = index_directory(&db, &fixtures, true, false, None, None).unwrap();
+            let r3 = index_directory(
+                &db,
+                &fixtures,
+                true,
+                false,
+                None,
+                None,
+                crate::RedactionConfig::disabled(),
+            )
+            .unwrap();
             assert_eq!(r3.files_indexed, r1.files_indexed);
             assert_eq!(r3.files_skipped, 0);
             assert_eq!(r3.dirty_files, r3.files_indexed);
@@ -1074,9 +1226,27 @@ mod tests {
 
         // Prime, then re-run. Don't assert LSP found anything (depends on
         // whether pyright is on PATH in CI) — only that the second pass skips it.
-        let _ = index_directory(&db, &fixtures, false, true, None, None).unwrap();
+        let _ = index_directory(
+            &db,
+            &fixtures,
+            false,
+            true,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
-        let r2 = index_directory(&db, &fixtures, false, true, None, None).unwrap();
+        let r2 = index_directory(
+            &db,
+            &fixtures,
+            false,
+            true,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
         assert_eq!(r2.dirty_files, 0);
         assert_eq!(r2.edges_lsp_resolved, 0);
     }
@@ -1095,7 +1265,16 @@ mod tests {
         std::fs::write(root.join("a.py"), "def caller():\n    find_user('x')\n").unwrap();
 
         let db = Database::open_memory().unwrap();
-        let r1 = index_directory(&db, &root, false, false, None, None).unwrap();
+        let r1 = index_directory(
+            &db,
+            &root,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
         assert!(
             r1.files_indexed >= 1,
             "expected a.py to index, got {:?}",
@@ -1113,7 +1292,16 @@ mod tests {
 
         // Adding b.py with find_user definition should reopen the marker.
         std::fs::write(root.join("b.py"), "def find_user(name):\n    return None\n").unwrap();
-        index_directory(&db, &root, false, false, None, None).unwrap();
+        index_directory(
+            &db,
+            &root,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
         assert!(
             !db.is_edge_unresolvable(edge_id).unwrap(),
@@ -1144,7 +1332,16 @@ mod tests {
         .unwrap();
 
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &root, false, false, None, None).unwrap();
+        index_directory(
+            &db,
+            &root,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
         let pre = db.unresolved_edges().unwrap();
         let find_x_id = pre
@@ -1161,7 +1358,16 @@ mod tests {
         db.mark_edge_external(find_ext_id).unwrap();
 
         // --force = true: rebuilds edges with fresh IDs, must NOT inherit state {2, 3}.
-        index_directory(&db, &root, true, false, None, None).unwrap();
+        index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
         let post = db.unresolved_edges().unwrap();
         assert!(
             post.iter().any(|e| e.target_name == "find_x"),
@@ -1186,7 +1392,16 @@ mod tests {
         std::fs::write(root.join("a.py"), "def caller():\n    vendored_helper()\n").unwrap();
 
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &root, false, false, None, None).unwrap();
+        index_directory(
+            &db,
+            &root,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
         let unresolved = db.unresolved_edges().unwrap();
         let edge_id = unresolved
@@ -1203,7 +1418,16 @@ mod tests {
             "def vendored_helper():\n    return 1\n",
         )
         .unwrap();
-        index_directory(&db, &root, false, false, None, None).unwrap();
+        index_directory(
+            &db,
+            &root,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
         // After the name-keyed reset, the edge is reopened (state=0) and the
         // heuristic resolver runs in the same indexing pass — `vendored_helper`
@@ -1234,7 +1458,16 @@ mod tests {
         .unwrap();
 
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &root, false, false, None, None).unwrap();
+        index_directory(
+            &db,
+            &root,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
         let unresolved = db.unresolved_edges().unwrap();
         let burned = unresolved
@@ -1249,7 +1482,16 @@ mod tests {
         db.mark_edge_external(ext.edge_id).unwrap();
 
         // No file changes → reindex is a no-op → markers survive.
-        let r = index_directory(&db, &root, false, false, None, None).unwrap();
+        let r = index_directory(
+            &db,
+            &root,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
         assert_eq!(r.dirty_files, 0);
 
         assert_eq!(
@@ -1543,7 +1785,16 @@ def main():
         let db = Database::open_memory().unwrap();
 
         // ── Index 1: initial full index ──
-        let r1 = index_directory(&db, &dir, true, false, None, None).unwrap();
+        let r1 = index_directory(
+            &db,
+            &dir,
+            true,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
         assert_eq!(r1.files_indexed, 2);
         assert!(r1.symbols_added > 0, "should have symbols");
 
@@ -1592,7 +1843,16 @@ def standalone():
         )
         .unwrap();
 
-        let r2 = index_directory(&db, &dir, false, false, None, None).unwrap();
+        let r2 = index_directory(
+            &db,
+            &dir,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
         assert_eq!(r2.files_indexed, 1, "only a.py changed");
         assert!(r2.files_skipped > 0, "b.py should be skipped");
         assert_eq!(r2.symbols_added, 1, "standalone is new");
@@ -1639,7 +1899,16 @@ def standalone():
         )
         .unwrap();
 
-        let r3 = index_directory(&db, &dir, false, false, None, None).unwrap();
+        let r3 = index_directory(
+            &db,
+            &dir,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
         assert_eq!(r3.files_indexed, 1);
         assert!(r3.symbols_removed >= 1, "goodbye should be removed");
 
@@ -1693,7 +1962,16 @@ We use PostgreSQL with connection pooling via pgbouncer.
         .unwrap();
 
         let db = Database::open_memory().unwrap();
-        let result = index_directory(&db, &dir, false, false, None, None).unwrap();
+        let result = index_directory(
+            &db,
+            &dir,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
         assert_eq!(result.files_indexed, 1);
         assert!(result.symbols_added >= 3, "should have at least 3 sections");
@@ -1771,7 +2049,16 @@ We use PostgreSQL with connection pooling via pgbouncer.
         std::fs::write(dir.join("seed.py"), "def keep_me():\n    return 1\n").unwrap();
 
         let db = Database::open_memory().unwrap();
-        index_directory(&db, &dir, true, false, None, None).expect("seed index should succeed");
+        index_directory(
+            &db,
+            &dir,
+            true,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .expect("seed index should succeed");
 
         // Snapshot the seed state so we can assert it is preserved across the
         // failed run.
@@ -1802,7 +2089,15 @@ We use PostgreSQL with connection pooling via pgbouncer.
         // new functions through Phase 3.
         db.set_max_page_count_for_tests(30).unwrap();
 
-        let result = index_directory(&db, &dir, false, false, None, None);
+        let result = index_directory(
+            &db,
+            &dir,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        );
         assert!(
             result.is_err(),
             "Phase 3 must fail when SQLite runs out of pages; got Ok({result:?})"
@@ -1863,7 +2158,16 @@ We use PostgreSQL with connection pooling via pgbouncer.
 
         let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
         let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
-        let result = index_directory(&db, &root, true, false, Some(&cb), None).unwrap();
+        let result = index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            Some(&cb),
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
         assert!(result.files_indexed >= 2);
         let events = events.into_inner().unwrap();
@@ -1879,12 +2183,30 @@ We use PostgreSQL with connection pooling via pgbouncer.
 
         let (_t1, root1) = tiny_python_project();
         let db1 = Database::open_memory().unwrap();
-        let r_none = index_directory(&db1, &root1, true, false, None, None).unwrap();
+        let r_none = index_directory(
+            &db1,
+            &root1,
+            true,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
         let (_t2, root2) = tiny_python_project();
         let db2 = Database::open_memory().unwrap();
         let cb = |_: ProgressUpdate| {};
-        let r_some = index_directory(&db2, &root2, true, false, Some(&cb), None).unwrap();
+        let r_some = index_directory(
+            &db2,
+            &root2,
+            true,
+            false,
+            Some(&cb),
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
         // Different temp dirs → different file modified-times can shift, but the
         // count-based fields of IndexResult are deterministic on a fresh DB.
@@ -1905,7 +2227,16 @@ We use PostgreSQL with connection pooling via pgbouncer.
         let db = Database::open_memory().unwrap();
         let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
         let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
-        index_directory(&db, &root, true, false, Some(&cb), None).unwrap();
+        index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            Some(&cb),
+            None,
+            crate::RedactionConfig::disabled(),
+        )
+        .unwrap();
 
         let events = events.into_inner().unwrap();
         assert!(
@@ -1935,8 +2266,16 @@ We use PostgreSQL with connection pooling via pgbouncer.
         let db = Database::open_memory().unwrap();
 
         let probe = || true;
-        let err = index_directory(&db, &root, true, false, None, Some(&probe))
-            .expect_err("index must abort when probe trips at first phase boundary");
+        let err = index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            None,
+            Some(&probe),
+            crate::RedactionConfig::disabled(),
+        )
+        .expect_err("index must abort when probe trips at first phase boundary");
         assert!(
             err.to_string().contains("cancelled"),
             "error must mention cancellation, got: {err}"
@@ -1951,8 +2290,16 @@ We use PostgreSQL with connection pooling via pgbouncer.
         let db = Database::open_memory().unwrap();
 
         let probe = || false;
-        let result = index_directory(&db, &root, true, false, None, Some(&probe))
-            .expect("non-cancelling probe must not affect normal indexing");
+        let result = index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            None,
+            Some(&probe),
+            crate::RedactionConfig::disabled(),
+        )
+        .expect("non-cancelling probe must not affect normal indexing");
         assert!(result.files_indexed >= 2);
     }
 
@@ -1966,13 +2313,222 @@ We use PostgreSQL with connection pooling via pgbouncer.
 
         let flag = AtomicBool::new(true);
         let probe = || flag.load(Ordering::SeqCst);
-        let _ = index_directory(&db, &root, true, false, None, Some(&probe))
-            .expect_err("first run cancels");
+        let _ = index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            None,
+            Some(&probe),
+            crate::RedactionConfig::disabled(),
+        )
+        .expect_err("first run cancels");
 
         // Flip the probe off — second run must complete and produce a real result.
         flag.store(false, Ordering::SeqCst);
-        let result = index_directory(&db, &root, true, false, None, Some(&probe))
-            .expect("re-run after cancellation must succeed");
+        let result = index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            None,
+            Some(&probe),
+            crate::RedactionConfig::disabled(),
+        )
+        .expect("re-run after cancellation must succeed");
         assert!(result.files_indexed >= 2);
+    }
+
+    // ── Secret redaction integration ──
+
+    /// A project whose single function body embeds a GitHub PAT.
+    fn project_with_secret() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(
+            root.join("conf.py"),
+            "def connect():\n    token = \"ghp_abcdefghijklmnopqrstuvwxyz0123456789\"\n    return token\n",
+        )
+        .unwrap();
+        (tmp, root)
+    }
+
+    fn only_content(db: &Database) -> String {
+        let ids = db.all_content_symbol_ids().unwrap();
+        let map = db.get_symbol_contents_batch(&ids).unwrap();
+        map.values()
+            .map(|(c, _)| c.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn indexing_redacts_secret_in_symbol_content() {
+        let (_tmp, root) = project_with_secret();
+        let db = Database::open_memory().unwrap();
+        index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            None,
+            None,
+            RedactionConfig::enabled(),
+        )
+        .unwrap();
+
+        let content = only_content(&db);
+        assert!(content.contains("[REDACTED_SECRET]"));
+        assert!(!content.contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+    }
+
+    #[test]
+    fn redaction_disabled_keeps_secret_verbatim() {
+        let (_tmp, root) = project_with_secret();
+        let db = Database::open_memory().unwrap();
+        index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            None,
+            None,
+            RedactionConfig::disabled(),
+        )
+        .unwrap();
+
+        let content = only_content(&db);
+        assert!(content.contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+        assert!(!content.contains("[REDACTED_SECRET]"));
+    }
+
+    #[test]
+    fn redacted_secret_is_not_searchable_in_fts() {
+        let (_tmp, root) = project_with_secret();
+        let db = Database::open_memory().unwrap();
+        index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            None,
+            None,
+            RedactionConfig::enabled(),
+        )
+        .unwrap();
+
+        let hits = db
+            .fts5_search("\"ghp_abcdefghijklmnopqrstuvwxyz0123456789\"", 10)
+            .unwrap();
+        assert!(
+            hits.is_empty(),
+            "secret must not be searchable after redaction"
+        );
+    }
+
+    #[test]
+    fn sensitive_file_is_never_indexed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("a.py"), "def f():\n    pass\n").unwrap();
+        // A code-extension file whose name matches the deny-list.
+        std::fs::write(root.join("id_rsa"), "PRIVATE KEY").unwrap();
+        std::fs::write(root.join(".env"), "API_KEY=ghp_xxxxxxxxxxxxxxxxxxxx").unwrap();
+
+        let db = Database::open_memory().unwrap();
+        let r = index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            None,
+            None,
+            RedactionConfig::enabled(),
+        )
+        .unwrap();
+
+        assert_eq!(r.files_indexed, 1, "only a.py indexes");
+        assert!(
+            r.files_redacted_skipped >= 1,
+            "deny-listed files are skipped"
+        );
+    }
+
+    #[test]
+    fn enabling_redaction_on_warm_index_reindexes_and_scrubs() {
+        let (_tmp, root) = project_with_secret();
+        let db = Database::open_memory().unwrap();
+
+        // First index with redaction OFF: secret is stored verbatim.
+        index_directory(
+            &db,
+            &root,
+            false,
+            false,
+            None,
+            None,
+            RedactionConfig::disabled(),
+        )
+        .unwrap();
+        assert!(only_content(&db).contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+
+        // Plain re-index (no --force) with redaction ON must promote to a full
+        // re-index via the policy fingerprint and scrub the stored secret.
+        let r = index_directory(
+            &db,
+            &root,
+            false,
+            false,
+            None,
+            None,
+            RedactionConfig::enabled(),
+        )
+        .unwrap();
+        assert!(r.redaction_backfilled, "policy change must flag a backfill");
+        let content = only_content(&db);
+        assert!(content.contains("[REDACTED_SECRET]"));
+        assert!(!content.contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+    }
+
+    #[test]
+    fn content_hash_is_identical_with_redaction_on_vs_off() {
+        let (_tmp, root) = project_with_secret();
+
+        let db_on = Database::open_memory().unwrap();
+        index_directory(
+            &db_on,
+            &root,
+            true,
+            false,
+            None,
+            None,
+            RedactionConfig::enabled(),
+        )
+        .unwrap();
+
+        let db_off = Database::open_memory().unwrap();
+        index_directory(
+            &db_off,
+            &root,
+            true,
+            false,
+            None,
+            None,
+            RedactionConfig::disabled(),
+        )
+        .unwrap();
+
+        // Hashing keys off raw source, so redaction must not perturb identity.
+        let mut ids_on = db_on.all_content_symbol_ids().unwrap();
+        let mut ids_off = db_off.all_content_symbol_ids().unwrap();
+        ids_on.sort();
+        ids_off.sort();
+        for id in &ids_on {
+            let h_on = db_on.get_symbol(id).unwrap().unwrap().content_hash;
+            let h_off = db_off.get_symbol(id).unwrap().unwrap().content_hash;
+            assert_eq!(h_on, h_off, "content_hash must not depend on redaction");
+        }
     }
 }

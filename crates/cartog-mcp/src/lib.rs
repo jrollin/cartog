@@ -294,6 +294,7 @@ fn index_with_optional_lsp(
     force: bool,
     progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
     cancel: Option<indexer::CancelProbe<'_>>,
+    redact: indexer::RedactionConfig,
 ) -> Result<indexer::IndexResult, McpError> {
     let indexer_cb = progress_tx
         .as_ref()
@@ -304,7 +305,7 @@ fn index_with_optional_lsp(
         })?;
         let cb_ref: Option<&(dyn Fn(indexer::ProgressUpdate) + Send + Sync)> =
             indexer_cb.as_ref().map(|f| f as _);
-        indexer::index_directory(&db, root, force, false, cb_ref, cancel)
+        indexer::index_directory(&db, root, force, false, cb_ref, cancel, redact)
             .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
     };
 
@@ -344,6 +345,7 @@ fn index_with_optional_lsp(
     force: bool,
     progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
     cancel: Option<indexer::CancelProbe<'_>>,
+    redact: indexer::RedactionConfig,
 ) -> Result<indexer::IndexResult, McpError> {
     let indexer_cb = progress_tx
         .as_ref()
@@ -353,7 +355,7 @@ fn index_with_optional_lsp(
         .map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
     let cb_ref: Option<&(dyn Fn(indexer::ProgressUpdate) + Send + Sync)> =
         indexer_cb.as_ref().map(|f| f as _);
-    indexer::index_directory(&db, root, force, false, cb_ref, cancel)
+    indexer::index_directory(&db, root, force, false, cb_ref, cancel, redact)
         .map_err(|e| mcp_err(format!("indexing failed: {e}")))
 }
 
@@ -756,6 +758,8 @@ pub struct CartogServer {
     /// promotion — surfaced in `cartog_stats` output so users can see
     /// the degraded state.
     watcher_active: Arc<std::sync::atomic::AtomicBool>,
+    /// Secret-redaction policy applied to indexing tools.
+    redact: indexer::RedactionConfig,
 }
 
 /// Role of this MCP server instance under single-writer election.
@@ -806,6 +810,7 @@ impl CartogServer {
     pub fn new(
         db_path: &std::path::Path,
         rag_config: rag::EmbeddingProviderConfig,
+        redact: indexer::RedactionConfig,
     ) -> anyhow::Result<Self> {
         let db = Database::open(db_path, rag_config.resolved_dimension())
             .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
@@ -825,6 +830,7 @@ impl CartogServer {
             cwd: Arc::from(cwd),
             role: Arc::new(AtomicRole::new(Role::Primary)),
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            redact,
         })
     }
 
@@ -837,6 +843,7 @@ impl CartogServer {
     pub fn new_read_only(
         db_path: &std::path::Path,
         rag_config: rag::EmbeddingProviderConfig,
+        redact: indexer::RedactionConfig,
     ) -> anyhow::Result<Self> {
         let db = Database::open_readonly(db_path)
             .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?;
@@ -854,6 +861,7 @@ impl CartogServer {
             cwd: Arc::from(cwd),
             role: Arc::new(AtomicRole::new(Role::ReadOnly)),
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            redact,
         })
     }
 
@@ -918,6 +926,7 @@ impl CartogServer {
         let force = params.force;
         let db = Arc::clone(&self.db);
         let cwd = Arc::clone(&self.cwd);
+        let redact = self.redact;
         #[cfg(feature = "lsp")]
         let lsp_manager = Arc::clone(&self.lsp_manager);
         #[cfg(not(feature = "lsp"))]
@@ -945,6 +954,7 @@ impl CartogServer {
                 force,
                 progress_tx,
                 probe_ref,
+                redact,
             )?;
 
             let json = serde_json::to_string_pretty(&result)
@@ -1481,6 +1491,7 @@ impl CartogServer {
         let force = params.force;
         let db = Arc::clone(&self.db);
         let cwd = Arc::clone(&self.cwd);
+        let redact = self.redact;
         let provider = Arc::clone(&self.embedding_provider);
 
         let (progress_tx, forwarder) = match ctx.meta.get_progress_token() {
@@ -1508,8 +1519,9 @@ impl CartogServer {
             // intentionally suppressed: the RAG tool exposes only rag-specific
             // phases (preparing/embedding/storing) so the client-facing
             // vocabulary stays stable.
-            let _ = indexer::index_directory(&db, &validated, false, false, None, probe_ref)
-                .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
+            let _ =
+                indexer::index_directory(&db, &validated, false, false, None, probe_ref, redact)
+                    .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
 
             let mut provider = provider.lock().map_err(|_| {
                 mcp_err(
@@ -2507,8 +2519,12 @@ mod tests {
     fn primary_server_reports_primary_role() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
-        let server =
-            CartogServer::new(&db_path, test_rag_config()).expect("primary server constructs");
+        let server = CartogServer::new(
+            &db_path,
+            test_rag_config(),
+            indexer::RedactionConfig::disabled(),
+        )
+        .expect("primary server constructs");
         assert_eq!(server.role(), Role::Primary);
     }
 
@@ -2518,11 +2534,19 @@ mod tests {
         let db_path = dir.path().join("test.db");
         // First open writable to materialize the file with current schema.
         {
-            let _primary =
-                CartogServer::new(&db_path, test_rag_config()).expect("primary server constructs");
+            let _primary = CartogServer::new(
+                &db_path,
+                test_rag_config(),
+                indexer::RedactionConfig::disabled(),
+            )
+            .expect("primary server constructs");
         }
-        let reader = CartogServer::new_read_only(&db_path, test_rag_config())
-            .expect("read-only server constructs");
+        let reader = CartogServer::new_read_only(
+            &db_path,
+            test_rag_config(),
+            indexer::RedactionConfig::disabled(),
+        )
+        .expect("read-only server constructs");
         assert_eq!(reader.role(), Role::ReadOnly);
     }
 
@@ -2583,11 +2607,19 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         {
-            let _primary =
-                CartogServer::new(&db_path, test_rag_config()).expect("primary server constructs");
+            let _primary = CartogServer::new(
+                &db_path,
+                test_rag_config(),
+                indexer::RedactionConfig::disabled(),
+            )
+            .expect("primary server constructs");
         }
-        let reader = CartogServer::new_read_only(&db_path, test_rag_config())
-            .expect("read-only server constructs");
+        let reader = CartogServer::new_read_only(
+            &db_path,
+            test_rag_config(),
+            indexer::RedactionConfig::disabled(),
+        )
+        .expect("read-only server constructs");
 
         let err = reader
             .refuse_if_read_only("cartog_index")
@@ -2622,7 +2654,12 @@ mod tests {
             "cartog_rag_index refusal must suggest `cartog rag index`, got: {msg}"
         );
 
-        let primary = CartogServer::new(&db_path, test_rag_config()).expect("primary reconstructs");
+        let primary = CartogServer::new(
+            &db_path,
+            test_rag_config(),
+            indexer::RedactionConfig::disabled(),
+        )
+        .expect("primary reconstructs");
         assert!(
             primary.refuse_if_read_only("cartog_index").is_none(),
             "primary must NOT refuse"
@@ -2684,7 +2721,16 @@ mod tests {
 
         // First call primes the index. dirty_files > 0 → LSP is allowed (it may
         // resolve nothing if pyright isn't on PATH, but the gate must let it run).
-        let r1 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false, None, None).unwrap();
+        let r1 = index_with_optional_lsp(
+            &db,
+            &lsp_mgr,
+            &fixtures,
+            false,
+            None,
+            None,
+            indexer::RedactionConfig::disabled(),
+        )
+        .unwrap();
         assert!(
             r1.dirty_files > 0,
             "first index must report dirty files (got {})",
@@ -2692,7 +2738,16 @@ mod tests {
         );
 
         // Second call without changes must be a no-op AND must skip LSP.
-        let r2 = index_with_optional_lsp(&db, &lsp_mgr, &fixtures, false, None, None).unwrap();
+        let r2 = index_with_optional_lsp(
+            &db,
+            &lsp_mgr,
+            &fixtures,
+            false,
+            None,
+            None,
+            indexer::RedactionConfig::disabled(),
+        )
+        .unwrap();
         assert_eq!(r2.dirty_files, 0);
         assert_eq!(
             r2.edges_lsp_resolved, 0,
@@ -2776,6 +2831,7 @@ mod tests {
             watch_requested: false,
             rag: false,
             rag_config: rag::EmbeddingProviderConfig::default(),
+            redact: indexer::RedactionConfig::disabled(),
             // Very short for tests so the loop responds quickly.
             poll_interval: std::time::Duration::from_millis(20),
         }
@@ -3327,9 +3383,23 @@ def main():
         let db_path = tmp.path().join("cartog.db");
         {
             let db = Database::open(&db_path, test_rag_config().resolved_dimension()).unwrap();
-            indexer::index_directory(&db, &root, true, false, None, None).expect("fixture indexes");
+            indexer::index_directory(
+                &db,
+                &root,
+                true,
+                false,
+                None,
+                None,
+                indexer::RedactionConfig::disabled(),
+            )
+            .expect("fixture indexes");
         }
-        let server = CartogServer::new(&db_path, test_rag_config()).expect("server constructs");
+        let server = CartogServer::new(
+            &db_path,
+            test_rag_config(),
+            indexer::RedactionConfig::disabled(),
+        )
+        .expect("server constructs");
         (tmp, server)
     }
 

@@ -19,8 +19,16 @@ impl Database {
         header: &str,
     ) -> Result<()> {
         let normalized = normalize_symbol_name(symbol_name);
+        // Explicit delete-then-insert (not INSERT OR REPLACE): the FTS5
+        // external-content delete trigger does not fire on a REPLACE-conflict
+        // with recursive_triggers off, which would leave the old content
+        // searchable in the FTS index.
         self.conn.execute(
-            "INSERT OR REPLACE INTO symbol_content (symbol_id, content, header, normalized_name)
+            "DELETE FROM symbol_content WHERE symbol_id = ?1",
+            params![symbol_id],
+        )?;
+        self.conn.execute(
+            "INSERT INTO symbol_content (symbol_id, content, header, normalized_name)
              VALUES (?1, ?2, ?3, ?4)",
             params![symbol_id, content, header, normalized],
         )?;
@@ -43,13 +51,19 @@ impl Database {
         &self,
         items: &[(String, String, String, String)],
     ) -> Result<()> {
-        let mut stmt = self.conn.prepare_cached(
-            "INSERT OR REPLACE INTO symbol_content (symbol_id, content, header, normalized_name)
+        // Delete-then-insert per row so the FTS5 delete trigger fires and the
+        // old content does not linger in the index (see `upsert_symbol_content`).
+        let mut del = self
+            .conn
+            .prepare_cached("DELETE FROM symbol_content WHERE symbol_id = ?1")?;
+        let mut ins = self.conn.prepare_cached(
+            "INSERT INTO symbol_content (symbol_id, content, header, normalized_name)
              VALUES (?1, ?2, ?3, ?4)",
         )?;
         for (symbol_id, name, content, header) in items {
             let normalized = normalize_symbol_name(name);
-            stmt.execute(params![symbol_id, content, header, normalized])?;
+            del.execute(params![symbol_id])?;
+            ins.execute(params![symbol_id, content, header, normalized])?;
         }
         Ok(())
     }

@@ -33,6 +33,8 @@ pub struct WatchConfig {
     pub rag_delay: Duration,
     /// RAG provider configuration (embedding + reranker).
     pub rag_config: rag::EmbeddingProviderConfig,
+    /// Secret-redaction policy applied to each re-index pass.
+    pub redact: indexer::RedactionConfig,
     /// Emit newline-delimited JSON events on stdout. When false, the loop
     /// only produces tracing logs on stderr (existing behavior).
     pub json_events: bool,
@@ -77,6 +79,7 @@ impl WatchConfig {
             rag: false,
             rag_delay: Duration::from_secs(30),
             rag_config: rag::EmbeddingProviderConfig::default(),
+            redact: indexer::RedactionConfig::default(),
             json_events: false,
             pid_lock_dir: None,
             pid_lock_slot: None,
@@ -360,7 +363,7 @@ fn watch_loop(
 
     // Initial incremental index to ensure DB is current
     let initial_start = Instant::now();
-    match indexer::index_directory(&db, root, false, false, None, None) {
+    match indexer::index_directory(&db, root, false, false, None, None, config.redact) {
         Ok(r) => {
             info!(
                 files = r.files_indexed,
@@ -461,7 +464,15 @@ fn watch_loop(
                         "file change events received, re-indexing"
                     );
                     let reindex_start = Instant::now();
-                    match indexer::index_directory(&db, root, false, false, None, None) {
+                    match indexer::index_directory(
+                        &db,
+                        root,
+                        false,
+                        false,
+                        None,
+                        None,
+                        config.redact,
+                    ) {
                         Ok(r) => {
                             if r.files_indexed > 0 || r.files_removed > 0 {
                                 info!(

@@ -1961,6 +1961,41 @@ mod tests {
         assert!(results.is_empty());
     }
 
+    #[test]
+    fn fts5_drops_old_content_when_symbol_content_is_replaced() {
+        // Re-indexing a symbol (INSERT OR REPLACE on symbol_content) must not
+        // leave the previous content searchable. Without an explicit delete the
+        // FTS5 external-content delete trigger does not fire on REPLACE-conflict
+        // (recursive_triggers is off), so a stale secret stays searchable.
+        let db = Database::open_memory().unwrap();
+        let sym = test_symbol("load", SymbolKind::Function, "a.py", 1);
+        db.insert_symbol(&sym).unwrap();
+
+        db.upsert_symbol_content(&sym.id, "load", "key = ghp_oldsecrettoken_value", "h")
+            .unwrap();
+        assert!(!db
+            .fts5_search("\"ghp_oldsecrettoken_value\"", 10)
+            .unwrap()
+            .is_empty());
+
+        db.upsert_symbol_content(&sym.id, "load", "key = [REDACTED_SECRET]", "h")
+            .unwrap();
+
+        // Assert against the raw FTS index, not the JOIN-filtered fts5_search:
+        // an orphaned FTS row survives the JOIN filter but still leaks the
+        // plaintext token at the index level.
+        let stale: i64 = db
+            .conn
+            .query_row(
+                "SELECT count(*) FROM symbol_fts WHERE symbol_fts MATCH 'ghp_oldsecrettoken_value'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale, 0, "old plaintext must not remain in the FTS index");
+        assert_eq!(db.symbol_content_count().unwrap(), 1);
+    }
+
     // ── RAG: Embedding Map Tests ──
 
     #[test]

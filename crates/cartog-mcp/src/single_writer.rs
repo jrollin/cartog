@@ -150,6 +150,7 @@ pub async fn run_server(
     watch: bool,
     rag: bool,
     rag_config: rag::EmbeddingProviderConfig,
+    redact: indexer::RedactionConfig,
     opts: ServerOptions,
 ) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
@@ -192,6 +193,7 @@ pub async fn run_server(
         let mut config = WatchConfig::new(cwd);
         config.rag = rag;
         config.rag_config = rag_config.clone();
+        config.redact = redact;
         // Claim the watcher's PID slot so a separately-running `cartog watch`
         // from a terminal correctly refuses to start against the same DB.
         config.pid_lock_dir = opts.pid_lock_dir.clone();
@@ -217,8 +219,8 @@ pub async fn run_server(
     };
 
     let server = match role {
-        Role::Primary => CartogServer::new(db_path, rag_config.clone())?,
-        Role::ReadOnly => CartogServer::new_read_only(db_path, rag_config.clone())?,
+        Role::Primary => CartogServer::new(db_path, rag_config.clone(), redact)?,
+        Role::ReadOnly => CartogServer::new_read_only(db_path, rag_config.clone(), redact)?,
     };
 
     // Reflect initial watcher state on the server's flag so `cartog_stats`
@@ -272,6 +274,7 @@ pub async fn run_server(
                     watch_requested: watch,
                     rag,
                     rag_config,
+                    redact: server.redact,
                     poll_interval: DEFAULT_PROMOTER_POLL_INTERVAL,
                 })))
             }
@@ -361,6 +364,7 @@ pub(crate) struct PromoterArgs {
     pub(crate) watch_requested: bool,
     pub(crate) rag: bool,
     pub(crate) rag_config: rag::EmbeddingProviderConfig,
+    pub(crate) redact: indexer::RedactionConfig,
     /// Polling interval. Const in production
     /// ([`DEFAULT_PROMOTER_POLL_INTERVAL`]); override in tests to keep
     /// the suite fast.
@@ -498,6 +502,7 @@ pub(crate) async fn promoter_task(args: PromoterArgs) {
             let mut config = WatchConfig::new(args.cwd.clone());
             config.rag = args.rag;
             config.rag_config = args.rag_config.clone();
+            config.redact = args.redact;
             config.pid_lock_dir = Some(args.state_dir.clone());
             config.pid_lock_slot = Some(args.watch_slot.clone());
             // Skip migrations because we validated the schema when we
