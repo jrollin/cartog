@@ -37,6 +37,7 @@ pub fn cmd_config(
     let local = embed.and_then(|e| e.local.as_ref());
     let reranker = config.reranker.as_ref();
     let rag = config.rag.as_ref();
+    let security = config.security.as_ref();
     let tuning_defaults = cartog_rag::search::SearchTuning::default();
     // `to_search_tuning()` applies the clamps (retrieval_multiplier.max(1),
     // rerank_min.min(rerank_max)) so what we show matches what the search
@@ -110,6 +111,13 @@ pub fn cmd_config(
                 effective_tuning.rerank_min,
                 tuning_defaults.rerank_min,
             ),
+        },
+        security: SecurityDisplay {
+            redact_secrets: ValueDisplay {
+                value: security.map_or(true, |s| s.redact_secrets()).to_string(),
+                is_default: security.map_or(true, |s| s.redact_secrets.is_none()),
+                default: "true".into(),
+            },
         },
     };
 
@@ -230,6 +238,14 @@ fn format_config_human(d: &ConfigDisplay) -> String {
     )
     .unwrap();
 
+    writeln!(out, "\n[security]").unwrap();
+    writeln!(
+        out,
+        "  redact_secrets:    {}",
+        format_value(&d.security.redact_secrets)
+    )
+    .unwrap();
+
     out
 }
 
@@ -240,6 +256,12 @@ struct ConfigDisplay {
     embedding: EmbeddingDisplay,
     reranker: RerankerDisplay,
     rag: RagDisplay,
+    security: SecurityDisplay,
+}
+
+#[derive(Serialize)]
+struct SecurityDisplay {
+    redact_secrets: ValueDisplay,
 }
 
 #[derive(Serialize)]
@@ -339,6 +361,13 @@ mod tests {
                     rerank_max: v(t.rerank_max),
                     rerank_min: v(t.rerank_min),
                 }
+            },
+            security: SecurityDisplay {
+                redact_secrets: ValueDisplay {
+                    value: "true".into(),
+                    is_default: true,
+                    default: "true".into(),
+                },
             },
         }
     }

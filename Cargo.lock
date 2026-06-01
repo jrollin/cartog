@@ -338,6 +338,7 @@ dependencies = [
  "cartog-lsp",
  "criterion",
  "rayon",
+ "regex",
  "serde",
  "sha2",
  "tempfile",

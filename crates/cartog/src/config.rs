@@ -17,6 +17,23 @@ pub struct CartogConfig {
     pub reranker: Option<RerankerConfig>,
     pub rag: Option<RagConfig>,
     pub remote: Option<RemoteConfig>,
+    pub security: Option<SecurityConfig>,
+}
+
+/// Secret-redaction settings.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct SecurityConfig {
+    /// Redact known secret patterns from stored symbol text. Default: true.
+    /// The sensitive-file deny-list is always enforced regardless of this flag.
+    pub redact_secrets: Option<bool>,
+}
+
+impl SecurityConfig {
+    /// Whether secret redaction is enabled (default: true).
+    #[must_use]
+    pub fn redact_secrets(&self) -> bool {
+        self.redact_secrets.unwrap_or(true)
+    }
 }
 
 /// Optional S3-compatible remote for `cartog push` / `cartog pull`.
@@ -226,6 +243,15 @@ impl RerankerConfig {
     }
 }
 
+/// Build the indexer redaction policy from the `[security]` section.
+pub fn to_redaction_config(config: &CartogConfig) -> cartog_indexer::RedactionConfig {
+    let enabled = config
+        .security
+        .as_ref()
+        .map_or(true, SecurityConfig::redact_secrets);
+    cartog_indexer::RedactionConfig { enabled }
+}
+
 /// Convert the embedding config section into an `EmbeddingProviderConfig` for cartog-rag.
 pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProviderConfig {
     match &config.embedding {
@@ -347,7 +373,14 @@ fn local_config_path() -> Option<PathBuf> {
 /// Known top-level sections of `.cartog.toml`. Kept in sync with the fields of
 /// [`CartogConfig`]. Unknown keys are warned about (non-fatal) so a typo like
 /// `[embeddings]` is visible instead of silently ignored.
-const KNOWN_CONFIG_SECTIONS: &[&str] = &["database", "embedding", "reranker", "rag", "remote"];
+const KNOWN_CONFIG_SECTIONS: &[&str] = &[
+    "database",
+    "embedding",
+    "reranker",
+    "rag",
+    "remote",
+    "security",
+];
 
 /// Collect top-level keys that are not a recognized config section.
 fn unknown_sections(raw: &toml::value::Table) -> Vec<&str> {
@@ -693,6 +726,21 @@ mod tests {
             cfg.database.as_ref().unwrap().path.as_deref(),
             Some("/tmp/test.db")
         );
+    }
+
+    #[test]
+    fn redact_secrets_defaults_true_when_absent() {
+        let cfg = CartogConfig::default();
+        assert!(to_redaction_config(&cfg).enabled);
+    }
+
+    #[test]
+    fn redact_secrets_can_be_disabled_via_config() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        fs::write(&cfg_path, "[security]\nredact_secrets = false\n").unwrap();
+        let cfg = read_config(&cfg_path).expect("should parse");
+        assert!(!to_redaction_config(&cfg).enabled);
     }
 
     #[test]

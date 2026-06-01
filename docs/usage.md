@@ -140,6 +140,26 @@ document_prefix = "search_document: "
 provider = "none"
 ```
 
+### Secret redaction
+
+cartog scrubs common secret patterns from indexed symbol text and skips
+sensitive files. **On by default.** Disable with:
+
+```toml
+[security]
+redact_secrets = false
+```
+
+- Redacts AWS keys, GitHub PATs, Slack/Stripe tokens, JWTs, and quoted
+  `password`/`secret`/`token`/`api_key` assignments, replacing them with
+  `[REDACTED_SECRET]` in stored content, signatures, docstrings, and embeddings.
+  Best-effort: not every secret is caught (see
+  [tech.md](tech.md#secret-redaction)).
+- Always excludes sensitive files (`.env`, `*.pem`, `id_rsa`,
+  `credentials.json`, ...) from indexing, regardless of `redact_secrets`.
+- Toggling `redact_secrets` triggers a one-time full re-index so already-stored
+  content is scrubbed (or restored); a notice is printed.
+
 **Compile-time feature flags**:
 
 ```bash

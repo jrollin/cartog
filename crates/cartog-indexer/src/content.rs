@@ -83,6 +83,19 @@ pub(crate) fn extract_symbol_content(
     Some((raw.to_string(), header))
 }
 
+/// Like [`extract_symbol_content`] but redacts secrets from the content slice.
+///
+/// Header is generated metadata (file/type/name); only `content` can carry a
+/// secret, so only it is redacted.
+pub(crate) fn extract_symbol_content_redacted(
+    source: &str,
+    sym: &cartog_core::Symbol,
+    redact: crate::RedactionConfig,
+) -> Option<(String, String)> {
+    extract_symbol_content(source, sym)
+        .map(|(content, header)| (redact.redact(&content).into_owned(), header))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
