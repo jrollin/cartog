@@ -1,6 +1,12 @@
 # Changelog
 
-## [0.21.0] - 2026-05-31
+## [0.21.1] - 2026-06-01
+
+### Benchmarks
+
+- Add criterion benchmarks for incremental indexing ([`6f4e308`](https://github.com/jrollin/cartog/commit/6f4e3085558a68354ae6696684851a2726fcc979))
+- **indexer**: Add ONNX-free indexing benchmarks ([`ddbbdcf`](https://github.com/jrollin/cartog/commit/ddbbdcf8d58bf607bb9778631c6ba1e69918a8e1))
+- Black_box, split into ONNX-aware targets, cover all 8 languages ([`55e8b1f`](https://github.com/jrollin/cartog/commit/55e8b1f65510d2f477162b31db946b4ff88e1674))
 
 ### Bug Fixes
 
@@ -11,6 +17,15 @@
 - **ci**: Resolve gitleaks false positive on fixture fake API key ([`9ef398d`](https://github.com/jrollin/cartog/commit/9ef398dec824bfed4ead338d79ef53a9a99ca6d3))
 - **ci**: Remove deprecated os and use cross binaries ([`5804ed5`](https://github.com/jrollin/cartog/commit/5804ed55a1a5137abda4b8df00ae90cb88722392))
 - **skill**: Add "show me" trigger patterns to cartog skill description ([`fe7020f`](https://github.com/jrollin/cartog/commit/fe7020f18285d3f5902f5b79d73d37e263967e67))
+- Fix(skill): harden install and setup scripts for fresh installs
+- install.sh: check curl/tar before binary download, validate Rust >= 1.70
+  before cargo fallback, verify binary runs after install (detect wrong arch)
+- ensure_indexed.sh: log rag setup stderr to file instead of /dev/null,
+  add mkdir-based lock to prevent concurrent rag index, auto-remove stale
+  locks (>1h) from crashed processes
+- Remove unused query.sh (never referenced by SKILL.md)
+- Add 6 new test assertions (18 total): stderr logging, lock concurrency,
+  lock cleanup, stale lock recovery ([`66e1991`](https://github.com/jrollin/cartog/commit/66e1991b4620492b4d4765235f869d7295c820dc))
 - Update quinn-proto 0.11.13 -> 0.11.14 (RUSTSEC-2026-0037 DoS) ([`68b0399`](https://github.com/jrollin/cartog/commit/68b039901aa99f04e212341610c573e6d3fe7973))
 - Do exceed limit description ([`ecd612d`](https://github.com/jrollin/cartog/commit/ecd612d55a44a7587350ea1c2a0a9147196b7d2d))
 - Address review findings — chunking, CTE, migration logging ([`3970e5c`](https://github.com/jrollin/cartog/commit/3970e5c69a626c17866ac6027af9c308a9ec17c3))
@@ -103,6 +118,14 @@
 - **self-update**: Make plugin bumps seamless for all cohorts ([`8dbc79c`](https://github.com/jrollin/cartog/commit/8dbc79ce50ba51656e9d38cf5872b173d664ef90))
 - **lsp**: Reap child on Drop and detect binaries cross-platform ([`8ea5d3b`](https://github.com/jrollin/cartog/commit/8ea5d3b90893baf1b6bb352535539045cbedc182))
 - **site**: A11y accessible names + SEO metadata ([`419a8c2`](https://github.com/jrollin/cartog/commit/419a8c23ef194532d7de09108b8331c5235ef79e))
+- **skill**: Gate self-update on capability, not version boundary ([`3d3664a`](https://github.com/jrollin/cartog/commit/3d3664a6a1a83558a58eb6eaedb28bcb6847ac45))
+
+### Build
+
+- Use pure rust tls ([`4164284`](https://github.com/jrollin/cartog/commit/416428447e00caff6a3cd4e85fcf95d92e7496ca))
+- Use ubuntu arm os ([`93c3608`](https://github.com/jrollin/cartog/commit/93c3608b5cf73a42ceeb9074ac32640b949ce142))
+- **make**: Generalize Docker fallback to all fixture-validation targets ([`db38c9a`](https://github.com/jrollin/cartog/commit/db38c9a3f22a04d09ca5b5f97f19d306c01e415d))
+- Add workspace lints and a bench profile ([`49a1fa5`](https://github.com/jrollin/cartog/commit/49a1fa52fcfed948b66e233c99176fa250b58fba))
 
 ### Documentation
 
@@ -155,6 +178,17 @@
 ### Features
 
 - **perf**: Optimize treesitter parser and sql ([`4746d07`](https://github.com/jrollin/cartog/commit/4746d07e35be8a0e5c8dfbce25a4948c80348b9f))
+- Feat(bench): expand benchmark suite to 5 languages, 12 scenarios, and criterion benchmarks
+- Add TypeScript and Go fixture codebases (48 and 45 files)
+- Expand Python, Rust, Ruby fixtures to ~2.3-4K LOC each (278 files, 15.3K LOC total)
+- Add 4 new scenarios: ambiguous symbol, high-fanout refs, deep call chain, deep impact
+- Update scenarios 01-08 with per-language symbol names and TS/Go support
+- Add Rust criterion benchmarks (17 benchmarks across 8 query types)
+- Create src/lib.rs to expose modules for criterion bench access
+- Add Makefile with integrity check targets (check, check-rust, check-fixtures)
+- Add fixture READMEs and generator scripts for reproducibility
+- Fix SIGPIPE bug in benchmark compare helpers (grep -q -> grep -c)
+- Fix Go ValidationError missing Error() method for error interface ([`0ec0907`](https://github.com/jrollin/cartog/commit/0ec090745a0fffbb6fa22a68b52bd0fde8db57ff))
 - Add RAG semantic search, file watcher, and smart search routing ([`ad92a18`](https://github.com/jrollin/cartog/commit/ad92a18ac4685813d0a1424dbbf4dddb983850f6))
 - Add java lang support ([`c0c3cc0`](https://github.com/jrollin/cartog/commit/c0c3cc08141bb48a67237f891621594633d482bc))
 - Add information about model download on first time ([`3697cb1`](https://github.com/jrollin/cartog/commit/3697cb194db583151e205c13ac0ac85d7f0d75ee))
@@ -267,6 +301,7 @@
 - **tests**: Address /code-review findings on PR #55 follow-ups ([`6111b8f`](https://github.com/jrollin/cartog/commit/6111b8f99dcb1b0996bf27df158a0d14cee4d21f))
 - **plugin**: Non-blocking onboarding with /cartog-install repair verb ([`f498e80`](https://github.com/jrollin/cartog/commit/f498e80f6e662343a518e0d512b58da1a443e07f))
 - **plugin**: Address remaining /code-review findings (#8, #12, #13, #14) ([`eab61ef`](https://github.com/jrollin/cartog/commit/eab61efd5765d1c52a81d95a385c1ca294e701ae))
+- **cliff**: Silence merge-commit parse warnings and group build/bench/skill ([`43da868`](https://github.com/jrollin/cartog/commit/43da868182b903a69eff513371eed4a8b8f15980))
 
 ### Performance
 
@@ -297,6 +332,11 @@
 - **cli**: Extract doctor command into commands/doctor.rs ([`fa49e31`](https://github.com/jrollin/cartog/commit/fa49e3108f6e3e3ece89c366cf3e28f8749994ad))
 - **cli**: Extract config and savings rendering from commands/mod.rs ([`b7e99c2`](https://github.com/jrollin/cartog/commit/b7e99c2be81350ac8df0bd4c383605660fd5059a))
 - **indexer**: Split merkle, git, and content into submodules ([`cbc0871`](https://github.com/jrollin/cartog/commit/cbc0871944595546ca054473a8be12de6d6efb3b))
+
+### Skill
+
+- Simplify search routing and add background RAG indexing ([`ea59ccc`](https://github.com/jrollin/cartog/commit/ea59cccb79a4c56e7dd99a78d02f3d137fe4f4f3))
+- Improve chained command ([`7426704`](https://github.com/jrollin/cartog/commit/7426704796f9d901de927d036caa0448607308f8))
 
 ### Testing
 
@@ -338,6 +378,16 @@
 
 - Add Ruby to supported languages in README and skill ([`56f3bf4`](https://github.com/jrollin/cartog/commit/56f3bf4cb326f3d4b1a85fb0c8e56ad259f6539d))
 
+### Features
+
+- Feat: add Ruby language extractor
+Implements tree-sitter-ruby based extraction covering classes, modules,
+methods (instance + singleton), imports (require/require_relative),
+inheritance, mixins (include/extend/prepend), raise/rescue, and
+namespaced constants. Includes 18 unit tests, benchmark fixture
+(webapp_rb) with ground truth for all 7 scenarios, and documentation
+updates. ([`ad3645e`](https://github.com/jrollin/cartog/commit/ad3645e213160881742556a3efd520336afb8760))
+
 ### Testing
 
 - Improve coverage across core extractors and db layer ([`3e2c296`](https://github.com/jrollin/cartog/commit/3e2c2962294dc59cbc73909fa0236223c9e62801))
@@ -364,6 +414,11 @@
 ### Bug Fixes
 
 - **ci**: Upload coverage to codecov ([`e180884`](https://github.com/jrollin/cartog/commit/e180884d768b734600d781089733ee67e3678b3f))
+- Fix(rust): emit symbol for impl blocks to satisfy FK constraint
+extract_impl created Inherits edges with a source_id pointing to a
+synthetic impl block ID but never created the matching symbol. This
+violated the edges.source_id FK constraint on any Rust file containing
+`impl Trait for Type` blocks. ([`1bc51a2`](https://github.com/jrollin/cartog/commit/1bc51a267cdae88325b9eeb6d4ff03913d598a46))
 
 ## [0.1.3] - 2026-02-25
 
