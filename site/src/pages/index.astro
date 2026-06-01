@@ -200,7 +200,7 @@ import { withBase } from "../lib/url";
         </div>
         <div class="feature-card">
           <h3><span class="feature-icon">🔒</span> 100% local</h3>
-          <p>tree-sitter parsing, SQLite storage, local embeddings. No API keys, no telemetry. Works in air-gapped environments.</p>
+          <p>tree-sitter parsing, SQLite storage, local embeddings. No API keys, no telemetry. Secrets are redacted and sensitive files (.env, keys) skipped before they reach the index. Works in air-gapped environments.</p>
         </div>
       </div>
     </div>
@@ -277,7 +277,7 @@ import { withBase } from "../lib/url";
         <div class="why-card">
           <div class="why-number">03</div>
           <h3>Your code stays on your machine</h3>
-          <p>tree-sitter parsing, SQLite storage, local embeddings. No API keys, no telemetry, no cloud. Works in air-gapped environments.</p>
+          <p>tree-sitter parsing, SQLite storage, local embeddings. No API keys, no telemetry, no cloud. Hardcoded secrets are redacted and sensitive files skipped before indexing. Works in air-gapped environments.</p>
         </div>
       </div>
 
