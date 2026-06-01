@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn redacts_aws_access_key_id_asia_variant() {
-        let out = redact("ASIAY34FZKBOKMUTVV7A");
+        let out = redact("ASIAEXAMPLEFAKEKEY00");
         assert_eq!(out, PLACEHOLDER);
     }
 
