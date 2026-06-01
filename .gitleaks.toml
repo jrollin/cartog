@@ -2,7 +2,13 @@
 useDefault = true
 
 [allowlist]
-description = "False positives from benchmark fixture fake API keys"
+description = "False positives from fake API keys in fixtures and redaction tests"
 commits = [
     "0ec090745a0fffbb6fa22a68b52bd0fde8db57ff",
+]
+# Secret-redaction tests deliberately contain secret-shaped fixtures (fake
+# tokens) to exercise the detector; they are not real credentials.
+paths = [
+    '''crates/cartog-indexer/src/redact\.rs''',
+    '''crates/cartog-indexer/src/lib\.rs''',
 ]
