@@ -63,7 +63,28 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/cartog/scripts/install.sh" $PLUGIN_VERSION
 
 Then verify and tell the user to restart Claude Code (same as step 2).
 
-### 4. If the binary is present and `>= 0.14.0`
+### 4. If the binary is present, `>= 0.14.0`, and lacks `--apply-pending`
+
+The deferred flags (`--defer`/`--apply-pending`) landed in **0.20.0**. Binaries
+in **0.14.0–0.20.0** have `cartog self update` but reject those flags with a clap
+"unexpected argument" (exit 2), so the deferred path below does **not** apply to
+them. Detect this band by probing the help text:
+
+```bash
+cartog self update --help 2>&1 | grep -q -- '--apply-pending' || echo "PRE_DEFERRED"
+```
+
+When it prints `PRE_DEFERRED`, do **not** run `--defer`. Recover by reinstalling
+the pinned version with the bundled installer (it overwrites the on-disk binary;
+the running MCP server keeps its old inode until the user restarts):
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/skills/cartog/scripts/install.sh" $PLUGIN_VERSION
+```
+
+Then verify and tell the user to **restart Claude Code** (same as step 2).
+
+### 5. If the binary is present and supports `--apply-pending` (`>= 0.20.0`)
 
 Run `cartog self update` via Bash. Relay its output to the user verbatim.
 
@@ -82,7 +103,7 @@ in-place swap, and `--to` arms the **pinned** version (not the latest GitHub
 release) so the deferred update lands exactly on the plugin's pin. Plain
 `cartog self update` is for a terminal with no cartog serve/watch running.
 
-### 5. If already up to date
+### 6. If already up to date
 
 Compare `cartog --version` against the `PLUGIN_VERSION=` line at the top of
 this file. If they match, print "cartog is already at the pinned version —

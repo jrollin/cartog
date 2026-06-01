@@ -1,19 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# SessionEnd hook: apply deferred updates at the safe boundary.
-#
-# Two cohorts:
-#   >= 0.14.0 — applies any deferred update armed in-session (via
-#               /cartog-install or the cartog_update MCP tool) by running
-#               `cartog self update --apply-pending`. The serve process is
-#               exiting as this fires, so the binary is no longer pinned by a
-#               live inode. Drift detection / arming itself lives in the
-#               SessionStart hook and /cartog-install, not here.
-#   <  0.14.0 — TRANSITIONAL: those binaries lack `cartog self update`, so this
-#               hook is their only no-reinstall upgrade path (via install.sh).
-#               Sunset: scheduled for removal a release after /cartog-install
-#               shipped; long-dormant <0.14.0 users will then reinstall manually.
+# SessionEnd hook: bring the binary in line with the plugin pin at the safe
+# boundary (the serve peer is exiting, so the binary is no longer inode-pinned).
+# One gate, probed not assumed — can the binary apply a deferred update itself?
+#   has --apply-pending (>= 0.20.0): apply any update armed in-session.
+#   otherwise: pin-exact install.sh upgrade — covers the 0.14..0.20 band (has
+#     `self update` but not the deferred flags) and pre-0.14.0 (no `self update`).
 #
 # Failure modes are written to ~/.cache/cartog/last-error and surfaced by
 # ensure_indexed.sh on the next session start. A successful boundary swap
@@ -67,8 +60,19 @@ rag_pipeline_running() {
     [ "$age" -lt 3600 ]
 }
 
-# Apply a deferred update on a modern (>= 0.14.0) binary. Runs
-# `cartog self update --apply-pending`, which no-ops when nothing is armed.
+# True if `self update` accepts --apply-pending (landed in 0.20.0). Probe the
+# help text, not the version, so the gate tracks real capability across releases.
+# Require the probe itself to succeed: a non-zero `self update --help` (binary too
+# old to have the subcommand, or broken) routes to the installer, never a false
+# positive into the deferred path.
+supports_deferred_update() {
+    local help
+    help=$(cartog self update --help 2>&1) || return 1
+    printf '%s' "$help" | grep -q -- '--apply-pending'
+}
+
+# Apply a deferred update on a binary with deferred-flag support (>= 0.20.0).
+# Runs `cartog self update --apply-pending`, which no-ops when nothing is armed.
 # Owns its own last-error breadcrumb so the caller can treat its return value
 # as "did something need surfacing" rather than a raw exit code.
 apply_pending_update() {
@@ -127,21 +131,21 @@ apply_pending_update() {
     esac
 }
 
-# Upgrade a pre-self-update (< 0.14.0) binary via install.sh — the transitional
-# path for the cohort that lacks `cartog self update`. Returns non-zero only on
-# a genuine install failure (the caller writes last-error).
-upgrade_legacy() {
-    # Only upgrade when the installed binary is strictly OLDER than the pin —
-    # a string `!=` would also "upgrade" (downgrade) a manually-installed newer
-    # legacy binary. version_gt PLUGIN > installed ⇔ installed < PLUGIN.
+# Pin-exact install.sh upgrade for any binary that can't self-apply a deferred
+# update. Preferred over plain `cartog self update`, which fetches the LATEST
+# release (no `--to` on < 0.20.0 to constrain it) and carries peer-lock/smoke
+# exit codes that don't fit a session-end swap. Non-zero only on install failure.
+upgrade_via_installer() {
+    # Upgrade only when strictly behind the pin (version_gt avoids downgrading a
+    # manually-installed newer binary that a string `!=` would catch).
     if [ -z "$PLUGIN_VERSION" ] || ! version_gt "$PLUGIN_VERSION" "$installed"; then
         return 0
     fi
     if rag_pipeline_running; then
-        echo "Skipping pre-0.14 upgrade: background pipeline still running (lock: $LOCK_DIR)."
+        echo "Skipping installer upgrade: background pipeline still running (lock: $LOCK_DIR)."
         return 0
     fi
-    echo "Upgrading pre-self-update cartog $installed → ${PLUGIN_VERSION} via install.sh..."
+    echo "Upgrading cartog $installed → ${PLUGIN_VERSION} via install.sh (binary lacks deferred-update support)..."
     if ! bash "$SCRIPT_DIR/install.sh" "$PLUGIN_VERSION"; then
         echo "install.sh failed."
         return 1
@@ -153,10 +157,10 @@ run_update() {
     installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')"
     [ -n "$installed" ] || return 0
 
-    # < 0.14.0: transitional install.sh path. >= 0.14.0: apply any armed
-    # deferred update.
-    if version_gt "0.14.0" "$installed"; then
-        upgrade_legacy
+    # Capability is the only gate: a binary with no `self update` also lacks
+    # --apply-pending, so the probe routes both old cohorts to the installer.
+    if ! supports_deferred_update; then
+        upgrade_via_installer
         return $?
     fi
     apply_pending_update

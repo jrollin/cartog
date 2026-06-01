@@ -70,22 +70,65 @@ write_plugin_json() {
 JSON
 }
 
-# Mock cartog: supports --version, logs other invocations.
-# $2 (optional): exit code the mock returns for `self update --apply-pending`,
-# so tests can drive the hook's exit-code mapping. Defaults to 0.
+# Mock cartog: supports --version, logs other invocations, and — crucially —
+# models clap's flag handling so the deferred-update capability gate is exercised
+# honestly. `self update --help` advertises --apply-pending only for versions
+# >= 0.20.0 (where the flags actually landed); for older versions, passing
+# --defer/--apply-pending exits 2 with an "unexpected argument" message, exactly
+# as the real binary does. Without this, a mock that swallows every flag hides
+# the very bug these tests guard against.
+# $2 (optional): exit code the mock returns for a SUPPORTED `self update`
+#   invocation (--apply-pending on >=0.20.0, or plain `self update` on the
+#   0.14..0.20 band), so tests can drive the hook's exit-code mapping. Default 0.
+# $3 (optional): exit code for `self update --help`. Default 0. Set non-zero to
+#   model a binary whose help probe FAILS even though its text mentions the flags
+#   — the capability gate must then route to the installer, not the deferred path.
 create_mock_cartog() {
-    local mock_version="${1:-0.14.1}"
-    local apply_exit="${2:-0}"
+    local mock_version="${1:-0.20.1}"
+    local update_exit="${2:-0}"
+    local help_exit="${3:-0}"
     cat > "$TEST_DIR/bin/cartog" <<MOCK
 #!/usr/bin/env bash
+mock_version="$mock_version"
+help_exit="$help_exit"
+# semver: 0 iff installed >= 0.20.0 (deferred flags present)
+has_deferred() {
+    local IFS=.
+    local -a v
+    read -ra v <<< "\${mock_version%%-*}"
+    local maj="\${v[0]:-0}" min="\${v[1]:-0}"
+    [ "\$maj" -gt 0 ] 2>/dev/null && return 0
+    [ "\$min" -ge 20 ] 2>/dev/null && return 0
+    return 1
+}
 if [ "\$1" = "--version" ]; then
-    echo "cartog $mock_version"
+    echo "cartog \$mock_version"
     exit 0
 fi
-echo "\$@" >> "$CARTOG_TEST_LOG"
-if [ "\$1 \$2 \$3" = "self update --apply-pending" ]; then
-    exit $apply_exit
+if [ "\$1 \$2 \$3" = "self update --help" ]; then
+    echo "Upgrade cartog in place (or check for an update with --check)"
+    echo "  --check    Report whether an update is available"
+    echo "  --quiet    Suppress all output"
+    if has_deferred; then
+        echo "  --defer          Arm a deferred update"
+        echo "  --apply-pending  Apply a previously-armed deferred update"
+    fi
+    exit \$help_exit
 fi
+echo "\$@" >> "$CARTOG_TEST_LOG"
+# Reject deferred flags on binaries that predate them (clap exit 2).
+if ! has_deferred; then
+    case "\$*" in
+        *--defer*|*--apply-pending*)
+            echo "error: unexpected argument '\$3' found" >&2
+            exit 2
+            ;;
+    esac
+fi
+case "\$1 \$2 \$3" in
+    "self update --apply-pending") exit $update_exit ;;
+    "self update --quiet")         exit $update_exit ;;
+esac
 exit 0
 MOCK
     chmod +x "$TEST_DIR/bin/cartog"
@@ -143,10 +186,10 @@ test_missing_binary_is_noop() {
 }
 
 test_modern_binary_runs_apply_pending() {
-    echo "TEST: modern binary (>=0.14.0) runs self update --apply-pending"
+    echo "TEST: deferred-capable binary (>=0.20.0) runs self update --apply-pending"
     setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.0" 0
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 0
     shadow_install_sh 0
 
     run_update_on_exit > /dev/null
@@ -166,14 +209,14 @@ test_modern_binary_runs_apply_pending() {
 }
 
 test_modern_binary_drift_auto_arms_pin() {
-    echo "TEST: drifted modern binary auto-arms the pin (--defer --to PIN) so a passive user converges"
+    echo "TEST: drifted deferred-capable binary auto-arms the pin (--defer --to PIN) so a passive user converges"
     setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.0" 0   # installed 0.14.0 < pin 0.14.3 → drifted
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 0   # installed 0.20.0 < pin 0.20.3 → drifted
 
     run_update_on_exit > /dev/null
 
-    if grep -q 'self update --defer --to 0.14.3' "$CARTOG_TEST_LOG"; then
+    if grep -q 'self update --defer --to 0.20.3' "$CARTOG_TEST_LOG"; then
         echo "  PASS: auto-armed the pin on drift"; PASS=$((PASS + 1))
     else
         echo "  FAIL: did not auto-arm the pin on drift"; FAIL=$((FAIL + 1))
@@ -188,10 +231,10 @@ test_modern_binary_drift_auto_arms_pin() {
 }
 
 test_modern_binary_in_sync_does_not_auto_arm() {
-    echo "TEST: modern binary == pin does NOT auto-arm (no spurious --defer)"
+    echo "TEST: deferred-capable binary == pin does NOT auto-arm (no spurious --defer)"
     setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.3" 0   # installed == pin → not drifted
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.3" 0   # installed == pin → not drifted
 
     run_update_on_exit > /dev/null
 
@@ -203,11 +246,141 @@ test_modern_binary_in_sync_does_not_auto_arm() {
     teardown
 }
 
+# --- regression: the 0.14.0..0.20.0 band (has `self update`, lacks the
+#     deferred flags). Routing these into the apply-pending path made every
+#     --defer/--apply-pending call fail with clap exit 2, mislabelled
+#     "transient, will retry" — an unrecoverable loop. They must instead upgrade
+#     via the bundled install.sh pinned to PLUGIN_VERSION (NOT a plain
+#     `cartog self update`, which fetches the LATEST release and overshoots the
+#     pin, and carries peer-lock/smoke exit codes that don't fit a session-end
+#     swap). ---
+
+test_predeferred_binary_upgrades_via_installer() {
+    echo "TEST: 0.14..0.20 binary (no --apply-pending) upgrades via install.sh, never firing self update/--defer/--apply-pending"
+    setup
+    write_plugin_json "0.20.0"
+    create_mock_cartog "0.19.0" 0   # has `self update`, lacks deferred flags
+    shadow_install_sh 0
+
+    run_update_on_exit > /dev/null
+    restore_install_sh
+
+    if [ -f "$TEST_DIR/install.log" ]; then
+        echo "  PASS: install.sh invoked"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: install.sh not invoked"; FAIL=$((FAIL + 1))
+    fi
+    # Pin-exact: install.sh must receive PLUGIN_VERSION, not be left to fetch
+    # the latest release (the overshoot bug).
+    assert_contains "install.sh receives the pinned version" \
+        "args=[0.20.0]" "$(cat "$TEST_DIR/install.log" 2>/dev/null || echo "")"
+    # The probe runs `self update --help`, but no MUTATING `self update` must fire.
+    if grep -qE 'self update (--quiet|--apply-pending|--defer)' "$CARTOG_TEST_LOG"; then
+        echo "  FAIL: fired a mutating self update the binary cannot use safely"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: no mutating self update fired (probe-only)"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+test_predeferred_binary_no_false_transient_error() {
+    echo "TEST: 0.14..0.20 binary never writes a 'transient, will retry' loop for an unsupported flag"
+    setup
+    write_plugin_json "0.20.0"
+    create_mock_cartog "0.19.0" 0
+    shadow_install_sh 0
+
+    run_update_on_exit > /dev/null
+    restore_install_sh
+
+    # The pre-fix bug: --apply-pending exited 2, mapped to a "transient; will
+    # retry next session" last-error that never resolves. A clean installer
+    # upgrade must leave no last-error at all.
+    if [ -f "$CARTOG_LOG_DIR/last-error" ]; then
+        local err
+        err=$(cat "$CARTOG_LOG_DIR/last-error" 2>/dev/null || echo "")
+        echo "  FAIL: wrote a last-error on a successful installer upgrade: $err"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: no spurious last-error on successful installer upgrade"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+test_predeferred_binary_in_sync_is_noop() {
+    echo "TEST: 0.14..0.20 binary already at the pin does not upgrade"
+    setup
+    write_plugin_json "0.19.0"
+    create_mock_cartog "0.19.0" 0
+    shadow_install_sh 0
+
+    run_update_on_exit > /dev/null
+    restore_install_sh
+
+    if [ -s "$TEST_DIR/install.log" ]; then
+        echo "  FAIL: install.sh ran when already at the pin"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: no installer upgrade when at the pin"; PASS=$((PASS + 1))
+    fi
+    if grep -qE 'self update (--quiet|--apply-pending|--defer)' "$CARTOG_TEST_LOG"; then
+        echo "  FAIL: fired a mutating self update when at the pin"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: no mutating self update at the pin"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+test_predeferred_binary_skipped_when_rag_lock_active() {
+    echo "TEST: 0.14..0.20 installer upgrade skipped while RAG pipeline lock is recent"
+    setup
+    write_plugin_json "0.20.0"
+    create_mock_cartog "0.19.0" 0
+    shadow_install_sh 0
+    mkdir -p "$CARTOG_LOCK_DIR"   # fresh lock — pipeline "running"
+
+    run_update_on_exit > /dev/null
+    restore_install_sh
+
+    if [ -s "$TEST_DIR/install.log" ]; then
+        echo "  FAIL: installer upgrade ran while RAG pipeline lock was active"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: installer upgrade skipped while RAG pipeline lock active"; PASS=$((PASS + 1))
+    fi
+    assert_contains "log explains skip" "background pipeline still running" "$(session_log)"
+    teardown
+}
+
+test_failed_help_probe_routes_to_installer() {
+    echo "TEST: a non-zero 'self update --help' routes to installer even if its text mentions --apply-pending"
+    setup
+    write_plugin_json "0.21.0"
+    # Help text mentions --apply-pending but the probe command exits non-zero
+    # (broken binary). The gate must not trust the text. Two guards make this
+    # hold: pipefail propagates the failure, and supports_deferred_update's
+    # explicit `|| return 1` survives even if pipefail were ever removed.
+    create_mock_cartog "0.20.0" 0 1   # help_exit=1
+    shadow_install_sh 0
+
+    run_update_on_exit > /dev/null
+    restore_install_sh
+
+    if [ -f "$TEST_DIR/install.log" ]; then
+        echo "  PASS: failed probe routed to install.sh"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: failed probe did not route to install.sh"; FAIL=$((FAIL + 1))
+    fi
+    if grep -q -- '--apply-pending\|--defer' "$CARTOG_TEST_LOG"; then
+        echo "  FAIL: trusted help text and fired the deferred path on a failed probe"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: did not fire the deferred path on a failed probe"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
 test_apply_pending_exit_6_is_not_error() {
     echo "TEST: apply-pending exit 6 (peer running) is not an error"
     setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.0" 6
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 6
 
     run_update_on_exit > /dev/null
 
@@ -223,8 +396,8 @@ test_apply_pending_exit_6_is_not_error() {
 test_apply_pending_exit_4_writes_last_error() {
     echo "TEST: apply-pending exit 4 (checksum) writes last-error"
     setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.0" 4
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 4
 
     run_update_on_exit > /dev/null
 
@@ -239,8 +412,8 @@ test_apply_pending_exit_4_writes_last_error() {
 test_apply_pending_exit_7_smoke_writes_actionable_last_error() {
     echo "TEST: apply-pending exit 7 (smoke) writes an actionable, non-transient last-error"
     setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.0" 7
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 7
 
     run_update_on_exit > /dev/null
 
@@ -263,8 +436,8 @@ test_apply_pending_exit_7_smoke_writes_actionable_last_error() {
 test_apply_pending_exit_3_cargo_writes_cargo_command() {
     echo "TEST: apply-pending exit 3 (cargo) writes the cargo-install command, not a generic failure"
     setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.0" 3
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 3
 
     run_update_on_exit > /dev/null
 
@@ -277,8 +450,8 @@ test_apply_pending_exit_3_cargo_writes_cargo_command() {
 test_apply_pending_exit_2_writes_transient_last_error() {
     echo "TEST: apply-pending exit 2 (network) writes a transient last-error"
     setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.0" 2
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 2
 
     run_update_on_exit > /dev/null
 
@@ -291,8 +464,8 @@ test_apply_pending_exit_2_writes_transient_last_error() {
 test_apply_pending_exit_0_no_last_error() {
     echo "TEST: apply-pending exit 0 writes no last-error and logs success"
     setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.0" 0
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 0
 
     run_update_on_exit > /dev/null
 
@@ -308,8 +481,8 @@ test_apply_pending_exit_0_no_last_error() {
 test_apply_pending_skipped_when_rag_lock_active() {
     echo "TEST: apply-pending skipped when RAG pipeline lock is recent"
     setup
-    write_plugin_json "0.14.3"
-    create_mock_cartog "0.14.0" 0
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 0
     mkdir -p "$CARTOG_LOCK_DIR"   # fresh lock — pipeline "running"
 
     run_update_on_exit > /dev/null
@@ -335,8 +508,8 @@ test_legacy_binary_outdated_routes_to_install_sh() {
 
     local log
     log=$(session_log)
-    assert_contains "log announces pre-self-update upgrade" \
-        "Upgrading pre-self-update cartog 0.13.5 → 0.14.3" "$log"
+    assert_contains "log announces installer upgrade" \
+        "Upgrading cartog 0.13.5 → 0.14.3 via install.sh" "$log"
     if [ -f "$TEST_DIR/install.log" ]; then
         echo "  PASS: install.sh invoked"; PASS=$((PASS + 1))
     else
@@ -480,6 +653,16 @@ echo ""
 test_modern_binary_drift_auto_arms_pin
 echo ""
 test_modern_binary_in_sync_does_not_auto_arm
+echo ""
+test_predeferred_binary_upgrades_via_installer
+echo ""
+test_predeferred_binary_no_false_transient_error
+echo ""
+test_predeferred_binary_in_sync_is_noop
+echo ""
+test_predeferred_binary_skipped_when_rag_lock_active
+echo ""
+test_failed_help_probe_routes_to_installer
 echo ""
 test_apply_pending_exit_6_is_not_error
 echo ""
