@@ -814,24 +814,12 @@ impl CartogServer {
     ) -> anyhow::Result<Self> {
         let db = Database::open(db_path, rag_config.resolved_dimension())
             .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
-        let cwd = Self::cwd()?;
         let provider = rag::create_embedding_provider(&rag_config)
             .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
         db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
             .map_err(|e| anyhow::anyhow!("failed to reconcile embedding fingerprint: {e}"))?;
         let reranker = rag::create_reranker_provider(&rag_config.reranker_provider);
-        Ok(Self {
-            tool_router: Self::tool_router(),
-            db: Arc::new(Mutex::new(db)),
-            embedding_provider: Arc::new(Mutex::new(provider)),
-            reranker_provider: Arc::new(Mutex::new(reranker)),
-            #[cfg(feature = "lsp")]
-            lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
-            cwd: Arc::from(cwd),
-            role: Arc::new(AtomicRole::new(Role::Primary)),
-            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            redact,
-        })
+        Self::from_parts(db, provider, reranker, redact, Role::Primary)
     }
 
     /// Construct a secondary MCP server that attached read-only because
@@ -847,10 +835,24 @@ impl CartogServer {
     ) -> anyhow::Result<Self> {
         let db = Database::open_readonly(db_path)
             .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?;
-        let cwd = Self::cwd()?;
         let provider = rag::create_embedding_provider(&rag_config)
             .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
         let reranker = rag::create_reranker_provider(&rag_config.reranker_provider);
+        Self::from_parts(db, provider, reranker, redact, Role::ReadOnly)
+    }
+
+    /// Single field-wiring point for all constructors: takes an already-opened
+    /// DB and pre-built providers and assembles the server. Keeping the struct
+    /// literal here (instead of duplicated per constructor) means a new field
+    /// is wired once and the test path can't silently drift from production.
+    fn from_parts(
+        db: Database,
+        provider: Box<dyn rag::provider::EmbeddingProvider>,
+        reranker: Option<Box<dyn rag::provider::RerankerProvider>>,
+        redact: indexer::RedactionConfig,
+        role: Role,
+    ) -> anyhow::Result<Self> {
+        let cwd = Self::cwd()?;
         Ok(Self {
             tool_router: Self::tool_router(),
             db: Arc::new(Mutex::new(db)),
@@ -859,10 +861,39 @@ impl CartogServer {
             #[cfg(feature = "lsp")]
             lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
             cwd: Arc::from(cwd),
-            role: Arc::new(AtomicRole::new(Role::ReadOnly)),
+            role: Arc::new(AtomicRole::new(role)),
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             redact,
         })
+    }
+
+    /// Test-only constructor that injects an embedding provider instead of
+    /// loading the real ONNX model. Keeps the integration tests independent
+    /// of a cached model (the production `new`/`new_read_only` paths must
+    /// load it for real). The Primary path reconciles the embedding
+    /// fingerprint exactly like `new`, so tests exercise that side effect too.
+    /// `role` selects writable-primary vs read-only attach.
+    #[cfg(test)]
+    fn new_with_provider(
+        db_path: &std::path::Path,
+        provider: Box<dyn rag::provider::EmbeddingProvider>,
+        redact: indexer::RedactionConfig,
+        role: Role,
+    ) -> anyhow::Result<Self> {
+        let db = match role {
+            Role::Primary => {
+                let db = Database::open(db_path, provider.dimension())
+                    .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
+                db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
+                    .map_err(|e| {
+                        anyhow::anyhow!("failed to reconcile embedding fingerprint: {e}")
+                    })?;
+                db
+            }
+            Role::ReadOnly => Database::open_readonly(db_path)
+                .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?,
+        };
+        Self::from_parts(db, provider, None, redact, role)
     }
 
     fn cwd() -> anyhow::Result<std::path::PathBuf> {
@@ -2511,18 +2542,24 @@ mod tests {
 
     // ── Role / read-only attach tests (Phase 4) ──
 
-    fn test_rag_config() -> rag::EmbeddingProviderConfig {
-        rag::EmbeddingProviderConfig::default()
+    /// Deterministic in-memory embedding provider for tests, sized to the
+    /// default embedding dimension so the DB schema matches. Avoids loading
+    /// the real ONNX model (which may be absent in CI coverage runners).
+    fn test_provider() -> Box<dyn rag::provider::EmbeddingProvider> {
+        Box::new(rag::provider::test_utils::MockEmbeddingProvider::new(
+            rag::EMBEDDING_DIM,
+        ))
     }
 
     #[test]
     fn primary_server_reports_primary_role() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
-        let server = CartogServer::new(
+        let server = CartogServer::new_with_provider(
             &db_path,
-            test_rag_config(),
+            test_provider(),
             indexer::RedactionConfig::disabled(),
+            Role::Primary,
         )
         .expect("primary server constructs");
         assert_eq!(server.role(), Role::Primary);
@@ -2534,17 +2571,19 @@ mod tests {
         let db_path = dir.path().join("test.db");
         // First open writable to materialize the file with current schema.
         {
-            let _primary = CartogServer::new(
+            let _primary = CartogServer::new_with_provider(
                 &db_path,
-                test_rag_config(),
+                test_provider(),
                 indexer::RedactionConfig::disabled(),
+                Role::Primary,
             )
             .expect("primary server constructs");
         }
-        let reader = CartogServer::new_read_only(
+        let reader = CartogServer::new_with_provider(
             &db_path,
-            test_rag_config(),
+            test_provider(),
             indexer::RedactionConfig::disabled(),
+            Role::ReadOnly,
         )
         .expect("read-only server constructs");
         assert_eq!(reader.role(), Role::ReadOnly);
@@ -2607,17 +2646,19 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         {
-            let _primary = CartogServer::new(
+            let _primary = CartogServer::new_with_provider(
                 &db_path,
-                test_rag_config(),
+                test_provider(),
                 indexer::RedactionConfig::disabled(),
+                Role::Primary,
             )
             .expect("primary server constructs");
         }
-        let reader = CartogServer::new_read_only(
+        let reader = CartogServer::new_with_provider(
             &db_path,
-            test_rag_config(),
+            test_provider(),
             indexer::RedactionConfig::disabled(),
+            Role::ReadOnly,
         )
         .expect("read-only server constructs");
 
@@ -2654,10 +2695,11 @@ mod tests {
             "cartog_rag_index refusal must suggest `cartog rag index`, got: {msg}"
         );
 
-        let primary = CartogServer::new(
+        let primary = CartogServer::new_with_provider(
             &db_path,
-            test_rag_config(),
+            test_provider(),
             indexer::RedactionConfig::disabled(),
+            Role::Primary,
         )
         .expect("primary reconstructs");
         assert!(
@@ -2808,19 +2850,17 @@ mod tests {
         serve_slot: &str,
     ) -> PromoterArgs {
         // Test embedding provider: the reconcile step on promotion needs
-        // SOMETHING to fingerprint, but the test paths never actually write
-        // embeddings — the default rag config matches the secondary's, so
-        // reconcile is a no-op.
-        let test_provider =
-            rag::create_embedding_provider(&rag::EmbeddingProviderConfig::default())
-                .expect("test embedding provider should construct");
+        // SOMETHING to fingerprint. The promoter-test DBs are opened fresh and
+        // never reconciled, so reconcile takes the harmless backfill branch
+        // (stamps mock provider/model) rather than wiping a populated index.
+        // Mock avoids loading the real ONNX model.
         PromoterArgs {
             db,
             role,
             lock_cell: Arc::new(Mutex::new(None)),
             watch_cell: Arc::new(Mutex::new(None)),
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            embedding_provider: Arc::new(Mutex::new(test_provider)),
+            embedding_provider: Arc::new(Mutex::new(test_provider())),
             db_path: db_path.clone(),
             state_dir,
             serve_slot: serve_slot.to_string(),
@@ -3381,8 +3421,9 @@ def main():
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("lib.py"), FIXTURE_SRC).unwrap();
         let db_path = tmp.path().join("cartog.db");
+        let provider = test_provider();
         {
-            let db = Database::open(&db_path, test_rag_config().resolved_dimension()).unwrap();
+            let db = Database::open(&db_path, provider.dimension()).unwrap();
             indexer::index_directory(
                 &db,
                 &root,
@@ -3394,10 +3435,11 @@ def main():
             )
             .expect("fixture indexes");
         }
-        let server = CartogServer::new(
+        let server = CartogServer::new_with_provider(
             &db_path,
-            test_rag_config(),
+            provider,
             indexer::RedactionConfig::disabled(),
+            Role::Primary,
         )
         .expect("server constructs");
         (tmp, server)

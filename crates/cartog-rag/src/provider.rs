@@ -53,7 +53,10 @@ pub trait RerankerProvider: Send {
     fn score_batch(&mut self, query: &str, documents: &[&str]) -> Result<Vec<f32>>;
 }
 
-#[cfg(test)]
+// `#[doc(hidden)]`: exposed under `test-util` for dependent crates' tests, but
+// not a stable public API — these mocks carry no semver guarantee.
+#[cfg(any(test, feature = "test-util"))]
+#[doc(hidden)]
 pub mod test_utils {
     use super::*;
 
