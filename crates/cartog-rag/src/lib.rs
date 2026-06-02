@@ -7,6 +7,7 @@
 //! - **local** (default): ONNX models via fastembed (feature `provider-local`)
 //! - **ollama**: HTTP API to an Ollama server (feature `provider-ollama`)
 
+pub mod context;
 #[cfg(feature = "provider-local")]
 pub mod embeddings;
 pub mod indexer;

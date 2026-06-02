@@ -188,12 +188,17 @@ pub async fn run_server(
         Some(s) => Some(serve_to_watch_slot(s)?),
         None => None,
     };
+    // Staleness state the primary's watcher publishes for banner decisions.
+    // `None` when there's no primary watcher (read-only peer / no `--watch`).
+    let initial_stale: Option<Arc<cartog_watch::StaleState>> =
+        (watch && role == Role::Primary).then(cartog_watch::StaleState::new);
     let initial_watch_handle: Option<WatchHandle> = if watch && role == Role::Primary {
         let cwd = std::env::current_dir()?;
         let mut config = WatchConfig::new(cwd);
         config.rag = rag;
         config.rag_config = rag_config.clone();
         config.redact = redact;
+        config.stale = initial_stale.clone();
         // Claim the watcher's PID slot so a separately-running `cartog watch`
         // from a terminal correctly refuses to start against the same DB.
         config.pid_lock_dir = opts.pid_lock_dir.clone();
@@ -231,6 +236,14 @@ pub async fn run_server(
         std::sync::atomic::Ordering::Relaxed,
     );
 
+    // Install the staleness state only when the watcher actually started, so
+    // the cell stays consistent with `watcher_active`.
+    if initial_watch_handle.is_some() {
+        if let Ok(mut cell) = server.stale.lock() {
+            *cell = initial_stale;
+        }
+    }
+
     // Shared cells so the promoter (if any) can install the lock + watcher
     // after winning election, and so the cells stay alive for the whole
     // `run_server` lifetime — Drop on shutdown fires here.
@@ -262,6 +275,7 @@ pub async fn run_server(
                     role: Arc::clone(&server.role),
                     lock_cell: Arc::clone(&lock_cell),
                     watch_cell: Arc::clone(&watch_cell),
+                    stale_cell: Arc::clone(&server.stale),
                     watcher_active: Arc::clone(&server.watcher_active),
                     embedding_provider: Arc::clone(&server.embedding_provider),
                     db_path: db_path.to_path_buf(),
@@ -333,6 +347,10 @@ pub(crate) struct PromoterArgs {
     /// Slot for the watcher handle spawned after promotion (when the user
     /// asked for `serve --watch`).
     pub(crate) watch_cell: Arc<Mutex<Option<WatchHandle>>>,
+    /// Server's staleness cell. The promoter installs a fresh [`StaleState`]
+    /// here when it spawns a post-promotion watcher, so banners work after
+    /// failover.
+    pub(crate) stale_cell: Arc<Mutex<Option<Arc<cartog_watch::StaleState>>>>,
     /// Reflects whether a file watcher is currently running. Set to true
     /// on a successful post-promotion spawn, left false if the watcher
     /// failed to start (degraded Primary: surfaced in `cartog_stats`).
@@ -494,6 +512,9 @@ pub(crate) async fn promoter_task(args: PromoterArgs) {
         // keeps the invariant "Primary always owns its watcher when
         // watch_requested" intact rather than leaving a degraded Primary
         // with no watcher and only a stderr warning.
+        // Fresh staleness state for the post-promotion watcher; installed
+        // into the server's cell alongside the watcher handle below.
+        let new_stale = cartog_watch::StaleState::new();
         let new_watch_handle: Option<WatchHandle> = if args.watch_requested {
             // Reuse the cwd captured at server startup, not
             // std::env::current_dir() — the latter follows runtime
@@ -503,6 +524,7 @@ pub(crate) async fn promoter_task(args: PromoterArgs) {
             config.rag = args.rag;
             config.rag_config = args.rag_config.clone();
             config.redact = args.redact;
+            config.stale = Some(Arc::clone(&new_stale));
             config.pid_lock_dir = Some(args.state_dir.clone());
             config.pid_lock_slot = Some(args.watch_slot.clone());
             // Skip migrations because we validated the schema when we
@@ -576,6 +598,9 @@ pub(crate) async fn promoter_task(args: PromoterArgs) {
             match args.watch_cell.lock() {
                 Ok(mut guard) => {
                     *guard = Some(handle);
+                    if let Ok(mut cell) = args.stale_cell.lock() {
+                        *cell = Some(new_stale);
+                    }
                     args.watcher_active
                         .store(true, std::sync::atomic::Ordering::Relaxed);
                 }

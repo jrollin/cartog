@@ -51,6 +51,7 @@ import Base from "../layouts/Base.astro";
             <a href="#cmd-changes">cartog changes</a>
             <a href="#cmd-completions">cartog completions</a>
             <a href="#cmd-config">cartog config</a>
+            <a href="#cmd-context">cartog context</a>
             <a href="#cmd-deps">cartog deps</a>
             <a href="#cmd-doctor">cartog doctor</a>
             <a href="#cmd-hierarchy">cartog hierarchy</a>
@@ -67,6 +68,7 @@ import Base from "../layouts/Base.astro";
             <a href="#cmd-serve">cartog serve</a>
             <a href="#cmd-stats">cartog stats</a>
             <a href="#cmd-savings">cartog savings</a>
+            <a href="#cmd-trace">cartog trace</a>
             <a href="#cmd-watch">cartog watch</a>
           </details>
           <details class="sidebar-group">
@@ -300,14 +302,14 @@ cartog rag search "deployment architecture" --kind document</pre>
         <pre>/plugin install cartog@cartog-plugins</pre>
 
         <h2 id="mcp-server">MCP Server</h2>
-        <p><code>cartog serve</code> runs cartog as a <a href="https://modelcontextprotocol.io">Model Context Protocol</a> server over stdio, exposing the code graph as 13 tools any MCP-compatible client (Claude Code, Cursor, VS Code, Codex CLI, …) can call. No HTTP port, no daemon to manage — the client launches <code>cartog serve</code> as a subprocess and talks JSON-RPC over stdin/stdout.</p>
+        <p><code>cartog serve</code> runs cartog as a <a href="https://modelcontextprotocol.io">Model Context Protocol</a> server over stdio, exposing the code graph as 16 tools any MCP-compatible client (Claude Code, Cursor, VS Code, Codex CLI, …) can call. No HTTP port, no daemon to manage — the client launches <code>cartog serve</code> as a subprocess and talks JSON-RPC over stdin/stdout.</p>
         <pre>cartog serve                  <span class="comment"># MCP server only</span>
 cartog serve --watch          <span class="comment"># + background file watcher (auto re-index)</span>
 cartog serve --watch --rag    <span class="comment"># + watcher + deferred semantic embedding</span></pre>
         <p>Most users never run <code>cartog serve</code> by hand: <a href="#mcp-quickstart"><code>cartog ide</code></a> writes it into your editor's MCP config and the editor spawns it on demand. Run it directly only when wiring a client cartog doesn't know about, or to debug the JSON-RPC stream.</p>
 
-        <h3 id="mcp-tools">The 13 tools</h3>
-        <p>11 are read-only (safe to run without an approval prompt); 2 mutate the index. Each ships with a description telling the agent <em>when</em> to reach for it.</p>
+        <h3 id="mcp-tools">The 16 tools</h3>
+        <p>13 are read-only (safe to run without an approval prompt); 2 mutate the index and 1 arms a deferred self-update. Each ships with a description telling the agent <em>when</em> to reach for it.</p>
         <table>
           <thead>
             <tr><th>Tool</th><th>Kind</th><th>Description</th></tr>
@@ -315,30 +317,33 @@ cartog serve --watch --rag    <span class="comment"># + watcher + deferred seman
           <tbody>
             <tr><td><code>cartog_index</code></td><td>write</td><td>Build/update the code graph</td></tr>
             <tr><td><code>cartog_map</code></td><td>read</td><td>Codebase orientation: file list + top symbols (call first in a new repo)</td></tr>
+            <tr><td><code>cartog_context</code></td><td>read</td><td>One-shot task bundle: relevant symbols + bodies for a task</td></tr>
             <tr><td><code>cartog_search</code></td><td>read</td><td>Find symbols by partial name</td></tr>
             <tr><td><code>cartog_outline</code></td><td>read</td><td>File structure (symbols, line ranges)</td></tr>
             <tr><td><code>cartog_refs</code></td><td>read</td><td>All references to a symbol</td></tr>
             <tr><td><code>cartog_callees</code></td><td>read</td><td>What a symbol calls</td></tr>
             <tr><td><code>cartog_impact</code></td><td>read</td><td>Transitive impact analysis</td></tr>
+            <tr><td><code>cartog_trace</code></td><td>read</td><td>Shortest call path between two symbols, bodies inline</td></tr>
             <tr><td><code>cartog_hierarchy</code></td><td>read</td><td>Inheritance tree</td></tr>
             <tr><td><code>cartog_deps</code></td><td>read</td><td>File-level imports</td></tr>
             <tr><td><code>cartog_stats</code></td><td>read</td><td>Index summary</td></tr>
             <tr><td><code>cartog_changes</code></td><td>read</td><td>Symbols affected by recent git changes</td></tr>
             <tr><td><code>cartog_rag_index</code></td><td>write</td><td>Build embedding index</td></tr>
             <tr><td><code>cartog_rag_search</code></td><td>read</td><td>Semantic search</td></tr>
+            <tr><td><code>cartog_update</code></td><td>write</td><td>Arm a deferred self-update</td></tr>
           </tbody>
         </table>
 
         <h3 id="mcp-tool-shape">Tool metadata &amp; output</h3>
-        <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 11 read-only tools declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
+        <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 13 read-only tools declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
 
         <table>
           <thead>
-            <tr><th>Field</th><th>Read tools (search, refs, map, …)</th><th>Write tools (<code>cartog_index</code>, <code>cartog_rag_index</code>)</th></tr>
+            <tr><th>Field</th><th>Read tools (search, refs, trace, context, map, …)</th><th>Write tools (<code>cartog_index</code>, <code>cartog_rag_index</code>, <code>cartog_update</code>)</th></tr>
           </thead>
           <tbody>
             <tr><td><code>title</code></td><td>e.g. "Search symbols", "Find references"</td><td>e.g. "Index codebase"</td></tr>
-            <tr><td><code>readOnlyHint</code></td><td><code>true</code> — client can run without an approval prompt</td><td><code>false</code> — mutates the index</td></tr>
+            <tr><td><code>readOnlyHint</code></td><td><code>true</code> — client can run without an approval prompt</td><td><code>false</code> — mutates state (<code>cartog_update</code> writes the machine-level update file, not the index)</td></tr>
             <tr><td><code>openWorldHint</code></td><td><code>false</code> — closed domain (the local index)</td><td><code>false</code></td></tr>
             <tr><td><code>outputSchema</code></td><td>present — typed result schema</td><td>—</td></tr>
           </tbody>
@@ -603,6 +608,29 @@ ExpiredTokenError auth/tokens.py:50</pre>
     calls  auth_required.wrapper     auth/middleware.py:21
     calls  get_current_user          auth/middleware.py:61</pre>
         <p>Answers "what breaks if I change this?".</p>
+
+        <h2 id="cmd-trace"><code>cartog trace &lt;from&gt; &lt;to&gt; [--depth N]</code></h2>
+        <p>Find the shortest call path between two symbols, with each hop's body inline — answers "how does A reach B?". Follows only statically-resolved <code>calls</code> edges (dynamic dispatch is not traced); default depth 8.</p>
+        <pre>cartog trace handle_request validate_token</pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">handle_request → authenticate  api/routes.py:31
+    def handle_request(req):
+        return authenticate(req.user, req.token)
+authenticate → validate_token  auth/service.py:18
+    def authenticate(user, token):
+        return validate_token(token)</pre>
+
+        <h2 id="cmd-context"><code>cartog context &lt;task&gt; [--tokens N]</code></h2>
+        <p>Build a one-shot context bundle for a task: semantic-search seeds, their 1-hop call neighbors, and high-centrality definitions in the same files — bodies inline, trimmed to a token budget (default 6000). The single call an agent makes to scope a task.</p>
+        <pre>cartog context "validate an auth token" --tokens 6000</pre>
+        <p class="example-label">Example output</p>
+        <pre class="example-output">Context for 'validate an auth token' (5 symbols, ~520 tokens)
+
+[Seed] function validate_token  auth/tokens.py:10
+    def validate_token(token: str) -&gt; bool:
+        ...
+[Neighbor] function generate_token  auth/tokens.py:20
+[Central] class AuthService  auth/service.py:1</pre>
 
         <h2 id="cmd-hierarchy"><code>cartog hierarchy &lt;class&gt; [--mermaid]</code></h2>
         <p>Show inheritance relationships — both parents and children. Add <code>--mermaid</code> for a <code>graph TD</code> diagram you can paste into a PR description, doc, or mermaid.live.</p>

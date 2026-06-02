@@ -79,7 +79,7 @@ crates/cartog/         (binary — CLI dispatch, config, self-update)
 ├── cartog-rag         (embeddings, hybrid search, reranker)
 ├── cartog-lsp         (LSP-based edge resolution — default feature)
 ├── cartog-watch       (debounced re-index + deferred RAG)
-├── cartog-mcp         (MCP server over stdio, 14 tools)
+├── cartog-mcp         (MCP server over stdio, 16 tools)
 └── cartog-process-lock (PID-file locks for serve/watch peers)
 ```
 
@@ -142,17 +142,20 @@ The MCP config JSON has one canonical copy in `docs/mcp-setup.md`; other docs li
 ## Current State
 
 - **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Markdown
-- **CLI**: 23 top-level commands (`init`, `ide`, `index`, `search`, `outline`, `refs`, `callees`, `impact`, `hierarchy`, `deps`, `stats`, `map`, `changes`, `config`, `doctor`, `watch`, `serve`, `push`, `pull`, `completions`, `manpage`, plus `rag` with 3 subcommands and `self` with 4 subcommands; `self update` has `--check`/`--defer`[`--to <version>`]/`--apply-pending` modes) + MCP server (14 tools)
+- **CLI**: 25 top-level commands (`init`, `ide`, `index`, `search`, `outline`, `refs`, `callees`, `impact`, `trace`, `context`, `hierarchy`, `deps`, `stats`, `map`, `changes`, `config`, `doctor`, `watch`, `serve`, `push`, `pull`, `completions`, `manpage`, plus `rag` with 3 subcommands and `self` with 4 subcommands; `self update` has `--check`/`--defer`[`--to <version>`]/`--apply-pending` modes) + MCP server (16 tools)
 - **Indexing**: incremental (git-based + SHA-256 + Merkle-tree symbol diffing), `--force` re-index. Stable symbol IDs (`file:kind:qualified_name`) survive line movements. Scoped edge resolution for changed files only
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
 - **Watch**: `cartog watch` CLI + `cartog serve --watch` background mode, debounced re-index + deferred RAG embedding
-- **MCP single-writer**: `cartog serve` instances on the same DB use atomic O_EXCL election. First is primary, subsequent attach read-only (12 of 14 tools — only the 2 DB-write tools are gated); promoter on the secondary takes over within ~10s if the primary dies. Kill switch: `CARTOG_SINGLE_WRITER=0`.
+- **MCP single-writer**: `cartog serve` instances on the same DB use atomic O_EXCL election. First is primary, subsequent attach read-only (14 of 16 tools — only the 2 DB-write tools are gated); promoter on the secondary takes over within ~10s if the primary dies. Kill switch: `CARTOG_SINGLE_WRITER=0`.
 - **Deferred self-update**: inside a Claude Code session the MCP server holds the serve lock, so `cartog self update` would refuse (exit 6). `cartog self update --defer` (or the `cartog_update` MCP tool) arms a pending update without swapping; the SessionEnd hook runs `--apply-pending` once the peer exits. See [docs/updates.md](docs/updates.md).
 - **CI/CD**: fmt, clippy, test, coverage, release to crates.io + GitHub Releases
 - **Centrality**: in-degree ranking — search results prefer highly-referenced symbols
 - **Codebase map**: `cartog map --tokens N` produces budget-aware file tree + top symbols
 - **Token budget**: `--tokens N` global flag for context-window-aware output truncation
 - **Recent changes**: `cartog changes` shows symbols affected by recent git commits
+- **Call-path trace**: `cartog trace <from> <to>` / `cartog_trace` returns the shortest `calls` path between two symbols with each hop's body inline (forward BFS, static call edges only)
+- **Task-context bundle**: `cartog context <task>` / `cartog_context` fuses hybrid search seeds + 1-hop neighbors + seed-file centrality into a token-budgeted bundle
+- **Staleness banners**: when `cartog serve --watch` has pending changes/embeddings, affected MCP read-tool responses are prefixed with a `⚠️` banner; gated on a live watcher (no banner for read-only peers or watcherless serve)
 - **AST-aware embeddings**: significant body lines (skip blanks/comments/braces) for better vector search recall
 - **Embedding format versioning**: auto-detects embedding strategy changes, triggers re-embed on next `rag index`
 - **Schema versioning**: metadata-based migration system for DB schema evolution

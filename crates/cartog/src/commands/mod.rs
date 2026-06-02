@@ -278,11 +278,8 @@ pub fn cmd_index(
     let root = Path::new(path);
     let db = open_db(db_path, embedding_dim)?;
 
-    let spinner = if json {
-        None
-    } else {
-        Spinner::start("Indexing").map(Arc::new)
-    };
+    // Stderr-only; `Spinner::start` self-gates (TTY or CARTOG_PROGRESS), so --json stdout stays clean.
+    let spinner = Spinner::start("Indexing").map(Arc::new);
     let cb = spinner_callback(&spinner, indexer::ProgressUpdate::label);
     let cb_ref: Option<indexer::ProgressCallback<'_>> =
         cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
@@ -314,65 +311,7 @@ pub fn cmd_index(
         return Ok(());
     }
 
-    output(&result, json, None, |r| {
-        let lsp_part = if r.edges_lsp_resolved > 0
-            || r.edges_marked_unresolvable > 0
-            || r.edges_marked_external > 0
-        {
-            let mut s = format!(
-                " ({} heuristic + {} LSP",
-                r.edges_resolved, r.edges_lsp_resolved
-            );
-            if r.edges_marked_unresolvable > 0 {
-                s.push_str(&format!(
-                    ", {} marked unresolvable",
-                    r.edges_marked_unresolvable
-                ));
-            }
-            if r.edges_marked_external > 0 {
-                s.push_str(&format!(", {} external", r.edges_marked_external));
-            }
-            s.push(')');
-            s
-        } else {
-            String::new()
-        };
-        let sym_detail = if r.symbols_modified > 0 || r.symbols_unchanged > 0 {
-            format!(
-                " ({} new, {} modified, {} unchanged, {} removed)",
-                r.symbols_added, r.symbols_modified, r.symbols_unchanged, r.symbols_removed
-            )
-        } else {
-            String::new()
-        };
-        let unsupported = if r.files_unsupported > 0 {
-            let breakdown = r
-                .unsupported_by_ext
-                .iter()
-                .take(5)
-                .map(|(ext, n)| format!("{n} .{ext}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "\n  {} files in unsupported languages not indexed ({breakdown})",
-                r.files_unsupported
-            )
-        } else {
-            String::new()
-        };
-        format!(
-            "Indexed {} files ({} skipped, {} removed)\n  {} symbols{}, {} edges ({} resolved{}){}\n",
-            r.files_indexed,
-            r.files_skipped,
-            r.files_removed,
-            r.symbols_added + r.symbols_modified + r.symbols_unchanged,
-            sym_detail,
-            r.edges_added,
-            r.edges_resolved + r.edges_lsp_resolved,
-            lsp_part,
-            unsupported,
-        )
-    })
+    output(&result, json, None, indexer::render_index_summary)
 }
 
 /// Show symbols and structure of a file.
@@ -503,6 +442,146 @@ pub fn cmd_impact(
         }
         out
     })
+}
+
+/// Find a call path between two symbols, with each hop's body inline.
+pub fn cmd_trace(
+    db_path: &Path,
+    from: &str,
+    to: &str,
+    depth: u32,
+    json: bool,
+    token_budget: Option<u32>,
+    embedding_dim: usize,
+) -> Result<()> {
+    const MAX_TRACE_DEPTH: u32 = 20;
+    let db = open_db(db_path, embedding_dim)?;
+    // `file_path` is stored relative to the index root. The DB lives at
+    // `<root>/.cartog/db.sqlite`, so the root is the db's grandparent — robust
+    // regardless of the cwd `cartog trace` was launched from.
+    let index_root = index_root_from_db_path(db_path);
+    let path = db.trace(from, to, depth.min(MAX_TRACE_DEPTH))?;
+    if path.is_some() {
+        db.log_query("trace", "cli");
+    }
+
+    #[derive(Serialize)]
+    struct HydratedHop {
+        source_name: String,
+        target_name: String,
+        kind: cartog_core::EdgeKind,
+        file_path: String,
+        line: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+    }
+
+    // `{found, hops}` so `--json` distinguishes "no path" (found=false) from
+    // "from == to" (found=true, hops=[]) — matching the cartog_trace MCP shape.
+    #[derive(Serialize)]
+    struct TraceResult {
+        from: String,
+        to: String,
+        found: bool,
+        hops: Vec<HydratedHop>,
+    }
+
+    let hops: Vec<HydratedHop> = path
+        .iter()
+        .flatten()
+        .map(|h| HydratedHop {
+            body: hop_body(&db, &index_root, &h.source_id),
+            source_name: h.source_name.clone(),
+            target_name: h.target_name.clone(),
+            kind: h.kind,
+            file_path: h.file_path.clone(),
+            line: h.line,
+        })
+        .collect();
+
+    let result = TraceResult {
+        from: from.to_string(),
+        to: to.to_string(),
+        found: path.is_some(),
+        hops,
+    };
+    output(&result, json, token_budget, |r| {
+        if !r.found {
+            return format!(
+                "No call path from '{from}' to '{to}'{}{}{}\n",
+                empty_index_hint(&db),
+                did_you_mean(&db, &r.from),
+                did_you_mean(&db, &r.to),
+            );
+        }
+        if r.hops.is_empty() {
+            return format!("'{}' is the target.\n", r.from);
+        }
+        let mut out = String::new();
+        for hop in &r.hops {
+            out.push_str(&format!(
+                "{src} → {dst}  {file}:{line}\n",
+                src = hop.source_name,
+                dst = hop.target_name,
+                file = hop.file_path,
+                line = hop.line,
+            ));
+            if let Some(body) = &hop.body {
+                out.push_str(body);
+                out.push('\n');
+            }
+        }
+        out
+    })
+}
+
+/// Index root for a DB at `<root>/.cartog/db.sqlite` — the db's grandparent.
+/// Falls back to the db's own parent (legacy `.cartog.db` layout), then `.`.
+fn index_root_from_db_path(db_path: &Path) -> PathBuf {
+    db_path
+        .parent()
+        .and_then(Path::parent)
+        .or_else(|| db_path.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Body of the symbol with id `source_id` — the exact symbol on the call path.
+/// Prefers stored RAG content (redaction-aware), else reads source by byte
+/// range from `root`-relative `file_path`. `None` when neither is available
+/// (header-only hop).
+fn hop_body(db: &Database, root: &Path, source_id: &str) -> Option<String> {
+    if let Some((content, _)) = db.get_symbol_content(source_id).ok().flatten() {
+        return Some(content);
+    }
+    let sym = db
+        .get_symbols_by_ids(std::slice::from_ref(&source_id.to_string()))
+        .ok()?
+        .into_iter()
+        .next()?;
+    source_slice(
+        root,
+        &sym.file_path,
+        sym.start_byte as usize,
+        sym.end_byte as usize,
+    )
+}
+
+/// Read `path` (resolved against `root`; absolute paths pass through) and return
+/// the `[start, end)` byte slice, snapped to char boundaries. `None` on any read
+/// or range error.
+fn source_slice(root: &Path, path: &str, mut start: usize, mut end: usize) -> Option<String> {
+    let src = std::fs::read_to_string(root.join(path)).ok()?;
+    if start >= end || end > src.len() {
+        return None;
+    }
+    while start < end && !src.is_char_boundary(start) {
+        start += 1;
+    }
+    while end > start && !src.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(src[start..end].to_string())
 }
 
 /// All references to a symbol (calls, imports, inherits, references, raises).
@@ -1087,11 +1166,8 @@ pub fn cmd_rag_index(
     db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
         .context("failed to reconcile embedding fingerprint")?;
 
-    let spinner = if json {
-        None
-    } else {
-        Spinner::start("Indexing code graph").map(Arc::new)
-    };
+    // Progress on stderr; `Spinner::start` self-gates (TTY or CARTOG_PROGRESS).
+    let spinner = Spinner::start("Indexing code graph").map(Arc::new);
     let ix_cb = spinner_callback(&spinner, indexer::ProgressUpdate::label);
     let ix_cb_ref: Option<indexer::ProgressCallback<'_>> =
         ix_cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
@@ -1100,11 +1176,7 @@ pub fn cmd_rag_index(
     stop_spinner(spinner);
     let _index_result = index_res?;
 
-    let spinner = if json {
-        None
-    } else {
-        Spinner::start("Embedding symbols").map(Arc::new)
-    };
+    let spinner = Spinner::start("Embedding symbols").map(Arc::new);
     let rag_cb = spinner_callback(&spinner, rag::indexer::ProgressUpdate::label);
     let rag_cb_ref: Option<rag::indexer::ProgressCallback<'_>> =
         rag_cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
@@ -1222,6 +1294,80 @@ pub fn cmd_rag_search(
     })
 }
 
+/// Build a token-budgeted task-context bundle for a natural-language task.
+pub fn cmd_context(
+    db_path: &Path,
+    task: &str,
+    tokens: u32,
+    json: bool,
+    provider_config: &rag::EmbeddingProviderConfig,
+    tuning: &rag::search::SearchTuning,
+) -> Result<()> {
+    let mut provider = rag::create_embedding_provider(provider_config)?;
+    let db = open_db(db_path, provider.dimension())?;
+
+    // Build the bundle in its own scope so the provider/reranker borrows end
+    // before the `output` closure (which re-borrows `&db`) runs.
+    let ctx = {
+        let mut reranker = if provider_config.reranker_provider == "none" {
+            None
+        } else {
+            rag::create_reranker_provider(&provider_config.reranker_provider)
+        };
+        let opts = rag::context::ContextOptions {
+            tuning: *tuning,
+            ..Default::default()
+        };
+        // `match` (not `as_deref_mut`) keeps the reranker borrow scoped to the
+        // call so it drops before `output` re-borrows `db`.
+        match reranker.as_mut() {
+            Some(r) => rag::context::build_task_context(
+                &db,
+                task,
+                tokens,
+                provider.as_mut(),
+                Some(r.as_mut()),
+                &opts,
+            ),
+            None => {
+                rag::context::build_task_context(&db, task, tokens, provider.as_mut(), None, &opts)
+            }
+        }?
+    };
+    if !ctx.entries.is_empty() {
+        db.log_query("context", "cli");
+    }
+    let task = task.to_string();
+
+    output(&ctx, json, None, |ctx| {
+        if ctx.entries.is_empty() {
+            return format!("No context found for '{task}'{}\n", empty_index_hint(&db));
+        }
+        let mut out = format!(
+            "Context for '{task}' ({} symbols, ~{} tokens)\n\n",
+            ctx.entries.len(),
+            ctx.approx_tokens
+        );
+        for entry in &ctx.entries {
+            out.push_str(&format!(
+                "[{reason:?}] {kind} {name}  {file}:{line}\n",
+                reason = entry.reason,
+                kind = entry.symbol.kind,
+                name = entry.symbol.name,
+                file = entry.symbol.file_path,
+                line = entry.symbol.start_line,
+            ));
+            if let Some(body) = &entry.content {
+                for l in body.lines() {
+                    out.push_str(&format!("    {l}\n"));
+                }
+                out.push('\n');
+            }
+        }
+        out
+    })
+}
+
 mod config_display;
 pub use config_display::cmd_config;
 
@@ -1268,6 +1414,27 @@ pub use self_cmd::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_root_is_db_grandparent() {
+        // New layout: <root>/.cartog/db.sqlite → root.
+        let root = index_root_from_db_path(Path::new("/proj/.cartog/db.sqlite"));
+        assert_eq!(root, Path::new("/proj"));
+    }
+
+    #[test]
+    fn source_slice_resolves_relative_path_against_root() {
+        // file_path is stored relative to the index root; reading must join it
+        // to the root, not the process cwd.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("a.py"), "def f():\n    return 1\n").unwrap();
+        // Byte range covering "def f()".
+        let body = source_slice(root, "a.py", 0, 7).expect("reads relative to root");
+        assert_eq!(body, "def f()");
+        // A path that doesn't exist under root → None (not a cwd-relative read).
+        assert!(source_slice(root, "missing.py", 0, 5).is_none());
+    }
 
     #[test]
     fn capitalized_index_phase_labels() {
@@ -1544,6 +1711,34 @@ def main():
         cmd_impact(&db, "helper", 3, false, None, 384).expect("impact ok");
         cmd_impact(&db, "helper", 3, true, None, 384).expect("impact --json ok");
     }
+
+    #[test]
+    fn cmd_trace_logs_a_query_only_when_a_path_is_found() {
+        let (_tmp, db) = indexed_db();
+        let before = queries_logged(&db);
+        cmd_trace(&db, "speak", "helper", 8, false, None, 384).expect("trace ok");
+        let after_hit = queries_logged(&db);
+        cmd_trace(&db, "speak", "no_such_symbol", 8, false, None, 384)
+            .expect("no-path trace is ok");
+        let after_miss = queries_logged(&db);
+
+        assert_eq!(after_hit, before + 1, "a found path logs one query");
+        assert_eq!(
+            after_miss, after_hit,
+            "a no-path result must not log a query"
+        );
+    }
+
+    #[test]
+    fn cmd_trace_json_branch_does_not_error() {
+        let (_tmp, db) = indexed_db();
+        cmd_trace(&db, "speak", "helper", 8, true, None, 384).expect("trace --json ok");
+    }
+
+    // No CLI test for `cmd_context`: it builds a real embedding provider
+    // (ONNX model), so it can't run model-independently in CI. The fusion
+    // logic is covered by `cartog_rag::context` unit tests (MockEmbeddingProvider)
+    // and the `cartog_context` MCP tool test (test_provider).
 
     #[test]
     fn cmd_hierarchy_plain_json_and_mermaid_branches_do_not_error() {

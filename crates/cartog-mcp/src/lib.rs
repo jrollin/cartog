@@ -1,7 +1,7 @@
 //! MCP server for the cartog code graph.
 //!
 //! Exposes cartog's graph queries, indexing, semantic search, and deferred
-//! self-update as 14 MCP tools over stdio transport. Designed for Claude Code,
+//! self-update as 16 MCP tools over stdio transport. Designed for Claude Code,
 //! Cursor, and other MCP clients.
 
 use std::path::{Path, PathBuf};
@@ -25,11 +25,14 @@ use cartog_db::{Database, PinnedAttach, MAX_SEARCH_LIMIT};
 use cartog_indexer as indexer;
 use cartog_rag as rag;
 use cartog_watch as watch;
-use cartog_watch::{WatchConfig, WatchHandle};
+use cartog_watch::{StaleSnapshot, WatchConfig, WatchHandle};
 
 mod progress;
 
 const MAX_IMPACT_DEPTH: u32 = 10;
+const MAX_TRACE_DEPTH: u32 = 20;
+const DEFAULT_CONTEXT_TOKENS: u32 = 6000;
+const MAX_CONTEXT_TOKENS: u32 = 20000;
 
 // ── Parameter types ──
 
@@ -72,6 +75,16 @@ pub struct ImpactParams {
     /// Symbol name to analyze impact for
     pub name: String,
     /// Maximum traversal depth (default 3, max 10)
+    pub depth: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TraceParams {
+    /// Starting symbol (the caller end of the path)
+    pub from: String,
+    /// Target symbol (the callee end of the path)
+    pub to: String,
+    /// Maximum path length to search (default 8, max 20)
     pub depth: Option<u32>,
 }
 
@@ -128,6 +141,14 @@ pub struct RagSearchParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ContextParams {
+    /// Natural-language description of the task you're about to work on
+    pub task: String,
+    /// Approximate token budget for the returned bundle (default 6000)
+    pub tokens: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct MapParams {
     /// Maximum top-ranked symbols to include in the map (default 50).
     /// Symbols are ranked by in-degree centrality so the most-referenced
@@ -178,6 +199,24 @@ struct RefList {
 #[derive(Debug, Serialize, JsonSchema)]
 struct ImpactList {
     results: Vec<ImpactEntry>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct TraceHop {
+    source_name: String,
+    target_name: String,
+    kind: String,
+    file_path: String,
+    line: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct TraceList {
+    /// Empty when `from == to`; absent path is reported as `found: false`.
+    found: bool,
+    hops: Vec<TraceHop>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -366,9 +405,11 @@ fn suggestions_for(tool: &str) -> Option<&'static str> {
         "cartog_map" => Some("Next: use cartog_outline on an interesting file, cartog_rag_search for a concept, or cartog_search for a specific name."),
         "cartog_search" => Some("Next: use cartog_refs to find usages, cartog_callees to trace calls, or cartog_impact to assess blast radius."),
         "cartog_rag_search" => Some("Next: use cartog_outline to see file structure, or cartog_refs to find all usages of a symbol."),
+        "cartog_context" => Some("Next: use cartog_outline or Read on a returned symbol, or cartog_trace to follow a call path between two of them."),
         "cartog_outline" => Some("Next: use Read with offset/limit to see specific lines, or cartog_refs to find usages of a symbol."),
         "cartog_refs" => Some("Next: use cartog_impact to assess blast radius, or cartog_callees to trace what a function calls."),
         "cartog_callees" => Some("Next: use cartog_refs to find callers, or cartog_impact to assess blast radius."),
+        "cartog_trace" => Some("Next: read the hop bodies, or use cartog_refs/cartog_impact on a hop to widen the view."),
         "cartog_impact" => Some("Next: read the affected files to plan changes, or use cartog_hierarchy to check class inheritance."),
         "cartog_hierarchy" => Some("Next: use cartog_refs to find usages, or cartog_impact to assess blast radius."),
         "cartog_deps" => Some("Next: use cartog_outline to see file structure, or cartog_refs to find usages of a symbol."),
@@ -400,6 +441,7 @@ fn narrowing_hint_for(tool: &str) -> &'static str {
         "cartog_changes" => "Re-run with a smaller --commits window.",
         "cartog_search" | "cartog_rag_search" => "Re-run with a tighter query or --limit.",
         "cartog_refs" => "Re-run with a more specific symbol name, or filter by --kind.",
+        "cartog_trace" => "Re-run with a smaller --depth, or pick closer endpoints.",
         _ => "Re-run with a narrower scope or filter.",
     }
 }
@@ -602,8 +644,57 @@ fn tool_response(
     json: String,
     structured: Option<serde_json::Value>,
     tool: &str,
+    stale: Option<StaleSnapshot>,
 ) -> Result<CallToolResult, McpError> {
-    tool_response_named(db, json, structured, tool, None)
+    tool_response_named(db, json, structured, tool, None, stale)
+}
+
+/// Build a staleness banner for `tool`, or `None` when nothing is stale or the
+/// tool is unaffected. RAG staleness only warns the semantic tools; a debounce
+/// gap warns every read tool. Prepended to the response so the agent sees it
+/// first. Pure, so it's unit-testable without an MCP result.
+fn stale_banner(snapshot: Option<StaleSnapshot>, tool: &str) -> Option<String> {
+    let snap = snapshot?;
+    let rag_tool = matches!(tool, "cartog_rag_search" | "cartog_context");
+    if snap.rag_stale() && rag_tool {
+        return Some(format!(
+            "⚠️ {} symbol(s) awaiting re-embedding since the last index; semantic results may be stale.\n\n",
+            snap.rag_pending
+        ));
+    }
+    if snap.structural_stale() {
+        return Some(
+            "⚠️ File change(s) detected; the index is catching up and results may be stale.\n\n"
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// Body of the trace hop with id `source_id` — the exact symbol on the path.
+/// Stored RAG content if present, else the source byte-slice read relative to
+/// `cwd`. `None` when neither is found.
+fn trace_hop_body(db: &Database, cwd: &Path, source_id: &str) -> Option<String> {
+    if let Some((content, _)) = db.get_symbol_content(source_id).ok().flatten() {
+        return Some(content);
+    }
+    let sym = db
+        .get_symbols_by_ids(std::slice::from_ref(&source_id.to_string()))
+        .ok()?
+        .into_iter()
+        .next()?;
+    let src = std::fs::read_to_string(cwd.join(&sym.file_path)).ok()?;
+    let (mut start, mut end) = (sym.start_byte as usize, sym.end_byte as usize);
+    if start >= end || end > src.len() {
+        return None;
+    }
+    while start < end && !src.is_char_boundary(start) {
+        start += 1;
+    }
+    while end > start && !src.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(src[start..end].to_string())
 }
 
 /// Record a successful read tool call into the query log for
@@ -642,7 +733,9 @@ fn tool_response_named(
     structured: Option<serde_json::Value>,
     tool: &str,
     queried_name: Option<&str>,
+    stale: Option<StaleSnapshot>,
 ) -> Result<CallToolResult, McpError> {
+    let banner = stale_banner(stale, tool).unwrap_or_default();
     let is_empty = !db
         .has_indexed_files()
         .map_err(|e| mcp_err(format!("stats check failed: {e}")))?;
@@ -663,7 +756,7 @@ fn tool_response_named(
                     .map(|c| c.into_iter().map(|s| s.name).collect::<Vec<_>>())
                     .unwrap_or_default();
                 if let Some(suffix) = did_you_mean_suffix(name, &candidates) {
-                    let mut text = json;
+                    let mut text = format!("{banner}{json}");
                     text.push_str(&suffix);
                     // No structured content: the empty `[]` result plus a prose
                     // hint has no useful typed form.
@@ -673,7 +766,9 @@ fn tool_response_named(
         }
     }
 
-    let budget = mcp_max_bytes();
+    // Reserve the banner's bytes up front so the final `banner + text [+
+    // structured]` stays under the cap (the banner is prepended at the end).
+    let budget = mcp_max_bytes().saturating_sub(banner.len());
     let (mut text, truncated_bytes) = if json.len() > budget {
         // Leave room for the truncation notice.
         let notice_cap = 256;
@@ -705,7 +800,8 @@ fn tool_response_named(
     if truncated_bytes > 0 {
         text.push_str(&format!(
             "\n\n(Response truncated: {truncated_bytes} bytes omitted to stay under the \
-             {budget}-byte cap. {hint})",
+             {cap}-byte cap. {hint})",
+            cap = mcp_max_bytes(),
             hint = narrowing_hint_for(tool),
         ));
     } else if is_empty {
@@ -714,6 +810,22 @@ fn tool_response_named(
     } else if let Some(hint) = suggestions_for(tool) {
         text.push_str("\n\n");
         text.push_str(hint);
+    }
+    // Prepend after truncation so the banner survives an oversized body.
+    if !banner.is_empty() {
+        text.insert_str(0, &banner);
+    }
+    // Final hard clamp: the per-branch budgeting reserves space for the banner
+    // and a 256-byte notice, but appended suffixes (suggestions, hints) aren't
+    // individually counted. Trim to a char boundary so `text.len()` is provably
+    // ≤ the cap no matter which suffixes fired.
+    let cap = mcp_max_bytes();
+    if text.len() > cap {
+        let cut = (cap.saturating_sub(3)..=cap)
+            .rev()
+            .find(|&i| text.is_char_boundary(i))
+            .unwrap_or(0);
+        text.truncate(cut);
     }
     Ok(success_result(text, structured))
 }
@@ -747,7 +859,7 @@ pub struct CartogServer {
     /// Single-writer election role. `Primary` holds the `serve` PID lock
     /// and owns the RW DB connection. `ReadOnly` attached via
     /// [`Database::open_readonly`] because another cartog process owns
-    /// the slot — the 2 write tools are gated, the 11 read tools work
+    /// the slot — the 2 write tools are gated, the 13 read tools work
     /// unchanged. Mutated atomically when the Phase 5 promoter detects
     /// the primary died and takes over.
     role: Arc<AtomicRole>,
@@ -758,6 +870,11 @@ pub struct CartogServer {
     /// promotion — surfaced in `cartog_stats` output so users can see
     /// the degraded state.
     watcher_active: Arc<std::sync::atomic::AtomicBool>,
+    /// Staleness state published by the watcher (when `--watch` is active),
+    /// read to prepend "results may be stale" banners. A cell so the Phase 5
+    /// promoter can install one after spawning a post-promotion watcher.
+    /// `None`/empty for `cartog serve` without `--watch` and read-only peers.
+    stale: Arc<Mutex<Option<Arc<cartog_watch::StaleState>>>>,
     /// Secret-redaction policy applied to indexing tools.
     redact: indexer::RedactionConfig,
 }
@@ -845,6 +962,22 @@ impl CartogServer {
     /// DB and pre-built providers and assembles the server. Keeping the struct
     /// literal here (instead of duplicated per constructor) means a new field
     /// is wired once and the test path can't silently drift from production.
+    /// Snapshot the watcher's staleness state for banner decisions, or `None`
+    /// when no live watcher publishes it (no `--watch`, read-only peer, or a
+    /// degraded primary). Read with a brief lock — never held across `.await`.
+    fn stale_snapshot(&self) -> Option<StaleSnapshot> {
+        if !self
+            .watcher_active
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return None;
+        }
+        self.stale
+            .lock()
+            .ok()
+            .and_then(|cell| cell.as_ref().map(|s| s.snapshot()))
+    }
+
     fn from_parts(
         db: Database,
         provider: Box<dyn rag::provider::EmbeddingProvider>,
@@ -863,6 +996,7 @@ impl CartogServer {
             cwd: Arc::from(cwd),
             role: Arc::new(AtomicRole::new(role)),
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stale: Arc::new(Mutex::new(None)),
             redact,
         })
     }
@@ -990,7 +1124,8 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            let mut text = json;
+            // Human summary first, then the raw JSON, so the agent sees counts at a glance.
+            let mut text = format!("{}\n{json}", indexer::render_index_summary(&result));
             if let Some(hint) = suggestions_for("cartog_index") {
                 text.push_str("\n\n");
                 text.push_str(hint);
@@ -1023,6 +1158,7 @@ impl CartogServer {
     ) -> Result<CallToolResult, McpError> {
         let file = params.file;
         let db = Arc::clone(&self.db);
+        let stale = self.stale_snapshot();
 
         tokio::task::spawn_blocking(move || {
             debug!(file = %file, "outline");
@@ -1036,7 +1172,7 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(SymbolList { results: symbols }).ok();
-            tool_response(&db, json, structured, "cartog_outline")
+            tool_response(&db, json, structured, "cartog_outline", stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1059,6 +1195,7 @@ impl CartogServer {
         let name = params.name;
         let kind_str = params.kind;
         let db = Arc::clone(&self.db);
+        let stale = self.stale_snapshot();
 
         tokio::task::spawn_blocking(move || {
             let kind_filter = kind_str
@@ -1089,7 +1226,7 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(RefList { results: entries }).ok();
-            tool_response_named(&db, json, structured, "cartog_refs", Some(&name))
+            tool_response_named(&db, json, structured, "cartog_refs", Some(&name), stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1111,6 +1248,7 @@ impl CartogServer {
     ) -> Result<CallToolResult, McpError> {
         let name = params.name;
         let db = Arc::clone(&self.db);
+        let stale = self.stale_snapshot();
 
         tokio::task::spawn_blocking(move || {
             debug!(name = %name, "callees");
@@ -1124,7 +1262,7 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&edges)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(EdgeList { results: edges }).ok();
-            tool_response_named(&db, json, structured, "cartog_callees", Some(&name))
+            tool_response_named(&db, json, structured, "cartog_callees", Some(&name), stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1147,6 +1285,7 @@ impl CartogServer {
         let name = params.name;
         let depth = params.depth.unwrap_or(3).min(MAX_IMPACT_DEPTH);
         let db = Arc::clone(&self.db);
+        let stale = self.stale_snapshot();
 
         tokio::task::spawn_blocking(move || {
             debug!(name = %name, depth, "impact");
@@ -1165,7 +1304,63 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(ImpactList { results: entries }).ok();
-            tool_response_named(&db, json, structured, "cartog_impact", Some(&name))
+            tool_response_named(&db, json, structured, "cartog_impact", Some(&name), stale)
+        })
+        .await
+        .map_err(|e| mcp_err(format!("task join failed: {e}")))?
+    }
+
+    /// Find a call path between two symbols, with each hop's body inline.
+    #[tool(
+        description = "Trace how one symbol reaches another through the call graph. Returns the shortest call path from `from` to `to`, each hop carrying the calling symbol's body inline. Use when asked 'how does A reach B?', 'trace the execution flow from X to Y', 'what's the call path between X and Y?'. Only statically-resolved `calls` edges are followed (dynamic dispatch is not traced). Not for: all callers (use cartog_refs), or blast radius (use cartog_impact). Returns: {found: bool, hops: [{source_name, target_name, kind, file_path, line, body?}]}.",
+        annotations(
+            title = "Trace call path",
+            read_only_hint = true,
+            open_world_hint = false
+        ),
+        output_schema = output_schema_for::<TraceList>()
+    )]
+    async fn cartog_trace(
+        &self,
+        Parameters(params): Parameters<TraceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let from = params.from;
+        let to = params.to;
+        let depth = params.depth.unwrap_or(8).min(MAX_TRACE_DEPTH);
+        let db = Arc::clone(&self.db);
+        let cwd = Arc::clone(&self.cwd);
+        let stale = self.stale_snapshot();
+
+        tokio::task::spawn_blocking(move || {
+            debug!(from = %from, to = %to, depth, "trace");
+            let db = db.lock().map_err(|_| {
+                mcp_err("internal error: database lock poisoned (server restart required)")
+            })?;
+            let path = db
+                .trace(&from, &to, depth)
+                .map_err(|e| mcp_err(format!("trace query failed: {e}")))?;
+
+            let hops: Vec<TraceHop> = path
+                .iter()
+                .flatten()
+                .map(|h| TraceHop {
+                    body: trace_hop_body(&db, &cwd, &h.source_id),
+                    source_name: h.source_name.clone(),
+                    target_name: h.target_name.clone(),
+                    kind: h.kind.to_string(),
+                    file_path: h.file_path.clone(),
+                    line: h.line,
+                })
+                .collect();
+
+            let result = TraceList {
+                found: path.is_some(),
+                hops,
+            };
+            let json = serde_json::to_string_pretty(&result)
+                .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            let structured = serde_json::to_value(&result).ok();
+            tool_response_named(&db, json, structured, "cartog_trace", Some(&from), stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1187,6 +1382,7 @@ impl CartogServer {
     ) -> Result<CallToolResult, McpError> {
         let name = params.name;
         let db = Arc::clone(&self.db);
+        let stale = self.stale_snapshot();
 
         tokio::task::spawn_blocking(move || {
             debug!(name = %name, "hierarchy");
@@ -1205,7 +1401,14 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(HierarchyList { results: entries }).ok();
-            tool_response_named(&db, json, structured, "cartog_hierarchy", Some(&name))
+            tool_response_named(
+                &db,
+                json,
+                structured,
+                "cartog_hierarchy",
+                Some(&name),
+                stale,
+            )
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1227,6 +1430,7 @@ impl CartogServer {
     ) -> Result<CallToolResult, McpError> {
         let file = params.file;
         let db = Arc::clone(&self.db);
+        let stale = self.stale_snapshot();
 
         tokio::task::spawn_blocking(move || {
             debug!(file = %file, "deps");
@@ -1240,7 +1444,7 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&edges)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(EdgeList { results: edges }).ok();
-            tool_response(&db, json, structured, "cartog_deps")
+            tool_response(&db, json, structured, "cartog_deps", stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1266,6 +1470,7 @@ impl CartogServer {
         let limit = params.limit.unwrap_or(30).min(MAX_SEARCH_LIMIT);
         let db = Arc::clone(&self.db);
         let cwd = Arc::clone(&self.cwd);
+        let stale = self.stale_snapshot();
 
         tokio::task::spawn_blocking(move || {
             if query.is_empty() {
@@ -1301,7 +1506,7 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(SymbolList { results: symbols }).ok();
-            tool_response(&db, json, structured, "cartog_search")
+            tool_response(&db, json, structured, "cartog_search", stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1418,6 +1623,7 @@ impl CartogServer {
     ) -> Result<CallToolResult, McpError> {
         let limit = params.limit.unwrap_or(50);
         let db = Arc::clone(&self.db);
+        let stale = self.stale_snapshot();
 
         tokio::task::spawn_blocking(move || {
             debug!(limit, "map");
@@ -1436,7 +1642,7 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(&result).ok();
-            tool_response(&db, json, structured, "cartog_map")
+            tool_response(&db, json, structured, "cartog_map", stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1459,6 +1665,7 @@ impl CartogServer {
         let commits = params.commits.unwrap_or(5);
         let kind_str = params.kind;
         let db = Arc::clone(&self.db);
+        let stale = self.stale_snapshot();
 
         tokio::task::spawn_blocking(move || {
             let kind_filter = kind_str
@@ -1493,7 +1700,7 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(&result).ok();
-            tool_response(&db, json, structured, "cartog_changes")
+            tool_response(&db, json, structured, "cartog_changes", stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -1605,6 +1812,7 @@ impl CartogServer {
         let db = Arc::clone(&self.db);
         let provider = Arc::clone(&self.embedding_provider);
         let reranker = Arc::clone(&self.reranker_provider);
+        let stale = self.stale_snapshot();
 
         tokio::task::spawn_blocking(move || {
             if query.is_empty() {
@@ -1645,7 +1853,78 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(&result).ok();
-            tool_response(&db, json, structured, "cartog_rag_search")
+            tool_response(&db, json, structured, "cartog_rag_search", stale)
+        })
+        .await
+        .map_err(|e| mcp_err(format!("task join failed: {e}")))?
+    }
+
+    /// Build a one-shot task-context bundle fusing semantic search, structural
+    /// neighbors, and centrality.
+    #[tool(
+        description = "Build everything you need to start a task in ONE call: the most relevant symbols (semantic + keyword), their 1-hop call neighbors, and high-centrality definitions in the same files — with bodies inline, budgeted to fit. Use at the START of a task: 'where do I work on X?', 'give me context for implementing Y', 'what's relevant to Z?'. Routes through semantic search, so it finds code by concept, not just name. Not for: a single known symbol (use cartog_search), or a specific call path (use cartog_trace). Returns: {task, entries: [{symbol, reason, score, body?}], approx_tokens}.",
+        annotations(
+            title = "Task context bundle",
+            read_only_hint = true,
+            open_world_hint = false
+        ),
+        output_schema = output_schema_for::<rag::context::TaskContext>()
+    )]
+    async fn cartog_context(
+        &self,
+        Parameters(params): Parameters<ContextParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let task = params.task;
+        let tokens = params
+            .tokens
+            .unwrap_or(DEFAULT_CONTEXT_TOKENS)
+            .min(MAX_CONTEXT_TOKENS);
+        let db = Arc::clone(&self.db);
+        let provider = Arc::clone(&self.embedding_provider);
+        let reranker = Arc::clone(&self.reranker_provider);
+        let stale = self.stale_snapshot();
+
+        tokio::task::spawn_blocking(move || {
+            if task.is_empty() {
+                return Err(mcp_err("task description cannot be empty"));
+            }
+            debug!(task = %task, tokens, "context");
+            let db = db.lock().map_err(|_| {
+                mcp_err("internal error: database lock poisoned (server restart required)")
+            })?;
+            let mut provider = provider.lock().map_err(|_| {
+                mcp_err(
+                    "internal error: embedding provider lock poisoned (server restart required)",
+                )
+            })?;
+            let mut reranker = reranker.lock().map_err(|_| {
+                mcp_err("internal error: reranker lock poisoned (server restart required)")
+            })?;
+            let opts = rag::context::ContextOptions::default();
+            let result = match reranker.as_mut() {
+                Some(r) => rag::context::build_task_context(
+                    &db,
+                    &task,
+                    tokens,
+                    provider.as_mut(),
+                    Some(r.as_mut()),
+                    &opts,
+                ),
+                None => rag::context::build_task_context(
+                    &db,
+                    &task,
+                    tokens,
+                    provider.as_mut(),
+                    None,
+                    &opts,
+                ),
+            }
+            .map_err(|e| mcp_err(format!("context build failed: {e}")))?;
+
+            let json = serde_json::to_string_pretty(&result)
+                .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
+            let structured = serde_json::to_value(&result).ok();
+            tool_response(&db, json, structured, "cartog_context", stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -2008,7 +2287,7 @@ mod tests {
         let json = serde_json::to_string_pretty(&symbols).expect("json");
         let structured = serde_json::to_value(SymbolList { results: symbols }).ok();
 
-        let result = tool_response(&db, json, structured, "cartog_search").expect("response");
+        let result = tool_response(&db, json, structured, "cartog_search", None).expect("response");
 
         let structured = result
             .structured_content
@@ -2030,7 +2309,7 @@ mod tests {
         let json = format!("[\"{big}\"]");
         let structured = Some(serde_json::json!({ "results": [] }));
 
-        let result = tool_response(&db, json, structured, "cartog_search").expect("response");
+        let result = tool_response(&db, json, structured, "cartog_search", None).expect("response");
 
         assert!(
             result.structured_content.is_none(),
@@ -2043,6 +2322,53 @@ mod tests {
         assert!(
             text.contains("Response truncated"),
             "truncation notice present"
+        );
+    }
+
+    /// A staleness banner must not push a truncated response over the cap: the
+    /// banner's bytes are reserved before truncation, so banner + body ≤ cap.
+    #[test]
+    fn tool_response_with_banner_stays_under_cap() {
+        let db = populated_memory_db();
+        let big = "x".repeat(mcp_max_bytes() + 1024);
+        let json = format!("[\"{big}\"]");
+        // rag_pending on a rag tool fires the longest banner.
+        let stale = Some(snap(9, 0, 0));
+        let result = tool_response(&db, json, None, "cartog_rag_search", stale).expect("response");
+        let text = match &result.content.first().expect("content").raw {
+            RawContent::Text(t) => &t.text,
+            _ => panic!("expected text content"),
+        };
+        assert!(text.starts_with("⚠️"), "banner present: {}", &text[..40]);
+        assert!(
+            text.len() <= mcp_max_bytes(),
+            "banner + body must stay under the {}-byte cap, got {}",
+            mcp_max_bytes(),
+            text.len()
+        );
+    }
+
+    /// The final clamp also covers the NON-truncated path: a body just under the
+    /// banner-adjusted budget, plus a banner and an appended suggestion, must
+    /// still end up ≤ the cap (suffixes aren't individually budgeted).
+    #[test]
+    fn tool_response_banner_plus_suffix_stays_under_cap() {
+        let db = populated_memory_db();
+        let cap = mcp_max_bytes();
+        // Body sized so banner + body alone is just under cap; the appended
+        // suggestion would push it over without the final clamp.
+        let payload = "y".repeat(cap - 200);
+        let json = format!("[\"{payload}\"]");
+        let stale = Some(snap(3, 0, 0));
+        let result = tool_response(&db, json, None, "cartog_rag_search", stale).expect("response");
+        let text = match &result.content.first().expect("content").raw {
+            RawContent::Text(t) => &t.text,
+            _ => panic!("expected text content"),
+        };
+        assert!(
+            text.len() <= cap,
+            "banner + body + suffix must stay under {cap}, got {}",
+            text.len()
         );
     }
 
@@ -2060,7 +2386,7 @@ mod tests {
         let structured = Some(serde_json::json!({ "results": [payload.clone()] }));
 
         assert!(json.len() <= budget, "text alone fits the cap");
-        let result = tool_response(&db, json, structured, "cartog_search").expect("response");
+        let result = tool_response(&db, json, structured, "cartog_search", None).expect("response");
 
         assert!(
             result.structured_content.is_none(),
@@ -2282,6 +2608,36 @@ mod tests {
     #[test]
     fn did_you_mean_suffix_none_without_candidates() {
         assert!(did_you_mean_suffix("Whatever", &[]).is_none());
+    }
+
+    fn snap(rag_pending: u32, change_seq: u64, reindexed_seq: u64) -> StaleSnapshot {
+        StaleSnapshot {
+            rag_pending,
+            change_seq,
+            reindexed_seq,
+        }
+    }
+
+    #[test]
+    fn stale_banner_none_when_not_stale() {
+        assert!(stale_banner(Some(snap(0, 10, 10)), "cartog_rag_search").is_none());
+        assert!(stale_banner(None, "cartog_rag_search").is_none());
+    }
+
+    #[test]
+    fn stale_banner_rag_only_warns_semantic_tools() {
+        // Pending embeddings warn rag_search/context...
+        assert!(stale_banner(Some(snap(3, 10, 10)), "cartog_rag_search").is_some());
+        assert!(stale_banner(Some(snap(3, 10, 10)), "cartog_context").is_some());
+        // ...but not a structural tool (no debounce gap here).
+        assert!(stale_banner(Some(snap(3, 10, 10)), "cartog_refs").is_none());
+    }
+
+    #[test]
+    fn stale_banner_structural_warns_every_read_tool() {
+        // A change after the last reindex warns refs and rag_search alike.
+        assert!(stale_banner(Some(snap(0, 20, 10)), "cartog_refs").is_some());
+        assert!(stale_banner(Some(snap(0, 20, 10)), "cartog_rag_search").is_some());
     }
 
     #[test]
@@ -2859,6 +3215,7 @@ mod tests {
             role,
             lock_cell: Arc::new(Mutex::new(None)),
             watch_cell: Arc::new(Mutex::new(None)),
+            stale_cell: Arc::new(Mutex::new(None)),
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             embedding_provider: Arc::new(Mutex::new(test_provider())),
             db_path: db_path.clone(),
@@ -3570,6 +3927,146 @@ def main():
         assert!(
             text.trim_start().starts_with('['),
             "impact returns a JSON array"
+        );
+    }
+
+    #[tokio::test]
+    async fn trace_finds_path_from_speak_to_helper() {
+        let (_dir, server) = indexed_server();
+        let result = server
+            .cartog_trace(Parameters(TraceParams {
+                from: "speak".to_string(),
+                to: "helper".to_string(),
+                depth: Some(8),
+            }))
+            .await
+            .expect("trace succeeds");
+        let text = result_text(&result);
+        assert!(text.contains("\"found\": true"), "path exists: {text}");
+        assert!(text.contains("helper"), "hop should reach helper: {text}");
+    }
+
+    #[tokio::test]
+    async fn trace_reports_no_path_when_unreachable() {
+        let (_dir, server) = indexed_server();
+        let result = server
+            .cartog_trace(Parameters(TraceParams {
+                from: "helper".to_string(),
+                to: "speak".to_string(),
+                depth: Some(8),
+            }))
+            .await
+            .expect("trace succeeds");
+        let text = result_text(&result);
+        assert!(text.contains("\"found\": false"), "no path: {text}");
+    }
+
+    #[tokio::test]
+    async fn trace_hop_includes_body_when_content_indexed() {
+        let (_dir, server) = indexed_server();
+        // Seed RAG content for every `speak` symbol (the hop sources on the
+        // speak→helper path), so the hop body is populated.
+        {
+            let db = server.db.lock().unwrap();
+            for sym in db.search("speak", None, None, 10).unwrap() {
+                db.upsert_symbol_content(
+                    &sym.id,
+                    "speak",
+                    "def speak(self):\n    return helper()",
+                    "// method speak",
+                )
+                .unwrap();
+            }
+        }
+        let result = server
+            .cartog_trace(Parameters(TraceParams {
+                from: "speak".to_string(),
+                to: "helper".to_string(),
+                depth: Some(8),
+            }))
+            .await
+            .expect("trace succeeds");
+        let text = result_text(&result);
+        assert!(
+            text.contains("\"body\""),
+            "hop carries an inline body when content is indexed: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn context_bundles_relevant_symbols_for_a_task() {
+        let (_dir, server) = indexed_server();
+        let result = server
+            .cartog_context(Parameters(ContextParams {
+                task: "speak".to_string(),
+                tokens: Some(6000),
+            }))
+            .await
+            .expect("context succeeds");
+        let text = result_text(&result);
+        assert!(text.contains("\"task\": \"speak\""), "echoes task: {text}");
+        assert!(text.contains("\"entries\""), "returns entries: {text}");
+    }
+
+    #[tokio::test]
+    async fn rag_search_prepends_banner_when_embeddings_pending() {
+        let (_dir, server) = indexed_server();
+        // Simulate a live watcher with pending embeddings.
+        let stale = cartog_watch::StaleState::new();
+        stale.note_reindex(0, 7);
+        *server.stale.lock().unwrap() = Some(stale);
+        server
+            .watcher_active
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let result = server
+            .cartog_rag_search(Parameters(RagSearchParams {
+                query: "helper".to_string(),
+                kind: None,
+                limit: Some(5),
+            }))
+            .await
+            .expect("rag search succeeds");
+        let text = result_text(&result);
+        assert!(
+            text.starts_with("⚠️") && text.contains("re-embedding"),
+            "banner prepended: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_banner_without_active_watcher() {
+        let (_dir, server) = indexed_server();
+        // Stale state present but watcher_active is false (degraded/no watcher).
+        let stale = cartog_watch::StaleState::new();
+        stale.note_reindex(0, 7);
+        *server.stale.lock().unwrap() = Some(stale);
+
+        let result = server
+            .cartog_rag_search(Parameters(RagSearchParams {
+                query: "helper".to_string(),
+                kind: None,
+                limit: Some(5),
+            }))
+            .await
+            .expect("rag search succeeds");
+        assert!(!result_text(&result).starts_with("⚠️"), "no banner");
+    }
+
+    #[tokio::test]
+    async fn context_rejects_empty_task() {
+        let (_dir, server) = indexed_server();
+        let err = server
+            .cartog_context(Parameters(ContextParams {
+                task: String::new(),
+                tokens: None,
+            }))
+            .await
+            .expect_err("empty task must be rejected");
+        assert!(
+            err.message.contains("cannot be empty"),
+            "got: {}",
+            err.message
         );
     }
 
