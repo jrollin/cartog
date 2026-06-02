@@ -29,19 +29,19 @@ import { withBase } from "../lib/url";
       <div class="stats-bar" style="margin-top: 32px; border-radius: 12px; padding: 20px;">
         <div class="container" style="padding: 0;">
           <div class="stat-item">
-            <div class="stat-value">⚡ 8μs</div>
+            <div class="stat-value">⚡ <span data-count="8">8</span>μs</div>
             <div class="stat-label">query latency<sup><a href="#benchmark-notes" style="color: inherit; text-decoration: none;">*</a></sup></div>
           </div>
           <div class="stat-item">
-            <div class="stat-value">🎯 97%</div>
+            <div class="stat-value">🎯 <span data-count="97">97</span>%</div>
             <div class="stat-label">symbol recall<sup><a href="#benchmark-notes" style="color: inherit; text-decoration: none;">*</a></sup></div>
           </div>
           <div class="stat-item">
-            <div class="stat-value">🌐 10</div>
+            <div class="stat-value">🌐 <span data-count="10">10</span></div>
             <div class="stat-label">languages supported</div>
           </div>
           <div class="stat-item">
-            <div class="stat-value">🔒 100%</div>
+            <div class="stat-value">🔒 <span data-count="100">100</span>%</div>
             <div class="stat-label">local — your code stays private</div>
           </div>
         </div>
@@ -121,15 +121,15 @@ import { withBase } from "../lib/url";
       </div>
 
       <div class="features-grid" style="margin-top: 56px;">
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0s;">
           <h3><span class="feature-icon">⚙️</span> <code>cartog init</code></h3>
           <p>Drops a commented <code>.cartog.toml</code> template. Config only — re-runs are a no-op, your toml is never overwritten.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.08s;">
           <h3><span class="feature-icon">📚</span> <code>cartog index</code></h3>
           <p>tree-sitter parses 10 languages into a local SQLite file. Incremental on re-runs; only changed files re-parse. Pair with <code>cartog watch</code> for auto-refresh.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.16s;">
           <h3><span class="feature-icon">🛠️</span> <code>cartog ide</code> <span style="font-size: 11px; color: var(--text-tertiary); font-weight: 500;">(optional)</span></h3>
           <p>Skip this if you only use the CLI. Need MCP in Claude Code, Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, or Claude Desktop? Run it once per machine.</p>
         </div>
@@ -178,27 +178,27 @@ import { withBase } from "../lib/url";
       <p class="section-subtitle">Single binary, zero config, zero dependencies.</p>
 
       <div class="features-grid" style="margin-top: 40px;">
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0s;">
           <h3><span class="feature-icon">⚡</span> Zero dependencies</h3>
           <p>Single binary + SQLite file. No Docker, no language servers required, no graph databases. <code>cargo install</code> and you're done.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.06s;">
           <h3><span class="feature-icon">🔄</span> Live index</h3>
           <p><code>cartog watch</code> auto re-indexes on file changes. Debounced, incremental, near-instant. Always query fresh data.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.12s;">
           <h3><span class="feature-icon">🔍</span> Dual search</h3>
           <p>Keyword search (sub-ms, symbol names) + semantic search (natural language). Local embeddings with optional GPU acceleration via Ollama.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.18s;">
           <h3><span class="feature-icon">🎯</span> Impact analysis</h3>
           <p><code>cartog impact --depth 3</code> traces callers-of-callers instantly. Know the blast radius before you change anything.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.24s;">
           <h3><span class="feature-icon">🔬</span> LSP precision, built in</h3>
           <p>Auto-detects language servers on PATH. Boosts edge resolution from ~25% to ~44–81%. Works without them, better with them.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.3s;">
           <h3><span class="feature-icon">🔒</span> 100% local</h3>
           <p>tree-sitter parsing, SQLite storage, local embeddings. No API keys, no telemetry. Secrets are redacted and sensitive files (.env, keys) skipped before they reach the index. Works in air-gapped environments.</p>
         </div>
@@ -264,17 +264,17 @@ import { withBase } from "../lib/url";
       <p class="section-subtitle">Pre-compute the structure once, then answer any question in microseconds.</p>
 
       <div class="why-grid">
-        <div class="why-card">
+        <div class="why-card" data-reveal style="--reveal-delay: 0s;">
           <div class="why-number">01</div>
           <h3>Grep can't trace what breaks</h3>
           <p>Transitive impact analysis is impossible with grep. <code>cartog impact --depth 3</code> traces callers-of-callers instantly. Know the blast radius before you change anything.</p>
         </div>
-        <div class="why-card">
+        <div class="why-card" data-reveal style="--reveal-delay: 0.08s;">
           <div class="why-number">02</div>
           <h3>Structured answers, not file dumps</h3>
           <p>One <code>refs</code> call returns every caller, importer, and type reference — with file paths and line numbers. No parsing output, no false positives.</p>
         </div>
-        <div class="why-card">
+        <div class="why-card" data-reveal style="--reveal-delay: 0.16s;">
           <div class="why-number">03</div>
           <h3>Your code stays on your machine</h3>
           <p>tree-sitter parsing, SQLite storage, local embeddings. No API keys, no telemetry, no cloud. Hardcoded secrets are redacted and sensitive files skipped before indexing. Works in air-gapped environments.</p>
@@ -352,17 +352,17 @@ import { withBase } from "../lib/url";
       <h2 class="section-heading">Why not...</h2>
 
       <div class="why-grid">
-        <div class="why-card">
+        <div class="why-card" data-reveal style="--reveal-delay: 0s;">
           <div class="why-number">01</div>
           <h3>grep / ripgrep</h3>
           <p>Great for string literals and config values. But grep can't trace call chains, can't do transitive impact analysis, and floods your context with raw text. Cartog returns structured, ranked, deduplicated results — one <code>refs</code> call replaces 6+ discovery steps.</p>
         </div>
-        <div class="why-card">
+        <div class="why-card" data-reveal style="--reveal-delay: 0.08s;">
           <div class="why-number">02</div>
           <h3>A language server</h3>
           <p>LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 9 languages with one binary and answers in microseconds. When you need LSP precision, cartog uses it as an optional layer.</p>
         </div>
-        <div class="why-card">
+        <div class="why-card" data-reveal style="--reveal-delay: 0.16s;">
           <div class="why-number">03</div>
           <h3>Python-based graph tools</h3>
           <p>They solve a similar problem but require a Python runtime, pip dependencies, and virtual environments. Cartog is a single static binary — download and run. It also queries 10-100x faster thanks to compiled Rust + SQLite.</p>
@@ -426,17 +426,17 @@ import { withBase } from "../lib/url";
       </div>
 
       <div class="why-grid" style="margin-top: 56px;">
-        <div class="why-card">
+        <div class="why-card" data-reveal style="--reveal-delay: 0s;">
           <div class="why-number">01</div>
           <h3>One command to wire it in</h3>
           <p><code>cartog ide</code> writes <code>cartog serve</code> into installed editors (Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, Claude Desktop). Idempotent merge — existing MCP servers are preserved. Skip it if you only use the CLI.</p>
         </div>
-        <div class="why-card">
+        <div class="why-card" data-reveal style="--reveal-delay: 0.08s;">
           <div class="why-number">02</div>
           <h3>13 MCP tools</h3>
           <p><code>cartog serve</code> exposes <code>cartog_map</code>, <code>cartog_search</code>, <code>cartog_refs</code>, <code>cartog_impact</code>, <code>cartog_rag_search</code>, and 8 more. Each tool description tells the agent when (and when not) to use it.</p>
         </div>
-        <div class="why-card">
+        <div class="why-card" data-reveal style="--reveal-delay: 0.16s;">
           <div class="why-number">03</div>
           <h3>Agent skill</h3>
           <p>The bundled skill teaches your agent <em>when</em> and <em>how</em> to use cartog — search routing, refactoring workflows, fallback heuristics — so it picks the right tool first.</p>
@@ -518,15 +518,15 @@ import { withBase } from "../lib/url";
       </div>
 
       <div class="features-grid" style="margin-top: 56px;">
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0s;">
           <h3><span class="feature-icon">🔌</span> One command to wire it in</h3>
           <p><code>cartog ide</code> is the only verb that writes MCP configs. It merges <code>cartog serve</code> into Claude Code, Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, and Claude Desktop — existing servers preserved, dry-run-able.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.08s;">
           <h3><span class="feature-icon">🧰</span> 13 tools, typed output</h3>
           <p>11 read-only tools (<code>map</code>, <code>search</code>, <code>refs</code>, <code>impact</code>, <code>rag_search</code>, …) declare an <code>outputSchema</code> and ship <code>readOnlyHint</code>, so clients skip approval prompts and get validated <code>structuredContent</code>. 2 write tools build the index.</p>
         </div>
-        <div class="feature-card">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.16s;">
           <h3><span class="feature-icon">📡</span> Live + progress-aware</h3>
           <p><code>--watch</code> re-indexes on file changes; <code>--rag</code> defers semantic embedding. <code>cartog_index</code> and <code>cartog_rag_index</code> emit MCP <code>notifications/progress</code> so the client can show a progress bar.</p>
         </div>
@@ -556,19 +556,19 @@ import { withBase } from "../lib/url";
       <p class="section-subtitle">Pick <strong>one</strong> install method below — these are alternatives, not steps. Once <code>cartog</code> is on your <code>PATH</code>, run <code>cartog init</code> + <code>cartog index</code> in any repo.</p>
 
       <div class="install-options" style="grid-template-columns: 1fr;">
-        <div class="install-card">
+        <div class="install-card" data-reveal style="--reveal-delay: 0s;">
           <h3>① Install script <span style="font-size: 12px; color: var(--text-tertiary); font-weight: 500;">— macOS / Linux, no Rust required</span></h3>
           <pre>curl -fsSL https://jrollin.github.io/cartog/install.sh | sh</pre>
           <p>Detects your OS + architecture, downloads the matching binary from the latest GitHub Release, verifies its SHA-256, and installs to <code>/usr/local/bin</code> (or <code>~/.local/bin</code> if non-root). Override the target with <code>CARTOG_INSTALL_DIR</code>, pin a version with <code>CARTOG_VERSION</code>. Audit the script: <a href="https://github.com/jrollin/cartog/blob/main/scripts/install.sh">scripts/install.sh</a>.</p>
         </div>
-        <div class="install-card">
+        <div class="install-card" data-reveal style="--reveal-delay: 0.08s;">
           <h3>② From crates.io <span style="font-size: 12px; color: var(--text-tertiary); font-weight: 500;">— Rust toolchain required</span></h3>
           <pre>cargo install cartog                              <span class="comment"># default: LSP + S3 sync + Ollama</span>
 cargo install cartog --no-default-features        <span class="comment"># minimal: drops LSP, S3, Ollama</span>
 cargo install cartog --no-default-features --features lsp  <span class="comment"># LSP only</span></pre>
           <p>LSP, S3 index sync, and the Ollama provider are all enabled by default. Local ONNX stays the default embedding provider; set <code>provider = "ollama"</code> in <code>.cartog.toml</code> to use Ollama. Disable LSP at runtime with <code>--no-lsp</code>, or strip features at build time with <code>--no-default-features</code>.</p>
         </div>
-        <div class="install-card">
+        <div class="install-card" data-reveal style="--reveal-delay: 0.16s;">
           <h3>③ Pre-built binaries <span style="font-size: 12px; color: var(--text-tertiary); font-weight: 500;">— manual download</span></h3>
           <pre><span class="comment"># macOS (Apple Silicon)</span>
 curl -L https://github.com/jrollin/cartog/releases/latest/download/cartog-aarch64-apple-darwin.tar.gz | tar xz

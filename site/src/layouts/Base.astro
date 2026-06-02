@@ -44,7 +44,7 @@ const favicon =
     <meta name="twitter:image" content={ogImage} />
     <link rel="stylesheet" href={withBase("style.css?v=4")} />
   </head>
-  <body>
+  <body class="no-js">
     <Nav />
     <slot />
     <Footer variant={footerVariant} />
@@ -61,6 +61,77 @@ const favicon =
         });
       }
       window.copyCmd = copyCmd;
+    </script>
+
+    <script is:inline>
+      // Scroll-reveal + count-up. Guarded by prefers-reduced-motion and
+      // degrades gracefully: .no-js stays off only when this runs.
+      (function () {
+        document.body.classList.remove("no-js");
+
+        var reduce =
+          window.matchMedia &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+        function runCount(el) {
+          var target = parseInt(el.getAttribute("data-count"), 10);
+          if (isNaN(target)) return;
+          var duration = 900;
+          var start = null;
+          function step(ts) {
+            if (start === null) start = ts;
+            var p = Math.min((ts - start) / duration, 1);
+            var eased = 1 - Math.pow(1 - p, 3);
+            el.textContent = Math.round(eased * target).toString();
+            if (p < 1) requestAnimationFrame(step);
+            else el.textContent = target.toString();
+          }
+          requestAnimationFrame(step);
+        }
+
+        var counters = document.querySelectorAll("[data-count]");
+        var reveals = document.querySelectorAll("[data-reveal]");
+
+        if (reduce || !("IntersectionObserver" in window)) {
+          reveals.forEach(function (el) {
+            el.classList.add("is-visible");
+          });
+          return;
+        }
+
+        var revealObserver = new IntersectionObserver(
+          function (entries, obs) {
+            entries.forEach(function (entry) {
+              if (entry.isIntersecting) {
+                entry.target.classList.add("is-visible");
+                obs.unobserve(entry.target);
+              }
+            });
+          },
+          { rootMargin: "0px 0px -10% 0px", threshold: 0.1 }
+        );
+        reveals.forEach(function (el) {
+          revealObserver.observe(el);
+        });
+
+        if (counters.length) {
+          var counted = false;
+          var statsBar = counters[0].closest(".stats-bar") || document.body;
+          var countObserver = new IntersectionObserver(
+            function (entries, obs) {
+              entries.forEach(function (entry) {
+                if (entry.isIntersecting && !counted) {
+                  counted = true;
+                  counters.forEach(runCount);
+                  obs.disconnect();
+                }
+              });
+            },
+            { threshold: 0.4 }
+          );
+          countObserver.observe(statsBar);
+        }
+      })();
     </script>
   </body>
 </html>

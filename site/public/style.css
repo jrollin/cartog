@@ -520,7 +520,7 @@ section + section {
   border-color: rgba(0, 229, 153, 0.4);
   border-top-color: var(--accent);
   box-shadow: var(--accent-glow-strong);
-  transform: translateY(-2px);
+  transform: translateY(-4px);
 }
 
 .feature-icon {
@@ -561,6 +561,19 @@ section + section {
   margin-top: 48px;
 }
 
+.why-card {
+  border-radius: 12px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.why-card:hover {
+  transform: translateY(-4px);
+}
+
+.why-card:hover .why-number {
+  color: var(--accent);
+}
+
 .why-card .why-number {
   font-size: 48px;
   font-weight: 800;
@@ -568,6 +581,7 @@ section + section {
   line-height: 1;
   margin-bottom: 16px;
   font-family: 'JetBrains Mono', monospace;
+  transition: color 0.2s;
 }
 
 .why-card h3 {
@@ -705,12 +719,13 @@ td .badge {
   border-radius: 12px;
   padding: 24px;
   box-shadow: var(--accent-glow);
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 
 .install-card:hover {
   border-color: rgba(0, 229, 153, 0.35);
   box-shadow: var(--accent-glow-strong);
+  transform: translateY(-4px);
 }
 
 .install-card h3 {
@@ -1350,5 +1365,44 @@ pre.example-output {
     max-height: none;
     border-bottom: 1px solid var(--border);
     padding-bottom: 16px;
+  }
+}
+
+/* ── Scroll-reveal ───────────────────────────────── */
+/* Elements tagged [data-reveal] start hidden; JS adds .is-visible on
+   intersection. --reveal-delay staggers siblings within a grid. */
+
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.5s ease, transform 0.5s ease;
+  transition-delay: var(--reveal-delay, 0s);
+  will-change: opacity, transform;
+}
+
+[data-reveal].is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+/* No JS / not-yet-observed fallback: never leave content invisible. */
+.no-js [data-reveal] {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
   }
 }
