@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.21.1] - 2026-06-01
+## [0.21.2] - 2026-06-02
 
 ### Benchmarks
 
@@ -174,6 +174,7 @@
 - **agents**: Add Rust standard section to coding conventions ([`e095870`](https://github.com/jrollin/cartog/commit/e09587007335afb6f9a03bbc8ac8ab4222fb598f))
 - **usage**: Note that unknown provider values are rejected at load ([`2ccf4be`](https://github.com/jrollin/cartog/commit/2ccf4be5b2091f6876dd1585c5fa98dbab00ba3c))
 - **site**: Document MCP tool annotations and structured output ([`63a0dc4`](https://github.com/jrollin/cartog/commit/63a0dc45a747fd5c09950a341f1aa403d7e1664c))
+- **site**: Note secret redaction in privacy copy ([`c67221c`](https://github.com/jrollin/cartog/commit/c67221cdfc99c52e2c405cfe418e3312dfe303c2))
 
 ### Features
 
@@ -281,6 +282,10 @@
 - **self-update**: Defer in-session updates to the session boundary ([`cfca42c`](https://github.com/jrollin/cartog/commit/cfca42c9eec405b2152489691b84159a60037a8c))
 - **site**: Migrate landing page to Astro static site ([`06c3be8`](https://github.com/jrollin/cartog/commit/06c3be8b5ec84fc04f127625b0ccbfa655484637))
 - **site**: Collapsible docs sidebar + on-this-page rail ([`5abe23a`](https://github.com/jrollin/cartog/commit/5abe23a8490d1f85859932ec0e60603318755d1e))
+- **indexer**: Redact secrets and skip sensitive files during indexing ([`f9c1363`](https://github.com/jrollin/cartog/commit/f9c13634b01847fafee49283f81c8ec5b77028ad))
+- **site**: Add scroll-reveal, stat count-up, and card hover-lift ([`12c0aaf`](https://github.com/jrollin/cartog/commit/12c0aaf0aa3280c0de400fccfa4e342ec42df1aa))
+- **remote**: Record git-commit provenance on push/pull ([`5eda38c`](https://github.com/jrollin/cartog/commit/5eda38c21938248db6b7e56ae5457708fe2642dc))
+- **release**: Add --dry-run flag to release.sh ([`a3fe6fb`](https://github.com/jrollin/cartog/commit/a3fe6fbc686b96308a88a14a0f03795981217d0c))
 
 ### Miscellaneous
 
@@ -332,6 +337,7 @@
 - **cli**: Extract doctor command into commands/doctor.rs ([`fa49e31`](https://github.com/jrollin/cartog/commit/fa49e3108f6e3e3ece89c366cf3e28f8749994ad))
 - **cli**: Extract config and savings rendering from commands/mod.rs ([`b7e99c2`](https://github.com/jrollin/cartog/commit/b7e99c2be81350ac8df0bd4c383605660fd5059a))
 - **indexer**: Split merkle, git, and content into submodules ([`cbc0871`](https://github.com/jrollin/cartog/commit/cbc0871944595546ca054473a8be12de6d6efb3b))
+- **remote**: Serialize push/pull JSON via serde and hex-whitelist the commit suffix ([`53f4190`](https://github.com/jrollin/cartog/commit/53f41901288f4ac0ccca5cd28ec30d7a8b342db0))
 
 ### Skill
 
@@ -355,6 +361,7 @@
 - Assert real behavior instead of padding coverage ([`1708dc5`](https://github.com/jrollin/cartog/commit/1708dc511b9f4713350cbb0dcb1e41bd37567526))
 - Remove flake and no-op patterns from the suite ([`457bb95`](https://github.com/jrollin/cartog/commit/457bb9524caf58624c913891efcaea1b6b033456))
 - Remove duplicate auth fixture under crates/cartog ([`ba69ff5`](https://github.com/jrollin/cartog/commit/ba69ff57bf962a0dfd21aaf884102c93465f4cf1))
+- **indexer**: Use a fake AWS key in the ASIA redaction test ([`9710ae2`](https://github.com/jrollin/cartog/commit/9710ae2190040eb978eff7a2116b09238d6c8255))
 
 ## [0.3.1] - 2026-02-26
 
