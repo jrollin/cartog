@@ -133,6 +133,34 @@ impl Database {
         Ok(rows)
     }
 
+    /// Resolved symbol ids that the symbol `source_id` calls. Only edges with a
+    /// resolved `target_id` are returned — keyed on the exact source id (not a
+    /// name), so an overloaded source resolves to the right callees.
+    pub fn callee_ids_of(&self, source_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT DISTINCT e.target_id FROM edges e
+             WHERE e.source_id = ?1 AND e.kind = 'calls' AND e.target_id IS NOT NULL",
+        )?;
+        let ids = stmt
+            .query_map(params![source_id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
+    /// Source symbol ids that call the symbol `target_id` (resolved incoming
+    /// `calls` edges). Keyed on the exact target id, so callers of one overload
+    /// aren't confused with another sharing its name.
+    pub fn caller_ids_of(&self, target_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT DISTINCT e.source_id FROM edges e
+             WHERE e.target_id = ?1 AND e.kind = 'calls'",
+        )?;
+        let ids = stmt
+            .query_map(params![target_id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
     /// All references to a name, with the source symbol resolved.
     /// Optionally filter by edge kind.
     pub fn refs(
@@ -296,6 +324,7 @@ impl Database {
     ///
     /// # Errors
     /// Returns an error if the SQLite query fails.
+    #[must_use = "the traced path is the result; ignoring it wastes the query"]
     pub fn trace(&self, from: &str, to: &str, max_depth: u32) -> Result<Option<Vec<PathHop>>> {
         if from == to {
             return Ok(Some(Vec::new()));

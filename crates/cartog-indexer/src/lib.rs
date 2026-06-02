@@ -235,7 +235,7 @@ pub fn render_index_summary(r: &IndexResult) -> String {
     } else {
         String::new()
     };
-    let sym_detail = if r.symbols_modified > 0 || r.symbols_unchanged > 0 {
+    let sym_detail = if r.symbols_modified > 0 || r.symbols_unchanged > 0 || r.symbols_removed > 0 {
         format!(
             " ({} new, {} modified, {} unchanged, {} removed)",
             r.symbols_added, r.symbols_modified, r.symbols_unchanged, r.symbols_removed
@@ -1064,6 +1064,22 @@ mod tests {
         assert!(s.contains("Indexed 3 files (1 skipped, 0 removed)"));
         assert!(s.contains("12 symbols"));
         assert!(s.contains("20 edges (18 resolved)"));
+    }
+
+    #[test]
+    fn index_summary_shows_detail_for_removal_only_delta() {
+        // A pass that only removes symbols (no new/modified/unchanged) must
+        // still report the removed count, not a bare "0 symbols".
+        let r = IndexResult {
+            files_indexed: 1,
+            symbols_removed: 4,
+            ..Default::default()
+        };
+        let s = render_index_summary(&r);
+        assert!(
+            s.contains("4 removed"),
+            "removal-only delta must surface the removed count: {s}"
+        );
     }
 
     #[test]

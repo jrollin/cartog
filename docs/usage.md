@@ -375,15 +375,19 @@ want to edit by hand or audit what cartog wrote.
 | `cartog_refs` | `name`, `kind?` | All references to a symbol |
 | `cartog_callees` | `name` | What a symbol calls |
 | `cartog_impact` | `name`, `depth?` | Transitive impact analysis |
+| `cartog_trace` | `from`, `to`, `depth?` | Shortest call path between two symbols, bodies inline |
+| `cartog_context` | `task`, `tokens?` | One-shot task bundle: relevant symbols + bodies |
 | `cartog_hierarchy` | `name` | Inheritance tree |
 | `cartog_deps` | `file` | File-level imports |
 | `cartog_stats` | — | Index summary |
 | `cartog_map` | `tokens?` | Token-budget-aware codebase summary (file tree + top symbols by centrality) |
 | `cartog_changes` | `commits?`, `kind?` | Symbols affected by recent git changes |
-| `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search |
+| `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search (write) |
 | `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
+| `cartog_update` | `version?` | Arm a deferred self-update (write; touches the state file, not the index) |
 
-All tool responses are JSON.
+Read tools (everything except `cartog_index`, `cartog_rag_index`, and `cartog_update`)
+carry an `outputSchema` and return `structuredContent`. All tool responses also include a JSON text block.
 
 **Path restriction**: `cartog_index` and `cartog_rag_index` reject paths outside the project directory (CWD subtree). Agents cannot index arbitrary filesystem locations.
 

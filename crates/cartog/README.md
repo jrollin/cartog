@@ -16,11 +16,13 @@ Binary crate and library facade. Provides the `cartog` CLI with 25 top-level com
 | `outline FILE` | Show symbols and structure of a file |
 | `callees NAME` | Find what a symbol calls |
 | `impact NAME` | Transitive impact analysis (`--depth`, default: 3) |
+| `trace FROM TO` | Shortest call path between two symbols, bodies inline (`--depth`, default: 8) |
 | `refs NAME` | All references to a symbol (`--kind` filter) |
 | `hierarchy NAME` | Inheritance hierarchy for a class |
 | `deps FILE` | File-level import dependencies |
 | `stats` | Index statistics summary |
 | `search QUERY` | Search symbols by name (`--kind`, `--file`, `--limit`) |
+| `context TASK` | One-shot task bundle: relevant symbols + bodies (`--tokens`, default: 6000) |
 | `map` | Token-budget-aware codebase summary (`--tokens`, default: 4000) |
 | `changes` | Symbols affected by recent git changes (`--commits`, `--kind`) |
 | `watch [PATH]` | Auto-re-index on file changes (`--rag`, `--debounce`) |

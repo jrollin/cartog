@@ -815,6 +815,18 @@ fn tool_response_named(
     if !banner.is_empty() {
         text.insert_str(0, &banner);
     }
+    // Final hard clamp: the per-branch budgeting reserves space for the banner
+    // and a 256-byte notice, but appended suffixes (suggestions, hints) aren't
+    // individually counted. Trim to a char boundary so `text.len()` is provably
+    // ≤ the cap no matter which suffixes fired.
+    let cap = mcp_max_bytes();
+    if text.len() > cap {
+        let cut = (cap.saturating_sub(3)..=cap)
+            .rev()
+            .find(|&i| text.is_char_boundary(i))
+            .unwrap_or(0);
+        text.truncate(cut);
+    }
     Ok(success_result(text, structured))
 }
 
@@ -2332,6 +2344,30 @@ mod tests {
             text.len() <= mcp_max_bytes(),
             "banner + body must stay under the {}-byte cap, got {}",
             mcp_max_bytes(),
+            text.len()
+        );
+    }
+
+    /// The final clamp also covers the NON-truncated path: a body just under the
+    /// banner-adjusted budget, plus a banner and an appended suggestion, must
+    /// still end up ≤ the cap (suffixes aren't individually budgeted).
+    #[test]
+    fn tool_response_banner_plus_suffix_stays_under_cap() {
+        let db = populated_memory_db();
+        let cap = mcp_max_bytes();
+        // Body sized so banner + body alone is just under cap; the appended
+        // suggestion would push it over without the final clamp.
+        let payload = "y".repeat(cap - 200);
+        let json = format!("[\"{payload}\"]");
+        let stale = Some(snap(3, 0, 0));
+        let result = tool_response(&db, json, None, "cartog_rag_search", stale).expect("response");
+        let text = match &result.content.first().expect("content").raw {
+            RawContent::Text(t) => &t.text,
+            _ => panic!("expected text content"),
+        };
+        assert!(
+            text.len() <= cap,
+            "banner + body + suffix must stay under {cap}, got {}",
             text.len()
         );
     }

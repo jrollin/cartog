@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use serde::Serialize;
 
-use cartog_core::{EdgeKind, Symbol};
+use cartog_core::Symbol;
 use cartog_db::Database;
 
 use crate::provider::{EmbeddingProvider, RerankerProvider};
@@ -90,6 +90,7 @@ const CENTRAL_BASE: f64 = 0.5;
 ///
 /// # Errors
 /// Returns an error if a database query or the search pipeline fails.
+#[must_use = "the task-context bundle is the result; ignoring it wastes the query"]
 pub fn build_task_context<E: EmbeddingProvider + ?Sized>(
     db: &Database,
     task: &str,
@@ -140,22 +141,19 @@ pub fn build_task_context<E: EmbeddingProvider + ?Sized>(
         consider(&mut picked, r.symbol.clone(), ContextReason::Seed, score);
     }
 
-    // Expand the top seeds' 1-hop neighborhood (callees + callers).
+    // Expand the top seeds' 1-hop call neighborhood, keyed on the seed's exact
+    // id so an overloaded name doesn't pull in the wrong symbol's neighbors.
+    // Callees + callers, resolved `calls` edges only.
     for r in seeds.results.iter().take(opts.expand_count) {
         let boost = picked.get(&r.symbol.id).map_or(0.0, |e| e.2);
-        for edge in db.callees(&r.symbol.name)? {
-            if let Some(sym) = resolve_one(db, &edge.target_name)? {
-                let score = NEIGHBOR_BASE + neighbor_weight(boost, sym.in_degree);
-                consider(&mut picked, sym, ContextReason::Neighbor, score);
-            }
-        }
-        // Callers, restricted to `calls` edges — a symbol that merely imports
-        // or subclasses a seed is not a call neighbor.
-        for (_, source) in db.refs(&r.symbol.name, Some(EdgeKind::Calls))? {
-            if let Some(sym) = source {
-                let score = NEIGHBOR_BASE + neighbor_weight(boost, sym.in_degree);
-                consider(&mut picked, sym, ContextReason::Neighbor, score);
-            }
+        let neighbor_ids: Vec<String> = db
+            .callee_ids_of(&r.symbol.id)?
+            .into_iter()
+            .chain(db.caller_ids_of(&r.symbol.id)?)
+            .collect();
+        for sym in db.get_symbols_by_ids(&neighbor_ids)? {
+            let score = NEIGHBOR_BASE + neighbor_weight(boost, sym.in_degree);
+            consider(&mut picked, sym, ContextReason::Neighbor, score);
         }
     }
 
@@ -208,14 +206,6 @@ fn neighbor_weight(seed_score: f64, in_degree: u32) -> f64 {
 /// Central score lift from centrality alone.
 fn centrality_weight(in_degree: u32) -> f64 {
     (f64::from(in_degree)).ln_1p() * 0.1
-}
-
-/// Resolve a name to its single best-ranked symbol, if any.
-fn resolve_one(db: &Database, name: &str) -> Result<Option<Symbol>> {
-    if name.is_empty() {
-        return Ok(None);
-    }
-    Ok(db.search(name, None, None, 1)?.into_iter().next())
 }
 
 /// Attach bodies to ranked entries until `token_budget` is spent. Returns the
@@ -468,6 +458,100 @@ mod tests {
         assert!(
             ctx.entries.iter().all(|e| e.content.is_none()),
             "no body jumps ahead of the unfittable top-ranked entry"
+        );
+    }
+
+    #[test]
+    fn context_expands_neighbors_by_exact_seed_id_not_name() {
+        // Two symbols share the name `process` in different files. Only the
+        // seed in a.py calls `target_a`; the b.py overload calls `target_b`.
+        // Expansion keyed on the seed's exact id must pull target_a, not
+        // target_b (which a name-based fan-out would wrongly include).
+        let db = Database::open_memory().unwrap();
+        let seed = insert(
+            &db,
+            "process",
+            SymbolKind::Function,
+            "a.py",
+            "def process(): target_a()",
+        );
+        let other = insert(
+            &db,
+            "process",
+            SymbolKind::Function,
+            "b.py",
+            "def process(): target_b()",
+        );
+        let target_a = insert(
+            &db,
+            "target_a",
+            SymbolKind::Function,
+            "a.py",
+            "def target_a(): pass",
+        );
+        let target_b = insert(
+            &db,
+            "target_b",
+            SymbolKind::Function,
+            "b.py",
+            "def target_b(): pass",
+        );
+        assert_ne!(seed.id, other.id, "overloads have distinct ids");
+        db.insert_edges(&[
+            Edge {
+                source_id: seed.id.clone(),
+                target_name: "target_a".to_string(),
+                target_id: Some(target_a.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "a.py".to_string(),
+                line: 1,
+            },
+            Edge {
+                source_id: other.id.clone(),
+                target_name: "target_b".to_string(),
+                target_id: Some(target_b.id.clone()),
+                kind: EdgeKind::Calls,
+                file_path: "b.py".to_string(),
+                line: 1,
+            },
+        ])
+        .unwrap();
+
+        // Confirm the DB helper resolves callees by the exact seed id.
+        assert_eq!(
+            db.callee_ids_of(&seed.id).unwrap(),
+            vec![target_a.id.clone()]
+        );
+        assert_eq!(
+            db.callee_ids_of(&other.id).unwrap(),
+            vec![target_b.id.clone()]
+        );
+
+        let ctx = build_task_context(
+            &db,
+            "process",
+            6000,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+            &ContextOptions {
+                expand_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let names: Vec<&str> = ctx.entries.iter().map(|e| e.symbol.name.as_str()).collect();
+        // The top seed's exact callee is present; the other overload's callee
+        // is only present if its `process` was itself a seed — assert at least
+        // that expansion is id-scoped by checking target_a came in as a neighbor.
+        let target_a_entry = ctx.entries.iter().find(|e| e.symbol.id == target_a.id);
+        assert!(
+            target_a_entry.is_some(),
+            "seed's exact callee target_a is expanded: {names:?}"
+        );
+        assert_eq!(
+            target_a_entry.unwrap().reason,
+            ContextReason::Neighbor,
+            "target_a enters as a call neighbor"
         );
     }
 }

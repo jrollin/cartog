@@ -368,7 +368,11 @@ fn watch_loop(
         });
     }
 
-    // Initial incremental index to ensure DB is current
+    // Initial incremental index to ensure DB is current. Symbols left needing
+    // embedding here arm the RAG timer + staleness state below, so the initial
+    // batch is embedded on the same deferred schedule as change-driven reindexes
+    // (and shows the staleness banner meanwhile) rather than only on shutdown.
+    let mut initial_pending = 0u32;
     let initial_start = Instant::now();
     match indexer::index_directory(&db, root, false, false, None, None, config.redact) {
         Ok(r) => {
@@ -389,6 +393,17 @@ fn watch_loop(
                     edges_resolved: r.edges_resolved,
                     duration_ms: initial_start.elapsed().as_millis(),
                 });
+            }
+            if config.rag {
+                match db.symbols_needing_embeddings() {
+                    Ok(needing) => initial_pending = needing.len() as u32,
+                    Err(e) => warn!(error = %e, "failed to check embedding status"),
+                }
+            }
+            // Publish the post-initial-index state (no changes observed yet, so
+            // change_seq is 0; caught up to 0).
+            if let Some(s) = &config.stale {
+                s.note_reindex(s.change_seq(), initial_pending);
             }
         }
         Err(e) => {
@@ -442,9 +457,10 @@ fn watch_loop(
             }
         };
 
-    // RAG timer state: when we last indexed (to defer embedding)
-    let mut rag_pending = false;
-    let mut last_index_time: Option<Instant> = None;
+    // RAG timer state: when we last indexed (to defer embedding). Seed from the
+    // initial index so its pending symbols embed on the deferred schedule.
+    let mut rag_pending = config.rag && initial_pending > 0;
+    let mut last_index_time: Option<Instant> = rag_pending.then(Instant::now);
 
     loop {
         if shutdown.load(Ordering::SeqCst) {

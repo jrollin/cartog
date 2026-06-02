@@ -456,6 +456,10 @@ pub fn cmd_trace(
 ) -> Result<()> {
     const MAX_TRACE_DEPTH: u32 = 20;
     let db = open_db(db_path, embedding_dim)?;
+    // `file_path` is stored relative to the index root. The DB lives at
+    // `<root>/.cartog/db.sqlite`, so the root is the db's grandparent — robust
+    // regardless of the cwd `cartog trace` was launched from.
+    let index_root = index_root_from_db_path(db_path);
     let path = db.trace(from, to, depth.min(MAX_TRACE_DEPTH))?;
     if path.is_some() {
         db.log_query("trace", "cli");
@@ -486,7 +490,7 @@ pub fn cmd_trace(
         .iter()
         .flatten()
         .map(|h| HydratedHop {
-            body: hop_body(&db, &h.source_id),
+            body: hop_body(&db, &index_root, &h.source_id),
             source_name: h.source_name.clone(),
             target_name: h.target_name.clone(),
             kind: h.kind,
@@ -531,10 +535,22 @@ pub fn cmd_trace(
     })
 }
 
+/// Index root for a DB at `<root>/.cartog/db.sqlite` — the db's grandparent.
+/// Falls back to the db's own parent (legacy `.cartog.db` layout), then `.`.
+fn index_root_from_db_path(db_path: &Path) -> PathBuf {
+    db_path
+        .parent()
+        .and_then(Path::parent)
+        .or_else(|| db_path.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 /// Body of the symbol with id `source_id` — the exact symbol on the call path.
 /// Prefers stored RAG content (redaction-aware), else reads source by byte
-/// range relative to cwd. `None` when neither is available (header-only hop).
-fn hop_body(db: &Database, source_id: &str) -> Option<String> {
+/// range from `root`-relative `file_path`. `None` when neither is available
+/// (header-only hop).
+fn hop_body(db: &Database, root: &Path, source_id: &str) -> Option<String> {
     if let Some((content, _)) = db.get_symbol_content(source_id).ok().flatten() {
         return Some(content);
     }
@@ -544,16 +560,18 @@ fn hop_body(db: &Database, source_id: &str) -> Option<String> {
         .into_iter()
         .next()?;
     source_slice(
+        root,
         &sym.file_path,
         sym.start_byte as usize,
         sym.end_byte as usize,
     )
 }
 
-/// Read `path` (relative to cwd) and return the `[start, end)` byte slice,
-/// snapped to char boundaries. `None` on any read or range error.
-fn source_slice(path: &str, mut start: usize, mut end: usize) -> Option<String> {
-    let src = std::fs::read_to_string(path).ok()?;
+/// Read `path` (resolved against `root`; absolute paths pass through) and return
+/// the `[start, end)` byte slice, snapped to char boundaries. `None` on any read
+/// or range error.
+fn source_slice(root: &Path, path: &str, mut start: usize, mut end: usize) -> Option<String> {
+    let src = std::fs::read_to_string(root.join(path)).ok()?;
     if start >= end || end > src.len() {
         return None;
     }
@@ -1396,6 +1414,27 @@ pub use self_cmd::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_root_is_db_grandparent() {
+        // New layout: <root>/.cartog/db.sqlite → root.
+        let root = index_root_from_db_path(Path::new("/proj/.cartog/db.sqlite"));
+        assert_eq!(root, Path::new("/proj"));
+    }
+
+    #[test]
+    fn source_slice_resolves_relative_path_against_root() {
+        // file_path is stored relative to the index root; reading must join it
+        // to the root, not the process cwd.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("a.py"), "def f():\n    return 1\n").unwrap();
+        // Byte range covering "def f()".
+        let body = source_slice(root, "a.py", 0, 7).expect("reads relative to root");
+        assert_eq!(body, "def f()");
+        // A path that doesn't exist under root → None (not a cwd-relative read).
+        assert!(source_slice(root, "missing.py", 0, 5).is_none());
+    }
 
     #[test]
     fn capitalized_index_phase_labels() {

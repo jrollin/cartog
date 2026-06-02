@@ -920,9 +920,14 @@ fn client_installed(
     if scope == Scope::Project {
         return true;
     }
-    if let (Some(bin), Some(p)) = (client_binary(kind), path_env) {
-        if binary_in(p, bin) {
-            return true;
+    // Only trust a PATH match when we have a real home: `HomeDirs::default()`
+    // (no resolvable home) anchors user paths at "." (relative), and wiring a
+    // config there would litter the cwd. A genuine home path is absolute.
+    if path.is_absolute() {
+        if let (Some(bin), Some(p)) = (client_binary(kind), path_env) {
+            if binary_in(p, bin) {
+                return true;
+            }
         }
     }
     // Fall back to the config-dir proxy (the only signal for GUI-only clients).
@@ -2006,6 +2011,31 @@ mod tests {
         assert!(
             !client_installed(ClientKind::Codex, Scope::User, &cfg, Some(&empty)),
             "no codex on PATH and no config dir → not installed"
+        );
+    }
+
+    #[test]
+    fn client_installed_ignores_path_when_home_is_relative_fallback() {
+        // HomeDirs::default() anchors user paths at "." (relative). A PATH match
+        // must NOT count then — wiring would litter the cwd. The config path is
+        // relative, so even with codex on PATH the client is "not installed".
+        let tmp = tempfile::tempdir().unwrap();
+        let bindir = tmp.path().join("bin");
+        std::fs::create_dir(&bindir).unwrap();
+        let exe = if cfg!(windows) { "codex.exe" } else { "codex" };
+        std::fs::write(bindir.join(exe), b"#!/bin/sh\n").unwrap();
+        let with_codex = std::env::join_paths([bindir.as_path()]).unwrap();
+        // Relative path (the "." fallback shape), parent "." exists but isn't a home.
+        let relative_cfg = Path::new("config.toml");
+
+        assert!(
+            !client_installed(
+                ClientKind::Codex,
+                Scope::User,
+                relative_cfg,
+                Some(&with_codex)
+            ),
+            "PATH match must be ignored when the config path is relative (no real home)"
         );
     }
 
