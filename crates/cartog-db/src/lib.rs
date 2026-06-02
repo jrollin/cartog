@@ -12,7 +12,7 @@ use serde::Serialize;
 use sqlite_vec::sqlite3_vec_init;
 use tracing::{info, warn};
 
-use cartog_core::{Edge, EdgeKind, FileInfo, Symbol, SymbolKind, Visibility};
+use cartog_core::{Edge, EdgeKind, EdgeProvenance, FileInfo, Symbol, SymbolKind, Visibility};
 
 /// Typed errors for the database-open and schema-migration paths.
 ///
@@ -93,8 +93,8 @@ const SQL_INSERT_SYMBOL: &str = "INSERT OR REPLACE INTO symbols
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
 
 const SQL_INSERT_EDGE: &str =
-    "INSERT INTO edges (source_id, target_name, target_id, kind, file_path, line)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+    "INSERT INTO edges (source_id, target_name, target_id, kind, file_path, line, resolution_source)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS symbols (
@@ -128,6 +128,9 @@ CREATE TABLE IF NOT EXISTS edges (
     -- 2 = unresolvable (LSP definitively returned no definition: typo, dyn dispatch, macro),
     -- 3 = external (LSP located the target outside the indexed root: stdlib, deps, node_modules).
     resolution_state INTEGER NOT NULL DEFAULT 0,
+    -- Which tier/source resolved target_id (EdgeProvenance::as_str), or NULL for
+    -- unresolved edges and rows resolved before provenance tracking existed.
+    resolution_source TEXT,
     FOREIGN KEY (source_id) REFERENCES symbols(id)
 );
 
@@ -391,7 +394,7 @@ pub fn register_sqlite_vec() {
 }
 
 /// Current schema version. Increment when adding migrations.
-const SCHEMA_VERSION: u32 = 5;
+const SCHEMA_VERSION: u32 = 6;
 
 /// Public mirror of [`SCHEMA_VERSION`] for callers outside this crate
 /// (e.g. `cartog pull` needs it to compare against a pulled DB and refuse
@@ -523,8 +526,17 @@ fn migrate(conn: &Connection) {
         .is_ok();
     // Same idea for v5: ensure query_log exists even on partial migration.
     let has_query_log = conn.prepare("SELECT 1 FROM query_log LIMIT 0").is_ok();
+    // Same idea for v6: ensure the resolution_source column exists.
+    let has_resolution_source = conn
+        .prepare("SELECT resolution_source FROM edges LIMIT 0")
+        .is_ok();
 
-    if current >= SCHEMA_VERSION && has_hash_cols && has_resolution_state && has_query_log {
+    if current >= SCHEMA_VERSION
+        && has_hash_cols
+        && has_resolution_state
+        && has_query_log
+        && has_resolution_source
+    {
         return;
     }
 
@@ -592,6 +604,14 @@ fn migrate(conn: &Connection) {
             "CREATE INDEX IF NOT EXISTS idx_query_log_ts ON query_log(ts)",
             [],
         );
+    }
+
+    // Migration 5 → 6: edges.resolution_source records WHICH tier/source resolved
+    // each edge. Additive, nullable. Pre-v6 resolved edges have an indistinguishable
+    // tier, so they stay NULL ("unknown / pre-provenance") rather than guess a sentinel.
+    if current < 6 || !has_resolution_source {
+        info!("schema v6: adding edges.resolution_source column");
+        let _ = conn.execute("ALTER TABLE edges ADD COLUMN resolution_source TEXT", []);
     }
 
     // Store the new schema version
@@ -953,21 +973,40 @@ fn kind_priority(kind: &str) -> u8 {
     }
 }
 
-fn row_to_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<Edge> {
-    let kind_str = row.get::<_, String>(4)?;
+/// Build an [`Edge`] from six consecutive columns starting at `base`:
+/// `source_id, target_name, target_id, kind, file_path, line, resolution_source`.
+///
+/// Shared by every edge-returning query so the field reads, the warn-on-unknown
+/// decode, and the column ordering stay in one place. Callers that prepend an
+/// `id` column pass `base = 1`; the bare-projection impact CTE passes `base = 0`.
+fn edge_from_row(row: &rusqlite::Row<'_>, base: usize) -> rusqlite::Result<Edge> {
+    let kind_str = row.get::<_, String>(base + 3)?;
     let kind = kind_str.parse().unwrap_or_else(|_| {
         warn!(kind = %kind_str, "unknown edge kind, defaulting to references");
         EdgeKind::References
     });
 
+    let provenance = match row.get::<_, Option<String>>(base + 6)? {
+        Some(s) => s.parse::<EdgeProvenance>().ok().or_else(|| {
+            warn!(source = %s, "unknown edge provenance, dropping to None");
+            None
+        }),
+        None => None,
+    };
+
     Ok(Edge {
-        source_id: row.get(1)?,
-        target_name: row.get(2)?,
-        target_id: row.get(3)?,
+        source_id: row.get(base)?,
+        target_name: row.get(base + 1)?,
+        target_id: row.get(base + 2)?,
         kind,
-        file_path: row.get(5)?,
-        line: row.get(6)?,
+        file_path: row.get(base + 4)?,
+        line: row.get(base + 5)?,
+        provenance,
     })
+}
+
+fn row_to_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<Edge> {
+    edge_from_row(row, 1)
 }
 
 #[cfg(test)]
@@ -1072,6 +1111,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: "a.py".to_string(),
             line: 5,
+            provenance: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1094,6 +1134,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: "a.py".to_string(),
             line: 5,
+            provenance: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1199,6 +1240,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: "src/main.py".to_string(),
             line: 5,
+            provenance: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1231,6 +1273,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: "app/main.py".to_string(),
             line: 5,
+            provenance: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1257,6 +1300,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: "a.py".to_string(),
             line: 5,
+            provenance: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1290,6 +1334,7 @@ mod tests {
             kind: EdgeKind::References,
             file_path: "auth/Service.java".to_string(),
             line: 12,
+            provenance: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1323,6 +1368,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: "app.java".to_string(),
             line: 5,
+            provenance: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1356,6 +1402,7 @@ mod tests {
             kind: EdgeKind::Imports,
             file_path: "auth/service.java".to_string(),
             line: 1,
+            provenance: None,
         };
         db.insert_edge(&import_edge).unwrap();
 
@@ -1367,6 +1414,7 @@ mod tests {
             kind: EdgeKind::References,
             file_path: "auth/service.java".to_string(),
             line: 15,
+            provenance: None,
         };
         db.insert_edge(&ref_edge).unwrap();
 
@@ -1401,6 +1449,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: "app/main.rb".to_string(),
             line: 5,
+            provenance: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1432,6 +1481,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: "app.rb".to_string(),
             line: 5,
+            provenance: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1457,6 +1507,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "a.py".to_string(),
                 line: 5,
+                provenance: None,
             },
             Edge {
                 source_id: caller.id.clone(),
@@ -1465,6 +1516,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "a.py".to_string(),
                 line: 6,
+                provenance: None,
             },
         ])
         .unwrap();
@@ -1495,6 +1547,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "b.py".to_string(),
                 line: 5,
+                provenance: None,
             },
             Edge {
                 source_id: c.id.clone(),
@@ -1503,6 +1556,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "c.py".to_string(),
                 line: 5,
+                provenance: None,
             },
         ])
         .unwrap();
@@ -1537,6 +1591,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "a.py".to_string(),
                 line: 2,
+                provenance: None,
             },
             Edge {
                 source_id: b.id.clone(),
@@ -1545,6 +1600,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "b.py".to_string(),
                 line: 2,
+                provenance: None,
             },
         ])
         .unwrap();
@@ -1575,6 +1631,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "x.py".to_string(),
                 line: 1,
+                provenance: None,
             },
             Edge {
                 source_id: y.id.clone(),
@@ -1583,6 +1640,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "y.py".to_string(),
                 line: 1,
+                provenance: None,
             },
             Edge {
                 source_id: y.id.clone(),
@@ -1591,6 +1649,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "y.py".to_string(),
                 line: 2,
+                provenance: None,
             },
         ])
         .unwrap();
@@ -1618,6 +1677,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: w[0].file_path.clone(),
                 line: 2,
+                provenance: None,
             })
             .collect();
         db.insert_edges(&edges).unwrap();
@@ -1667,6 +1727,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "a.py".to_string(),
                 line: 2,
+                provenance: None,
             },
             Edge {
                 source_id: b.id.clone(),
@@ -1675,6 +1736,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "b.py".to_string(),
                 line: 2,
+                provenance: None,
             },
         ])
         .unwrap();
@@ -1706,6 +1768,7 @@ mod tests {
                         kind: EdgeKind::Calls,
                         file_path: src.file_path.clone(),
                         line: 2,
+                        provenance: None,
                     });
                 }
             }
@@ -1736,6 +1799,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: a.file_path.clone(),
                 line: 2,
+                provenance: None,
             },
             Edge {
                 source_id: b.id.clone(),
@@ -1744,6 +1808,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: b.file_path.clone(),
                 line: 2,
+                provenance: None,
             },
         ])
         .unwrap();
@@ -1774,6 +1839,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: caller.file_path.clone(),
             line: 2,
+            provenance: None,
         }])
         .unwrap();
         let hops = db
@@ -1799,6 +1865,7 @@ mod tests {
             kind: EdgeKind::Inherits,
             file_path: "a.py".to_string(),
             line: 10,
+            provenance: None,
         })
         .unwrap();
 
@@ -1822,6 +1889,7 @@ mod tests {
             kind: EdgeKind::Imports,
             file_path: "main.py".to_string(),
             line: 1,
+            provenance: None,
         })
         .unwrap();
 
@@ -1843,6 +1911,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: "test.py".to_string(),
             line: 5,
+            provenance: None,
         })
         .unwrap();
         db.upsert_file(&FileInfo {
@@ -1877,6 +1946,7 @@ mod tests {
                 kind: EdgeKind::Inherits,
                 file_path: "a.py".to_string(),
                 line: 20,
+                provenance: None,
             },
             Edge {
                 source_id: caller.id.clone(),
@@ -1885,6 +1955,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "b.py".to_string(),
                 line: 5,
+                provenance: None,
             },
         ])
         .unwrap();
@@ -3919,6 +3990,16 @@ mod tests {
             .unwrap()
     }
 
+    fn resolution_source_of(db: &Database, edge_id: i64) -> Option<String> {
+        db.conn
+            .query_row(
+                "SELECT resolution_source FROM edges WHERE id = ?1",
+                params![edge_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
     fn insert_test_edge(db: &Database, target_name: &str) -> i64 {
         let sym = test_symbol("src", SymbolKind::Function, "a.py", 1);
         db.insert_symbols(std::slice::from_ref(&sym)).unwrap();
@@ -4138,6 +4219,7 @@ mod tests {
         db.delete_symbol(&target.id).unwrap();
 
         assert_eq!(resolution_state_of(&db, eid), 0);
+        assert_eq!(resolution_source_of(&db, eid), None, "stale tag must clear");
         let visible = db
             .unresolved_edges()
             .unwrap()
@@ -4168,10 +4250,16 @@ mod tests {
         let eid2 = db.conn.last_insert_rowid();
         db.update_edge_target(eid2, &t2.id).unwrap();
 
+        assert_eq!(resolution_source_of(&db, eid1).as_deref(), Some("lsp"));
+
         db.delete_symbols(&[t1.id.clone(), t2.id.clone()]).unwrap();
 
         assert_eq!(resolution_state_of(&db, eid1), 0);
         assert_eq!(resolution_state_of(&db, eid2), 0);
+        // Deleting the target unresolves the edge; its provenance must clear too,
+        // else refs/callees report a stale tier for an edge pointing nowhere.
+        assert_eq!(resolution_source_of(&db, eid1), None);
+        assert_eq!(resolution_source_of(&db, eid2), None);
     }
 
     #[test]
@@ -4309,6 +4397,417 @@ mod tests {
             )
             .unwrap();
         assert_eq!(bumped, SCHEMA_VERSION.to_string());
+    }
+
+    // ── Edge provenance ──
+
+    /// Resolve a single `name`-targeting `calls` edge and return the provenance
+    /// the resolver tagged on it. The caller wires up the symbol graph so a
+    /// specific tier wins.
+    fn resolve_one_and_get_provenance(db: &Database, name: &str) -> Option<EdgeProvenance> {
+        let resolved = db.resolve_edges().unwrap();
+        assert_eq!(resolved, 1, "expected exactly one edge to resolve");
+        let refs = db.refs(name, None).unwrap();
+        refs.into_iter()
+            .find(|(e, _)| e.target_id.is_some())
+            .and_then(|(e, _)| e.provenance)
+    }
+
+    #[test]
+    fn resolve_tags_provenance_same_file() {
+        let db = Database::open_memory().unwrap();
+        let caller = test_symbol("process", SymbolKind::Function, "a.py", 1);
+        let same_file = test_symbol("helper", SymbolKind::Function, "a.py", 20);
+        let other_file = test_symbol("helper", SymbolKind::Function, "b.py", 1);
+        db.insert_symbols(&[caller.clone(), same_file, other_file])
+            .unwrap();
+        db.insert_edge(&Edge::new(&caller.id, "helper", EdgeKind::Calls, "a.py", 5))
+            .unwrap();
+
+        assert_eq!(
+            resolve_one_and_get_provenance(&db, "helper"),
+            Some(EdgeProvenance::SameFile)
+        );
+    }
+
+    #[test]
+    fn resolve_tags_provenance_same_dir() {
+        let db = Database::open_memory().unwrap();
+        let caller = test_symbol("process", SymbolKind::Function, "pkg/a.py", 1);
+        let same_dir = test_symbol("helper", SymbolKind::Function, "pkg/b.py", 1);
+        let far = test_symbol("helper", SymbolKind::Function, "other/c.py", 1);
+        db.insert_symbols(&[caller.clone(), same_dir, far]).unwrap();
+        db.insert_edge(&Edge::new(
+            &caller.id,
+            "helper",
+            EdgeKind::Calls,
+            "pkg/a.py",
+            5,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            resolve_one_and_get_provenance(&db, "helper"),
+            Some(EdgeProvenance::SameDir)
+        );
+    }
+
+    #[test]
+    fn resolve_tags_provenance_unique_global() {
+        let db = Database::open_memory().unwrap();
+        let caller = test_symbol("process", SymbolKind::Function, "a.py", 1);
+        let target = test_symbol("only_one", SymbolKind::Function, "far/away.py", 1);
+        db.insert_symbols(&[caller.clone(), target]).unwrap();
+        db.insert_edge(&Edge::new(
+            &caller.id,
+            "only_one",
+            EdgeKind::Calls,
+            "a.py",
+            5,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            resolve_one_and_get_provenance(&db, "only_one"),
+            Some(EdgeProvenance::UniqueGlobal)
+        );
+    }
+
+    #[test]
+    fn resolve_tags_provenance_kind_disambig() {
+        let db = Database::open_memory().unwrap();
+        // Two global matches: a class beats the constructor method (tier 6).
+        let caller = test_symbol("handleLogin", SymbolKind::Method, "auth/Service.java", 10);
+        let logger_class = test_symbol("Logger", SymbolKind::Class, "util/Logger.java", 1);
+        let logger_ctor = test_symbol("Logger", SymbolKind::Method, "util/Logger.java", 5);
+        db.insert_symbols(&[caller.clone(), logger_class, logger_ctor])
+            .unwrap();
+        db.insert_edge(&Edge::new(
+            &caller.id,
+            "Logger",
+            EdgeKind::References,
+            "auth/Service.java",
+            12,
+        ))
+        .unwrap();
+
+        db.resolve_edges().unwrap();
+        let refs = db.refs("Logger", None).unwrap();
+        let edge = refs
+            .iter()
+            .find(|(e, _)| e.kind == EdgeKind::References)
+            .unwrap();
+        assert_eq!(edge.0.provenance, Some(EdgeProvenance::KindDisambig));
+    }
+
+    #[test]
+    fn resolve_tags_provenance_parent_scope() {
+        // Tier 4 only fires when same-file/import/same-dir miss and there are
+        // multiple global matches, one sharing the caller's parent scope. Build
+        // two `helper`s in different dirs from the caller's file, both children
+        // of the same parent as the caller, so only parent-scope disambiguates.
+        let db = Database::open_memory().unwrap();
+        let mut caller = test_symbol("run", SymbolKind::Method, "app/svc.py", 10);
+        caller.parent_id = Some("app/svc.py:class:Svc".to_string());
+        let mut same_scope = test_symbol("helper", SymbolKind::Method, "lib/a.py", 1);
+        same_scope.parent_id = Some("app/svc.py:class:Svc".to_string());
+        let mut other_scope = test_symbol("helper", SymbolKind::Method, "lib/b.py", 1);
+        other_scope.parent_id = Some("other/x.py:class:Other".to_string());
+        db.insert_symbols(&[caller.clone(), same_scope.clone(), other_scope])
+            .unwrap();
+        db.insert_edge(&Edge::new(
+            &caller.id,
+            "helper",
+            EdgeKind::Calls,
+            "app/svc.py",
+            12,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            resolve_one_and_get_provenance(&db, "helper"),
+            Some(EdgeProvenance::ParentScope)
+        );
+    }
+
+    #[test]
+    fn callees_surfaces_provenance() {
+        // Read-back coverage for the callees() path (uses the shared row_to_edge).
+        let db = Database::open_memory().unwrap();
+        let caller = test_symbol("process", SymbolKind::Function, "a.py", 1);
+        let same_file = test_symbol("helper", SymbolKind::Function, "a.py", 20);
+        db.insert_symbols(&[caller.clone(), same_file]).unwrap();
+        db.insert_edge(&Edge::new(&caller.id, "helper", EdgeKind::Calls, "a.py", 5))
+            .unwrap();
+        db.resolve_edges().unwrap();
+
+        let callees = db.callees("process").unwrap();
+        assert_eq!(callees.len(), 1);
+        assert_eq!(callees[0].provenance, Some(EdgeProvenance::SameFile));
+    }
+
+    #[test]
+    fn impact_surfaces_provenance() {
+        // Read-back coverage for the impact() CTE mapper (depth at index 7,
+        // provenance at index 6).
+        let db = Database::open_memory().unwrap();
+        let caller = test_symbol("process", SymbolKind::Function, "a.py", 1);
+        let target = test_symbol("helper", SymbolKind::Function, "a.py", 20);
+        db.insert_symbols(&[caller.clone(), target]).unwrap();
+        db.insert_edge(&Edge::new(&caller.id, "helper", EdgeKind::Calls, "a.py", 5))
+            .unwrap();
+        db.resolve_edges().unwrap();
+
+        let impact = db.impact("helper", 3).unwrap();
+        let call = impact
+            .iter()
+            .find(|(e, _)| e.kind == EdgeKind::Calls)
+            .unwrap();
+        assert_eq!(call.0.provenance, Some(EdgeProvenance::SameFile));
+    }
+
+    #[test]
+    fn reset_unresolvable_for_names_clears_provenance() {
+        // The per-reindex reopen path (indexer calls this on every incremental
+        // run) must clear the stale LSP tag, not just the state.
+        let db = Database::open_memory().unwrap();
+        let id = insert_test_edge(&db, "foo");
+        db.mark_edge_unresolvable(id).unwrap();
+        assert_eq!(
+            resolution_source_of(&db, id).as_deref(),
+            Some("lsp_unresolvable")
+        );
+
+        let reopened = db
+            .reset_unresolvable_for_names(&["foo".to_string()])
+            .unwrap();
+        assert_eq!(reopened, 1);
+        assert_eq!(resolution_source_of(&db, id), None, "stale tag cleared");
+    }
+
+    #[test]
+    fn insert_edge_round_trips_provenance() {
+        // A reconstructed (already-resolved) edge persists its provenance through
+        // insert and reads back identically.
+        let db = Database::open_memory().unwrap();
+        let caller = test_symbol("process", SymbolKind::Function, "a.py", 1);
+        let target = test_symbol("helper", SymbolKind::Function, "a.py", 20);
+        db.insert_symbols(&[caller.clone(), target.clone()])
+            .unwrap();
+        let mut edge = Edge::new(&caller.id, "helper", EdgeKind::Calls, "a.py", 5);
+        edge.target_id = Some(target.id.clone());
+        edge.provenance = Some(EdgeProvenance::Lsp);
+        db.insert_edge(&edge).unwrap();
+
+        let callees = db.callees("process").unwrap();
+        assert_eq!(callees[0].provenance, Some(EdgeProvenance::Lsp));
+    }
+
+    #[test]
+    fn resolve_tags_provenance_import_path() {
+        // Two-pass: the import edge resolves in pass 1 (tier 6, class over ctor),
+        // then the reference in the importing file resolves via import-path in
+        // pass 2. Mirrors test_resolve_edges_multipass_import_then_call.
+        let db = Database::open_memory().unwrap();
+        let import_sym = test_symbol("util.Logger", SymbolKind::Import, "auth/service.java", 1);
+        let caller = test_symbol("authenticate", SymbolKind::Method, "auth/service.java", 10);
+        let logger_class = test_symbol("Logger", SymbolKind::Class, "util/Logger.java", 1);
+        let logger_ctor = test_symbol("Logger", SymbolKind::Method, "util/Logger.java", 5);
+        db.insert_symbols(&[
+            import_sym.clone(),
+            caller.clone(),
+            logger_class,
+            logger_ctor,
+        ])
+        .unwrap();
+        db.insert_edge(&Edge::new(
+            &import_sym.id,
+            "Logger",
+            EdgeKind::Imports,
+            "auth/service.java",
+            1,
+        ))
+        .unwrap();
+        db.insert_edge(&Edge::new(
+            &caller.id,
+            "Logger",
+            EdgeKind::References,
+            "auth/service.java",
+            15,
+        ))
+        .unwrap();
+
+        assert_eq!(db.resolve_edges().unwrap(), 2);
+        let refs = db.refs("Logger", None).unwrap();
+        let reference = refs
+            .iter()
+            .find(|(e, _)| e.kind == EdgeKind::References)
+            .unwrap();
+        assert_eq!(reference.0.provenance, Some(EdgeProvenance::ImportPath));
+    }
+
+    #[test]
+    fn lsp_resolve_tags_provenance_lsp() {
+        let db = Database::open_memory().unwrap();
+        let id = insert_test_edge(&db, "anything");
+        db.update_edge_target(id, "some:symbol:id").unwrap();
+        assert_eq!(resolution_source_of(&db, id).as_deref(), Some("lsp"));
+    }
+
+    #[test]
+    fn lsp_overwrite_retags_heuristic_as_lsp() {
+        let db = Database::open_memory().unwrap();
+        let caller = test_symbol("process", SymbolKind::Function, "a.py", 1);
+        let same_file = test_symbol("helper", SymbolKind::Function, "a.py", 20);
+        db.insert_symbols(&[caller.clone(), same_file.clone()])
+            .unwrap();
+        db.insert_edge(&Edge::new(&caller.id, "helper", EdgeKind::Calls, "a.py", 5))
+            .unwrap();
+        db.resolve_edges().unwrap();
+
+        let edge_id: i64 = db
+            .conn
+            .query_row("SELECT id FROM edges LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            resolution_source_of(&db, edge_id).as_deref(),
+            Some("same_file")
+        );
+
+        db.update_edge_target(edge_id, &same_file.id).unwrap();
+        assert_eq!(resolution_source_of(&db, edge_id).as_deref(), Some("lsp"));
+    }
+
+    #[test]
+    fn mark_external_tags_lsp_external() {
+        let db = Database::open_memory().unwrap();
+        let id = insert_test_edge(&db, "anything");
+        db.mark_edge_external(id).unwrap();
+        assert_eq!(
+            resolution_source_of(&db, id).as_deref(),
+            Some("lsp_external")
+        );
+    }
+
+    #[test]
+    fn mark_unresolvable_tags_lsp_unresolvable() {
+        let db = Database::open_memory().unwrap();
+        let id = insert_test_edge(&db, "anything");
+        db.mark_edge_unresolvable(id).unwrap();
+        assert_eq!(
+            resolution_source_of(&db, id).as_deref(),
+            Some("lsp_unresolvable")
+        );
+    }
+
+    #[test]
+    fn reset_unresolvable_clears_provenance() {
+        let db = Database::open_memory().unwrap();
+        let id = insert_test_edge(&db, "foo");
+        db.mark_edge_external(id).unwrap();
+        assert_eq!(
+            resolution_source_of(&db, id).as_deref(),
+            Some("lsp_external")
+        );
+
+        db.reset_all_unresolvable().unwrap();
+        assert_eq!(resolution_source_of(&db, id), None, "stale tag cleared");
+    }
+
+    /// Bootstrap a pre-v6-shaped DB at `path`: edges have `resolution_state` but
+    /// no `resolution_source` column, stamped at `schema_version`. Shared by the
+    /// migration tests so both exercise the same "old" shape.
+    fn bootstrap_pre_v6_db(path: &std::path::Path, schema_version: u32, seed_edges: bool) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE symbols (
+                id TEXT PRIMARY KEY, name TEXT, kind TEXT, file_path TEXT,
+                start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER,
+                parent_id TEXT, signature TEXT, visibility TEXT, is_async BOOLEAN,
+                docstring TEXT, in_degree INTEGER DEFAULT 0,
+                content_hash TEXT, subtree_hash TEXT);
+             CREATE TABLE edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id TEXT NOT NULL, target_name TEXT NOT NULL, target_id TEXT,
+                kind TEXT NOT NULL, file_path TEXT NOT NULL, line INTEGER,
+                resolution_state INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE files (path TEXT PRIMARY KEY);
+             CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT);
+             CREATE TABLE query_log (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool TEXT NOT NULL, source TEXT NOT NULL, ts INTEGER NOT NULL);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO metadata (key, value) VALUES ('schema_version', ?1)",
+            params![schema_version.to_string()],
+        )
+        .unwrap();
+        if seed_edges {
+            conn.execute_batch(
+                "INSERT INTO symbols (id, name, kind, file_path) VALUES ('s:1', 'foo', 'function', 'a.py');
+                 INSERT INTO edges (source_id, target_name, target_id, kind, file_path, line, resolution_state)
+                   VALUES ('s:1', 'foo', 's:1', 'calls', 'a.py', 1, 1);
+                 INSERT INTO edges (source_id, target_name, target_id, kind, file_path, line, resolution_state)
+                   VALUES ('s:1', 'missing', NULL, 'calls', 'a.py', 2, 0);",
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn migration_v5_to_v6_backfills_resolved_edges_to_null() {
+        // A pre-v6 DB (resolution_state present, resolution_source absent) gains
+        // the column on open; pre-existing rows keep NULL provenance, and a
+        // migrated resolved edge reads back through the production path as None.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("v5.sqlite");
+        bootstrap_pre_v6_db(&path, 5, true);
+
+        let db = Database::open(&path, DEFAULT_EMBEDDING_DIM).unwrap();
+
+        let null_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM edges WHERE resolution_source IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(null_count, 2, "pre-v6 rows keep NULL provenance");
+
+        // Read a migrated resolved edge back through callees() (the real decode
+        // path) to prove a NULL column deserializes to provenance == None.
+        let callees = db.callees("foo").unwrap();
+        assert!(
+            callees.iter().all(|e| e.provenance.is_none()),
+            "migrated rows decode with no provenance"
+        );
+
+        let bumped: String = db
+            .conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(bumped, SCHEMA_VERSION.to_string());
+    }
+
+    #[test]
+    fn migration_v6_self_heals_missing_column() {
+        // schema_version says 6 but the column is absent (partial-migration
+        // crash). The probe guard must re-add it on open.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("partial.sqlite");
+        bootstrap_pre_v6_db(&path, 6, false);
+
+        let db = Database::open(&path, DEFAULT_EMBEDDING_DIM).unwrap();
+        let has_col = db
+            .conn
+            .prepare("SELECT resolution_source FROM edges LIMIT 0")
+            .is_ok();
+        assert!(has_col, "missing resolution_source column was re-added");
     }
 
     #[test]

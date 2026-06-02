@@ -340,8 +340,11 @@ impl Database {
             .prepare_cached("DELETE FROM edges WHERE source_id = ?1")?;
         // Reset state alongside target_id so the orphaned edge re-enters
         // unresolved_edges() instead of becoming a (NULL, state=1) zombie.
+        // Clear resolution_source too, else the edge keeps a stale provenance
+        // tag that no longer reflects a real target until/unless it re-resolves.
         let mut null_in = self.conn.prepare_cached(
-            "UPDATE edges SET target_id = NULL, resolution_state = 0 WHERE target_id = ?1",
+            "UPDATE edges SET target_id = NULL, resolution_state = 0, resolution_source = NULL
+             WHERE target_id = ?1",
         )?;
         let mut del_vec = self.conn.prepare_cached(
             "DELETE FROM symbol_vec WHERE rowid IN \
@@ -373,7 +376,8 @@ impl Database {
         self.conn
             .execute("DELETE FROM edges WHERE source_id = ?1", params![id])?;
         self.conn.execute(
-            "UPDATE edges SET target_id = NULL, resolution_state = 0 WHERE target_id = ?1",
+            "UPDATE edges SET target_id = NULL, resolution_state = 0, resolution_source = NULL
+             WHERE target_id = ?1",
             params![id],
         )?;
         let _ = self.conn.execute(
@@ -407,6 +411,7 @@ impl Database {
             edge.kind.as_str(),
             edge.file_path,
             edge.line,
+            edge.provenance.map(|p| p.as_str()),
         ])?;
         Ok(())
     }
@@ -431,6 +436,7 @@ impl Database {
                 edge.kind.as_str(),
                 edge.file_path,
                 edge.line,
+                edge.provenance.map(|p| p.as_str()),
             ])?;
         }
         Ok(())

@@ -276,6 +276,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: "auth.py".to_string(),
             line: 2,
+            provenance: None,
         }])
         .unwrap();
         (auth, gen)
@@ -399,6 +400,7 @@ mod tests {
             kind: EdgeKind::Imports,
             file_path: "config.py".to_string(),
             line: 2,
+            provenance: None,
         }])
         .unwrap();
 
@@ -439,6 +441,7 @@ mod tests {
             kind: EdgeKind::Calls,
             file_path: "t.py".to_string(),
             line: 1,
+            provenance: None,
         }])
         .unwrap();
 
@@ -505,6 +508,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "a.py".to_string(),
                 line: 1,
+                provenance: None,
             },
             Edge {
                 source_id: other.id.clone(),
@@ -513,6 +517,7 @@ mod tests {
                 kind: EdgeKind::Calls,
                 file_path: "b.py".to_string(),
                 line: 1,
+                provenance: None,
             },
         ])
         .unwrap();
