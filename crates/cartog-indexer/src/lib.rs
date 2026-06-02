@@ -207,6 +207,71 @@ fn is_zero(v: &u32) -> bool {
     *v == 0
 }
 
+/// Render a human-readable one-block summary of an [`IndexResult`].
+///
+/// Shared by the `cartog index` CLI output and the `cartog_index` MCP tool so
+/// both surfaces report identical file/symbol/edge counts.
+#[must_use]
+pub fn render_index_summary(r: &IndexResult) -> String {
+    let lsp_part = if r.edges_lsp_resolved > 0
+        || r.edges_marked_unresolvable > 0
+        || r.edges_marked_external > 0
+    {
+        let mut s = format!(
+            " ({} heuristic + {} LSP",
+            r.edges_resolved, r.edges_lsp_resolved
+        );
+        if r.edges_marked_unresolvable > 0 {
+            s.push_str(&format!(
+                ", {} marked unresolvable",
+                r.edges_marked_unresolvable
+            ));
+        }
+        if r.edges_marked_external > 0 {
+            s.push_str(&format!(", {} external", r.edges_marked_external));
+        }
+        s.push(')');
+        s
+    } else {
+        String::new()
+    };
+    let sym_detail = if r.symbols_modified > 0 || r.symbols_unchanged > 0 {
+        format!(
+            " ({} new, {} modified, {} unchanged, {} removed)",
+            r.symbols_added, r.symbols_modified, r.symbols_unchanged, r.symbols_removed
+        )
+    } else {
+        String::new()
+    };
+    let unsupported = if r.files_unsupported > 0 {
+        let breakdown = r
+            .unsupported_by_ext
+            .iter()
+            .take(5)
+            .map(|(ext, n)| format!("{n} .{ext}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "\n  {} files in unsupported languages not indexed ({breakdown})",
+            r.files_unsupported
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "Indexed {} files ({} skipped, {} removed)\n  {} symbols{}, {} edges ({} resolved{}){}\n",
+        r.files_indexed,
+        r.files_skipped,
+        r.files_removed,
+        r.symbols_added + r.symbols_modified + r.symbols_unchanged,
+        sym_detail,
+        r.edges_added,
+        r.edges_resolved + r.edges_lsp_resolved,
+        lsp_part,
+        unsupported,
+    )
+}
+
 /// Coarse-grained progress events emitted by [`index_directory`].
 ///
 /// Plain data — no transport or runtime types — so callers (CLI, watcher,
@@ -983,6 +1048,52 @@ mod tests {
     #[test]
     fn extract_with_cached_returns_none_for_unregistered_language() {
         assert!(extract_with_cached("klingon", "irrelevant", "a.kl").is_none());
+    }
+
+    #[test]
+    fn index_summary_reports_file_symbol_and_edge_counts() {
+        let r = IndexResult {
+            files_indexed: 3,
+            files_skipped: 1,
+            symbols_added: 12,
+            edges_added: 20,
+            edges_resolved: 18,
+            ..Default::default()
+        };
+        let s = render_index_summary(&r);
+        assert!(s.contains("Indexed 3 files (1 skipped, 0 removed)"));
+        assert!(s.contains("12 symbols"));
+        assert!(s.contains("20 edges (18 resolved)"));
+    }
+
+    #[test]
+    fn index_summary_breaks_out_lsp_resolution_when_present() {
+        let r = IndexResult {
+            files_indexed: 1,
+            symbols_added: 5,
+            edges_added: 10,
+            edges_resolved: 6,
+            edges_lsp_resolved: 3,
+            edges_marked_external: 1,
+            ..Default::default()
+        };
+        let s = render_index_summary(&r);
+        assert!(s.contains("9 resolved"), "6 heuristic + 3 LSP = 9");
+        assert!(s.contains("6 heuristic + 3 LSP"));
+        assert!(s.contains("1 external"));
+    }
+
+    #[test]
+    fn index_summary_lists_unsupported_languages() {
+        let r = IndexResult {
+            files_indexed: 2,
+            files_unsupported: 4,
+            unsupported_by_ext: vec![("kt".into(), 3), ("swift".into(), 1)],
+            ..Default::default()
+        };
+        let s = render_index_summary(&r);
+        assert!(s.contains("4 files in unsupported languages"));
+        assert!(s.contains("3 .kt"));
     }
 
     #[test]

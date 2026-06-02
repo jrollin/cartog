@@ -877,7 +877,60 @@ pub enum PickerOutcome {
 /// Returns one row per unique `ClientKind`, with one `ScopeOption` per
 /// (kind, scope) entry in the catalogue. Claude Code ends up with two scope
 /// options; every other client has one.
+/// CLI binary name for a client, if it ships one we can detect on `PATH`.
+fn client_binary(kind: ClientKind) -> Option<&'static str> {
+    match kind {
+        ClientKind::ClaudeCode => Some("claude"),
+        ClientKind::Codex => Some("codex"),
+        ClientKind::Gemini => Some("gemini"),
+        ClientKind::Opencode => Some("opencode"),
+        ClientKind::Windsurf => Some("windsurf"),
+        ClientKind::Zed => Some("zed"),
+        // No reliable CLI: GUI apps (Claude Desktop) or editor-embedded (Cursor, VS Code).
+        ClientKind::ClaudeDesktop | ClientKind::Cursor | ClientKind::Vscode => None,
+    }
+}
+
+/// True if an executable `name` exists in any `paths` entry (PATH-style list).
+/// Side-effect-free and injectable for tests. On Windows, also tries each
+/// suffix in `%PATHEXT%` (falling back to a standard default) so `.bat`/`.com`
+/// shims are found, not just `.exe`/`.cmd`.
+fn binary_in(paths: &std::ffi::OsStr, name: &str) -> bool {
+    let mut candidates = vec![name.to_string()];
+    if cfg!(windows) {
+        let pathext =
+            std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        for ext in pathext.split(';').filter(|e| !e.is_empty()) {
+            candidates.push(format!("{name}{}", ext.to_ascii_lowercase()));
+        }
+    }
+    std::env::split_paths(paths).any(|dir| candidates.iter().any(|c| dir.join(c).is_file()))
+}
+
+/// Stronger "is this client installed?" check than parent-dir existence: a
+/// known CLI on `path_env` (the PATH-style list, passed in for determinism +
+/// testability) OR the config dir present. Project-scope clients are always
+/// considered installable (the parent is the repo).
+fn client_installed(
+    kind: ClientKind,
+    scope: Scope,
+    path: &Path,
+    path_env: Option<&std::ffi::OsStr>,
+) -> bool {
+    if scope == Scope::Project {
+        return true;
+    }
+    if let (Some(bin), Some(p)) = (client_binary(kind), path_env) {
+        if binary_in(p, bin) {
+            return true;
+        }
+    }
+    // Fall back to the config-dir proxy (the only signal for GUI-only clients).
+    path.parent().is_some_and(Path::exists)
+}
+
 pub fn picker_items(cwd: &Path, homes: &HomeDirs) -> Vec<PickerItem> {
+    let path_env = std::env::var_os("PATH");
     let mut by_kind: Vec<PickerItem> = Vec::new();
     for entry in CLIENT_CATALOGUE.iter() {
         let path = match entry.scope {
@@ -890,12 +943,7 @@ pub fn picker_items(cwd: &Path, homes: &HomeDirs) -> Vec<PickerItem> {
                 None => continue,
             },
         };
-        let installed = match entry.scope {
-            // Project parents always exist (it's the repo).
-            Scope::Project => true,
-            // Missing parent dir = client not installed on this machine.
-            Scope::User => path.parent().is_some_and(Path::exists),
-        };
+        let installed = client_installed(entry.kind, entry.scope, &path, path_env.as_deref());
         let opt = ScopeOption {
             scope: entry.scope,
             file_present: path.exists(),
@@ -1114,8 +1162,9 @@ fn run_ide_for_clients(
     let mut summary = IdeSummary::default();
     for spec in specs {
         // `interactive = false` here: the picker already prompted, so per-spec
-        // confirmation prompts would be redundant.
-        let step = process_spec(&spec, cwd, false, dry_run);
+        // confirmation prompts would be redundant. `auto_only = false`: the user
+        // explicitly picked these rows, so wire them even if detection is unsure.
+        let step = process_spec(&spec, cwd, false, dry_run, false);
         summary.total += 1;
         match step.status {
             IdeStatus::Created => summary.created += 1,
@@ -1196,8 +1245,11 @@ pub fn run_ide(
     let mut steps = Vec::with_capacity(specs.len());
     let mut summary = IdeSummary::default();
 
+    // No explicit client → only wire user clients we detect as installed.
+    // An explicit `--client X` always proceeds, even if X isn't detected.
+    let auto_only = client.is_none();
     for spec in specs {
-        let step = process_spec(&spec, cwd, interactive, dry_run);
+        let step = process_spec(&spec, cwd, interactive, dry_run, auto_only);
         match step.status {
             IdeStatus::Created => summary.created += 1,
             IdeStatus::Updated => summary.updated += 1,
@@ -1212,7 +1264,13 @@ pub fn run_ide(
     Ok(IdeReport { steps, summary })
 }
 
-fn process_spec(spec: &ClientSpec, cwd: &Path, interactive: bool, dry_run: bool) -> IdeStep {
+fn process_spec(
+    spec: &ClientSpec,
+    cwd: &Path,
+    interactive: bool,
+    dry_run: bool,
+    auto_only: bool,
+) -> IdeStep {
     let client = client_name(spec.kind).to_string();
     let scope = match spec.scope {
         Scope::Project => "project",
@@ -1230,15 +1288,22 @@ fn process_spec(spec: &ClientSpec, cwd: &Path, interactive: bool, dry_run: bool)
         diff,
     };
 
-    if spec.scope == Scope::User {
-        let parent_missing = spec.path.parent().map(|p| !p.exists()).unwrap_or(true);
-        if parent_missing {
-            return make(
-                IdeStatus::Skipped,
-                "config directory not found (client likely not installed)".into(),
-                None,
-            );
-        }
+    // In the auto path (no explicit client), skip user clients we can't detect
+    // as installed. An explicitly-requested client is always wired.
+    if auto_only
+        && spec.scope == Scope::User
+        && !client_installed(
+            spec.kind,
+            spec.scope,
+            &spec.path,
+            std::env::var_os("PATH").as_deref(),
+        )
+    {
+        return make(
+            IdeStatus::Skipped,
+            "client not detected (no CLI on PATH, no config directory)".into(),
+            None,
+        );
     }
 
     let existing = match fs::read_to_string(&spec.path) {
@@ -1850,29 +1915,98 @@ mod tests {
     }
 
     #[test]
-    fn picker_items_marks_user_clients_not_installed_when_parent_missing() {
+    fn picker_items_marks_no_cli_user_client_not_installed_when_parent_missing() {
+        // Claude Desktop has no CLI binary, so detection relies solely on the
+        // config-dir proxy — PATH-independent, unlike CLI clients (claude,
+        // codex, ...) whose installed-ness now depends on the test host's PATH.
         let tmp = tempfile::tempdir().unwrap();
         let homes = HomeDirs {
-            claude_code: tmp.path().join("does/not/exist/claude.json"),
             claude_desktop: tmp.path().join("does/not/exist/desktop.json"),
-            codex: tmp.path().join("does/not/exist/codex.toml"),
-            gemini: tmp.path().join("does/not/exist/gemini.json"),
-            windsurf: tmp.path().join("does/not/exist/windsurf.json"),
-            opencode: tmp.path().join("does/not/exist/opencode.json"),
-            zed: tmp.path().join("does/not/exist/zed.json"),
+            ..HomeDirs::default()
         };
         let items = picker_items(tmp.path(), &homes);
-        for item in &items {
-            for opt in &item.scopes {
-                if opt.scope == Scope::User {
-                    assert!(
-                        !opt.installed,
-                        "{:?} user-scope should be flagged not-installed",
-                        item.kind
-                    );
-                }
-            }
-        }
+        let desktop = items
+            .iter()
+            .find(|i| i.kind == ClientKind::ClaudeDesktop)
+            .unwrap();
+        assert!(
+            !desktop.scopes[0].installed,
+            "Claude Desktop with no config dir should be not-installed"
+        );
+    }
+
+    #[test]
+    fn binary_in_finds_executable_on_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("bin");
+        std::fs::create_dir(&dir).unwrap();
+        let exe = if cfg!(windows) {
+            "mytool.exe"
+        } else {
+            "mytool"
+        };
+        std::fs::write(dir.join(exe), b"#!/bin/sh\n").unwrap();
+        let paths = std::env::join_paths([dir.as_path()]).unwrap();
+        assert!(binary_in(&paths, "mytool"), "executable on PATH is found");
+        assert!(
+            !binary_in(&paths, "absent"),
+            "missing executable is not found"
+        );
+    }
+
+    #[test]
+    fn client_installed_is_always_true_for_project_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("nope/mcp.json");
+        assert!(client_installed(
+            ClientKind::Cursor,
+            Scope::Project,
+            &missing,
+            None
+        ));
+    }
+
+    #[test]
+    fn client_installed_no_cli_client_uses_dir_proxy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let present = tmp.path().join("cfg.json"); // parent (tmp) exists
+        let absent = tmp.path().join("nope/cfg.json"); // parent missing
+                                                       // Claude Desktop has no CLI, so only the dir proxy applies.
+        assert!(client_installed(
+            ClientKind::ClaudeDesktop,
+            Scope::User,
+            &present,
+            None
+        ));
+        assert!(!client_installed(
+            ClientKind::ClaudeDesktop,
+            Scope::User,
+            &absent,
+            None
+        ));
+    }
+
+    #[test]
+    fn client_installed_detects_cli_only_via_injected_path() {
+        // Codex (a CLI client) with a missing config dir is "installed" only
+        // when its binary is on the injected PATH — deterministic, not the host's.
+        let tmp = tempfile::tempdir().unwrap();
+        let bindir = tmp.path().join("bin");
+        std::fs::create_dir(&bindir).unwrap();
+        let exe = if cfg!(windows) { "codex.exe" } else { "codex" };
+        std::fs::write(bindir.join(exe), b"#!/bin/sh\n").unwrap();
+        let with_codex = std::env::join_paths([bindir.as_path()]).unwrap();
+        let empty = std::env::join_paths::<_, &Path>([]).unwrap();
+        let cfg = tmp.path().join("nope/config.toml"); // parent missing
+
+        assert!(
+            client_installed(ClientKind::Codex, Scope::User, &cfg, Some(&with_codex)),
+            "codex on the injected PATH counts as installed"
+        );
+        assert!(
+            !client_installed(ClientKind::Codex, Scope::User, &cfg, Some(&empty)),
+            "no codex on PATH and no config dir → not installed"
+        );
     }
 
     #[test]
@@ -2000,7 +2134,7 @@ mod tests {
         let cfg = tmp.path().join("mcp.json");
         let spec = project_spec(cfg.clone());
 
-        let step = process_spec(&spec, tmp.path(), false, false);
+        let step = process_spec(&spec, tmp.path(), false, false, false);
         assert_eq!(step.status, IdeStatus::Created);
         assert!(cfg.exists(), "config file written to disk");
         let written = fs::read_to_string(&cfg).unwrap();
@@ -2014,9 +2148,9 @@ mod tests {
         let cfg = tmp.path().join("mcp.json");
         let spec = project_spec(cfg);
 
-        let first = process_spec(&spec, tmp.path(), false, false);
+        let first = process_spec(&spec, tmp.path(), false, false, false);
         assert_eq!(first.status, IdeStatus::Created);
-        let second = process_spec(&spec, tmp.path(), false, false);
+        let second = process_spec(&spec, tmp.path(), false, false, false);
         assert_eq!(
             second.status,
             IdeStatus::Unchanged,
@@ -2030,24 +2164,45 @@ mod tests {
         let cfg = tmp.path().join("mcp.json");
         let spec = project_spec(cfg.clone());
 
-        let step = process_spec(&spec, tmp.path(), false, true);
+        let step = process_spec(&spec, tmp.path(), false, true, false);
         assert_eq!(step.status, IdeStatus::Created);
         assert!(step.diff.is_some(), "dry-run carries a before/after diff");
         assert!(!cfg.exists(), "dry-run must not write the file");
     }
 
     #[test]
-    fn process_spec_skips_user_scope_when_parent_missing() {
+    fn process_spec_skips_undetected_user_client_in_auto_mode() {
         let tmp = tempfile::TempDir::new().unwrap();
-        // A user-scoped path whose parent directory does not exist → the
-        // client is treated as not installed and skipped.
+        // Cursor has no CLI binary, and this user-scoped parent dir is absent →
+        // undetected. In auto mode (no explicit client) it is skipped.
         let cfg = tmp.path().join("no-such-dir").join("config.json");
         let mut spec = project_spec(cfg.clone());
         spec.scope = Scope::User;
 
-        let step = process_spec(&spec, tmp.path(), false, false);
+        let step = process_spec(&spec, tmp.path(), false, false, true);
         assert_eq!(step.status, IdeStatus::Skipped);
         assert!(!cfg.exists(), "nothing written for a not-installed client");
+    }
+
+    #[test]
+    fn process_spec_wires_undetected_user_client_when_explicit() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Same undetected client, but auto_only = false (the user named it) →
+        // wired regardless of detection. The config dir is absent and is
+        // created from scratch: an explicit `cartog install X` materializes the
+        // client's config even when X isn't installed yet (intended).
+        let cfg = tmp.path().join("brand-new-dir").join("config.json");
+        assert!(!cfg.parent().unwrap().exists(), "parent dir starts absent");
+        let mut spec = project_spec(cfg.clone());
+        spec.scope = Scope::User;
+
+        let step = process_spec(&spec, tmp.path(), false, false, false);
+        assert_eq!(step.status, IdeStatus::Created);
+        assert!(cfg.exists(), "explicitly-requested client is wired");
+        assert!(
+            cfg.parent().unwrap().exists(),
+            "config dir created on demand"
+        );
     }
 
     #[test]
@@ -2057,7 +2212,7 @@ mod tests {
         fs::write(&cfg, "{ this is not valid json").unwrap();
         let spec = project_spec(cfg.clone());
 
-        let step = process_spec(&spec, tmp.path(), false, false);
+        let step = process_spec(&spec, tmp.path(), false, false, false);
         assert_eq!(
             step.status,
             IdeStatus::Skipped,

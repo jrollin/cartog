@@ -4,7 +4,7 @@ Code graph indexer for LLM coding agents. Map your codebase, navigate by graph.
 
 ## Overview
 
-Binary crate and library facade. Provides the `cartog` CLI with 23 top-level commands for code graph indexing, querying, and semantic search. Also re-exports workspace crates under the `cartog::` namespace for use by benches and integration tests.
+Binary crate and library facade. Provides the `cartog` CLI with 25 top-level commands for code graph indexing, querying, and semantic search. Also re-exports workspace crates under the `cartog::` namespace for use by benches and integration tests.
 
 ## CLI commands
 

@@ -6,6 +6,6 @@ use super::*;
 mod crud;
 mod lifecycle;
 mod lsp;
-mod queries;
+pub(crate) mod queries;
 mod rag;
 mod resolution;

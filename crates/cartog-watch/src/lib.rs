@@ -21,6 +21,9 @@ use cartog_indexer as indexer;
 use cartog_indexer::is_ignored_dirname;
 use cartog_rag as rag;
 
+mod stale;
+pub use stale::{StaleSnapshot, StaleState};
+
 /// Configuration for the watch loop.
 pub struct WatchConfig {
     /// Root directory to watch.
@@ -60,6 +63,9 @@ pub struct WatchConfig {
     /// when it pinned `PinnedAttach`; running them again would re-trigger
     /// the SQLITE_BUSY race the election prevents).
     pub skip_migrations: bool,
+    /// Shared staleness state for the MCP server to read. `None` (the default,
+    /// e.g. standalone `cartog watch`) disables staleness publishing.
+    pub stale: Option<Arc<StaleState>>,
 }
 
 impl WatchConfig {
@@ -84,6 +90,7 @@ impl WatchConfig {
             pid_lock_dir: None,
             pid_lock_slot: None,
             skip_migrations: false,
+            stale: None,
         }
     }
 }
@@ -463,6 +470,13 @@ fn watch_loop(
                         count = events.len(),
                         "file change events received, re-indexing"
                     );
+                    // Capture the change count BEFORE reindexing; a change that
+                    // arrives while the reindex runs bumps the seq past this and
+                    // stays flagged stale.
+                    let caught_up_to = config.stale.as_ref().map(|s| {
+                        s.note_change();
+                        s.change_seq()
+                    });
                     let reindex_start = Instant::now();
                     match indexer::index_directory(
                         &db,
@@ -495,6 +509,7 @@ fn watch_loop(
                                 });
                             }
                             // Check if RAG embedding is needed
+                            let mut pending_count = 0u32;
                             if config.rag {
                                 match db.symbols_needing_embeddings() {
                                     Ok(needing) if !needing.is_empty() => {
@@ -502,6 +517,7 @@ fn watch_loop(
                                             pending = needing.len(),
                                             "symbols need embedding, starting RAG timer"
                                         );
+                                        pending_count = needing.len() as u32;
                                         rag_pending = true;
                                         last_index_time = Some(Instant::now());
                                     }
@@ -513,6 +529,9 @@ fn watch_loop(
                                         warn!(error = %e, "failed to check embedding status");
                                     }
                                 }
+                            }
+                            if let (Some(s), Some(seq)) = (&config.stale, caught_up_to) {
+                                s.note_reindex(seq, pending_count);
                             }
                         }
                         Err(e) => {
@@ -563,6 +582,10 @@ fn watch_loop(
                                                 duration_ms: embed_start.elapsed().as_millis(),
                                             });
                                         }
+                                        // Embeddings are current — clear the stale signal.
+                                        if let Some(s) = &config.stale {
+                                            s.clear_rag_pending();
+                                        }
                                     }
                                     Err(e) => {
                                         warn!(error = %e, "RAG embedding failed");
@@ -571,9 +594,13 @@ fn watch_loop(
                                                 error: e.to_string(),
                                             });
                                         }
+                                        // Leave the stale signal set: embeddings did NOT
+                                        // catch up, so callers must still be warned.
                                     }
                                 }
                             }
+                            // Disarm the local retry timer regardless (avoid a tight
+                            // re-embed loop); a later file change re-arms it.
                             rag_pending = false;
                             last_index_time = None;
                         }

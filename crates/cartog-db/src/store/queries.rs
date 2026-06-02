@@ -4,6 +4,31 @@
 
 use super::*;
 
+/// One hop on a call path returned by [`Database::trace`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PathHop {
+    /// Id of the calling symbol — the exact source on this hop, so callers can
+    /// hydrate its body without re-resolving an ambiguous name.
+    pub source_id: String,
+    pub source_name: String,
+    pub target_name: String,
+    pub kind: EdgeKind,
+    pub file_path: String,
+    pub line: u32,
+}
+
+/// Internal call-edge record used during BFS in [`Database::trace`].
+#[derive(Debug, Clone)]
+struct CallHop {
+    source_id: String,
+    source_name: String,
+    target_name: String,
+    target_id: Option<String>,
+    kind: EdgeKind,
+    file_path: String,
+    line: u32,
+}
+
 impl Database {
     // ── Queries ──
 
@@ -261,6 +286,143 @@ impl Database {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Shortest forward `calls` path from `from` to `to`, or `None` if `to` is
+    /// unreachable within `max_depth` hops. `from == to` yields an empty path.
+    /// Matches the source symbol by name, so an ambiguous `from` follows every
+    /// match and the globally-shortest path wins. Only statically-resolved
+    /// `calls` edges participate (dynamic dispatch is absent).
+    ///
+    /// # Errors
+    /// Returns an error if the SQLite query fails.
+    pub fn trace(&self, from: &str, to: &str, max_depth: u32) -> Result<Option<Vec<PathHop>>> {
+        if from == to {
+            return Ok(Some(Vec::new()));
+        }
+        if max_depth == 0 {
+            return Ok(None);
+        }
+
+        // Breadth-first over `calls` edges, expanding each symbol once. Visited
+        // is keyed on exact symbol id (a HashSet, not a delimited string), so
+        // ids containing commas can't corrupt the cycle break, and the global
+        // visited set bounds the search to O(V+E) — no per-path enumeration.
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // parent[id] = (edge that reached it, predecessor symbol id).
+        let mut parent: std::collections::HashMap<String, (CallHop, String)> =
+            std::collections::HashMap::new();
+
+        // Seed: every symbol named `from` starts the frontier at depth 0.
+        let mut frontier: Vec<String> = self.symbol_ids_named(from)?;
+        for id in &frontier {
+            visited.insert(id.clone());
+        }
+
+        for _ in 0..max_depth {
+            if frontier.is_empty() {
+                break;
+            }
+            let mut next: Vec<String> = Vec::new();
+            for src_id in &frontier {
+                for hop in self.outgoing_calls(src_id)? {
+                    // A reached symbol is any symbol whose name matches the
+                    // edge's target (resolved id preferred when present).
+                    for tgt_id in self.resolved_call_targets(&hop)? {
+                        if !visited.insert(tgt_id.clone()) {
+                            continue;
+                        }
+                        parent.insert(tgt_id.clone(), (hop.clone(), src_id.clone()));
+                        if self.symbol_name(&tgt_id)?.as_deref() == Some(to) {
+                            return Ok(Some(self.reconstruct_path(&tgt_id, &parent)));
+                        }
+                        next.push(tgt_id);
+                    }
+                }
+            }
+            frontier = next;
+        }
+        Ok(None)
+    }
+
+    /// Walk `parent` back from `end` to the seed, returning hops in call order.
+    fn reconstruct_path(
+        &self,
+        end: &str,
+        parent: &std::collections::HashMap<String, (CallHop, String)>,
+    ) -> Vec<PathHop> {
+        let mut chain: Vec<&CallHop> = Vec::new();
+        let mut cur = end;
+        while let Some((hop, pred)) = parent.get(cur) {
+            chain.push(hop);
+            cur = pred;
+        }
+        chain.reverse();
+        chain
+            .into_iter()
+            .map(|h| PathHop {
+                source_id: h.source_id.clone(),
+                source_name: h.source_name.clone(),
+                target_name: h.target_name.clone(),
+                kind: h.kind,
+                file_path: h.file_path.clone(),
+                line: h.line,
+            })
+            .collect()
+    }
+
+    /// Symbol ids whose name is exactly `name`.
+    fn symbol_ids_named(&self, name: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT id FROM symbols WHERE name = ?1")?;
+        let ids = stmt
+            .query_map(params![name], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
+    /// Name of the symbol with id `id`, if it exists.
+    fn symbol_name(&self, id: &str) -> Result<Option<String>> {
+        let name = self
+            .conn
+            .prepare_cached("SELECT name FROM symbols WHERE id = ?1")?
+            .query_row(params![id], |row| row.get::<_, String>(0))
+            .optional()?;
+        Ok(name)
+    }
+
+    /// Outgoing `calls` edges from the symbol with id `source_id`.
+    fn outgoing_calls(&self, source_id: &str) -> Result<Vec<CallHop>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT s.name, e.target_name, e.target_id, e.kind, e.file_path, e.line
+             FROM edges e JOIN symbols s ON e.source_id = s.id
+             WHERE e.source_id = ?1 AND e.kind = 'calls'",
+        )?;
+        let hops = stmt
+            .query_map(params![source_id], |row| {
+                let kind_str: String = row.get(3)?;
+                Ok(CallHop {
+                    source_id: source_id.to_string(),
+                    source_name: row.get(0)?,
+                    target_name: row.get(1)?,
+                    target_id: row.get(2)?,
+                    kind: kind_str.parse().unwrap_or(EdgeKind::Calls),
+                    file_path: row.get(4)?,
+                    line: row.get(5)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(hops)
+    }
+
+    /// Symbol ids a call hop reaches: the resolved `target_id` if set, else
+    /// every symbol whose name matches the edge's `target_name`.
+    fn resolved_call_targets(&self, hop: &CallHop) -> Result<Vec<String>> {
+        if let Some(id) = &hop.target_id {
+            return Ok(vec![id.clone()]);
+        }
+        self.symbol_ids_named(&hop.target_name)
     }
 
     /// True when no symbols have been indexed yet (fresh/empty DB). Cheap —

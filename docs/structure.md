@@ -53,7 +53,7 @@ Each link goes to that crate's `README.md`, which has the detailed responsibilit
 - **[cartog-watch](../crates/cartog-watch/README.md)** — debounced file watcher (`notify-debouncer-mini`), incremental re-index, deferred RAG embedding.
 - **[cartog-mcp](../crates/cartog-mcp/README.md)** — MCP server over stdio (`rmcp`). 13 tool handlers, single-writer election (primary + read-only attach + promotion).
 - **[cartog-process-lock](../crates/cartog-process-lock/README.md)** — cross-platform PID-file locks (`<state_dir>/{slot}.pid`). Two-line format with `is_same_process(pid, start_time)` to close the PID-reuse window. Used by `cartog serve`, `cartog watch`, and `cartog self update`.
-- **[cartog](../crates/cartog/README.md)** — binary crate: 23 top-level CLI commands via clap (including `cartog push`/`pull` for S3 index sync and `cartog self update/version/rollback/migrate-db`), config resolution, logging, tokio runtime for `cartog serve`, daily background update probe.
+- **[cartog](../crates/cartog/README.md)** — binary crate: 25 top-level CLI commands via clap (including `cartog trace`/`context` for call paths and task-context bundles, `cartog push`/`pull` for S3 index sync, and `cartog self update/version/rollback/migrate-db`), config resolution, logging, tokio runtime for `cartog serve`, daily background update probe.
 
 ## Conventions
 

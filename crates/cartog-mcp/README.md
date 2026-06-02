@@ -10,7 +10,7 @@ Exposes cartog's graph queries, indexing, and semantic search as MCP tools over 
 
 ### MCP tools
 
-13 tools are exposed via rmcp's `#[tool_router]` macro with auto-generated JSON Schema parameters. Each tool also carries `annotations` (a `title` and `readOnlyHint`: `true` for the 11 query tools, `false` for the two index tools), and the read tools declare an `outputSchema`:
+16 tools are exposed via rmcp's `#[tool_router]` macro with auto-generated JSON Schema parameters. Each tool also carries `annotations` (a `title` and `readOnlyHint`: `true` for the 13 query tools, `false` for the two index tools and `cartog_update`), and the read tools declare an `outputSchema`:
 
 | Tool | Description |
 |------|-------------|
@@ -20,6 +20,8 @@ Exposes cartog's graph queries, indexing, and semantic search as MCP tools over 
 | `cartog_refs` | All references to a symbol |
 | `cartog_callees` | Outgoing calls from a symbol |
 | `cartog_impact` | Transitive impact analysis (max depth: 10) |
+| `cartog_trace` | Shortest call path between two symbols, bodies inline |
+| `cartog_context` | One-shot task-context bundle (semantic + structural + centrality) |
 | `cartog_hierarchy` | Inheritance hierarchy for a class |
 | `cartog_deps` | File-level import dependencies |
 | `cartog_search` | Search symbols by name |
@@ -27,6 +29,7 @@ Exposes cartog's graph queries, indexing, and semantic search as MCP tools over 
 | `cartog_changes` | Symbols affected by recent git changes |
 | `cartog_rag_index` | Build embedding index for semantic search |
 | `cartog_rag_search` | Semantic search over code symbols |
+| `cartog_update` | Arm a deferred self-update |
 
 ### Path validation
 

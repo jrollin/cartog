@@ -167,6 +167,29 @@ pub enum Command {
         depth: u32,
     },
 
+    /// Build a one-shot task-context bundle: relevant symbols + bodies for a task
+    Context {
+        /// Natural-language description of the task
+        task: String,
+
+        /// Approximate token budget for the bundle
+        #[arg(long, default_value = "6000")]
+        tokens: u32,
+    },
+
+    /// Find a call path between two symbols, with each hop's body inline
+    Trace {
+        /// Starting symbol (the caller end of the path)
+        from: String,
+
+        /// Target symbol (the callee end of the path)
+        to: String,
+
+        /// Maximum path length to search
+        #[arg(long, default_value = "8")]
+        depth: u32,
+    },
+
     /// All references to a symbol (calls, imports, inherits, references, raises)
     Refs {
         /// Symbol name to search for

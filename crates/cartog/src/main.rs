@@ -195,6 +195,23 @@ fn main() -> Result<()> {
             token_budget,
             embedding_dim,
         ),
+        Command::Context { task, tokens } => commands::cmd_context(
+            &db_path,
+            &task,
+            tokens,
+            cli.json,
+            &provider_config,
+            &search_tuning,
+        ),
+        Command::Trace { from, to, depth } => commands::cmd_trace(
+            &db_path,
+            &from,
+            &to,
+            depth,
+            cli.json,
+            token_budget,
+            embedding_dim,
+        ),
         Command::Refs { name, kind } => {
             commands::cmd_refs(&db_path, &name, kind, cli.json, token_budget, embedding_dim)
         }
