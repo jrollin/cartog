@@ -150,7 +150,9 @@ fn which(name: &str) -> Option<PathBuf> {
 /// Returns true (with a SKIP message printed) when an external dep is missing.
 /// Tests should `return` early if this returns true.
 fn skip_unless_deps_present() -> bool {
-    for tool in ["docker", "aws"] {
+    // `git` is needed by build_minimal_index (it commits so the index records
+    // last_commit); without it the fixture would hard-fail instead of skip.
+    for tool in ["docker", "aws", "git"] {
         if which(tool).is_none() {
             eprintln!("SKIP: `{tool}` not on PATH");
             return true;
@@ -195,9 +197,16 @@ fn build_minimal_index(repo_dir: &Path, db_path: &Path) {
             .stderr(Stdio::null())
             .status()
     };
-    let _ = git(&["init", "-q"]);
-    let _ = git(&["add", "-A"]);
-    // Must succeed: provenance tests need metadata[last_commit], i.e. a HEAD.
+    // All three must succeed: provenance tests need metadata[last_commit], i.e.
+    // a resolvable HEAD. Asserting each step reports the failure at its source.
+    assert!(
+        matches!(git(&["init", "-q"]), Ok(s) if s.success()),
+        "git init failed in build_minimal_index"
+    );
+    assert!(
+        matches!(git(&["add", "-A"]), Ok(s) if s.success()),
+        "git add failed in build_minimal_index"
+    );
     let committed = git(&[
         "-c",
         "user.email=ci@cartog.test",

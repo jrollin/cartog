@@ -295,19 +295,19 @@ mod imp {
             .collect()
     }
 
-    /// JSON-escaped `git_commit` value or `null` (the commit may be untrusted).
-    fn commit_json_field(commit: Option<&str>) -> String {
-        match commit {
-            Some(c) => serde_json::Value::String(c.to_string()).to_string(),
-            None => "null".to_string(),
-        }
-    }
-
-    /// `, commit=<short>` suffix; char-safe truncation so it never panics.
+    /// `, commit=<short>` suffix. Whitelists ASCII hex (a git SHA is hex), so a
+    /// hand-edited/forged value can never emit control codes; empty → no suffix.
     fn commit_suffix(commit: Option<&str>) -> String {
-        match commit {
-            Some(c) => format!(", commit={}", c.chars().take(8).collect::<String>()),
-            None => String::new(),
+        let hex: String = commit
+            .unwrap_or("")
+            .chars()
+            .filter(char::is_ascii_hexdigit)
+            .take(8)
+            .collect();
+        if hex.is_empty() {
+            String::new()
+        } else {
+            format!(", commit={hex}")
         }
     }
 
@@ -391,11 +391,16 @@ mod imp {
         })?;
 
         if json {
-            // Additive field: null when the index has no commit provenance.
-            let commit_json = commit_json_field(git_commit.as_deref());
-            println!(
-                r#"{{"bucket":"{bucket_name}","key":"{key}","size":{size},"sha256":"{sha}","schema_version":{schema},"git_commit":{commit_json}}}"#
-            );
+            // serde serialization escapes every field; git_commit is null when absent.
+            let value = serde_json::json!({
+                "bucket": bucket_name,
+                "key": key,
+                "size": size,
+                "sha256": sha,
+                "schema_version": schema,
+                "git_commit": git_commit,
+            });
+            println!("{}", serde_json::to_string(&value)?);
         } else {
             println!(
                 "pushed {}/{key} ({} bytes, sha256={}…, schema=v{schema}{})",
@@ -665,10 +670,16 @@ mod imp {
 
         let size = std::fs::metadata(db_path)?.len();
         if json {
-            let commit_json = commit_json_field(report_commit.as_deref());
-            println!(
-                r#"{{"bucket":"{bucket_name}","key":"{key}","size":{size},"sha256":"{actual_sha}","schema_version":{pulled_schema},"git_commit":{commit_json}}}"#
-            );
+            // serde serialization escapes every field; git_commit is null when absent.
+            let value = serde_json::json!({
+                "bucket": bucket_name,
+                "key": key,
+                "size": size,
+                "sha256": actual_sha,
+                "schema_version": pulled_schema,
+                "git_commit": report_commit,
+            });
+            println!("{}", serde_json::to_string(&value)?);
         } else {
             println!(
                 "pulled {}/{key} → {} ({} bytes, sha256={}…, schema=v{pulled_schema}{})",
@@ -739,22 +750,16 @@ mod imp {
         }
 
         #[test]
-        fn commit_json_field_escapes_and_nulls() {
-            assert_eq!(commit_json_field(None), "null");
-            assert_eq!(commit_json_field(Some("abc123")), r#""abc123""#);
-            // A quote/backslash must be escaped, not break the JSON document.
-            assert_eq!(
-                commit_json_field(Some(r#"a","x":"b"#)),
-                r#""a\",\"x\":\"b""#
-            );
-        }
-
-        #[test]
-        fn commit_suffix_truncates_by_char_not_byte() {
+        fn commit_suffix_whitelists_hex_and_truncates() {
             assert_eq!(commit_suffix(None), "");
             assert_eq!(commit_suffix(Some("1234567890abcdef")), ", commit=12345678");
-            // Multibyte value must not panic on a byte-index slice.
-            assert_eq!(commit_suffix(Some("1234567é89")), ", commit=1234567é");
+            // Control codes / multibyte / punctuation are filtered out: only the
+            // hex digits survive (the ESC, '[', 'm' are gone; '3','1' are hex).
+            assert_eq!(commit_suffix(Some("\x1b[31mabc")), ", commit=31abc");
+            assert!(!commit_suffix(Some("\x1b[31mabc")).contains('\x1b'));
+            assert_eq!(commit_suffix(Some("12é34")), ", commit=1234");
+            // Nothing hex-like → no suffix (safe default).
+            assert_eq!(commit_suffix(Some("zzz!!!")), "");
         }
     }
 }
