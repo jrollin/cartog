@@ -743,7 +743,11 @@ What it does, in order:
 2. Runs `PRAGMA wal_checkpoint(TRUNCATE)` so the file is self-contained.
 3. Streams a SHA-256 hash of the DB.
 4. Uploads via multipart with object metadata: `x-amz-meta-sha256`,
-   `x-amz-meta-schema-version`, `x-amz-meta-cartog-version`.
+   `x-amz-meta-schema-version`, `x-amz-meta-cartog-version`, and
+   `x-amz-meta-git-commit` (the commit the index was built at; omitted when
+   the index has no git provenance). The `--json` output adds a `git_commit`
+   field (`null` when absent) so a puller can decide whether the remote index
+   matches its checkout.
 
 Credentials come from the AWS environment chain (env vars, `~/.aws/credentials`,
 IMDS) — **never from `.cartog.toml`**. Storing a credential-shaped key
@@ -771,6 +775,12 @@ Safety guarantees:
 - **Non-cartog files refused** — pulling a SQLite file that lacks cartog's
   schema (e.g. an unrelated app's DB) is refused even when its sha256
   matches; cartog cross-checks the `schema_version` row against the header.
+- **Commit provenance (report-only)** — pull prints the commit the index was
+  built at (`commit=<short>`, also `git_commit` in `--json`) and, when both
+  the `x-amz-meta-git-commit` header and the file's `last_commit` row are
+  present, refuses to install if they disagree. Pull never blocks on
+  staleness: the install always proceeds, and the caller (CI script, agent)
+  decides whether the reported commit is fresh enough.
 - **Schema-version guard** — refuses to install a DB produced by a newer
   cartog, naming both the pulled and supported versions.
 - **WAL/SHM cleanup** — stale `db-wal` / `db-shm` siblings are deleted

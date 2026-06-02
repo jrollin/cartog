@@ -27,6 +27,8 @@ const META_SHA256: &str = "sha256";
 const META_SCHEMA_VERSION: &str = "schema-version";
 #[cfg(feature = "remote-s3")]
 const META_CARTOG_VERSION: &str = "cartog-version";
+#[cfg(feature = "remote-s3")]
+const META_GIT_COMMIT: &str = "git-commit";
 
 /// Parse an `s3://bucket/key` URL into `(bucket, key)`.
 ///
@@ -113,7 +115,9 @@ fn resolve_remote_url(
 #[cfg(feature = "remote-s3")]
 mod imp {
     use super::*;
-    use cartog_db::{checkpoint_wal, read_schema_version_at, CURRENT_SCHEMA_VERSION};
+    use cartog_db::{
+        checkpoint_wal, read_metadata_at, read_schema_version_at, CURRENT_SCHEMA_VERSION,
+    };
     use cartog_process_lock::find_active_locks;
     use s3::bucket::Bucket;
     use s3::creds::Credentials;
@@ -291,6 +295,22 @@ mod imp {
             .collect()
     }
 
+    /// `, commit=<short>` suffix. Whitelists ASCII hex (a git SHA is hex), so a
+    /// hand-edited/forged value can never emit control codes; empty → no suffix.
+    fn commit_suffix(commit: Option<&str>) -> String {
+        let hex: String = commit
+            .unwrap_or("")
+            .chars()
+            .filter(char::is_ascii_hexdigit)
+            .take(8)
+            .collect();
+        if hex.is_empty() {
+            String::new()
+        } else {
+            format!(", commit={hex}")
+        }
+    }
+
     pub(super) fn push_index(
         db_path: &Path,
         remote_cfg: Option<&RemoteConfig>,
@@ -325,6 +345,9 @@ mod imp {
         let sha = sha256_file(db_path)?;
         let schema = read_schema_version_at(db_path)
             .with_context(|| format!("read schema_version from {}", db_path.display()))?;
+        // Commit the index was built at; absent on a non-git index (header omitted).
+        let git_commit = read_metadata_at(db_path, "last_commit")
+            .with_context(|| format!("read last_commit from {}", db_path.display()))?;
         let size = std::fs::metadata(db_path)?.len();
 
         // 4) Async upload via a small tokio current-thread runtime — keep the
@@ -346,6 +369,9 @@ mod imp {
                 &format!("x-amz-meta-{META_CARTOG_VERSION}"),
                 env!("CARGO_PKG_VERSION"),
             );
+            if let Some(commit) = git_commit.as_deref() {
+                bucket.add_header(&format!("x-amz-meta-{META_GIT_COMMIT}"), commit);
+            }
 
             let mut file = tokio::fs::File::open(db_path)
                 .await
@@ -365,15 +391,23 @@ mod imp {
         })?;
 
         if json {
-            println!(
-                r#"{{"bucket":"{bucket_name}","key":"{key}","size":{size},"sha256":"{sha}","schema_version":{schema}}}"#
-            );
+            // serde serialization escapes every field; git_commit is null when absent.
+            let value = serde_json::json!({
+                "bucket": bucket_name,
+                "key": key,
+                "size": size,
+                "sha256": sha,
+                "schema_version": schema,
+                "git_commit": git_commit,
+            });
+            println!("{}", serde_json::to_string(&value)?);
         } else {
             println!(
-                "pushed {}/{key} ({} bytes, sha256={}…, schema=v{schema})",
+                "pushed {}/{key} ({} bytes, sha256={}…, schema=v{schema}{})",
                 bucket_name,
                 size,
-                &sha[..8]
+                &sha[..8],
+                commit_suffix(git_commit.as_deref())
             );
         }
         Ok(())
@@ -424,7 +458,11 @@ mod imp {
             .build()
             .context("build tokio runtime")?;
 
-        let (expected_sha, schema_meta): (Option<String>, Option<u32>) = rt.block_on(async {
+        let (expected_sha, schema_meta, commit_meta): (
+            Option<String>,
+            Option<u32>,
+            Option<String>,
+        ) = rt.block_on(async {
             let bucket = build_bucket(&bucket_name, remote_cfg, no_sign_request)?;
 
             // 3) Stream-download to .partial.
@@ -452,6 +490,7 @@ mod imp {
             }
             let md: HashMap<String, String> = head.metadata.unwrap_or_default();
             let sha = md.get(META_SHA256).cloned();
+            let commit = md.get(META_GIT_COMMIT).cloned();
             // Distinguish "header absent" (None) from "header present but not
             // a u32" (a hard error). Collapsing both into None made a corrupt
             // or hand-edited `x-amz-meta-schema-version: abc` masquerade as a
@@ -468,7 +507,7 @@ mod imp {
                     )
                 })?),
             };
-            Ok::<_, anyhow::Error>((sha, schema))
+            Ok::<_, anyhow::Error>((sha, schema, commit))
         })?;
 
         // 5) Verify SHA-256 against object metadata.
@@ -543,6 +582,25 @@ mod imp {
             );
         }
 
+        // 6b) Git-commit provenance, report-only. When both header and file
+        //     row are present they must agree (catches partial/edited uploads);
+        //     an absent header is fine. Staleness is the caller's decision.
+        let file_commit = read_metadata_at(&partial, "last_commit")
+            .with_context(|| format!("read last_commit from pulled {}", partial.display()))?;
+        if let (Some(header), Some(file)) = (commit_meta.as_deref(), file_commit.as_deref()) {
+            if header != file {
+                // {:?} so an untrusted header can't inject terminal control codes.
+                bail!(
+                    "git-commit mismatch: object metadata claims commit {header:?} but the \
+                     file's `last_commit` row says {file:?}. Refusing to install — this usually \
+                     means a partial / corrupted upload, or hand-edited S3 metadata. Re-push \
+                     from a healthy cartog run."
+                );
+            }
+        }
+        // Report the file's own row only — never the unvalidated S3 header.
+        let report_commit = file_commit;
+
         // 7) Re-check for peers right before the rename window. The
         //    download above can take many seconds; a `cartog serve` /
         //    `cartog watch` that started during that window now holds an
@@ -612,16 +670,24 @@ mod imp {
 
         let size = std::fs::metadata(db_path)?.len();
         if json {
-            println!(
-                r#"{{"bucket":"{bucket_name}","key":"{key}","size":{size},"sha256":"{actual_sha}","schema_version":{pulled_schema}}}"#
-            );
+            // serde serialization escapes every field; git_commit is null when absent.
+            let value = serde_json::json!({
+                "bucket": bucket_name,
+                "key": key,
+                "size": size,
+                "sha256": actual_sha,
+                "schema_version": pulled_schema,
+                "git_commit": report_commit,
+            });
+            println!("{}", serde_json::to_string(&value)?);
         } else {
             println!(
-                "pulled {}/{key} → {} ({} bytes, sha256={}…, schema=v{pulled_schema})",
+                "pulled {}/{key} → {} ({} bytes, sha256={}…, schema=v{pulled_schema}{})",
                 bucket_name,
                 db_path.display(),
                 size,
-                &actual_sha[..8]
+                &actual_sha[..8],
+                commit_suffix(report_commit.as_deref())
             );
         }
         Ok(())
@@ -681,6 +747,19 @@ mod imp {
                 !is_cross_device_error(&no_os),
                 "an error without an OS code is not cross-device"
             );
+        }
+
+        #[test]
+        fn commit_suffix_whitelists_hex_and_truncates() {
+            assert_eq!(commit_suffix(None), "");
+            assert_eq!(commit_suffix(Some("1234567890abcdef")), ", commit=12345678");
+            // Control codes / multibyte / punctuation are filtered out: only the
+            // hex digits survive (the ESC, '[', 'm' are gone; '3','1' are hex).
+            assert_eq!(commit_suffix(Some("\x1b[31mabc")), ", commit=31abc");
+            assert!(!commit_suffix(Some("\x1b[31mabc")).contains('\x1b'));
+            assert_eq!(commit_suffix(Some("12é34")), ", commit=1234");
+            // Nothing hex-like → no suffix (safe default).
+            assert_eq!(commit_suffix(Some("zzz!!!")), "");
         }
     }
 }
