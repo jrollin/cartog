@@ -108,13 +108,16 @@ Returns `Vec<Symbol>` + `Vec<Edge>`. After all files are extracted, `db.resolve_
 ### Release Process
 
 ```bash
-./scripts/release.sh patch   # 0.1.0 → 0.1.1
-./scripts/release.sh minor   # 0.1.0 → 0.2.0
-./scripts/release.sh major   # 0.1.0 → 1.0.0
-./scripts/release.sh 2.3.4   # set exact version
+./scripts/release.sh patch            # 0.1.0 → 0.1.1
+./scripts/release.sh minor            # 0.1.0 → 0.2.0
+./scripts/release.sh major            # 0.1.0 → 1.0.0
+./scripts/release.sh 2.3.4            # set exact version
+./scripts/release.sh --dry-run minor  # preview next version + changelog, change nothing
 ```
 
 The script bumps `Cargo.toml`, commits, tags `vX.Y.Z`, and pushes. The release workflow then builds binaries and publishes to crates.io.
+
+`--dry-run` prints the computed next version and the unreleased changelog (via `git-cliff`), then exits before touching the working tree, tags, or remote. It skips the main-branch and clean-tree gates since it only reads git history.
 
 ## Documentation Convention
 

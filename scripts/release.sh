@@ -11,15 +11,19 @@ info() { echo "==> $*"; }
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") <major|minor|patch|VERSION>
+Usage: $(basename "$0") [--dry-run] <major|minor|patch|VERSION>
 
 Bump the version in Cargo.toml, commit, tag, and push.
 
+  --dry-run   Print the computed next version and the unreleased changelog,
+              then exit without touching the working tree, tags, or remote.
+
 Examples:
-  $(basename "$0") patch        # 0.1.0 → 0.1.1
-  $(basename "$0") minor        # 0.1.0 → 0.2.0
-  $(basename "$0") major        # 0.1.0 → 1.0.0
-  $(basename "$0") 2.3.4        # set exact version 2.3.4
+  $(basename "$0") patch            # 0.1.0 → 0.1.1
+  $(basename "$0") minor            # 0.1.0 → 0.2.0
+  $(basename "$0") major            # 0.1.0 → 1.0.0
+  $(basename "$0") 2.3.4            # set exact version 2.3.4
+  $(basename "$0") --dry-run minor  # preview the v0.2.0 changelog, change nothing
 EOF
   exit 1
 }
@@ -50,13 +54,22 @@ next_version() {
 }
 
 # ── main ─────────────────────────────────────────────────────────────
+DRY_RUN=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=1
+  shift
+fi
+
 [[ $# -eq 1 ]] || usage
 
 # sanity checks
 [[ -f "$CARGO_TOML" ]] || die "cannot find $CARGO_TOML — run from repo root"
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
-[[ "$BRANCH" == "main" ]] || die "release must be cut from main (currently on '$BRANCH')"
-git diff --quiet && git diff --cached --quiet || die "working tree is dirty — commit or stash first"
+# --dry-run only reads git history, so skip the branch/clean-tree gates.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  BRANCH=$(git rev-parse --abbrev-ref HEAD)
+  [[ "$BRANCH" == "main" ]] || die "release must be cut from main (currently on '$BRANCH')"
+  git diff --quiet && git diff --cached --quiet || die "working tree is dirty — commit or stash first"
+fi
 
 CURRENT=$(current_version)
 NEW=$(next_version "$CURRENT" "$1")
@@ -69,6 +82,18 @@ TAG="v${NEW}"
 
 if git rev-parse "$TAG" >/dev/null 2>&1; then
   die "tag $TAG already exists"
+fi
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  info "dry run — would bump $CURRENT → $NEW (tag $TAG)"
+  if command -v git-cliff &>/dev/null; then
+    echo
+    git-cliff --config cliff.toml --unreleased --tag "$TAG"
+  else
+    info "git-cliff not found — install it to preview the changelog"
+  fi
+  info "dry run complete — nothing was changed"
+  exit 0
 fi
 
 info "bumping $CURRENT → $NEW"
