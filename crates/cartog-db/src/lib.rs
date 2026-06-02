@@ -417,6 +417,41 @@ pub fn read_schema_version_at(path: &std::path::Path) -> anyhow::Result<u32> {
     Ok(read_schema_version(&conn)?)
 }
 
+/// Read a single `metadata` value by key from a cartog SQLite file at `path`,
+/// without the full [`Database::open`] machinery. Mirrors
+/// [`read_schema_version_at`]; used by `cartog push`/`pull` to read the
+/// `last_commit` provenance row off a closed DB file.
+///
+/// Returns `Ok(None)` when the file is a cartog DB but lacks the row, or when
+/// it has no `metadata` table at all (not a cartog DB). Returns `Err` only on
+/// genuine SQLite errors (corrupt file, permission denied, etc.).
+pub fn read_metadata_at(path: &std::path::Path, key: &str) -> anyhow::Result<Option<String>> {
+    use anyhow::Context;
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .with_context(|| format!("open {} read-only for metadata read", path.display()))?;
+    match conn.query_row(
+        "SELECT value FROM metadata WHERE key = ?1",
+        rusqlite::params![key],
+        |row| row.get::<_, Option<String>>(0),
+    ) {
+        // Row present; value may be a string or SQL NULL (a corrupt/hand-edited
+        // row) — both collapse to "no usable value", same as a missing row.
+        Ok(v) => Ok(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        // Missing `metadata` table entirely (non-cartog SQLite file): treat as
+        // absent rather than an error, matching read_schema_version's stored=0.
+        Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
+            if msg.contains("no such table: metadata") =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e).with_context(|| format!("read metadata[{key}] from {}", path.display())),
+    }
+}
+
 /// True when the `symbol_vec` virtual table exists in the open DB. Used by
 /// the fast-path early returns in [`handle_embedding_dimension`] and
 /// [`Database::reconcile_embedding_fingerprint`] so a previously-corrupted
@@ -4089,5 +4124,58 @@ mod tests {
             )
             .unwrap();
         assert_eq!(bumped, SCHEMA_VERSION.to_string());
+    }
+
+    #[test]
+    fn read_metadata_at_returns_value_when_present() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            db.set_metadata("last_commit", "abc1234").unwrap();
+        }
+        assert_eq!(
+            read_metadata_at(&db_path, "last_commit").unwrap(),
+            Some("abc1234".to_string())
+        );
+    }
+
+    #[test]
+    fn read_metadata_at_returns_none_when_row_absent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        // A freshly opened cartog DB has a metadata table but no last_commit row.
+        let _db = Database::open(&db_path, 384).unwrap();
+        assert_eq!(read_metadata_at(&db_path, "last_commit").unwrap(), None);
+    }
+
+    #[test]
+    fn read_metadata_at_returns_none_for_non_cartog_sqlite() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("foreign.db");
+        // A SQLite file with no `metadata` table is not a cartog DB; the helper
+        // treats the missing table as an absent value, not an error.
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("CREATE TABLE notes(content TEXT);")
+            .unwrap();
+        drop(conn);
+        assert_eq!(read_metadata_at(&db_path, "last_commit").unwrap(), None);
+    }
+
+    #[test]
+    fn read_metadata_at_returns_none_for_null_value() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        {
+            let db = Database::open(&db_path, 384).unwrap();
+            // A corrupt/hand-edited NULL value must read as absent, not error.
+            db.conn
+                .execute(
+                    "INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_commit', NULL)",
+                    [],
+                )
+                .unwrap();
+        }
+        assert_eq!(read_metadata_at(&db_path, "last_commit").unwrap(), None);
     }
 }

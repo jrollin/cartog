@@ -184,11 +184,34 @@ fn create_bucket(endpoint: &str, bucket: &str) {
 fn build_minimal_index(repo_dir: &Path, db_path: &Path) {
     std::fs::create_dir_all(repo_dir).unwrap();
     std::fs::write(repo_dir.join("hello.py"), "def greet():\n    return 'hi'\n").unwrap();
-    // git init so cartog detects a repo root.
-    let _ = Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(repo_dir)
-        .status();
+    // git init + commit so HEAD resolves and the index records last_commit
+    // (the git-commit provenance header depends on it). Explicit -c identity
+    // so this works on CI runners with no global git config.
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .current_dir(repo_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+    };
+    let _ = git(&["init", "-q"]);
+    let _ = git(&["add", "-A"]);
+    // Must succeed: provenance tests need metadata[last_commit], i.e. a HEAD.
+    let committed = git(&[
+        "-c",
+        "user.email=ci@cartog.test",
+        "-c",
+        "user.name=cartog ci",
+        "commit",
+        "-q",
+        "-m",
+        "init",
+    ]);
+    assert!(
+        matches!(committed, Ok(s) if s.success()),
+        "git commit failed in build_minimal_index; provenance tests need a HEAD"
+    );
 
     let st = Command::new(env!("CARGO_BIN_EXE_cartog"))
         .args([
@@ -299,7 +322,9 @@ path_style = true
         .unwrap();
     assert!(head.status.success(), "head-object failed: {:?}", head);
     let head_json = String::from_utf8_lossy(&head.stdout);
-    for header in ["sha256", "schema-version", "cartog-version"] {
+    // git-commit is included: build_minimal_index runs `git init` + index, so
+    // metadata[last_commit] is populated and push must emit the header.
+    for header in ["sha256", "schema-version", "cartog-version", "git-commit"] {
         // AWS CLI flattens x-amz-meta-foo into Metadata.{foo} in JSON.
         // Just substring-match — the field name itself is the contract.
         assert!(
@@ -923,6 +948,102 @@ fn pull_refuses_header_vs_file_mismatch() {
         "expected mismatch refusal, got: {stderr}"
     );
     assert!(!dst_db.exists(), "destination must not be created");
+}
+
+/// When the `x-amz-meta-git-commit` header disagrees with the file's
+/// `last_commit` row, pull must refuse — same partial-upload / hand-edit
+/// defense as the schema cross-check.
+#[test]
+fn pull_refuses_git_commit_header_vs_file_mismatch() {
+    if skip_unless_deps_present() {
+        return;
+    }
+    let floci = match FlociContainer::start() {
+        Some(f) => f,
+        None => {
+            eprintln!("SKIP: could not start floci container");
+            return;
+        }
+    };
+    let endpoint = floci.endpoint();
+    create_bucket(&endpoint, "cartog-commit-skew");
+
+    let work = tempfile::TempDir::new().unwrap();
+    let repo = work.path().join("repo");
+    let src_db = work.path().join("src.sqlite");
+    build_minimal_index(&repo, &src_db);
+
+    // Hash the real DB so the sha + schema checks pass and we reach the
+    // git-commit cross-check. The git-commit header is a deliberate lie.
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(&src_db).unwrap();
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    let sha = h
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let claimed_v = cartog::db::CURRENT_SCHEMA_VERSION;
+
+    let st = Command::new("aws")
+        .args([
+            "--endpoint-url",
+            &endpoint,
+            "s3",
+            "cp",
+            &src_db.to_string_lossy(),
+            "s3://cartog-commit-skew/index.sqlite",
+            "--metadata",
+            &format!("sha256={sha},schema-version={claimed_v},git-commit=deadbeefdeadbeef"),
+        ])
+        .env("AWS_ACCESS_KEY_ID", "test")
+        .env("AWS_SECRET_ACCESS_KEY", "test")
+        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .status()
+        .unwrap();
+    assert!(st.success(), "aws s3 cp failed");
+
+    let cfg_dir = work.path().join("cfg");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    std::fs::write(
+        cfg_dir.join(".cartog.toml"),
+        format!(
+            r#"[remote]
+url = "s3://cartog-commit-skew/index.sqlite"
+region = "us-east-1"
+endpoint = "{endpoint}"
+path_style = true
+"#
+        ),
+    )
+    .unwrap();
+    let _ = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&cfg_dir)
+        .status();
+
+    let dst_db = work.path().join("dst.sqlite");
+    let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
+        .args(["--db", &dst_db.to_string_lossy(), "pull"])
+        .current_dir(&cfg_dir)
+        .env("AWS_ACCESS_KEY_ID", "test")
+        .env("AWS_SECRET_ACCESS_KEY", "test")
+        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "pull with git-commit header/file mismatch must fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("git-commit mismatch"),
+        "expected git-commit mismatch refusal, got: {stderr}"
+    );
+    assert!(!dst_db.exists(), "destination must not be created");
+    let partial = work.path().join("dst.sqlite.partial");
+    assert!(!partial.exists(), "partial file must be cleaned up");
 }
 
 /// A non-numeric `x-amz-meta-schema-version` header (corruption, or a
