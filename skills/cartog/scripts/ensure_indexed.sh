@@ -77,6 +77,9 @@ LAST_ERROR_FILE="$SESSION_LOG_DIR/last-error"
 # Breadcrumb written by `cartog self update --apply-pending` on a successful
 # boundary swap; surfaced once here to confirm the deferred update landed.
 LAST_UPDATE_FILE="$SESSION_LOG_DIR/last-update"
+# Leftover marker = a SessionEnd swap was SIGKILL'd mid-flight. The intent is
+# persisted and retries, so it's a heads-up, not an error.
+APPLY_MARKER_FILE="$SESSION_LOG_DIR/apply-in-progress"
 
 # F1: surface any error from the previous session's background pipeline.
 # stdout (not stderr): SessionStart stdout reaches the user via the model's
@@ -84,15 +87,21 @@ LAST_UPDATE_FILE="$SESSION_LOG_DIR/last-update"
 if [ -f "$LAST_ERROR_FILE" ]; then
     echo "Previous cartog background task failed:"
     cat "$LAST_ERROR_FILE" 2>/dev/null || true
-    rm -f "$LAST_ERROR_FILE"
+    rm -f "$LAST_ERROR_FILE" || true
 fi
 
 # F1b: surface (and clear) a completed deferred update from the last session.
-# Guard the cat: under `set -e`, an unreadable file that still passes -f would
-# otherwise abort the whole hook before indexing runs.
+# Guard cat and rm: under `set -e`, an unreadable file (passes -f) or an
+# unremovable one (EPERM on a shared dir) would otherwise abort before indexing.
 if [ -f "$LAST_UPDATE_FILE" ]; then
     cat "$LAST_UPDATE_FILE" 2>/dev/null || true
-    rm -f "$LAST_UPDATE_FILE"
+    rm -f "$LAST_UPDATE_FILE" || true
+fi
+
+# F1c: surface (and clear) a marker left by an interrupted SessionEnd swap.
+if [ -f "$APPLY_MARKER_FILE" ]; then
+    echo "cartog's previous update was interrupted before it finished (likely a fast session restart); it will retry automatically."
+    rm -f "$APPLY_MARKER_FILE" || true
 fi
 
 # Semver compare: returns 0 iff $1 < $2 component-wise (pre-release suffix

@@ -989,6 +989,39 @@ test_last_update_surfaced_and_cleared() {
     teardown
 }
 
+test_apply_marker_surfaced_and_cleared() {
+    echo "TEST: interrupted-swap marker is surfaced and cleared"
+    setup
+    create_mock_cartog "0.14.1"
+    mkdir -p "$CARTOG_LOG_DIR"
+    echo "0.14.3" > "$CARTOG_LOG_DIR/apply-in-progress"
+
+    local output
+    output=$(run_ensure_indexed 2>&1)
+    wait_for_rag_index
+
+    assert_contains "surfaces the interrupted swap" "previous update was interrupted" "$output"
+    if [ ! -f "$CARTOG_LOG_DIR/apply-in-progress" ]; then
+        echo "  PASS: marker cleared after surfacing"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: marker still exists after surfacing"; FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
+test_no_apply_marker_is_silent() {
+    echo "TEST: no interrupted-swap message when the marker is absent"
+    setup
+    create_mock_cartog "0.14.1"
+
+    local output
+    output=$(run_ensure_indexed 2>&1)
+    wait_for_rag_index
+
+    assert_not_contains "no spurious interrupted-swap line" "previous update was interrupted" "$output"
+    teardown
+}
+
 # --- tests: .cartog.toml DB path resolution ---
 #
 # These tests inject `echo "DB_FILE=$DB_FILE"` right before phase 1 (the
@@ -1758,6 +1791,10 @@ echo ""
 test_drift_warning_acknowledges_stale_armed_after_repin
 echo ""
 test_last_update_surfaced_and_cleared
+echo ""
+test_apply_marker_surfaced_and_cleared
+echo ""
+test_no_apply_marker_is_silent
 echo ""
 test_toml_cwd_database_path
 echo ""

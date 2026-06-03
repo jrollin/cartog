@@ -27,6 +27,9 @@ if ! mkdir -p "$SESSION_LOG_DIR" 2>/dev/null; then
 fi
 SESSION_LOG="$SESSION_LOG_DIR/session.log"
 LAST_ERROR_FILE="$SESSION_LOG_DIR/last-error"
+# Kill-safe breadcrumb: bracketed around the swap, so only a SIGKILL mid-swap
+# leaves it. ensure_indexed.sh surfaces a leftover next SessionStart.
+APPLY_MARKER_FILE="$SESSION_LOG_DIR/apply-in-progress"
 
 # Bail quietly if cartog isn't installed — nothing to update, and the
 # missing-binary case is handled by ensure_indexed.sh + /cartog-install.
@@ -92,7 +95,9 @@ apply_pending_update() {
     fi
 
     local rc=0
+    printf '%s\n' "${PLUGIN_VERSION:-unknown}" > "$APPLY_MARKER_FILE" 2>/dev/null || true
     cartog self update --apply-pending || rc=$?
+    rm -f "$APPLY_MARKER_FILE" 2>/dev/null || true
     case "$rc" in
         0)
             echo "Deferred update applied (or nothing pending)."
