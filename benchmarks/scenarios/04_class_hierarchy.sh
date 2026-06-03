@@ -61,6 +61,7 @@ run_scenario "webapp_py" "BaseService" "class.*BaseService\|class.*(BaseService)
 run_scenario "webapp_ts" "BaseService" "class.*BaseService\|extends.*BaseService\|implements.*BaseService"
 run_scenario "webapp_rb" "BaseService" "class.*BaseService\|class.*<.*BaseService\|class.*<.*AuthService"
 run_scenario "webapp_java" "BaseService" "class.*BaseService\|class.*extends.*BaseService\|class.*extends.*AuthService"
+run_scenario "webapp_swift" "BaseService" "class.*BaseService\|class.*:.*BaseService\|class.*:.*AuthService"
 
 # PHP has `extends BaseService` subclasses in source, but cartog only partially
 # resolves PHP inheritance: the error tree (e.g. TokenError -> App\AppError)

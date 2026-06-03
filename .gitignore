@@ -9,4 +9,5 @@ benchmarks/agent/results/agent-latest.jsonl
 benchmarks/agent/.corpus/
 benchmarks/.indexes/
 benchmarks/fixtures/webapp_rs/target/
+benchmarks/fixtures/webapp_swift/.build/
 .playwright-mcp/

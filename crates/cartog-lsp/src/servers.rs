@@ -99,6 +99,14 @@ pub const SERVERS: &[ServerSpec] = &[
         language_id: "dart",
         install_hint: "install Dart SDK from https://dart.dev/get-dart",
     },
+    ServerSpec {
+        language: "swift",
+        binary: "sourcekit-lsp",
+        args: &[],
+        language_id: "swift",
+        install_hint:
+            "ships with the Swift toolchain / Xcode; see https://github.com/swiftlang/sourcekit-lsp",
+    },
 ];
 
 /// Find all server specs for a cartog language name, in priority order.
@@ -177,6 +185,14 @@ mod tests {
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].binary, "dart");
         assert_eq!(specs[0].language_id, "dart");
+    }
+
+    #[test]
+    fn test_find_servers_swift() {
+        let specs = find_servers("swift");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].binary, "sourcekit-lsp");
+        assert_eq!(specs[0].language_id, "swift");
     }
 
     #[test]

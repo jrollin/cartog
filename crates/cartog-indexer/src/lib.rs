@@ -180,7 +180,7 @@ pub struct IndexResult {
     #[serde(skip)]
     pub dirty_files: u32,
     /// Files seen during the walk whose extension maps to no supported language
-    /// (e.g. `.kt`, `.swift`). Surfaced so a user on a mixed/monorepo isn't
+    /// (e.g. `.kt`, `.cpp`). Surfaced so a user on a mixed/monorepo isn't
     /// misled into thinking an unsupported subtree was indexed.
     #[serde(skip_serializing_if = "is_zero")]
     pub files_unsupported: u32,
@@ -883,7 +883,8 @@ pub mod bench_support {
     /// `benchmarks/fixtures/webapp_<tag>` directory name. Each exercises a
     /// distinct tree-sitter grammar + extractor, which is where indexing cost
     /// actually varies by language.
-    pub const FIXTURE_LANGS: [&str; 8] = ["py", "ts", "go", "rs", "rb", "java", "php", "dart"];
+    pub const FIXTURE_LANGS: [&str; 9] =
+        ["py", "ts", "go", "rs", "rb", "java", "php", "dart", "swift"];
 
     /// Absolute path to `benchmarks/fixtures`, relative to either bench crate.
     fn fixtures_dir() -> PathBuf {
@@ -1104,7 +1105,7 @@ mod tests {
         let r = IndexResult {
             files_indexed: 2,
             files_unsupported: 4,
-            unsupported_by_ext: vec![("kt".into(), 3), ("swift".into(), 1)],
+            unsupported_by_ext: vec![("kt".into(), 3), ("cpp".into(), 1)],
             ..Default::default()
         };
         let s = render_index_summary(&r);
@@ -1249,7 +1250,7 @@ mod tests {
         std::fs::write(dir.join("a.rs"), "fn main() {}\n").unwrap();
         std::fs::write(dir.join("b.kt"), "fun main() {}\n").unwrap();
         std::fs::write(dir.join("c.kt"), "fun main() {}\n").unwrap();
-        std::fs::write(dir.join("d.swift"), "print(1)\n").unwrap();
+        std::fs::write(dir.join("d.cpp"), "int main() {}\n").unwrap();
         // cartog's own DB sidecars must NOT count as unsupported languages.
         std::fs::write(dir.join(".cartog.db"), "x").unwrap();
         std::fs::write(dir.join(".cartog.db-wal"), "x").unwrap();
@@ -1269,12 +1270,12 @@ mod tests {
         assert_eq!(r.files_indexed, 1, "only a.rs is supported");
         assert_eq!(
             r.files_unsupported, 3,
-            "2 kotlin + 1 swift, db sidecars excluded"
+            "2 kotlin + 1 cpp, db sidecars excluded"
         );
         // Descending by count, ties broken alphabetically.
         assert_eq!(
             r.unsupported_by_ext,
-            vec![("kt".to_string(), 2), ("swift".to_string(), 1)]
+            vec![("kt".to_string(), 2), ("cpp".to_string(), 1)]
         );
     }
 

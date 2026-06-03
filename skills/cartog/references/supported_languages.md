@@ -1,6 +1,6 @@
 # Supported Languages
 
-## Currently Supported (10 languages)
+## Currently Supported (11 languages)
 
 ### Python (.py, .pyi)
 - Functions, classes, methods
@@ -116,6 +116,17 @@
 - Async functions / methods
 - Doc comments (`///`)
 - Library-private visibility (leading underscore `_foo` → private)
+
+### Swift (.swift)
+- Classes, structs, actors (all as class symbols), protocols (as interfaces), enums, extensions (as class symbols), typealiases/associatedtypes
+- Top-level functions, methods, `init`/`deinit`/`subscript`, properties (`let`/`var`), enum cases
+- Imports (`import Foundation`, `import UIKit.UIView`)
+- Function and method calls
+- Inheritance (class superclass → `Inherits`) and conformance (protocols → `Implements`)
+- Type annotation references (parameter types, return types, generic types)
+- Async functions (`async`); `throws`/`rethrows` kept in the signature (no `Raises` edge — Swift errors are untyped at the declaration site)
+- Doc comments (`///` lines and `/** */` blocks)
+- Visibility: `private`/`fileprivate` → private; `internal` (default)/`public`/`open`/`package` → public
 
 ### Markdown (.md)
 - Document sections chunked by heading (`#`, `##`, `###`, etc.)

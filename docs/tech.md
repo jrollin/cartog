@@ -9,7 +9,7 @@
 | Crate | Purpose | Notes |
 |-------|---------|-------|
 | `tree-sitter` 0.26 | Incremental parsing, CST traversal | Pinned — grammar crates lag by one minor |
-| `tree-sitter-{lang}` 0.2–0.25 | Per-language grammars (Python, TS/JS, Rust, Go, Ruby, Java, PHP, Dart, Markdown) | Each ~1-2 MB of generated C |
+| `tree-sitter-{lang}` 0.2–0.25 | Per-language grammars (Python, TS/JS, Rust, Go, Ruby, Java, PHP, Dart, Swift, Markdown) | Each ~1-2 MB of generated C |
 | `rusqlite` (bundled) | SQLite storage, zero external deps | `bundled` compiles SQLite from C source — no system `libsqlite3-dev` required. Critical for cross-compilation to 4 release targets |
 | `clap` (derive) | CLI argument parsing | `ValueEnum` derive for type-safe `--kind` filters with shell completion |
 | `serde` + `serde_json` | JSON serialization for `--json` output | `to_string_pretty` for readability in both terminal and agent contexts |
@@ -63,7 +63,7 @@ end-to-end task cost).
 
 ## Benchmarks
 
-Three distinct surfaces, all rooted in `benchmarks/fixtures/` (8 language webapps):
+Three distinct surfaces, all rooted in `benchmarks/fixtures/` (9 language webapps):
 
 - **Shell suite** (`benchmarks/run.sh`, 13 scenarios × fixtures) — per-query token
   efficiency and recall versus grep/cat. Run with `make bench`.
