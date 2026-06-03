@@ -92,9 +92,9 @@ const SQL_INSERT_SYMBOL: &str = "INSERT OR REPLACE INTO symbols
       parent_id, signature, visibility, is_async, docstring, content_hash, subtree_hash)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
 
-const SQL_INSERT_EDGE: &str =
-    "INSERT INTO edges (source_id, target_name, target_id, kind, file_path, line, resolution_source)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+const SQL_INSERT_EDGE: &str = "INSERT INTO edges
+     (source_id, target_name, target_id, kind, file_path, line, resolution_state, resolution_source)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS symbols (
@@ -611,7 +611,12 @@ fn migrate(conn: &Connection) {
     // tier, so they stay NULL ("unknown / pre-provenance") rather than guess a sentinel.
     if current < 6 || !has_resolution_source {
         info!("schema v6: adding edges.resolution_source column");
-        let _ = conn.execute("ALTER TABLE edges ADD COLUMN resolution_source TEXT", []);
+        // Surface a failed ALTER (matches the schema-version write below): the
+        // probe guard re-runs the migration on the next open, so this is logged
+        // rather than fatal, consistent with the other additive migrations.
+        if let Err(e) = conn.execute("ALTER TABLE edges ADD COLUMN resolution_source TEXT", []) {
+            warn!(error = %e, "failed to add edges.resolution_source column");
+        }
     }
 
     // Store the new schema version
@@ -4598,9 +4603,33 @@ mod tests {
         edge.target_id = Some(target.id.clone());
         edge.provenance = Some(EdgeProvenance::Lsp);
         db.insert_edge(&edge).unwrap();
+        let eid = db.conn.last_insert_rowid();
 
         let callees = db.callees("process").unwrap();
         assert_eq!(callees[0].provenance, Some(EdgeProvenance::Lsp));
+        // An inserted edge that already has a target must persist resolution_state=1,
+        // not the column default 0 — else stats()/unresolved_edges() misreport it.
+        assert_eq!(resolution_state_of(&db, eid), 1);
+        assert!(
+            !db.unresolved_edges()
+                .unwrap()
+                .iter()
+                .any(|e| e.edge_id == eid),
+            "a resolved insert must not resurface as unresolved"
+        );
+    }
+
+    #[test]
+    fn insert_edge_without_target_is_unresolved() {
+        // The extraction path inserts edges with no target_id; they must land at
+        // resolution_state=0 so resolve_edges()/LSP pick them up.
+        let db = Database::open_memory().unwrap();
+        let src = test_symbol("src", SymbolKind::Function, "a.py", 1);
+        db.insert_symbols(std::slice::from_ref(&src)).unwrap();
+        db.insert_edge(&Edge::new(&src.id, "missing", EdgeKind::Calls, "a.py", 1))
+            .unwrap();
+        let eid = db.conn.last_insert_rowid();
+        assert_eq!(resolution_state_of(&db, eid), 0);
     }
 
     #[test]
