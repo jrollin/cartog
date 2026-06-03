@@ -116,7 +116,8 @@ if [ -n "$REPO_FILTER" ] || [ -n "$LANG_FILTER" ]; then
         fi
         echo -e "${BOLD}Indexing $id...${NC}"
         local_db="$WORK_DIR/$id.sqlite"
-        (cd "$target" && CARTOG_DB="$local_db" "$CARTOG_BIN" index . --force >/dev/null 2>&1)
+        (cd "$target" && CARTOG_DB="$local_db" "$CARTOG_BIN" index . --force >/dev/null 2>&1) \
+            || { echo -e "${YELLOW}index failed: $id — skipping${NC}"; continue; }
         (cd "$target" && CARTOG_DB="$local_db" "$CARTOG_BIN" rag index . >/dev/null 2>&1 || true)
 
         jq -nc --arg t "$target" --arg l "$id" --arg p "$prompt" \
@@ -174,6 +175,10 @@ cartog_deps, cartog_outline) over reading files. Answer concisely."
 Grep, and Glob to explore the code. Answer concisely."
     fi
 
+    # A failed arm (crash, budget cap) is a legitimate outcome the harness
+    # reports as 0 tool calls / judge FAIL — not fatal — so `|| true` keeps the
+    # multi-repo run alive under `set -e`. stderr goes to a per-arm log (not
+    # /dev/null) so a failure is inspectable.
     (cd "$target" && claude --print --output-format stream-json --verbose \
         --model "$MODEL" \
         --append-system-prompt "$sys_prompt" \
@@ -181,7 +186,7 @@ Grep, and Glob to explore the code. Answer concisely."
         --permission-mode bypassPermissions \
         --max-budget-usd "$BUDGET_USD" \
         --no-session-persistence \
-        "$prompt" > "$transcript" 2>/dev/null) || true
+        "$prompt" > "$transcript" 2>"${transcript%.jsonl}.err") || true
 
     local usage answer verdict
     usage=$(parse_usage "$transcript")

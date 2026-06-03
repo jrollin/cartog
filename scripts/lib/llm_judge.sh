@@ -18,7 +18,9 @@ judge_verdict() {
         echo "ERROR: judge call failed"
         return 0
     }
-    echo "$response" | head -1
+    # First line via parameter expansion — no `head` pipe to avoid a SIGPIPE
+    # on the echo under `set -o pipefail`.
+    printf '%s\n' "${response%%$'\n'*}"
 }
 
 # True (0) if a verdict line is a PASS. Treats a leading PASS as the signal.

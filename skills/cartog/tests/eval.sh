@@ -177,7 +177,10 @@ $reasoning"
 
     verdict=$(judge_verdict "$MODEL" "$judge_prompt")
 
-    if is_pass "$verdict"; then
+    if echo "$verdict" | grep -q "^ERROR"; then
+        echo "  SKIP: $verdict"
+        SKIP=$((SKIP + 1))
+    elif is_pass "$verdict"; then
         echo "  PASS: $verdict"
         PASS=$((PASS + 1))
     else
