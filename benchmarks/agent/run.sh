@@ -24,25 +24,33 @@ REPO_FILTER=""        # repo id, or "all"
 LANG_FILTER=""        # selects repos by their `lang:` field
 TASK_FILTER=""
 MODEL="${CARTOG_BENCH_MODEL:-opus}"
+JUDGE_MODEL="${CARTOG_BENCH_JUDGE_MODEL:-}"   # defaults to MODEL if unset (resolved below)
 BUDGET_USD="${CARTOG_BENCH_BUDGET:-4}"
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --runs)    RUNS="$2"; shift 2 ;;
-        --fixture) FIXTURE="$2"; REPO_FILTER=""; LANG_FILTER=""; shift 2 ;;
-        --repo)    REPO_FILTER="$2"; shift 2 ;;
-        --lang)    LANG_FILTER="$2"; shift 2 ;;
-        --task)    TASK_FILTER="$2"; shift 2 ;;
-        --model)   MODEL="$2"; shift 2 ;;
+        --runs)        RUNS="$2"; shift 2 ;;
+        --fixture)     FIXTURE="$2"; REPO_FILTER=""; LANG_FILTER=""; shift 2 ;;
+        --repo)        REPO_FILTER="$2"; shift 2 ;;
+        --lang)        LANG_FILTER="$2"; shift 2 ;;
+        --task)        TASK_FILTER="$2"; shift 2 ;;
+        --model)       MODEL="$2"; shift 2 ;;
+        --judge-model) JUDGE_MODEL="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--runs N] [--model M]"
+            echo "Usage: $0 [--runs N] [--model M] [--judge-model M]"
             echo "  Fixture mode (default): --fixture py|ts|go|rs|rb|java|php  [--task ID]"
             echo "  Real-repo mode:         --repo <id>|all   OR   --lang py|rs|java|go"
+            echo "  --model       agent model for both arms (default opus)"
+            echo "  --judge-model PASS/FAIL judge model (default: same as --model;"
+            echo "                a cheaper model like haiku/sonnet cuts cost)"
             echo "  Repos and their language tags are defined in repos.yaml."
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
+
+# Judge defaults to the agent model unless overridden.
+JUDGE_MODEL="${JUDGE_MODEL:-$MODEL}"
 
 # ── Prerequisites ──
 
@@ -78,7 +86,7 @@ WORKLIST="$WORK_DIR/worklist.jsonl"
 : > "$WORKLIST"
 
 if [ -n "$REPO_FILTER" ] || [ -n "$LANG_FILTER" ]; then
-    echo "Mode: real repos    Runs/arm: $RUNS    Model: $MODEL"
+    echo "Mode: real repos    Runs/arm: $RUNS    Model: $MODEL    Judge: $JUDGE_MODEL"
     [ -n "$LANG_FILTER" ] && echo "lang filter: $LANG_FILTER"
     [ -n "$REPO_FILTER" ] && echo "repo filter: $REPO_FILTER"
     echo "cartog:  $CARTOG_BIN"
@@ -118,7 +126,7 @@ if [ -n "$REPO_FILTER" ] || [ -n "$LANG_FILTER" ]; then
 else
     FIXTURE_DIR="$BENCH_DIR/fixtures/webapp_${FIXTURE}"
     [ -d "$FIXTURE_DIR" ] || { echo -e "${RED}No fixture: $FIXTURE_DIR${NC}"; exit 1; }
-    echo "Mode: fixture webapp_${FIXTURE}    Runs/arm: $RUNS    Model: $MODEL"
+    echo "Mode: fixture webapp_${FIXTURE}    Runs/arm: $RUNS    Model: $MODEL    Judge: $JUDGE_MODEL"
     echo "cartog:  $CARTOG_BIN"
     echo ""
 
@@ -195,7 +203,7 @@ $expected
 
 Agent answer:
 $answer"
-    verdict=$(judge_verdict "$MODEL" "$judge_prompt")
+    verdict=$(judge_verdict "$JUDGE_MODEL" "$judge_prompt")
     if is_pass "$verdict"; then echo "PASS"; else echo "FAIL"; fi
 }
 

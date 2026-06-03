@@ -73,7 +73,11 @@ make bench-agent                              # fixture mode: webapp_py, 4 runs/
 ./benchmarks/agent/run.sh --repo django       # one repo by id
 ./benchmarks/agent/run.sh --repo all          # all repos in repos.yaml
 ./benchmarks/agent/run.sh --lang py           # all repos tagged that language
-./benchmarks/agent/run.sh --model sonnet      # cheaper agent + judge
+
+# Model selection (default opus for both arms + judge — the most expensive)
+./benchmarks/agent/run.sh --model sonnet              # cheaper agent on both arms (~5x cheaper)
+./benchmarks/agent/run.sh --judge-model haiku         # cheap PASS/FAIL judge, keep opus agent
+./benchmarks/agent/run.sh --model sonnet --judge-model haiku   # cheapest full run
 ```
 
 Targets live in `repos.yaml`, one curated repo per language. Select by `id`
