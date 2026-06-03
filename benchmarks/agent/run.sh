@@ -26,6 +26,10 @@ TASK_FILTER=""
 MODEL="${CARTOG_BENCH_MODEL:-opus}"
 JUDGE_MODEL="${CARTOG_BENCH_JUDGE_MODEL:-}"   # defaults to MODEL if unset (resolved below)
 BUDGET_USD="${CARTOG_BENCH_BUDGET:-4}"
+# Independent (arm, run) units execute concurrently up to this many at once.
+# Bounded to respect API rate limits; runs are otherwise independent.
+MAX_PARALLEL="${CARTOG_BENCH_PARALLEL:-5}"
+EMBED=1   # 0 = skip `rag index` (semantic search); structural tasks rarely need it
 while [[ $# -gt 0 ]]; do
     case $1 in
         --runs)        RUNS="$2"; shift 2 ;;
@@ -35,13 +39,16 @@ while [[ $# -gt 0 ]]; do
         --task)        TASK_FILTER="$2"; shift 2 ;;
         --model)       MODEL="$2"; shift 2 ;;
         --judge-model) JUDGE_MODEL="$2"; shift 2 ;;
+        --no-embed)    EMBED=0; shift ;;
         -h|--help)
-            echo "Usage: $0 [--runs N] [--model M] [--judge-model M]"
+            echo "Usage: $0 [--runs N] [--model M] [--judge-model M] [--no-embed]"
             echo "  Fixture mode (default): --fixture py|ts|go|rs|rb|java|php  [--task ID]"
             echo "  Real-repo mode:         --repo <id>|all   OR   --lang py|rs|java|go"
             echo "  --model       agent model for both arms (default opus)"
             echo "  --judge-model PASS/FAIL judge model (default: same as --model;"
             echo "                a cheaper model like haiku/sonnet cuts cost)"
+            echo "  --no-embed    skip the heavy 'rag index' embed step (structural"
+            echo "                tasks rarely use semantic search; big speedup on large repos)"
             echo "  Repos and their language tags are defined in repos.yaml."
             exit 0
             ;;
@@ -118,7 +125,7 @@ if [ -n "$REPO_FILTER" ] || [ -n "$LANG_FILTER" ]; then
         local_db="$WORK_DIR/$id.sqlite"
         (cd "$target" && CARTOG_DB="$local_db" "$CARTOG_BIN" index . --force >/dev/null 2>&1) \
             || { echo -e "${YELLOW}index failed: $id — skipping${NC}"; continue; }
-        (cd "$target" && CARTOG_DB="$local_db" "$CARTOG_BIN" rag index . >/dev/null 2>&1 || true)
+        [ "$EMBED" -eq 1 ] && (cd "$target" && CARTOG_DB="$local_db" "$CARTOG_BIN" rag index . >/dev/null 2>&1 || true)
 
         jq -nc --arg t "$target" --arg l "$id" --arg p "$prompt" \
             --arg e "$expected" --arg db "$local_db" \
@@ -134,7 +141,7 @@ else
     echo -e "${BOLD}Indexing fixture...${NC}"
     fixture_db="$WORK_DIR/fixture.sqlite"
     (cd "$FIXTURE_DIR" && CARTOG_DB="$fixture_db" "$CARTOG_BIN" index . --force >/dev/null 2>&1)
-    (cd "$FIXTURE_DIR" && CARTOG_DB="$fixture_db" "$CARTOG_BIN" rag index . >/dev/null 2>&1 || true)
+    [ "$EMBED" -eq 1 ] && (cd "$FIXTURE_DIR" && CARTOG_DB="$fixture_db" "$CARTOG_BIN" rag index . >/dev/null 2>&1 || true)
 
     TASKS_JSON=$(python3 "$AGENT_DIR/parse_tasks.py" "$AGENT_DIR/tasks.yaml")
     TASK_COUNT=$(echo "$TASKS_JSON" | jq 'length')
@@ -195,6 +202,12 @@ Grep, and Glob to explore the code. Answer concisely."
     echo "$usage $verdict"
 }
 
+# One (arm, run) unit → its own result file, so concurrent units never interleave.
+run_unit() {
+    local arm="$1" target="$2" prompt="$3" expected="$4" db="$5" idx="$6" out="$7"
+    run_arm "$arm" "$target" "$prompt" "$expected" "$db" "$idx" > "$out"
+}
+
 # LLM judge via the shared scripts/lib/llm_judge.sh. Prints PASS|FAIL.
 judge() {
     local answer="$1" expected="$2"
@@ -237,13 +250,28 @@ while IFS= read -r item; do
     b_cost=(); b_calls=(); b_time=(); b_tok=(); b_cr=(); b_pass=0
     c_cost=(); c_calls=(); c_time=(); c_tok=(); c_cr=(); c_pass=0
 
-    # parse_usage fields: cost calls time total_tok input cache_create cache_read output.
+    # Run all RUNS x 2 arms concurrently in batches of MAX_PARALLEL (bash 3.2 has
+    # no `wait -n`, so batch-and-wait). Each unit writes to its own file.
+    unit_dir="$WORK_DIR/units_${label}"
+    mkdir -p "$unit_dir"
+    in_batch=0
+    for ((r=0; r<RUNS; r++)); do
+        for arm in baseline cartog; do
+            tag="${arm:0:1}$r"
+            run_unit "$arm" "$target" "$prompt" "$expected" "$db" "$tag" "$unit_dir/$tag" &
+            in_batch=$((in_batch + 1))
+            [ "$in_batch" -ge "$MAX_PARALLEL" ] && { wait; in_batch=0; }
+        done
+    done
+    wait
+
+    # Collect. parse_usage fields: cost calls time total_tok input cache_create cache_read output.
     # We track cost/calls/time/total/cache_read; input/cache_create/output go to _.
     for ((r=0; r<RUNS; r++)); do
-        read -r bcost bc btime btok _ _ bcr _ bv <<< "$(run_arm baseline "$target" "$prompt" "$expected" "$db" "b$r")"
+        read -r bcost bc btime btok _ _ bcr _ bv < "$unit_dir/b$r"
         [ "$bv" = "PASS" ] && { b_cost+=("$bcost"); b_calls+=("$bc"); b_time+=("$btime"); b_tok+=("$btok"); b_cr+=("$bcr"); b_pass=$((b_pass+1)); }
 
-        read -r ccost cc ctime ctok _ _ ccr _ cv <<< "$(run_arm cartog "$target" "$prompt" "$expected" "$db" "c$r")"
+        read -r ccost cc ctime ctok _ _ ccr _ cv < "$unit_dir/c$r"
         [ "$cv" = "PASS" ] && { c_cost+=("$ccost"); c_calls+=("$cc"); c_time+=("$ctime"); c_tok+=("$ctok"); c_cr+=("$ccr"); c_pass=$((c_pass+1)); }
     done
 

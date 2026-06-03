@@ -78,7 +78,18 @@ make bench-agent                              # fixture mode: webapp_py, 4 runs/
 ./benchmarks/agent/run.sh --model sonnet              # cheaper agent on both arms (~5x cheaper)
 ./benchmarks/agent/run.sh --judge-model haiku         # cheap PASS/FAIL judge, keep opus agent
 ./benchmarks/agent/run.sh --model sonnet --judge-model haiku   # cheapest full run
+
+# Speed
+./benchmarks/agent/run.sh --no-embed          # skip the heavy `rag index` embed (structural tasks)
+CARTOG_BENCH_PARALLEL=8 ./benchmarks/agent/run.sh --repo all   # more concurrent units (default 5)
 ```
+
+The N runs × 2 arms per target are **independent** and run concurrently in
+batches of `CARTOG_BENCH_PARALLEL` (default 5). `--no-embed` skips the embedding
+step: the deep mechanism tasks use structural tools (refs/callees/search), so on
+a large repo skipping the embed is a big speedup at the cost of `cartog_rag_search`
+returning nothing. The structural index always runs (it dominates per-repo setup
+time on large repos and is single-threaded).
 
 Targets live in `repos.yaml`, one curated repo per language. Select by `id`
 (`--repo`) or by `lang` (`--lang`); to swap which repo represents a language,
