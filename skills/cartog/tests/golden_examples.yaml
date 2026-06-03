@@ -429,3 +429,48 @@
     - cartog hierarchy AuthService (plain text — not paste-ready)
     - Building the diagram by hand from the plain output
   tags: [outline]
+
+# ============================================================
+# Trace — call path between two known symbols
+# ============================================================
+
+- id: trace_call_path_between_symbols
+  description: '"How does A reach B?" should lead to cartog trace'
+  user_query: "How does handle_request end up calling escalate_to_family? Show me the call path."
+  context: "Both handle_request and escalate_to_family are indexed symbols."
+  expected:
+    tool_calls:
+      - "cartog trace handle_request escalate_to_family"
+    reasoning: >
+      The user wants the call path between two named endpoints, with the
+      intermediate hops. cartog trace does exactly this — shortest calls path
+      with each hop's body inline. cartog impact (blast radius) and cartog refs
+      (all callers) answer different questions and should not be the first step.
+  anti_patterns:
+    - cartog impact handle_request (blast radius, not a path to a specific target)
+    - cartog refs escalate_to_family (all callers, not the path from a specific source)
+    - Reading files manually to reconstruct the path
+  tags: [routing]
+
+# ============================================================
+# Context — one-shot task bundle to start work
+# ============================================================
+
+- id: context_bundle_to_start_task
+  description: '"Where do I work on X / give me context for Y" should lead to cartog context'
+  user_query: "I need to add OAuth refresh-token rotation. Give me the relevant code to start."
+  context: "The cartog index is up to date. The exact symbols involved are not known yet."
+  expected:
+    tool_calls:
+      - 'cartog context "add OAuth refresh-token rotation"'
+    reasoning: >
+      The user is starting a task and does not name a specific symbol. cartog
+      context fuses semantic search seeds, their 1-hop neighbors, and same-file
+      centrality into one budgeted bundle with bodies inline — the right
+      one-shot entry point. cartog rag search alone would miss the graph
+      neighbors; cartog search needs an exact name the user hasn't given.
+  anti_patterns:
+    - cartog search OAuth (no exact symbol name was given)
+    - cartog rag search "OAuth refresh token" then manually fetching neighbors
+    - Falling back to grep
+  tags: [routing]

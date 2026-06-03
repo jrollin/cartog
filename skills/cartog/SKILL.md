@@ -49,7 +49,7 @@ Both `cartog init` and `cartog index` are safe to run via Bash during an active 
 
 If MCP runs with `--watch`, the watcher will also re-index on file changes. A manual `cartog index .` is still safe; it just shares the write-queue.
 
-When two `cartog serve` instances run against the same DB (e.g. two Claude Code windows on the same project), single-writer election picks one as **primary** and the others attach **read-only**. Read-only secondaries refuse `cartog_index` / `cartog_rag_index` with a clear message but serve the other 11 MCP tools normally. The secondary auto-promotes to primary within ~10s if the primary process dies.
+When two `cartog serve` instances run against the same DB (e.g. two Claude Code windows on the same project), single-writer election picks one as **primary** and the others attach **read-only**. Read-only secondaries refuse `cartog_index` / `cartog_rag_index` with a clear message but serve the other 14 MCP tools normally. The secondary auto-promotes to primary within ~10s if the primary process dies.
 
 If `cartog_index` or `cartog_rag_index` fails with a read-only error, call `cartog_stats` and check `role` (`primary` vs `read-only`) and `watcher_active` (whether the primary is auto-reindexing). That tells you whether to wait for promotion (~10s) or whether the primary's watcher will pick up changes on its own.
 
@@ -107,6 +107,8 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | `cartog impact <name>` | `cartog_impact` | `name`, `depth?` |
 | `cartog hierarchy <class>` | `cartog_hierarchy` | `name` |
 | `cartog deps <file>` | `cartog_deps` | `file` |
+| `cartog trace <from> <to>` | `cartog_trace` | `from`, `to`, `depth?` |
+| `cartog context "<task>"` | `cartog_context` | `task`, `tokens?` |
 | `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
 | `cartog stats [--savings]` | `cartog_stats` | — |
 | `cartog savings` | — (CLI only — alias for `cartog stats --savings`) | — |
@@ -293,6 +295,13 @@ cartog impact SessionManager --depth 3
 ```
 Shows everything that transitively depends on a symbol up to N hops.
 
+### Trace (call path between two symbols)
+```bash
+cartog trace handle_request escalate_to_family   # shortest call path, bodies inline
+cartog trace handle_request escalate_to_family --depth 4
+```
+Returns the shortest `calls` path from the first symbol to the second, each hop carrying the caller's body inline. Only statically-resolved `calls` edges are followed (dynamic dispatch is not traced). Use for "how does A reach B?"; use `cartog impact` for blast radius and `cartog refs` for all callers.
+
 ### Hierarchy (inheritance tree)
 ```bash
 cartog hierarchy BaseService
@@ -321,6 +330,13 @@ cartog changes --commits 10              # last 10 commits
 cartog changes --kind function           # only functions
 ```
 Shows symbols affected by recent git changes, grouped by file.
+
+### Context (one-shot task bundle)
+```bash
+cartog context "escalate an alert to family when a senior misses check-in"
+cartog context "add OAuth refresh token rotation" --tokens 8000   # default 6000
+```
+Builds everything needed to start a task in one call: the most relevant symbols (semantic + keyword search), their 1-hop call neighbors, and high-centrality definitions in the same files — bodies inline, budgeted to fit. Routes through semantic search, so it finds code by concept, not just name. Use at the START of a task ("where do I work on X?"); use `cartog search` for a single known symbol and `cartog trace` for a specific call path.
 
 ### Doctor (environment health check)
 ```bash
@@ -457,6 +473,8 @@ cartog --json outline src/auth/tokens.py
 cartog --json rag search "authentication"
 ```
 
+Edge results (`refs`, `callees`, `impact`, `deps`, `trace`) carry a `provenance` field naming which tier resolved the edge: a heuristic tier (`same_file`, `import_path`, `same_dir`, `parent_scope`, `unique_global`, `kind_disambig`) or an LSP outcome (`lsp`, `lsp_external`, `lsp_unresolvable`). Treat `lsp`/`same_file`/`import_path` as high-confidence; `unique_global`/`kind_disambig` as best-effort guesses. Omitted for unresolved edges and indexes built before provenance tracking.
+
 ## Refactoring Workflow
 
 Before changing any symbol (rename, extract, move, delete):
@@ -484,6 +502,8 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 | Find usages of a function | `cartog refs <name>` (`--kind calls` for just callers) |
 | See what a function calls | `cartog callees <name>` |
 | Check if a change is safe | `cartog impact <name> --depth 3` |
+| Trace how one symbol reaches another | `cartog trace <from> <to>` |
+| Gather everything to start a task | `cartog context "<task>"` |
 | Understand class hierarchy | `cartog hierarchy <class>` |
 | See file dependencies | `cartog deps <file>` |
 | Render a diagram to paste into a PR / doc | append `--mermaid` to `hierarchy`, `deps`, or `map` |
