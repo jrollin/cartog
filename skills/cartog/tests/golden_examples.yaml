@@ -124,22 +124,22 @@
   tags: [refactoring, lsp]
 
 - id: refactoring_fast_reindex_after_changes
-  description: After applying code changes, re-index fast with --no-lsp
-  user_query: "I've finished renaming process_payment to handle_payment across multiple files. Verify nothing is broken."
+  description: After applying code changes, re-index before verifying references
+  user_query: "I've finished renaming process_payment to handle_payment across multiple files. Re-sync cartog's graph and check nothing still points at the old name."
   context: "User just applied rename changes across multiple files. Old name: process_payment, new name: handle_payment."
   expected:
     tool_calls:
-      - "cartog index . --no-lsp"
-      - "cartog refs old_method_name"
+      - "cartog index ."
+      - "cartog refs process_payment"
     reasoning: >
-      After code changes, re-index with --no-lsp (heuristic only, ~1s)
-      to update the graph, then verify no stale references remain. LSP is not
-      needed here — speed matters for the verify loop. The key requirement is
-      that cartog index . --no-lsp appears in the command list (it does not
-      have to be the very first command — cartog changes first is acceptable).
+      After code changes the graph is stale, so re-index BEFORE querying, then
+      verify no stale references to the old name remain. `cartog index .` (with
+      or without --no-lsp) is correct — --no-lsp is a speed optimization for the
+      verify loop, not a requirement. The key requirement is that the re-index
+      comes before any refs/search query (querying first returns stale results).
   anti_patterns:
-    - Re-indexing with LSP (unnecessary latency for verification)
     - Skipping re-index entirely
+    - Querying cartog refs/search BEFORE re-indexing (returns stale graph)
   tags: [refactoring, lsp]
 
 - id: no_parallel_double_call
@@ -240,20 +240,21 @@
 
 - id: setup_non_blocking
   description: Setup should not block on RAG embedding
-  user_query: "Help me explore this new codebase"
-  context: "First time using cartog on this project, no .cartog/db.sqlite exists"
+  user_query: "Set up cartog on this codebase so I can start exploring it."
+  context: "First time using cartog on this project, no .cartog/db.sqlite exists yet."
   expected:
     tool_calls:
       - "bash scripts/ensure_indexed.sh"
       - "cartog index ."
     reasoning: >
-      The agent should run ensure_indexed.sh or at minimum cartog index .
-      to build the code graph. Either is acceptable as the first command.
-      The key constraint: the agent must NOT run cartog rag index in the
-      foreground and block waiting for it to complete before proceeding.
+      No index exists yet, so the agent must build the code graph first —
+      ensure_indexed.sh or at minimum cartog index . as the first command. The
+      key constraint: the agent must NOT run cartog rag index in the foreground
+      and block waiting for it to complete before proceeding.
   anti_patterns:
     - Running cartog rag index in the foreground as a blocking step
     - Telling the user to wait for RAG indexing to complete before proceeding
+    - Querying the graph (cartog map/search) before any index exists
   tags: [setup, do-dont]
 
 # ============================================================
@@ -316,6 +317,22 @@
     - Manually running ls or find to list files
     - Reading random files to understand the codebase
   tags: [map, overview]
+
+- id: deps_file_imports
+  description: '"What does file X import / depend on?" should use cartog deps'
+  user_query: "What does routes/auth.py import?"
+  expected:
+    tool_calls:
+      - "cartog deps routes/auth.py"
+    reasoning: >
+      Asking what a specific file imports / depends on maps to cartog deps,
+      which returns the resolved import targets per import statement. The agent
+      should not grep for import lines or read the whole file.
+  anti_patterns:
+    - grep for "import" / "from" in the file as the FIRST command
+    - Read the whole file to scan its imports
+    - cartog refs (that finds reverse dependencies, not what this file imports)
+  tags: [routing]
 
 # ============================================================
 # Recent changes
@@ -473,4 +490,62 @@
     - cartog search OAuth (no exact symbol name was given)
     - cartog rag search "OAuth refresh token" then manually fetching neighbors
     - Falling back to grep
+  tags: [routing]
+
+- id: context_how_does_it_work
+  description: '"How does X work?" should lead to cartog context (the primary understand-an-area tool)'
+  user_query: "How does the session expiry and refresh flow work in this codebase?"
+  context: "The cartog index is up to date. No specific symbol name is given."
+  expected:
+    tool_calls:
+      - 'cartog context "session expiry and refresh flow"'
+    reasoning: >
+      "How does X work?" over an area (not one named symbol) is exactly what
+      cartog context is the primary tool for: one call returns the relevant
+      symbols with bodies, their call neighbors, and same-file centrality, so the
+      agent answers from the bundle instead of chaining rag search + outline +
+      refs + Read. cartog rag search alone returns snippet locations the agent
+      would then have to Read; cartog context returns the full bodies in one call.
+  anti_patterns:
+    - 'cartog rag search "session expiry" then Reading each hit (context returns bodies in one call)'
+    - A chain of cartog outline / cartog refs / Read to assemble the picture by hand
+    - cartog search (no exact symbol name was given)
+    - grep / Glob to explore
+  tags: [routing]
+
+- id: context_walk_me_through_subsystem
+  description: '"Walk me through subsystem Y" should lead to cartog context, not a tool chain'
+  user_query: "Walk me through how the payment processing pipeline is structured."
+  context: "The cartog index is up to date."
+  expected:
+    tool_calls:
+      - 'cartog context "payment processing pipeline"'
+    reasoning: >
+      Understanding how a subsystem is structured spans multiple symbols and
+      files — cartog context fuses semantic seeds, 1-hop call neighbors, and
+      same-file centrality into one budgeted, body-inline bundle. For a whole
+      subsystem the agent may raise --tokens. Granular tools (outline/refs/callees)
+      are follow-ups for details the bundle doesn't cover, not the first move.
+  anti_patterns:
+    - cartog outline on a guessed file as the FIRST command
+    - cartog rag search then a chain of refs/callees/Read to reconstruct the flow
+    - Reading files to understand the structure
+  tags: [routing]
+
+- id: context_starting_a_feature
+  description: 'Starting work on a feature with no known symbol should lead to cartog context'
+  user_query: "I'm starting work on rate limiting for the public API. Pull together the relevant code and how it connects so I have context to begin."
+  context: "The cartog index is up to date. The exact symbols are not known yet."
+  expected:
+    tool_calls:
+      - 'cartog context "rate limiting public API"'
+    reasoning: >
+      The user is starting a task and names no symbol. cartog context is the
+      one-shot entry point: relevant symbols + neighbors + centrality with bodies
+      inline. cartog search needs an exact name; cartog rag search returns
+      snippets without the graph neighbors the agent needs to start.
+  anti_patterns:
+    - cartog search "rate limiting" (no exact symbol name)
+    - cartog rag search then manually pulling neighbors with refs/callees
+    - grep across the API directory
   tags: [routing]

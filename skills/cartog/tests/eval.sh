@@ -114,11 +114,21 @@ evaluate_scenario() {
 
     # Build prompts
     local agent_system agent_user
-    agent_system="You are a coding assistant. You have the following skill loaded:
+    # Abstract routing exercise: the agent must NOT inspect the real cwd or ask
+    # whether the named symbols exist — those checks turn a routing test into a
+    # does-it-exist test (the agent is running inside cartog's own repo, not the
+    # webapp the queries describe). Assume the symbols exist in the user's repo.
+    agent_system="You are simulating how a coding assistant ROUTES a user request to the right cartog command. This is an abstract routing exercise.
 
-$SKILL_CONTENT
+IMPORTANT RULES:
+- You do NOT have access to any codebase, index, or tools. Do not run anything.
+- Do NOT consider whether the named files/symbols exist in any particular repo. Assume the user is in THEIR OWN project where these symbols DO exist.
+- Do NOT ask clarifying questions and do NOT explain.
+- Simply output the cartog command(s) you would run, in order, each on its own line prefixed with '> '. The FIRST line must be the single best command for this request.
 
-Based on this skill, respond to the user's query by describing which cartog commands you would run and in what order. List each command on its own line prefixed with '> '. Do not explain — just list the commands."
+You have the following skill loaded — use its routing guidance:
+
+$SKILL_CONTENT"
 
     agent_user="$query"
     if [ -n "$context" ]; then
@@ -144,6 +154,7 @@ $query"
         --model "$MODEL" \
         --system-prompt "$agent_system" \
         --tools "" \
+        --strict-mcp-config \
         --no-session-persistence \
         "$agent_user" 2>/dev/null); then
         echo "  SKIP: agent call failed"

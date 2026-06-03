@@ -218,7 +218,9 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 6. **Only fall back to grep/read** when cartog doesn't have what you need (e.g., reading actual implementation logic, string literals, config values).
 
-7. **After making code changes**, run `cartog index . --no-lsp` to quickly update the graph. If MCP is running with `--watch`, the re-index already happened automatically — skip this step. Only run a manual index in CLI-only sessions, or to force LSP edges in a watched session.
+7. **After making code changes**, run `cartog index .` to update the graph (LSP auto-detected for accurate edges); add `--no-lsp` only when you need a faster heuristic-only pass. If MCP is running with `--watch`, the re-index already happened automatically — skip this step. Only run a manual index in CLI-only sessions, or to force LSP edges in a watched session.
+
+8. **If `refs`/`callees`/`impact` look incomplete** (fewer results than you expect), re-index *with* LSP — run `cartog index .` without `--no-lsp` — to resolve more edges, then re-run the query.
 
 ## Do / Don't
 
@@ -484,7 +486,7 @@ Before changing any symbol (rename, extract, move, delete):
 3. `cartog refs <name>` — find every usage
 4. `cartog impact <name> --depth 3` — transitive blast radius
 5. `cartog hierarchy <name>` — if it's a class, check subclasses too
-6. Apply changes, then `cartog index . --no-lsp` to update the graph. **Skip this step if MCP is running with `--watch`** — the watcher has already re-indexed; only run it in CLI-only sessions or to force LSP edges on demand.
+6. Apply changes, then `cartog index .` to update the graph (add `--no-lsp` for a faster heuristic-only pass). **Skip this step if MCP is running with `--watch`** — the watcher has already re-indexed; only run it in CLI-only sessions or to force LSP edges on demand.
 7. Re-run `cartog refs <name>` to confirm no stale references remain
 
 For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `references/query_cookbook.md` → "Assess refactoring scope".
@@ -531,7 +533,7 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 
 - **Default feature**: shipped by default. Installs with `--no-default-features` omit LSP entirely (equivalent to `--no-lsp` at runtime).
 - **Auto-detected**: if language servers are on PATH, they are used automatically during `cartog index`. Use `--no-lsp` to skip.
-- **Startup latency**: language servers typically reach ready in 2-15s on cold cache. The default ready-timeout is 20s — override via `CARTOG_LSP_READY_TIMEOUT_SECS` for very large projects. Day-to-day indexing should use `--no-lsp`.
+- **Startup latency**: language servers typically reach ready in 2-15s on cold cache. The default ready-timeout is 20s — override via `CARTOG_LSP_READY_TIMEOUT_SECS` for very large projects. Reach for `--no-lsp` when that startup cost isn't worth it (a quick re-index in a tight edit loop); keep LSP on when edge accuracy matters (refactoring, incomplete refs).
 - **CLI vs MCP**: each `cartog index .` via Bash spawns and kills LSP servers (cold start). Use `cartog serve` (MCP mode) for sessions with multiple index calls — it keeps servers warm across tool calls.
 - **Supported servers**: rust-analyzer, pyright-langserver, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls, intelephense (phpactor fallback). Install hints shown when servers are missing.
 - **External crate edges stay unresolved**: LSP resolves definitions within the project. Calls to std/external crates remain unresolved regardless.
