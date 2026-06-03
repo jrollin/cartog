@@ -250,7 +250,8 @@ The database is a regenerable index — crash-recovery safety is traded for thro
 │   file_path, lines,    target_name,   hash,    value)    │
 │   signature,           target_id,     lang)              │
 │   content_hash,        kind, line,                       │
-│   subtree_hash, ...)   resolution_state)                 │
+│   subtree_hash, ...)   resolution_state,                 │
+│                        resolution_source)                │
 ├──────────────────────────────────────────────────────────┤
 │ RAG tables                                               │
 │                                                          │

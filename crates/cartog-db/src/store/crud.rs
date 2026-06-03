@@ -411,6 +411,7 @@ impl Database {
             edge.kind.as_str(),
             edge.file_path,
             edge.line,
+            i64::from(edge.target_id.is_some()),
             edge.provenance.map(|p| p.as_str()),
         ])?;
         Ok(())
@@ -436,6 +437,7 @@ impl Database {
                 edge.kind.as_str(),
                 edge.file_path,
                 edge.line,
+                i64::from(edge.target_id.is_some()),
                 edge.provenance.map(|p| p.as_str()),
             ])?;
         }
