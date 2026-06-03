@@ -182,15 +182,18 @@ run_arm() {
         mcp_config="$WORK_DIR/mcp-empty.json"
     fi
 
-    # A failed arm (crash, budget cap) is a legitimate outcome the harness
-    # reports as 0 tool calls / judge FAIL — not fatal — so `|| true` keeps the
-    # multi-repo run alive under `set -e`. stderr goes to a per-arm log (not
-    # /dev/null) so a failure is inspectable.
+    # A failed arm (crash, budget cap) is a legitimate, non-fatal outcome (0 tool
+    # calls; judge FAIL, or SKIP if the judge call itself errored) — `|| true`
+    # keeps the multi-repo run alive under `set -e`. stderr → a per-arm .err log
+    # under WORK_DIR; it is removed by the EXIT trap, so inspect it mid-run.
+    # Deny sub-agent spawning (Task/Agent) — it escapes --allowedTools and could
+    # re-introduce the ambient .claude skill into the baseline.
     # shellcheck disable=SC2086  # $allowed is an intentional multi-arg list
     (cd "$target" && claude --print --output-format stream-json --verbose \
         --model "$MODEL" \
         --mcp-config "$mcp_config" --strict-mcp-config \
         --allowedTools $allowed \
+        --disallowedTools Task Agent \
         --disable-slash-commands \
         --permission-mode bypassPermissions \
         --max-budget-usd "$BUDGET_USD" \
@@ -227,7 +230,12 @@ $expected
 Agent answer:
 $answer"
     verdict=$(judge_verdict "$JUDGE_MODEL" "$judge_prompt")
-    if is_pass "$verdict"; then echo "PASS"; else echo "FAIL"; fi
+    # A failed judge CALL (the ERROR sentinel) is not a wrong answer — surface it
+    # as SKIP so it never counts as a FAIL or feeds the medians.
+    case "$verdict" in
+        ERROR*) echo "SKIP" ;;
+        *) if is_pass "$verdict"; then echo "PASS"; else echo "FAIL"; fi ;;
+    esac
 }
 
 # ── Run ──
@@ -274,16 +282,18 @@ while IFS= read -r item; do
     # Track cost/calls/time/total/cache_read; rest → _. tool_breakdown = first PASS run's map.
     b_tools="{}"; c_tools="{}"
     for ((r=0; r<RUNS; r++)); do
-        read -r bcost bc btime btok _ _ bcr _ bv < "$unit_dir/b$r"
+        # `|| true`: an empty/missing unit file (SIGKILL'd arm) is a non-fatal
+        # outcome — empty $bv falls through as not-PASS, not a set -e abort.
+        read -r bcost bc btime btok _ _ bcr _ bv < "$unit_dir/b$r" || true
         if [ "$bv" = "PASS" ]; then
             b_cost+=("$bcost"); b_calls+=("$bc"); b_time+=("$btime"); b_tok+=("$btok"); b_cr+=("$bcr"); b_pass=$((b_pass+1))
-            [ "$b_pass" -eq 1 ] && b_tools=$(cat "$WORK_DIR/baseline_b$r.tools" 2>/dev/null || echo "{}")
+            [ "$b_pass" -eq 1 ] && b_tools=$(read_tools "$WORK_DIR/baseline_b$r.tools")
         fi
 
-        read -r ccost cc ctime ctok _ _ ccr _ cv < "$unit_dir/c$r"
+        read -r ccost cc ctime ctok _ _ ccr _ cv < "$unit_dir/c$r" || true
         if [ "$cv" = "PASS" ]; then
             c_cost+=("$ccost"); c_calls+=("$cc"); c_time+=("$ctime"); c_tok+=("$ctok"); c_cr+=("$ccr"); c_pass=$((c_pass+1))
-            [ "$c_pass" -eq 1 ] && c_tools=$(cat "$WORK_DIR/cartog_c$r.tools" 2>/dev/null || echo "{}")
+            [ "$c_pass" -eq 1 ] && c_tools=$(read_tools "$WORK_DIR/cartog_c$r.tools")
         fi
     done
 

@@ -48,7 +48,7 @@ import json, sys
 tool_calls = 0
 result = None
 
-with open(sys.argv[1]) as fh:
+with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
     for line in fh:
         line = line.strip()
         if not line:
@@ -84,7 +84,7 @@ parse_tools() {
 import json, sys
 
 counts = {}
-with open(sys.argv[1]) as fh:
+with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
     for line in fh:
         line = line.strip()
         if not line:
@@ -102,6 +102,14 @@ print(json.dumps(counts, sort_keys=True))
 PY
 }
 
+# A tool-breakdown JSON file's contents, or "{}" if missing OR empty. Guards the
+# `jq --argjson` consumer against an empty file (a SIGKILL between parse_tools'
+# truncate and its write), which would otherwise abort the run.
+# Usage: read_tools <path>
+read_tools() {
+    if [ -s "$1" ]; then cat "$1"; else echo "{}"; fi
+}
+
 # The agent's final answer (the `result` event's text), for the judge to score.
 # Usage: extract_answer <stream_json_file>
 extract_answer() {
@@ -109,7 +117,7 @@ extract_answer() {
 import json, sys
 
 answer = ""
-with open(sys.argv[1]) as fh:
+with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
     for line in fh:
         line = line.strip()
         if not line:

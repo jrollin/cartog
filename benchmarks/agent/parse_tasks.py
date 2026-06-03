@@ -3,8 +3,17 @@
 import json
 import sys
 
+
+def strip_fold(value):
+    """Drop a leading YAML folded-scalar marker (`>` / `>-`) as a prefix only."""
+    v = value.strip()
+    if v.startswith(">"):
+        v = v[1:].lstrip("-")
+    return v.strip()
+
+
 tasks, cur, key = [], None, None
-with open(sys.argv[1]) as fh:
+with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
     lines = fh.readlines()
 
 i = 0
@@ -19,8 +28,11 @@ while i < len(lines):
             tasks.append(cur)
         cur = {"id": s.split(":", 1)[1].strip(), "expected": []}
         key = None
-    elif s.startswith("prompt:"):
-        val = s.split(":", 1)[1].strip().lstrip(">").lstrip("-").strip()
+        continue
+    if cur is None:
+        sys.exit(f"tasks.yaml: line {i} '{s}' appears before the first '- id:' entry")
+    if s.startswith("prompt:"):
+        val = strip_fold(s.split(":", 1)[1])
         block = []
         while i < len(lines) and lines[i].startswith("      ") and not lines[i].strip().startswith(("expected:", "- id:")):
             block.append(lines[i].strip())

@@ -9,9 +9,19 @@ import sys
 
 SCALARS = ("id", "url", "rev", "lang")
 FOLDED = ("prompt", "expected")
+KEYS = SCALARS + FOLDED
+
+
+def strip_fold(value):
+    """Drop a leading YAML folded-scalar marker (`>` / `>-`) as a prefix only."""
+    v = value.strip()
+    if v.startswith(">"):
+        v = v[1:].lstrip("-")
+    return v.strip()
+
 
 repos, cur = [], None
-with open(sys.argv[1]) as fh:
+with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
     lines = fh.readlines()
 
 i = 0
@@ -26,13 +36,19 @@ while i < len(lines):
             repos.append(cur)
         cur = {"id": s.split(":", 1)[1].strip()}
         continue
+    if cur is None:
+        sys.exit(f"repos.yaml: line {i} '{s}' appears before the first '- id:' entry")
     field = s.split(":", 1)[0]
     if field in SCALARS:
         cur[field] = s.split(":", 1)[1].strip()
     elif field in FOLDED:
-        val = s.split(":", 1)[1].strip().lstrip(">").lstrip("-").strip()
+        val = strip_fold(s.split(":", 1)[1])
         block = []
-        while i < len(lines) and lines[i].startswith("      ") and ":" not in lines[i].split("#")[0]:
+        # A continuation is an indented line that does NOT start a new key —
+        # stop at a dedent or the next field, not merely at a colon in the text.
+        while i < len(lines) and lines[i].startswith("      ") \
+                and not lines[i].strip().split(":", 1)[0] in KEYS \
+                and not lines[i].strip().startswith("- "):
             block.append(lines[i].strip())
             i += 1
         cur[field] = " ".join([val] + block).strip()

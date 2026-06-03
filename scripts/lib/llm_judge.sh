@@ -23,8 +23,12 @@ judge_verdict() {
     printf '%s\n' "${response%%$'\n'*}"
 }
 
-# True (0) if a verdict line is a PASS. Treats a leading PASS as the signal.
+# True (0) if a verdict line's leading word is PASS. Word-boundary match (no pipe)
+# so "PASSABLE"/"Passing" don't count and a leading echo flag can't eat the input.
 # Usage: is_pass "<verdict line>"
 is_pass() {
-    echo "$1" | grep -qi "^PASS"
+    case "$1" in
+        [Pp][Aa][Ss][Ss] | [Pp][Aa][Ss][Ss][^A-Za-z]*) return 0 ;;
+        *) return 1 ;;
+    esac
 }

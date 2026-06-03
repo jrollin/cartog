@@ -136,15 +136,21 @@ $query"
         return
     fi
 
-    # Step 1: Agent call — ask the LLM what commands it would run
+    # Step 1: Agent call — ask the LLM what commands it would run. A transient
+    # claude failure must not abort the whole eval (set -e) — SKIP this scenario.
     local agent_response
-    agent_response=$(claude \
+    if ! agent_response=$(claude \
         --print \
         --model "$MODEL" \
         --system-prompt "$agent_system" \
         --tools "" \
         --no-session-persistence \
-        "$agent_user" 2>/dev/null)
+        "$agent_user" 2>/dev/null); then
+        echo "  SKIP: agent call failed"
+        SKIP=$((SKIP + 1))
+        echo ""
+        return
+    fi
 
     # Step 2: Judge call — evaluate the agent's response
     local judge_prompt verdict

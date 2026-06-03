@@ -57,7 +57,9 @@ questions, where the baseline thrashes through many grep/read round-trips.
   wall-time, total tokens, and cache-read tokens (the category that diverges).
 - **Correctness gate** — an LLM judge (shared `scripts/lib/llm_judge.sh`) scores
   each run PASS/FAIL against the task's `expected` rubric. **Only PASS runs feed
-  the medians**, so a cheaper-but-wrong answer cannot win.
+  the medians**, so a cheaper-but-wrong answer cannot win. A failed judge *call*
+  (not a wrong answer) is recorded as SKIP, so it neither counts as a FAIL nor
+  feeds the medians.
 
 Each target is indexed (and embedded) once up-front into a temp DB; agents never
 re-index during a run, so indexing cost is out of scope here (it has its own
