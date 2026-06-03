@@ -136,3 +136,7 @@ bench-rag: ## Run RAG relevancy benchmarks (in-memory + shell scenario 13)
 	cargo test --test rag_relevancy -- --nocapture
 	cargo build --release
 	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/run.sh --scenario 13
+
+bench-agent: ## Run end-to-end agent-task benchmark (cartog on/off; requires claude CLI)
+	cargo build --release
+	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/agent/run.sh

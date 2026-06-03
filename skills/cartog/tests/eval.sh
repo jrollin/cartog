@@ -22,8 +22,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SKILL_DIR/../.." && pwd)"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 GOLDEN="$SCRIPT_DIR/golden_examples.yaml"
+
+source "$REPO_ROOT/scripts/lib/llm_judge.sh"
 
 MODEL="${CARTOG_EVAL_MODEL:-sonnet}"
 
@@ -144,7 +147,7 @@ $query"
         "$agent_user" 2>/dev/null)
 
     # Step 2: Judge call — evaluate the agent's response
-    local judge_prompt verdict judge_response
+    local judge_prompt verdict
     judge_prompt="You are an evaluator. Score the agent response as PASS or FAIL.
 
 Judging rules:
@@ -172,16 +175,9 @@ $anti_patterns
 Reasoning:
 $reasoning"
 
-    judge_response=$(claude \
-        --print \
-        --model "$MODEL" \
-        --tools "" \
-        --no-session-persistence \
-        "$judge_prompt" 2>/dev/null)
+    verdict=$(judge_verdict "$MODEL" "$judge_prompt")
 
-    verdict=$(echo "$judge_response" | head -1)
-
-    if echo "$verdict" | grep -qi "^PASS"; then
+    if is_pass "$verdict"; then
         echo "  PASS: $verdict"
         PASS=$((PASS + 1))
     else

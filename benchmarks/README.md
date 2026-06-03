@@ -2,6 +2,20 @@
 
 Compares cartog graph queries vs grep/cat approaches for common code navigation tasks.
 
+## Three benchmark surfaces
+
+| Surface | Question it answers | Run with |
+|---------|---------------------|----------|
+| **Shell suite** (this file) | Is a single cartog query smaller / more complete than grep? | `make bench` |
+| **Criterion micro-benchmarks** | How fast is cartog's own CPU work (µs–ms)? | `make bench-criterion` |
+| **Agent-task** (`agent/`) | Does giving an agent cartog cut the *end-to-end* token cost of a task? | `make bench-agent` |
+
+The shell suite below is **per-query** (no LLM). The
+[agent-task suite](agent/README.md) drives a real agent through whole tasks with
+and without cartog — the end-to-end "does it actually help" claim. See
+[docs/tech.md → Benchmarks](../docs/tech.md#benchmarks) for the full
+test-and-benchmark matrix.
+
 ## What it measures
 
 | Dimension | Metric | Method |
