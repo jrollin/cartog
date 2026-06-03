@@ -76,6 +76,32 @@ print(f"{cost:.4f} {tool_calls} {duration:.0f} {total} {inp} {cc} {cr} {out}")
 PY
 }
 
+# Per-tool call counts as a compact JSON object {tool_name: count}, so we can see
+# which tools the model self-selected (e.g. did it call cartog_context?).
+# Usage: parse_tools <stream_json_file>  → e.g. {"cartog_context":1,"Read":3}
+parse_tools() {
+    python3 - "$1" <<'PY'
+import json, sys
+
+counts = {}
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "assistant":
+            for block in event.get("message", {}).get("content", []) or []:
+                if block.get("type") == "tool_use":
+                    name = block.get("name", "?")
+                    counts[name] = counts.get(name, 0) + 1
+print(json.dumps(counts, sort_keys=True))
+PY
+}
+
 # The agent's final answer (the `result` event's text), for the judge to score.
 # Usage: extract_answer <stream_json_file>
 extract_answer() {

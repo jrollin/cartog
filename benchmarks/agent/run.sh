@@ -162,34 +162,36 @@ echo '{"mcpServers":{}}' > "$WORK_DIR/mcp-empty.json"
 
 # Drive one agent run; prints parse_usage fields + verdict, i.e.
 # "<cost> <tool_calls> <time> <total_tokens> <input> <cache_create> <cache_read> <output> <verdict>".
-# Arms differ only in cartog: baseline gets an empty MCP config, cartog gets the
-# server pinned to the prebuilt index and a nudge to prefer its tools.
+# No system prompt either arm — MCP config is the only variable (cartog server vs.
+# empty), so the model selects tools purely from their descriptions. Tools are
+# fenced (--allowedTools + --disable-slash-commands) so the ambient .claude config
+# can't leak the cartog skill into the baseline. tool_breakdown records the picks.
 run_arm() {
     local arm="$1" target="$2" prompt="$3" expected="$4" db="$5" idx="$6"
     local transcript="$WORK_DIR/${arm}_${idx}.jsonl"
-    local mcp_config sys_prompt
+    local mcp_config
 
+    # Baseline: built-in exploration tools only. cartog arm: same + the cartog
+    # MCP tools (mcp__cartog__*).
+    local allowed="Read Grep Glob Bash"
     if [ "$arm" = "cartog" ]; then
         mcp_config="$WORK_DIR/mcp-cartog-${idx}.json"
         write_mcp_config "$CARTOG_BIN" "$db" "$mcp_config"
-        sys_prompt="You are a coding agent in the repository at $target. A cartog \
-code-graph server is available via MCP — prefer its tools (cartog_refs, \
-cartog_callees, cartog_impact, cartog_hierarchy, cartog_search, cartog_rag_search, \
-cartog_deps, cartog_outline) over reading files. Answer concisely."
+        allowed="$allowed mcp__cartog"
     else
         mcp_config="$WORK_DIR/mcp-empty.json"
-        sys_prompt="You are a coding agent in the repository at $target. Use Read, \
-Grep, and Glob to explore the code. Answer concisely."
     fi
 
     # A failed arm (crash, budget cap) is a legitimate outcome the harness
     # reports as 0 tool calls / judge FAIL — not fatal — so `|| true` keeps the
     # multi-repo run alive under `set -e`. stderr goes to a per-arm log (not
     # /dev/null) so a failure is inspectable.
+    # shellcheck disable=SC2086  # $allowed is an intentional multi-arg list
     (cd "$target" && claude --print --output-format stream-json --verbose \
         --model "$MODEL" \
-        --append-system-prompt "$sys_prompt" \
         --mcp-config "$mcp_config" --strict-mcp-config \
+        --allowedTools $allowed \
+        --disable-slash-commands \
         --permission-mode bypassPermissions \
         --max-budget-usd "$BUDGET_USD" \
         --no-session-persistence \
@@ -199,6 +201,9 @@ Grep, and Glob to explore the code. Answer concisely."
     usage=$(parse_usage "$transcript")
     answer=$(extract_answer "$transcript")
     verdict=$(judge "$answer" "$expected")
+    # Tool breakdown is JSON (spaces/braces) so it can't ride the positional line;
+    # write it to a sibling file the collector reads for the first PASS run.
+    parse_tools "$transcript" > "${transcript%.jsonl}.tools"
     echo "$usage $verdict"
 }
 
@@ -265,14 +270,21 @@ while IFS= read -r item; do
     done
     wait
 
-    # Collect. parse_usage fields: cost calls time total_tok input cache_create cache_read output.
-    # We track cost/calls/time/total/cache_read; input/cache_create/output go to _.
+    # parse_usage fields: cost calls time total_tok input cache_create cache_read output.
+    # Track cost/calls/time/total/cache_read; rest → _. tool_breakdown = first PASS run's map.
+    b_tools="{}"; c_tools="{}"
     for ((r=0; r<RUNS; r++)); do
         read -r bcost bc btime btok _ _ bcr _ bv < "$unit_dir/b$r"
-        [ "$bv" = "PASS" ] && { b_cost+=("$bcost"); b_calls+=("$bc"); b_time+=("$btime"); b_tok+=("$btok"); b_cr+=("$bcr"); b_pass=$((b_pass+1)); }
+        if [ "$bv" = "PASS" ]; then
+            b_cost+=("$bcost"); b_calls+=("$bc"); b_time+=("$btime"); b_tok+=("$btok"); b_cr+=("$bcr"); b_pass=$((b_pass+1))
+            [ "$b_pass" -eq 1 ] && b_tools=$(cat "$WORK_DIR/baseline_b$r.tools" 2>/dev/null || echo "{}")
+        fi
 
         read -r ccost cc ctime ctok _ _ ccr _ cv < "$unit_dir/c$r"
-        [ "$cv" = "PASS" ] && { c_cost+=("$ccost"); c_calls+=("$cc"); c_time+=("$ctime"); c_tok+=("$ctok"); c_cr+=("$ccr"); c_pass=$((c_pass+1)); }
+        if [ "$cv" = "PASS" ]; then
+            c_cost+=("$ccost"); c_calls+=("$cc"); c_time+=("$ctime"); c_tok+=("$ctok"); c_cr+=("$ccr"); c_pass=$((c_pass+1))
+            [ "$c_pass" -eq 1 ] && c_tools=$(cat "$WORK_DIR/cartog_c$r.tools" 2>/dev/null || echo "{}")
+        fi
     done
 
     bm_cost=$(median_float "${b_cost[@]:-}"); bm_calls=$(median "${b_calls[@]:-}")
@@ -299,12 +311,12 @@ while IFS= read -r item; do
 
     jq -nc \
         --arg label "$label" --argjson runs "$RUNS" \
-        --arg bcost "$bm_cost" --argjson bc "$bm_calls" --argjson btime "$bm_time" --argjson btok "$bm_tok" --argjson bcr "$bm_cr" --argjson bp "$b_pass" \
-        --arg ccost "$cm_cost" --argjson cc "$cm_calls" --argjson ctime "$cm_time" --argjson ctok "$cm_tok" --argjson ccr "$cm_cr" --argjson cp "$c_pass" \
+        --arg bcost "$bm_cost" --argjson bc "$bm_calls" --argjson btime "$bm_time" --argjson btok "$bm_tok" --argjson bcr "$bm_cr" --argjson bp "$b_pass" --argjson btools "$b_tools" \
+        --arg ccost "$cm_cost" --argjson cc "$cm_calls" --argjson ctime "$cm_time" --argjson ctok "$cm_tok" --argjson ccr "$cm_cr" --argjson cp "$c_pass" --argjson ctools "$c_tools" \
         --arg costcut "$cost_cut" --arg tokcut "$tok_cut" \
         '{target:$label,runs:$runs,
-          baseline:{median_cost_usd:($bcost|tonumber),median_tool_calls:$bc,median_time_s:$btime,median_tokens:$btok,median_cache_read_tokens:$bcr,pass:$bp},
-          cartog:{median_cost_usd:($ccost|tonumber),median_tool_calls:$cc,median_time_s:$ctime,median_tokens:$ctok,median_cache_read_tokens:$ccr,pass:$cp},
+          baseline:{median_cost_usd:($bcost|tonumber),median_tool_calls:$bc,median_time_s:$btime,median_tokens:$btok,median_cache_read_tokens:$bcr,pass:$bp,tool_breakdown:$btools},
+          cartog:{median_cost_usd:($ccost|tonumber),median_tool_calls:$cc,median_time_s:$ctime,median_tokens:$ctok,median_cache_read_tokens:$ccr,pass:$cp,tool_breakdown:$ctools},
           cost_reduction_pct:$costcut,token_reduction_pct:$tokcut}' >> "$RESULTS_FILE"
 done < "$WORKLIST"
 

@@ -336,7 +336,7 @@ Shows symbols affected by recent git changes, grouped by file.
 cartog context "escalate an alert to family when a senior misses check-in"
 cartog context "add OAuth refresh token rotation" --tokens 8000   # default 6000
 ```
-Builds everything needed to start a task in one call: the most relevant symbols (semantic + keyword search), their 1-hop call neighbors, and high-centrality definitions in the same files — bodies inline, budgeted to fit. Routes through semantic search, so it finds code by concept, not just name. Use at the START of a task ("where do I work on X?"); use `cartog search` for a single known symbol and `cartog trace` for a specific call path.
+The primary tool for "how does X work?" and understanding an area: one call returns the most relevant symbols (semantic + keyword search), their 1-hop call neighbors, and high-centrality definitions in the same files — bodies inline, budgeted to fit. Read-equivalent: answer from its bundle instead of a chain of `search`/`refs`/`outline`/Read; drill in with the granular tools only for follow-ups it doesn't cover. Raise `--tokens` (default 6000) for a whole subsystem. Use `cartog search` for a single known symbol and `cartog trace` for a specific call path.
 
 ### Doctor (environment health check)
 ```bash

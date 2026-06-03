@@ -33,13 +33,17 @@ questions, where the baseline thrashes through many grep/read round-trips.
 
 ## Methodology
 
-- **Two arms per task**
-  - `baseline` — empty MCP config; agent has only `Read`/`Grep`/`Glob`.
-  - `cartog` — same agent + cartog's MCP server over a prebuilt index, nudged to
-    prefer its tools.
-  - cartog availability is the **only** variable; both arms run with
-    `--strict-mcp-config` (no ambient MCP servers leak in) and a per-run
-    `--max-budget-usd` cap.
+- **Two arms per task** — **no system prompt** either arm (bare question), so the
+  MCP config is the *only* variable and the model selects tools purely from their
+  descriptions:
+  - `baseline` — empty MCP config; only the built-in `Read`/`Grep`/`Glob`/`Bash`.
+  - `cartog` — cartog's MCP server over a prebuilt index.
+  - Both run with `--strict-mcp-config` (no ambient MCP servers leak in) and a
+    per-run `--max-budget-usd` cap.
+- **`tool_breakdown`** per arm records which tools the model actually called
+  (a `{tool: count}` map from the first PASS run) — so you can see whether the
+  cartog arm self-selected the answer-shaped `cartog_context` vs. grep-walking
+  via granular tools.
 - **N runs per arm** (default 4) → report the **median** to damp LLM variance.
   Variance is large run-to-run; treat single runs as directional only.
 - **Cost (USD) is the headline metric**, not a lump-sum token total. A token
@@ -148,10 +152,12 @@ Prints a per-target table (cost-headlined) and a median summary, and writes
 `results/agent-latest.jsonl` (gitignored). Each line:
 
 ```json
-{"target":"gin","runs":4,"baseline":{"median_cost_usd":0.62,"median_tool_calls":13,"median_time_s":118,"median_tokens":847000,"median_cache_read_tokens":210000,"pass":4},"cartog":{"median_cost_usd":0.46,"median_tool_calls":5,"median_time_s":94,"median_tokens":651000,"median_cache_read_tokens":380000,"pass":4},"cost_reduction_pct":"25.8","token_reduction_pct":"23.0"}
+{"target":"gin","runs":4,"baseline":{"median_cost_usd":0.62,"median_tool_calls":13,"median_time_s":118,"median_tokens":847000,"median_cache_read_tokens":210000,"pass":4,"tool_breakdown":{"Grep":7,"Read":6}},"cartog":{"median_cost_usd":0.46,"median_tool_calls":5,"median_time_s":94,"median_tokens":651000,"median_cache_read_tokens":380000,"pass":4,"tool_breakdown":{"mcp__cartog__cartog_context":1,"mcp__cartog__cartog_callees":2}},"cost_reduction_pct":"25.8","token_reduction_pct":"23.0"}
 ```
 
 `median_cost_usd` is the headline (cache priced correctly). `median_tokens` is
 the lump sum and `median_cache_read_tokens` is broken out so you can see how much
-of the token total is cheap cache reads. `pass` is how many of the N runs the
-judge scored correct; only those count toward the medians.
+of the token total is cheap cache reads. `tool_breakdown` is the `{tool: count}`
+map from each arm's first PASS run — check the cartog arm for `cartog_context`.
+`pass` is how many of the N runs the judge scored correct; only those count
+toward the medians.
