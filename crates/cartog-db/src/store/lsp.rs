@@ -73,9 +73,11 @@ impl Database {
     /// `index_directory` so it does not call `lsp_resolve_edges` inside its
     /// outer transaction.
     pub fn update_edge_target(&self, edge_id: i64, target_id: &str) -> Result<()> {
+        // Overwrites any heuristic provenance: an LSP definition is more precise.
         self.conn.execute(
-            "UPDATE edges SET target_id = ?1, resolution_state = 1 WHERE id = ?2",
-            params![target_id, edge_id],
+            "UPDATE edges SET target_id = ?1, resolution_state = 1, resolution_source = ?2
+             WHERE id = ?3",
+            params![target_id, EdgeProvenance::Lsp.as_str(), edge_id],
         )?;
         Ok(())
     }
@@ -109,7 +111,8 @@ impl Database {
     /// tx-safe: single statement — see the LSP-section header note.
     pub fn reset_all_unresolvable(&self) -> Result<u32> {
         let n = self.conn.execute(
-            "UPDATE edges SET resolution_state = 0 WHERE resolution_state IN (2, 3)",
+            "UPDATE edges SET resolution_state = 0, resolution_source = NULL
+             WHERE resolution_state IN (2, 3)",
             [],
         )?;
         Ok(n as u32)
@@ -133,8 +136,9 @@ impl Database {
     /// tx-safe: single statement — see the LSP-section header note.
     pub fn mark_edge_unresolvable(&self, edge_id: i64) -> Result<()> {
         self.conn.execute(
-            "UPDATE edges SET resolution_state = 2 WHERE id = ?1 AND resolution_state = 0",
-            params![edge_id],
+            "UPDATE edges SET resolution_state = 2, resolution_source = ?2
+             WHERE id = ?1 AND resolution_state = 0",
+            params![edge_id, EdgeProvenance::LspUnresolvable.as_str()],
         )?;
         Ok(())
     }
@@ -151,8 +155,9 @@ impl Database {
     /// tx-safe: single statement — see the LSP-section header note.
     pub fn mark_edge_external(&self, edge_id: i64) -> Result<()> {
         self.conn.execute(
-            "UPDATE edges SET resolution_state = 3 WHERE id = ?1 AND resolution_state = 0",
-            params![edge_id],
+            "UPDATE edges SET resolution_state = 3, resolution_source = ?2
+             WHERE id = ?1 AND resolution_state = 0",
+            params![edge_id, EdgeProvenance::LspExternal.as_str()],
         )?;
         Ok(())
     }
@@ -178,7 +183,7 @@ impl Database {
             let placeholders = vec!["?"; chunk.len()].join(",");
             let sql = format!(
                 "UPDATE edges
-                 SET resolution_state = 0
+                 SET resolution_state = 0, resolution_source = NULL
                  WHERE resolution_state IN (2, 3)
                    AND target_name IN ({placeholders})"
             );

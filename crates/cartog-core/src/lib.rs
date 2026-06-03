@@ -11,6 +11,9 @@ use std::path::Path;
 
 use serde::Serialize;
 
+mod provenance;
+pub use provenance::EdgeProvenance;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct Symbol {
     pub id: String,
@@ -215,6 +218,10 @@ pub struct Edge {
     pub kind: EdgeKind,
     pub file_path: String,
     pub line: u32,
+    /// Which tier/source resolved `target_id`. `None` at extraction and for edges
+    /// resolved before provenance tracking existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<EdgeProvenance>,
 }
 
 impl Edge {
@@ -234,6 +241,7 @@ impl Edge {
             kind,
             file_path: file_path.to_string(),
             line,
+            provenance: None,
         }
     }
 }

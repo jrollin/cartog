@@ -122,7 +122,8 @@ impl Database {
     /// Find what a symbol calls (edges originating from symbols matching the name).
     pub fn callees(&self, name: &str) -> Result<Vec<Edge>> {
         let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line
+            "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+                    e.resolution_source
              FROM edges e
              JOIN symbols s ON e.source_id = s.id
              WHERE s.name = ?1 AND e.kind = 'calls'",
@@ -170,18 +171,10 @@ impl Database {
     ) -> Result<Vec<(Edge, Option<Symbol>)>> {
         // Use a LEFT JOIN to resolve target_id → symbol name instead of a correlated subquery.
         let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(Edge, Option<Symbol>)> {
-            let kind_str = row.get::<_, String>(4)?;
-            let kind = kind_str.parse().unwrap_or(EdgeKind::References);
-            let edge = Edge {
-                source_id: row.get(1)?,
-                target_name: row.get(2)?,
-                target_id: row.get(3)?,
-                kind,
-                file_path: row.get(5)?,
-                line: row.get(6)?,
-            };
-            let sym: Option<Symbol> = if row.get::<_, Option<String>>(7)?.is_some() {
-                Some(row_to_symbol_offset(row, 7)?)
+            // Edge columns 1..=7 (id is column 0), source symbol from column 8.
+            let edge = edge_from_row(row, 1)?;
+            let sym: Option<Symbol> = if row.get::<_, Option<String>>(8)?.is_some() {
+                Some(row_to_symbol_offset(row, 8)?)
             } else {
                 None
             };
@@ -191,6 +184,7 @@ impl Database {
         let rows = if let Some(kind) = kind_filter {
             let mut stmt = self.conn.prepare_cached(
                 "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+                        e.resolution_source,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
                         s.is_async, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
@@ -207,6 +201,7 @@ impl Database {
         } else {
             let mut stmt = self.conn.prepare_cached(
                 "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+                        e.resolution_source,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
                         s.is_async, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
@@ -242,7 +237,8 @@ impl Database {
     /// File-level dependencies (imports from a file).
     pub fn file_deps(&self, file_path: &str) -> Result<Vec<Edge>> {
         let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line
+            "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+                    e.resolution_source
              FROM edges e
              WHERE e.file_path = ?1 AND e.kind = 'imports'",
         )?;
@@ -266,10 +262,10 @@ impl Database {
         let sql = "
             WITH RECURSIVE impacted(
                 edge_id, source_id, target_name, target_id, kind,
-                file_path, line, source_name, depth
+                file_path, line, resolution_source, source_name, depth
             ) AS (
                 SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
-                       e.file_path, e.line, s.name, 1
+                       e.file_path, e.line, e.resolution_source, s.name, 1
                 FROM edges e
                 LEFT JOIN symbols s ON e.source_id = s.id
                 LEFT JOIN symbols sym2 ON e.target_id = sym2.id
@@ -278,7 +274,7 @@ impl Database {
                 UNION
 
                 SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
-                       e.file_path, e.line, s.name, i.depth + 1
+                       e.file_path, e.line, e.resolution_source, s.name, i.depth + 1
                 FROM impacted i
                 JOIN edges e
                   ON (e.target_name = i.source_name
@@ -290,7 +286,7 @@ impl Database {
                 WHERE i.source_name IS NOT NULL AND i.depth < ?2
             )
             SELECT source_id, target_name, target_id, kind, file_path, line,
-                   MIN(depth) AS depth
+                   resolution_source, MIN(depth) AS depth
             FROM impacted
             GROUP BY edge_id
             ORDER BY depth, edge_id
@@ -299,17 +295,9 @@ impl Database {
         let mut stmt = self.conn.prepare_cached(sql)?;
         let rows = stmt
             .query_map(params![name, max_depth], |row| {
-                let kind_str: String = row.get(3)?;
-                let kind = kind_str.parse().unwrap_or(EdgeKind::References);
-                let edge = Edge {
-                    source_id: row.get(0)?,
-                    target_name: row.get(1)?,
-                    target_id: row.get(2)?,
-                    kind,
-                    file_path: row.get(4)?,
-                    line: row.get(5)?,
-                };
-                let depth: u32 = row.get(6)?;
+                // Bare projection: edge columns 0..=6, depth at column 7.
+                let edge = edge_from_row(row, 0)?;
+                let depth: u32 = row.get(7)?;
                 Ok((edge, depth))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;

@@ -2536,6 +2536,31 @@ mod tests {
         assert!("".parse::<EdgeKind>().is_err());
     }
 
+    // ── Edge provenance in structured output ──
+
+    #[test]
+    fn json_output_includes_provenance_when_present() {
+        let mut edge = cartog_core::Edge::new("s:1", "foo", EdgeKind::Calls, "a.py", 1);
+        edge.provenance = Some(cartog_core::EdgeProvenance::SameFile);
+        let value = serde_json::to_value(EdgeList {
+            results: vec![edge],
+        })
+        .unwrap();
+        assert_eq!(value["results"][0]["provenance"], "same_file");
+    }
+
+    #[test]
+    fn json_output_omits_provenance_when_absent() {
+        // A freshly extracted edge has no provenance; skip_serializing_if drops
+        // the key entirely so the wire format stays clean.
+        let edge = cartog_core::Edge::new("s:1", "foo", EdgeKind::Calls, "a.py", 1);
+        let value = serde_json::to_value(EdgeList {
+            results: vec![edge],
+        })
+        .unwrap();
+        assert!(value["results"][0].get("provenance").is_none());
+    }
+
     // ── Tool handler tests (using in-memory DB) ──
 
     // These test the underlying DB operations that the MCP handlers call.

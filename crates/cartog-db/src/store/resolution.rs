@@ -99,9 +99,10 @@ impl Database {
         // Heuristic resolve must flip state=1 alongside target_id; otherwise
         // unresolved_edges() (state=0 filter) would still surface the edge to
         // the next LSP pass, wasting a server roundtrip on already-known answers.
-        let mut update_stmt = self
-            .conn
-            .prepare("UPDATE edges SET target_id = ?1, resolution_state = 1 WHERE id = ?2")?;
+        let mut update_stmt = self.conn.prepare(
+            "UPDATE edges SET target_id = ?1, resolution_state = 1, resolution_source = ?2
+             WHERE id = ?3",
+        )?;
 
         for (edge_id, target_name, edge_file, source_id) in unresolved {
             let simple_name = target_name.rsplit('.').next().unwrap_or(target_name);
@@ -112,7 +113,7 @@ impl Database {
                 .optional()?;
 
             if let Some(tid) = target_id {
-                update_stmt.execute(params![tid, edge_id])?;
+                update_stmt.execute(params![tid, EdgeProvenance::SameFile.as_str(), edge_id])?;
                 resolved += 1;
                 continue;
             }
@@ -123,7 +124,7 @@ impl Database {
                 .optional()?;
 
             if let Some(tid) = target_id {
-                update_stmt.execute(params![tid, edge_id])?;
+                update_stmt.execute(params![tid, EdgeProvenance::ImportPath.as_str(), edge_id])?;
                 resolved += 1;
                 continue;
             }
@@ -140,7 +141,7 @@ impl Database {
                     .optional()?;
 
                 if let Some(tid) = target_id {
-                    update_stmt.execute(params![tid, edge_id])?;
+                    update_stmt.execute(params![tid, EdgeProvenance::SameDir.as_str(), edge_id])?;
                     resolved += 1;
                     continue;
                 }
@@ -152,7 +153,7 @@ impl Database {
                 .optional()?;
 
             if let Some(tid) = target_id {
-                update_stmt.execute(params![tid, edge_id])?;
+                update_stmt.execute(params![tid, EdgeProvenance::ParentScope.as_str(), edge_id])?;
                 resolved += 1;
                 continue;
             }
@@ -168,14 +169,16 @@ impl Database {
             }
             drop(rows);
 
-            let resolved_id = match matches.len() {
-                1 => Some(&matches[0].0),
-                2 => disambiguate_two(&matches[0], &matches[1]),
+            // Tier and target are decided together so the provenance label can
+            // never drift from the branch that picked the id.
+            let resolution = match matches.as_slice() {
+                [(id, _)] => Some((id, EdgeProvenance::UniqueGlobal)),
+                [a, b] => disambiguate_two(a, b).map(|id| (id, EdgeProvenance::KindDisambig)),
                 _ => None,
             };
 
-            if let Some(tid) = resolved_id {
-                update_stmt.execute(params![tid, edge_id])?;
+            if let Some((tid, prov)) = resolution {
+                update_stmt.execute(params![tid, prov.as_str(), edge_id])?;
                 resolved += 1;
             }
         }
@@ -235,7 +238,7 @@ impl Database {
         // the edge would stay at state=1 (resolved) but with target_id NULL —
         // permanently invisible to `unresolved_edges()`.
         let n = self.conn.execute(
-            "UPDATE edges SET target_id = NULL, resolution_state = 0
+            "UPDATE edges SET target_id = NULL, resolution_state = 0, resolution_source = NULL
              WHERE target_id IS NOT NULL
                AND NOT EXISTS (SELECT 1 FROM symbols WHERE symbols.id = edges.target_id)",
             [],
