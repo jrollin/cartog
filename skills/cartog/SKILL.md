@@ -49,7 +49,7 @@ Both `cartog init` and `cartog index` are safe to run via Bash during an active 
 
 If MCP runs with `--watch`, the watcher will also re-index on file changes. A manual `cartog index .` is still safe; it just shares the write-queue.
 
-When two `cartog serve` instances run against the same DB (e.g. two Claude Code windows on the same project), single-writer election picks one as **primary** and the others attach **read-only**. Read-only secondaries refuse `cartog_index` / `cartog_rag_index` with a clear message but serve the other 11 MCP tools normally. The secondary auto-promotes to primary within ~10s if the primary process dies.
+When two `cartog serve` instances run against the same DB (e.g. two Claude Code windows on the same project), single-writer election picks one as **primary** and the others attach **read-only**. Read-only secondaries refuse `cartog_index` / `cartog_rag_index` with a clear message but serve the other 14 MCP tools normally (the 2 write tools are gated; the remaining 14 include `cartog_update`, which arms a machine-level deferred update rather than a DB write, so it is served even though only 13 tools carry `readOnlyHint = true`). The secondary auto-promotes to primary within ~10s if the primary process dies.
 
 If `cartog_index` or `cartog_rag_index` fails with a read-only error, call `cartog_stats` and check `role` (`primary` vs `read-only`) and `watcher_active` (whether the primary is auto-reindexing). That tells you whether to wait for promotion (~10s) or whether the primary's watcher will pick up changes on its own.
 
@@ -107,6 +107,8 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | `cartog impact <name>` | `cartog_impact` | `name`, `depth?` |
 | `cartog hierarchy <class>` | `cartog_hierarchy` | `name` |
 | `cartog deps <file>` | `cartog_deps` | `file` |
+| `cartog trace <from> <to>` | `cartog_trace` | `from`, `to`, `depth?` |
+| `cartog context "<task>"` | `cartog_context` | `task`, `tokens?` |
 | `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
 | `cartog stats [--savings]` | `cartog_stats` | — |
 | `cartog savings` | — (CLI only — alias for `cartog stats --savings`) | — |
@@ -216,7 +218,9 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 6. **Only fall back to grep/read** when cartog doesn't have what you need (e.g., reading actual implementation logic, string literals, config values).
 
-7. **After making code changes**, run `cartog index . --no-lsp` to quickly update the graph. If MCP is running with `--watch`, the re-index already happened automatically — skip this step. Only run a manual index in CLI-only sessions, or to force LSP edges in a watched session.
+7. **After making code changes**, run `cartog index .` to update the graph (LSP auto-detected for accurate edges); add `--no-lsp` only when you need a faster heuristic-only pass. If MCP is running with `--watch`, the re-index already happened automatically — skip this step. Only run a manual index in CLI-only sessions, or to force LSP edges in a watched session.
+
+8. **If `refs`/`callees`/`impact` look incomplete** (fewer results than you expect), re-index *with* LSP — run `cartog index .` without `--no-lsp` — to resolve more edges, then re-run the query.
 
 ## Do / Don't
 
@@ -293,6 +297,13 @@ cartog impact SessionManager --depth 3
 ```
 Shows everything that transitively depends on a symbol up to N hops.
 
+### Trace (call path between two symbols)
+```bash
+cartog trace handle_request escalate_to_family   # shortest call path, bodies inline
+cartog trace handle_request escalate_to_family --depth 4
+```
+Returns the shortest `calls` path from the first symbol to the second, each hop carrying the caller's body inline. Only statically-resolved `calls` edges are followed (dynamic dispatch is not traced). Use for "how does A reach B?"; use `cartog impact` for blast radius and `cartog refs` for all callers.
+
 ### Hierarchy (inheritance tree)
 ```bash
 cartog hierarchy BaseService
@@ -321,6 +332,13 @@ cartog changes --commits 10              # last 10 commits
 cartog changes --kind function           # only functions
 ```
 Shows symbols affected by recent git changes, grouped by file.
+
+### Context (one-shot task bundle)
+```bash
+cartog context "escalate an alert to family when a senior misses check-in"
+cartog context "add OAuth refresh token rotation" --tokens 8000   # default 6000
+```
+The primary tool for "how does X work?" and understanding an area: one call returns the most relevant symbols (semantic + keyword search), their 1-hop call neighbors, and high-centrality definitions in the same files — bodies inline, budgeted to fit. Read-equivalent: answer from its bundle instead of a chain of `search`/`refs`/`outline`/Read; drill in with the granular tools only for follow-ups it doesn't cover. Raise `--tokens` (default 6000) for a whole subsystem. Use `cartog search` for a single known symbol and `cartog trace` for a specific call path.
 
 ### Doctor (environment health check)
 ```bash
@@ -457,6 +475,8 @@ cartog --json outline src/auth/tokens.py
 cartog --json rag search "authentication"
 ```
 
+Edge results (`refs`, `callees`, `impact`, `deps`, `trace`) carry a `provenance` field naming which tier resolved the edge: a heuristic tier (`same_file`, `import_path`, `same_dir`, `parent_scope`, `unique_global`, `kind_disambig`) or an LSP outcome (`lsp`, `lsp_external`, `lsp_unresolvable`). Treat `lsp`/`same_file`/`import_path` as high-confidence; `unique_global`/`kind_disambig` as best-effort guesses. Omitted for unresolved edges and indexes built before provenance tracking.
+
 ## Refactoring Workflow
 
 Before changing any symbol (rename, extract, move, delete):
@@ -466,7 +486,7 @@ Before changing any symbol (rename, extract, move, delete):
 3. `cartog refs <name>` — find every usage
 4. `cartog impact <name> --depth 3` — transitive blast radius
 5. `cartog hierarchy <name>` — if it's a class, check subclasses too
-6. Apply changes, then `cartog index . --no-lsp` to update the graph. **Skip this step if MCP is running with `--watch`** — the watcher has already re-indexed; only run it in CLI-only sessions or to force LSP edges on demand.
+6. Apply changes, then `cartog index .` to update the graph (add `--no-lsp` for a faster heuristic-only pass). **Skip this step if MCP is running with `--watch`** — the watcher has already re-indexed; only run it in CLI-only sessions or to force LSP edges on demand.
 7. Re-run `cartog refs <name>` to confirm no stale references remain
 
 For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `references/query_cookbook.md` → "Assess refactoring scope".
@@ -484,6 +504,8 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 | Find usages of a function | `cartog refs <name>` (`--kind calls` for just callers) |
 | See what a function calls | `cartog callees <name>` |
 | Check if a change is safe | `cartog impact <name> --depth 3` |
+| Trace how one symbol reaches another | `cartog trace <from> <to>` |
+| Gather everything to start a task | `cartog context "<task>"` |
 | Understand class hierarchy | `cartog hierarchy <class>` |
 | See file dependencies | `cartog deps <file>` |
 | Render a diagram to paste into a PR / doc | append `--mermaid` to `hierarchy`, `deps`, or `map` |
@@ -511,7 +533,7 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 
 - **Default feature**: shipped by default. Installs with `--no-default-features` omit LSP entirely (equivalent to `--no-lsp` at runtime).
 - **Auto-detected**: if language servers are on PATH, they are used automatically during `cartog index`. Use `--no-lsp` to skip.
-- **Startup latency**: language servers typically reach ready in 2-15s on cold cache. The default ready-timeout is 20s — override via `CARTOG_LSP_READY_TIMEOUT_SECS` for very large projects. Day-to-day indexing should use `--no-lsp`.
+- **Startup latency**: language servers typically reach ready in 2-15s on cold cache. The default ready-timeout is 20s — override via `CARTOG_LSP_READY_TIMEOUT_SECS` for very large projects. Reach for `--no-lsp` when that startup cost isn't worth it (a quick re-index in a tight edit loop); keep LSP on when edge accuracy matters (refactoring, incomplete refs).
 - **CLI vs MCP**: each `cartog index .` via Bash spawns and kills LSP servers (cold start). Use `cartog serve` (MCP mode) for sessions with multiple index calls — it keeps servers warm across tool calls.
 - **Supported servers**: rust-analyzer, pyright-langserver, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls, intelephense (phpactor fallback). Install hints shown when servers are missing.
 - **External crate edges stay unresolved**: LSP resolves definitions within the project. Calls to std/external crates remain unresolved regardless.

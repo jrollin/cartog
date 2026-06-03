@@ -35,12 +35,42 @@
 | `release.lto` | `"thin"` | Most binary size / performance benefits of full LTO at a fraction of the link time |
 | `release.strip` | `"debuginfo"` | Removes DWARF sections (~50% binary size reduction) but keeps function names in panic backtraces for diagnosable crash reports |
 
+## Test & benchmark matrix
+
+Every measurement surface, what it uniquely covers, and where surfaces
+deliberately reuse each other. Kept here so new tests land in the right place
+instead of duplicating an existing one.
+
+| Surface | Question | Command | Overlap note |
+|---------|----------|---------|--------------|
+| Unit tests (`#[cfg(test)]`) | Does a single fn/module work? | `cargo test` | finest grain |
+| Integration tests (`crates/*/tests/`) | Do subsystems compose (init, remote, ide, locks, self-update, watch)? | `cargo test` | each owns one subsystem |
+| RAG relevancy (`rag_relevancy.rs`) | Does hybrid search return the right symbols? | `cargo test --test rag_relevancy` | reused by `bench-rag` |
+| Fixture integrity | Do the 8 fixture codebases compile/parse? | `make check-fixtures` | validates inputs, not cartog |
+| Skill shell tests | Does `ensure_indexed.sh`/`install.sh` logic hold? | `make check-skill` | bash-level |
+| Skill eval | Does the agent pick the **right cartog command first**? (tools off) | `make eval-skill` | LLM judge, tool-selection only |
+| Agent eval | Same, for the agent definitions | `make eval-agents` | LLM judge, tool-selection only |
+| Criterion benches | How fast is cartog's own CPU work (µs–ms)? | `make bench-criterion` | in-process latency |
+| Shell suite | Is one cartog query smaller/more complete than one grep? (**per-query**, no LLM) | `make bench` | token + recall |
+| Agent-task | Does giving an agent cartog cut **end-to-end** task cost? (LLM, with/without arms) | `make bench-agent` | task outcome + cost |
+
+The skill/agent **evals** judge *tool-selection* with tools disabled; the
+**agent-task benchmark** judges *task outcome and cost* with tools enabled and a
+baseline arm — they share `scripts/lib/llm_judge.sh` (one judge invocation) but
+test different things. The shell suite and agent-task suite share the
+token-savings *theme* but answer different questions (per-query size vs
+end-to-end task cost).
+
 ## Benchmarks
 
-Two distinct surfaces, both rooted in `benchmarks/fixtures/` (8 language webapps):
+Three distinct surfaces, all rooted in `benchmarks/fixtures/` (8 language webapps):
 
-- **Shell suite** (`benchmarks/run.sh`, 13 scenarios × fixtures) — token efficiency
-  and recall versus grep/cat. Run with `make bench`.
+- **Shell suite** (`benchmarks/run.sh`, 13 scenarios × fixtures) — per-query token
+  efficiency and recall versus grep/cat. Run with `make bench`.
+- **Agent-task** (`benchmarks/agent/run.sh`) — end-to-end agent token + turn cost
+  with cartog on vs off, median over N runs, LLM-judged for correctness. The
+  "does it actually help an agent" claim. Run with `make bench-agent`; not in CI
+  (spends model tokens). See [benchmarks/agent/README.md](../benchmarks/agent/README.md).
 - **Criterion micro-benchmarks** — in-process latency. The guiding rule: benchmark
   cartog's own CPU-bound work; anything dominated by an external service (the
   Ollama daemon, S3) gets a *correctness* test at the boundary, not a latency

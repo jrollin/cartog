@@ -1,0 +1,1 @@
+{"target":"django","runs":4,"baseline":{"median_cost_usd":0.2397,"median_tool_calls":40,"median_time_s":102,"median_tokens":67666,"median_cache_read_tokens":51051,"pass":4},"cartog":{"median_cost_usd":0.3266,"median_tool_calls":24,"median_time_s":68,"median_tokens":539063,"median_cache_read_tokens":503811,"pass":4},"cost_reduction_pct":"-36.3","token_reduction_pct":"-696.7"}

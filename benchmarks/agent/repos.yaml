@@ -1,0 +1,62 @@
+# Real-repo agent-task targets. Each repo is cloned at --depth 1, indexed by
+# cartog, then asked one deep "how does X work?" mechanism question — the task
+# shape where exploration cost dominates and a code graph earns its keep.
+#
+# Curated, hand-picked set. Select with `--repo <id>` / `--repo all`, or by
+# language with `--lang <lang>` (matches the `lang:` field). To swap a language's
+# repo, edit that entry in place — no code change needed.
+#
+# ALL fields are required (parse_repos.py rejects an entry missing any):
+#   id        unique slug; corpus dir name + --repo selector
+#   url       git clone source
+#   rev       tag/branch to pin (reproducibility); cloned via --branch
+#   lang      cartog language tag; the --lang selector
+#   prompt    the deep mechanism question asked of the agent
+#   expected  rubric of what a correct answer must explain (judge scores against it)
+#
+# Languages limited to what cartog supports today.
+
+repos:
+  - id: django
+    url: https://github.com/django/django
+    rev: 5.1.4
+    lang: py
+    prompt: >-
+      How does Django's ORM build and execute a SQL query from a QuerySet?
+      Walk through the key classes and methods involved.
+    expected: >-
+      Names QuerySet and its lazy evaluation, the Query object, the SQLCompiler
+      that produces SQL, and where execution hits the database backend.
+
+  - id: tokio
+    url: https://github.com/tokio-rs/tokio
+    rev: tokio-1.42.0
+    lang: rs
+    prompt: >-
+      How does tokio schedule and run async tasks on its runtime? Walk through
+      the key types and the path from spawning a task to it being polled.
+    expected: >-
+      Names the runtime/scheduler, the task spawn entry point, the worker
+      threads or run queue, and where futures are polled.
+
+  - id: okhttp
+    url: https://github.com/square/okhttp
+    rev: parent-5.0.0-alpha.14
+    lang: java
+    prompt: >-
+      How does OkHttp process an HTTP request through its interceptor chain?
+      Walk through the key classes and the order interceptors run in.
+    expected: >-
+      Names the interceptor chain (RealInterceptorChain), the ordered
+      interceptors, and how a Call proceeds through them to produce a Response.
+
+  - id: gin
+    url: https://github.com/gin-gonic/gin
+    rev: v1.10.0
+    lang: go
+    prompt: >-
+      How does gin route an incoming request and run it through its middleware
+      chain? Walk through the key types and the handler dispatch path.
+    expected: >-
+      Names the Engine/RouterGroup, the radix tree route match, the Context, and
+      how the HandlersChain (middleware + handler) runs via Context.Next.

@@ -1,0 +1,52 @@
+# Agent-task benchmark tasks. `expected` = ground-truth artifacts the answer must
+# name (drawn from benchmarks/ground_truth/webapp_py); the judge scores against them.
+# Methodology: benchmarks/agent/README.md.
+
+tasks:
+  - id: callers
+    prompt: >-
+      Which functions call validate_token? List each calling symbol and its file.
+    expected:
+      - auth_middleware
+      - get_current_user
+      - change_password
+      - refresh_token
+      - verify_token
+
+  - id: impact
+    prompt: >-
+      I want to rename the AuthService class. What symbols and files would be
+      affected? List them.
+    expected:
+      - AdminService
+      - routes/auth.py
+      - routes/admin.py
+      - services/auth_service.py
+
+  - id: hierarchy
+    prompt: >-
+      What classes inherit from BaseService? List each subclass.
+    expected:
+      - AuthService
+      - AuthenticationService
+      - CacheableService
+      - NotificationManager
+      - AuditableService
+
+  - id: trace
+    prompt: >-
+      Trace the call chain starting from login_route into the auth service. What
+      does login_route call, and what does that call in turn?
+    expected:
+      - login
+      - generate_token
+      - Session.create
+
+  - id: concept
+    prompt: >-
+      Where is the token validation logic in this codebase? Point me at the
+      relevant functions.
+    expected:
+      - validate_token
+      - verify_token
+      - extract_token

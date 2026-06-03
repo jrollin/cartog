@@ -478,6 +478,97 @@ test_apply_pending_exit_0_no_last_error() {
     teardown
 }
 
+test_apply_marker_cleared_on_clean_exit() {
+    echo "TEST: apply-in-progress marker is removed after a clean apply-pending"
+    setup
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 0
+
+    run_update_on_exit > /dev/null
+
+    if [ -f "$CARTOG_LOG_DIR/apply-in-progress" ]; then
+        echo "  FAIL: marker left behind after clean apply"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: marker cleared after clean apply"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+test_apply_marker_cleared_on_handled_failure() {
+    echo "TEST: apply-in-progress marker is removed even when apply-pending fails (exit 4)"
+    setup
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 4
+
+    run_update_on_exit > /dev/null
+
+    if [ -f "$CARTOG_LOG_DIR/apply-in-progress" ]; then
+        echo "  FAIL: marker left behind after a handled failure (would masquerade as a kill)"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: marker cleared after handled failure"; PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+# SIGKILL can't be trapped, so the rm never runs and the marker survives. Mock
+# blocks on the swap; kill the hook mid-swap and assert the marker is left.
+test_apply_marker_survives_kill_mid_swap() {
+    echo "TEST: apply-in-progress marker survives a SIGKILL during the swap"
+    setup
+    write_plugin_json "0.20.3"
+    create_mock_cartog "0.20.0" 0
+    # Make the apply-pending call hang so we can kill the hook while it runs.
+    # `exec sleep` so the sleep REPLACES the mock process (no orphaned grandchild
+    # to leak) and records its own PID for an exact reap. Short sleep bounds the
+    # worst-case orphan window if the reap below ever misses.
+    cat > "$TEST_DIR/bin/cartog" <<MOCK
+#!/usr/bin/env bash
+if [ "\$1" = "--version" ]; then echo "cartog 0.20.0"; exit 0; fi
+if [ "\$1 \$2 \$3" = "self update --help" ]; then
+    echo "  --apply-pending  Apply a previously-armed deferred update"
+    exit 0
+fi
+if [ "\$1 \$2 \$3" = "self update --apply-pending" ]; then
+    echo \$\$ > "$TEST_DIR/swap.pid"
+    exec sleep 5   # stand-in for a slow swap; killed by the test mid-flight
+fi
+exit 0
+MOCK
+    chmod +x "$TEST_DIR/bin/cartog"
+
+    (
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        exec bash "$UPDATE_SCRIPT" > /dev/null 2>&1
+    ) &
+    local hook_pid=$!
+    disown "$hook_pid" 2>/dev/null || true   # stop the shell reporting "Killed: 9"
+
+    # Wait (bounded) for the marker, i.e. the swap has started.
+    local waited=0
+    while [ ! -f "$CARTOG_LOG_DIR/apply-in-progress" ] && [ "$waited" -lt 50 ]; do
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+
+    kill -KILL "$hook_pid" 2>/dev/null || true
+    pkill -KILL -P "$hook_pid" 2>/dev/null || true
+    # Reap the swap process by its recorded PID (exec made it the mock's PID).
+    [ -f "$TEST_DIR/swap.pid" ] && kill -KILL "$(cat "$TEST_DIR/swap.pid")" 2>/dev/null || true
+    # Reap the hook (bounded): the job is disowned, so poll instead of `wait`.
+    local reap=0
+    while kill -0 "$hook_pid" 2>/dev/null && [ "$reap" -lt 20 ]; do
+        sleep 0.05
+        reap=$((reap + 1))
+    done
+
+    if [ -f "$CARTOG_LOG_DIR/apply-in-progress" ]; then
+        echo "  PASS: marker survived the mid-swap kill"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: marker missing after a mid-swap kill (interrupted swap would be silent)"; FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
 test_apply_pending_skipped_when_rag_lock_active() {
     echo "TEST: apply-pending skipped when RAG pipeline lock is recent"
     setup
@@ -677,6 +768,12 @@ echo ""
 test_apply_pending_exit_0_no_last_error
 echo ""
 test_apply_pending_skipped_when_rag_lock_active
+echo ""
+test_apply_marker_cleared_on_clean_exit
+echo ""
+test_apply_marker_cleared_on_handled_failure
+echo ""
+test_apply_marker_survives_kill_mid_swap
 echo ""
 test_legacy_binary_outdated_routes_to_install_sh
 echo ""

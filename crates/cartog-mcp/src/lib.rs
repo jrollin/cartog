@@ -1148,7 +1148,7 @@ impl CartogServer {
 
     /// Show symbols and structure of a file without reading its content.
     #[tool(
-        description = "Show file structure: functions, classes, methods, imports with signatures and line ranges. Use this INSTEAD of reading a file when you need to understand what's in it — then Read only the specific lines you need. Not for: reading the actual function body (use Read with offset/limit), or finding usages (use cartog_refs). Returns: Symbol[] with {name, kind, signature, line_start, line_end, parent_id, is_async, is_exported}.",
+        description = "Show one file's structure: functions, classes, methods, imports with signatures and line ranges. Use this INSTEAD of reading a file when you need to understand what's in it — then Read only the specific lines you need. For understanding how a FEATURE or AREA works (spanning files), prefer cartog_context — it returns the relevant bodies across files in one call. Not for: reading the actual function body (use Read with offset/limit), or finding usages (use cartog_refs). Returns: Symbol[] with {name, kind, signature, line_start, line_end, parent_id, is_async, is_exported}.",
         annotations(title = "Outline file", read_only_hint = true, open_world_hint = false),
         output_schema = output_schema_for::<SymbolList>()
     )]
@@ -1794,7 +1794,7 @@ impl CartogServer {
 
     /// Semantic search over code symbols using hybrid FTS5 + vector search.
     #[tool(
-        description = "Search code by concept, keyword, or natural language — the DEFAULT entry point for finding code. Use when asked 'find code related to...', 'how does X work?', 'show me the authentication logic'. Works even without embeddings (keyword matching alone is already strong). Prefer this over Grep for code discovery. Not for: looking up a known symbol name (use cartog_search instead — more precise). Filter with kind='document' for docs, kind='all' for both. Returns: Symbol[] ranked by relevance with snippet excerpts.",
+        description = "Search code by concept, keyword, or natural language. Returns ranked symbols with snippet excerpts — locations + previews, not full bodies. Use to LOCATE code matching a concept: 'find code related to...', 'show me the authentication logic'. For 'how does X work?' or understanding an area, prefer cartog_context — it returns full bodies + call neighbors in one call instead of snippets you'd then have to Read. Works even without embeddings (keyword matching alone is already strong). Prefer this over Grep for code discovery. Not for: looking up a known symbol name (use cartog_search instead — more precise). Filter with kind='document' for docs, kind='all' for both. Returns: Symbol[] ranked by relevance with snippet excerpts.",
         annotations(
             title = "Semantic code search",
             read_only_hint = true,
@@ -1862,7 +1862,7 @@ impl CartogServer {
     /// Build a one-shot task-context bundle fusing semantic search, structural
     /// neighbors, and centrality.
     #[tool(
-        description = "Build everything you need to start a task in ONE call: the most relevant symbols (semantic + keyword), their 1-hop call neighbors, and high-centrality definitions in the same files — with bodies inline, budgeted to fit. Use at the START of a task: 'where do I work on X?', 'give me context for implementing Y', 'what's relevant to Z?'. Routes through semantic search, so it finds code by concept, not just name. Not for: a single known symbol (use cartog_search), or a specific call path (use cartog_trace). Returns: {task, entries: [{symbol, reason, score, body?}], approx_tokens}.",
+        description = "PRIMARY TOOL — call FIRST for any 'how does X work?', 'understand/survey area Y', 'where do I implement Z?' question. ONE call returns the relevant symbols (semantic + keyword), their 1-hop call neighbors, and high-centrality definitions in the same files, with bodies inline and budgeted to fit. Read-equivalent: do NOT re-open the symbols it returns, and usually the ONLY call you need — answer from its bundle instead of a chain of search/refs/callees/outline/Read. Drill in with the granular tools (cartog_refs, cartog_callees, cartog_trace) only for follow-ups it doesn't cover. Routes through semantic search, so it finds code by concept, not just name. Raise `tokens` (default 6000, max 20000) for a whole subsystem. Not for: a single known symbol (use cartog_search), or one specific call path (use cartog_trace). Returns: {task, entries: [{symbol, reason, score, body?}], approx_tokens}.",
         annotations(
             title = "Task context bundle",
             read_only_hint = true,

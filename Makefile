@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-install-script sync-install-script bench bench-criterion bench-rag bench-onnx eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-install-script sync-install-script bench bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -136,3 +136,7 @@ bench-rag: ## Run RAG relevancy benchmarks (in-memory + shell scenario 13)
 	cargo test --test rag_relevancy -- --nocapture
 	cargo build --release
 	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/run.sh --scenario 13
+
+bench-agent: ## Run end-to-end agent-task benchmark (cartog on/off; requires claude CLI)
+	cargo build --release
+	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/agent/run.sh

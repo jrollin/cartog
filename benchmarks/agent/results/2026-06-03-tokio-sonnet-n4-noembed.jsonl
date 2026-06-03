@@ -1,0 +1,1 @@
+{"target":"tokio","runs":4,"baseline":{"median_cost_usd":0.3689,"median_tool_calls":36,"median_time_s":131,"median_tokens":68648,"median_cache_read_tokens":51008,"pass":4},"cartog":{"median_cost_usd":0.3631,"median_tool_calls":16,"median_time_s":74,"median_tokens":535184,"median_cache_read_tokens":485923,"pass":4},"cost_reduction_pct":"1.6","token_reduction_pct":"-679.6"}

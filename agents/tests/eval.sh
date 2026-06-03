@@ -27,6 +27,8 @@ AGENTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$AGENTS_DIR/.." && pwd)"
 GOLDEN="$SCRIPT_DIR/golden_examples.yaml"
 
+source "$REPO_ROOT/scripts/lib/llm_judge.sh"
+
 MODEL="${CARTOG_EVAL_MODEL:-sonnet}"
 
 FILTER_ID=""
@@ -240,21 +242,17 @@ Quality criteria:
 $quality"
 
     echo "  Judging quality..."
-    local judge_response verdict
-    judge_response=$(claude \
-        --print \
-        --model "$MODEL" \
-        --no-session-persistence \
-        "$judge_prompt" 2>/dev/null) || {
+    local verdict
+    verdict=$(judge_verdict "$MODEL" "$judge_prompt")
+
+    if echo "$verdict" | grep -q "^ERROR"; then
         echo "  SKIP: judge call failed"
         SKIP=$((SKIP + 1))
         echo ""
         return
-    }
+    fi
 
-    verdict=$(echo "$judge_response" | head -1)
-
-    if echo "$verdict" | grep -qi "^PASS"; then
+    if is_pass "$verdict"; then
         echo "  $verdict"
         PASS=$((PASS + 1))
     else
