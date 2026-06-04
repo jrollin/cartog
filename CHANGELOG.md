@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.23.0] - 2026-06-04
+
+### Bug Fixes
+
+- **release**: Generate changelog from explicit range before tagging ([`5296205`](https://github.com/jrollin/cartog/commit/5296205734e3af4bf6dfb96a52fbd8be2d7f4370))
+- **ci**: Bound release notes by commit range instead of --latest ([`21faae2`](https://github.com/jrollin/cartog/commit/21faae230a74bc8f5e47a300684c0a5d3c3df4d9))
+
+### Documentation
+
+- **changelog**: Rebuild with correct per-release segmentation ([`79b3939`](https://github.com/jrollin/cartog/commit/79b3939528bf72fb4f370da4f4456c66ab32121b))
+
+### Features
+
+- **site**: Render --mermaid example outputs as diagrams ([`2c780ff`](https://github.com/jrollin/cartog/commit/2c780ff4978166e20fd3e1f50adf7b1fe84b697f))
+
 ## [0.22.0] - 2026-06-04
 
 ### Bug Fixes
