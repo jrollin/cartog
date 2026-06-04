@@ -544,6 +544,30 @@ section + section {
   line-height: 1.6;
 }
 
+/* Horizontal variant: icon left, title + copy right (see #features). */
+.feature-card--row {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.feature-card--row .feature-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+}
+
+.feature-card--row h3 {
+  margin-bottom: 6px;
+}
+
 .feature-card code {
   font-size: 12px;
   background: var(--bg-tertiary);
@@ -635,7 +659,8 @@ section + section {
   margin-top: 32px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 table {
@@ -941,7 +966,29 @@ td .badge {
 
   .install-widget code {
     font-size: 12px;
+    white-space: normal;
     word-break: break-all;
+  }
+
+  /* Wide comparison tables scroll sideways within their box. Always show the
+     scrollbar so the swipe affordance is visible (cell backgrounds occlude a
+     background-fade, so the scrollbar is the honest cue). */
+  .table-wrapper {
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent) var(--bg-tertiary);
+  }
+
+  .table-wrapper::-webkit-scrollbar {
+    height: 8px;
+  }
+
+  .table-wrapper::-webkit-scrollbar-track {
+    background: var(--bg-tertiary);
+  }
+
+  .table-wrapper::-webkit-scrollbar-thumb {
+    background: var(--accent);
+    border-radius: 8px;
   }
 
   .stats-bar .container {
