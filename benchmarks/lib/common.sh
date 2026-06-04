@@ -31,7 +31,7 @@ should_skip_fixture() {
     # Match by the `_<tag>` suffix in the fixture directory name. Keep this list
     # in sync with the languages that have fixtures under benchmarks/fixtures/.
     case "$FIXTURE_FILTER" in
-        py|ts|go|rs|rb|java|php|dart|swift)
+        py|ts|go|rs|rb|java|php|dart|swift|kt)
             [[ "$fixture_name" != *"_${FIXTURE_FILTER}"* ]] && return 0 || return 1 ;;
         *) return 1 ;;
     esac

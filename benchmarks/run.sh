@@ -16,6 +16,7 @@
 #   ./benchmarks/run.sh --fixture php    # Run only PHP fixtures
 #   ./benchmarks/run.sh --fixture dart   # Run only Dart fixtures
 #   ./benchmarks/run.sh --fixture swift  # Run only Swift fixtures
+#   ./benchmarks/run.sh --fixture kt     # Run only Kotlin fixtures
 
 set -euo pipefail
 
@@ -38,7 +39,7 @@ while [[ $# -gt 0 ]]; do
         --scenario) SCENARIO_FILTER="$2"; shift 2 ;;
         --fixture)  FIXTURE_FILTER="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb|java|php|dart|swift]"
+            echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb|java|php|dart|swift|kt]"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;

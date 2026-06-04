@@ -23,6 +23,7 @@ tree-sitter-java = { workspace = true }
 tree-sitter-php = { workspace = true }
 tree-sitter-dart = { workspace = true }
 tree-sitter-swift = { workspace = true }
+tree-sitter-kotlin-sg = { workspace = true }
 
 [lints]
 workspace = true

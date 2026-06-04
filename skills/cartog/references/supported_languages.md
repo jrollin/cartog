@@ -1,6 +1,6 @@
 # Supported Languages
 
-## Currently Supported (11 languages)
+## Currently Supported (12 languages)
 
 ### Python (.py, .pyi)
 - Functions, classes, methods
@@ -127,6 +127,18 @@
 - Async functions (`async`); `throws`/`rethrows` kept in the signature (no `Raises` edge — Swift errors are untyped at the declaration site)
 - Doc comments (`///` lines and `/** */` blocks)
 - Visibility: `private`/`fileprivate` → private; `internal` (default)/`public`/`open`/`package` → public
+
+### Kotlin (.kt, .kts)
+- Classes, `data`/`sealed` classes, interfaces (as interfaces), `enum class` (as enums), `object`/`companion object` (as class symbols), typealiases
+- Top-level functions, methods, primary/secondary constructors (as `init` methods), properties (`val`/`var`), constructor `val`/`var` parameters, enum entries
+- Imports (`import a.b.C`, `import a.b.*`, `import a.b.C as D`)
+- Function and method calls
+- Inheritance (superclass constructor call → `Inherits`) and interface implementation (→ `Implements`)
+- Type annotation references (parameter types, return types, generic type arguments)
+- Coroutine functions (`suspend` → marked async)
+- KDoc comments (`/** */` blocks)
+- Visibility: `private` → private; `internal`/`protected`/`public` (default) → public
+- Annotations (`@Deprecated`, `@Override`) are not emitted as type references
 
 ### Markdown (.md)
 - Document sections chunked by heading (`#`, `##`, `###`, etc.)

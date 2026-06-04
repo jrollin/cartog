@@ -28,12 +28,12 @@ cargo check --features provider-ollama -p cartog-rag # verify Ollama feature
 ```bash
 make check                 # all checks (Rust project + fixtures + skill)
 make check-rust            # cargo fmt + clippy + test
-make check-fixtures        # validate all fixture codebases (py, ts, go, rs, rb, java, php, dart, swift)
+make check-fixtures        # validate all fixture codebases (py, ts, go, rs, rb, java, php, dart, swift, kt)
 make check-fixtures-docker # same, forcing the Docker fallback for every language
 make check-skill           # skill tests (ensure_indexed.sh unit tests)
 make eval-skill            # LLM-as-judge skill evaluation (requires claude CLI)
 make eval-agents           # LLM-as-judge agent evaluation (requires claude CLI)
-make bench                 # shell benchmark suite (13 scenarios x 9 languages)
+make bench                 # shell benchmark suite (13 scenarios x 10 languages)
 make bench-criterion       # ONNX-free criterion benches (queries, per-language indexing, hybrid search)
 make bench-onnx            # real-model embed/rerank benches (needs `cartog rag setup`; not in CI)
 make bench-rag             # RAG relevancy benchmarks (in-memory + shell scenario 13)
@@ -74,7 +74,7 @@ See [docs/structure.md](docs/structure.md) for full directory tree and module re
 crates/cartog/         (binary — CLI dispatch, config, self-update)
 ├── cartog-core        (Symbol, Edge, SymbolKind, detect_language)
 ├── cartog-db          (SQLite: core + RAG schema, edge resolution)
-├── cartog-languages   (tree-sitter extractors, 11 languages)
+├── cartog-languages   (tree-sitter extractors, 12 languages)
 ├── cartog-indexer     (walk + extract + store, Merkle hashing)
 ├── cartog-rag         (embeddings, hybrid search, reranker)
 ├── cartog-lsp         (LSP-based edge resolution — default feature)
@@ -162,7 +162,7 @@ The MCP config JSON has one canonical copy in `docs/mcp-setup.md`; other docs li
 
 ## Current State
 
-- **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Markdown
+- **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, Markdown
 - **CLI**: 25 top-level commands (`init`, `ide`, `index`, `search`, `outline`, `refs`, `callees`, `impact`, `trace`, `context`, `hierarchy`, `deps`, `stats`, `map`, `changes`, `config`, `doctor`, `watch`, `serve`, `push`, `pull`, `completions`, `manpage`, plus `rag` with 3 subcommands and `self` with 4 subcommands; `self update` has `--check`/`--defer`[`--to <version>`]/`--apply-pending` modes) + MCP server (16 tools)
 - **Indexing**: incremental (git-based + SHA-256 + Merkle-tree symbol diffing), `--force` re-index. Stable symbol IDs (`file:kind:qualified_name`) survive line movements. Scoped edge resolution for changed files only
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
@@ -183,4 +183,4 @@ The MCP config JSON has one canonical copy in `docs/mcp-setup.md`; other docs li
 - **Pluggable embedding providers**: local ONNX (default) and Ollama, configured via `.cartog.toml`
 - **Secret redaction**: default-on, best-effort. Scrubs common secret patterns (AWS/GitHub/Slack/Stripe/JWT + quoted key=value assignments) from `symbol_content`, `signature`, `docstring`, and embeddings; always excludes sensitive files (`.env`, `*.pem`, `id_rsa`, ...). Toggling `[security] redact_secrets` force-reindexes. See [docs/tech.md](docs/tech.md#secret-redaction)
 - **Feature flags**: binary `cartog` default = `lsp` + `remote-s3` + `ollama-embedding` (all on); advanced users strip via `--no-default-features`. Runtime embedding default stays local ONNX (`provider = "local"`); Ollama is opt-in via `.cartog.toml`. Crate `cartog-rag` — `provider-local` (default), `provider-ollama`
-- **Pending**: Kotlin extractor (next language after Swift); Java extractor improvements
+- **Pending**: next language TBD; Java extractor improvements

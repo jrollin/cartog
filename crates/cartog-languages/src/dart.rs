@@ -3,7 +3,7 @@ use tree_sitter::{Language, Node, Parser};
 
 use cartog_core::{symbol_id, Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 
-use super::{last_segment, node_text, ExtractionResult, Extractor, ParentScope};
+use super::{last_segment, node_text, qualified, ExtractionResult, Extractor, ParentScope};
 
 /// Tree-sitter–based extractor for Dart source files.
 pub struct DartExtractor {
@@ -1132,13 +1132,6 @@ fn dart_visibility(name: &str) -> Visibility {
         Visibility::Private
     } else {
         Visibility::Public
-    }
-}
-
-fn qualified(parent_qname: Option<&str>, name: &str) -> String {
-    match parent_qname {
-        Some(p) => format!("{p}.{name}"),
-        None => name.to_string(),
     }
 }
 

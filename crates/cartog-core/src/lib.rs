@@ -350,6 +350,7 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
         "php" => Some("php"),
         "dart" => Some("dart"),
         "swift" => Some("swift"),
+        "kt" | "kts" => Some("kotlin"),
         "md" => Some("markdown"),
         _ => None,
     }
@@ -466,5 +467,10 @@ mod tests {
         assert_eq!(detect_language(Path::new("Service.php")), Some("php"));
         assert_eq!(detect_language(Path::new("main.dart")), Some("dart"));
         assert_eq!(detect_language(Path::new("App.swift")), Some("swift"));
+        assert_eq!(detect_language(Path::new("Main.kt")), Some("kotlin"));
+        assert_eq!(
+            detect_language(Path::new("build.gradle.kts")),
+            Some("kotlin")
+        );
     }
 }

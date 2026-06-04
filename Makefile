@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-install-script sync-install-script bench bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-install-script sync-install-script bench bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -52,7 +52,7 @@ check-rust: ## cargo fmt + clippy + test
 
 # --- Fixture syntax/build checks ---
 
-check-fixtures: check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift ## Validate all fixture codebases
+check-fixtures: check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt ## Validate all fixture codebases
 
 check-fixtures-docker: ## Validate all fixture codebases via Docker (reproducible)
 	@$(MAKE) check-fixtures FORCE_DOCKER=1
@@ -110,6 +110,12 @@ check-swift: ## Validate Swift fixtures (swift build, falls back to Docker)
 	$(call check_lang,swift,swift:6.1,\
 		cd benchmarks/fixtures/webapp_swift && swift build,\
 		cd webapp_swift && HOME=/tmp swift build --cache-path /tmp/swiftpm --scratch-path /tmp/swiftbuild)
+
+check-kt: ## Validate Kotlin fixtures (kotlinc compile, falls back to Docker)
+	@echo "==> Checking Kotlin fixtures..."
+	$(call check_lang,kotlinc,zenika/kotlin:1.9-jdk17,\
+		cd benchmarks/fixtures/webapp_kt && kotlinc src -include-runtime -d /tmp/webapp_kt.jar,\
+		cd webapp_kt && HOME=/tmp kotlinc src -include-runtime -d /tmp/webapp_kt.jar)
 
 # --- Skill tests ---
 

@@ -13,7 +13,7 @@ description: >-
   or needs to navigate code, locate definitions, search code by concept or behavior,
   trace dependencies, assess blast radius of changes, explore how a feature is implemented,
   support refactoring (rename, extract, move, delete), or explore an unfamiliar codebase.
-  Supports Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, and Markdown documents.
+  Supports Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, and Markdown documents.
 ---
 
 # cartog — Code Graph Navigation Skill
@@ -524,7 +524,7 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 ## Limitations
 
 - Heuristic resolution is name-based (~25% of edges resolved). With LSP enabled, ~42-81% resolved depending on language. Remaining unresolved edges are mostly calls to external libraries.
-- Code languages: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift.
+- Code languages: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin.
 - Documents: Markdown (`.md`) — indexed by heading sections for semantic search.
 - Does not index string literals, comments (except docstrings), or config values.
 - Method resolution is name-based without LSP — `foo.bar()` resolves `bar`, not `Foo.bar` specifically. LSP resolves to the exact type when a language server is available.
@@ -535,7 +535,7 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 - **Auto-detected**: if language servers are on PATH, they are used automatically during `cartog index`. Use `--no-lsp` to skip.
 - **Startup latency**: language servers typically reach ready in 2-15s on cold cache. The default ready-timeout is 20s — override via `CARTOG_LSP_READY_TIMEOUT_SECS` for very large projects. Reach for `--no-lsp` when that startup cost isn't worth it (a quick re-index in a tight edit loop); keep LSP on when edge accuracy matters (refactoring, incomplete refs).
 - **CLI vs MCP**: each `cartog index .` via Bash spawns and kills LSP servers (cold start). Use `cartog serve` (MCP mode) for sessions with multiple index calls — it keeps servers warm across tool calls.
-- **Supported servers**: rust-analyzer, pyright-langserver, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls, intelephense (phpactor fallback), dart, sourcekit-lsp. Install hints shown when servers are missing.
+- **Supported servers**: rust-analyzer, pyright-langserver, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls, intelephense (phpactor fallback), dart, sourcekit-lsp, kotlin-language-server. Install hints shown when servers are missing.
 - **External crate edges stay unresolved**: LSP resolves definitions within the project. Calls to std/external crates remain unresolved regardless.
 
 ### RAG search limitations

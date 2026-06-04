@@ -107,6 +107,14 @@ pub const SERVERS: &[ServerSpec] = &[
         install_hint:
             "ships with the Swift toolchain / Xcode; see https://github.com/swiftlang/sourcekit-lsp",
     },
+    ServerSpec {
+        language: "kotlin",
+        binary: "kotlin-language-server",
+        args: &[],
+        language_id: "kotlin",
+        install_hint:
+            "install from https://github.com/fwcd/kotlin-language-server (or via your package manager)",
+    },
 ];
 
 /// Find all server specs for a cartog language name, in priority order.
@@ -193,6 +201,14 @@ mod tests {
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].binary, "sourcekit-lsp");
         assert_eq!(specs[0].language_id, "swift");
+    }
+
+    #[test]
+    fn test_find_servers_kotlin() {
+        let specs = find_servers("kotlin");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].binary, "kotlin-language-server");
+        assert_eq!(specs[0].language_id, "kotlin");
     }
 
     #[test]

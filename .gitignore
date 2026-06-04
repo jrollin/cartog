@@ -10,4 +10,6 @@ benchmarks/agent/.corpus/
 benchmarks/.indexes/
 benchmarks/fixtures/webapp_rs/target/
 benchmarks/fixtures/webapp_swift/.build/
+benchmarks/fixtures/webapp_kt/.gradle/
+benchmarks/fixtures/webapp_kt/build/
 .playwright-mcp/
