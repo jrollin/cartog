@@ -134,24 +134,41 @@ done
 # update Cargo.lock
 cargo generate-lockfile --quiet 2>/dev/null || true
 
+# Generate CHANGELOG.md BEFORE committing/tagging so the tag points at the
+# SAME commit that lands on main. (The previous approach amended the bump
+# commit AFTER tagging, which rewrote its SHA and orphaned every tag 1 commit
+# off main — see the note below.)
+#
+# We prepend only the new section instead of regenerating the whole file.
+# Historical tags are orphaned off main (a past rebase), so a full git-cliff
+# run can't segment them and would dump all prior history into this release.
+# Bounding the section by an explicit commit range — previous bump commit on
+# main .. HEAD — sidesteps that entirely: it relies on the reachable *commit*,
+# not the orphaned *tag*. CHANGELOG.md stays the frozen historical record.
+if command -v git-cliff &>/dev/null; then
+  info "generating CHANGELOG.md with git-cliff"
+  # Last "bump version" commit on main before this release (HEAD is not yet
+  # bumped at this point, so the most recent match is the previous release).
+  PREV_BUMP=$(git log HEAD --grep='^chore: bump version to' --format='%H' -n1)
+  if [[ -n "$PREV_BUMP" ]]; then
+    RANGE="${PREV_BUMP}..HEAD"
+  else
+    RANGE=""  # first release ever — no prior bump; let git-cliff take all commits
+  fi
+  # --prepend errors on a missing file; seed the header so a clean-room first
+  # release degrades instead of aborting after the version bump is applied.
+  [[ -f CHANGELOG.md ]] || printf '# Changelog\n\n' > CHANGELOG.md
+  git-cliff --config cliff.toml --tag "$TAG" --prepend CHANGELOG.md $RANGE
+else
+  info "git-cliff not found — skipping local CHANGELOG.md update (CI will still generate release notes)"
+fi
+
 info "committing version bump"
-git add "$CARGO_TOML" Cargo.lock "$PLUGIN_JSON" "$INSTALL_SKILL" site/
+git add "$CARGO_TOML" Cargo.lock "$PLUGIN_JSON" "$INSTALL_SKILL" site/ CHANGELOG.md
 git commit -m "chore: bump version to ${NEW}"
 
 info "tagging $TAG"
 git tag -a "$TAG" -m "Release ${TAG}"
-
-# generate / update CHANGELOG.md with git-cliff (tag must exist first)
-if command -v git-cliff &>/dev/null; then
-  info "generating CHANGELOG.md with git-cliff"
-  git-cliff --config cliff.toml -o CHANGELOG.md
-  if ! git diff --quiet CHANGELOG.md; then
-    git add CHANGELOG.md
-    git commit --amend --no-edit
-  fi
-else
-  info "git-cliff not found — skipping local CHANGELOG.md update (CI will still generate release notes)"
-fi
 
 info "pushing commit and tag"
 git push origin HEAD
