@@ -498,7 +498,7 @@ cartog ide --scope project          <span class="comment"># .mcp.json, .cursor/,
 cartog ide --scope user             <span class="comment"># user-scope clients only</span>
 cartog ide --client cursor          <span class="comment"># one client</span>
 cartog ide --dry-run                <span class="comment"># preview with before/after diff</span></pre>
-        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>, <code>antigravity</code>, <code>kiro</code> (project + user), <code>hermes</code>. User-scope clients whose config directory is missing are skipped (treated as "not installed"). Codex stores all servers in one global <code>~/.codex/config.toml</code>, so cartog writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section. Idempotent: existing servers in each file are preserved.</p>
+        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code> (project + user), <code>windsurf</code>, <code>zed</code>, <code>antigravity</code>, <code>kiro</code> (project + user), <code>hermes</code>. User-scope clients whose config directory is missing are skipped (treated as "not installed"). Codex stores all servers in one global <code>~/.codex/config.toml</code>, so cartog writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section. Idempotent: existing servers in each file are preserved.</p>
         <p><strong>Known limitation:</strong> configs containing JSON-with-comments (JSONC) are left untouched and reported as skipped. Configure those clients manually using the snippets below.</p>
 
         <h3 id="mcp-ide">Bootstrap sequence</h3>
@@ -558,9 +558,9 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>VS Code (Copilot)</strong> — <code>.vscode/mcp.json</code></summary>
+          <summary><strong>VS Code (Copilot)</strong> — project <code>.vscode/mcp.json</code> + user <code>Code/User/mcp.json</code></summary>
           <pre>cartog ide --client vscode</pre>
-          <p>Note: top-level key is <code>servers</code>, not <code>mcpServers</code>.</p>
+          <p>Writes both scopes: project <code>.vscode/mcp.json</code> and the user file under VS Code's config dir (<code>~/Library/Application Support/Code/User/mcp.json</code> on macOS, <code>~/.config/Code/User/mcp.json</code> on Linux, <code>%APPDATA%\Code\User\mcp.json</code> on Windows). Top-level key is <code>servers</code>, not <code>mcpServers</code>.</p>
           <pre>&#123;
   "servers": &#123;
     "cartog": &#123; "type": "stdio", "command": "cartog", "args": ["serve"] &#125;
@@ -614,9 +614,9 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Antigravity</strong> — <code>~/.gemini/antigravity/mcp_config.json</code></summary>
+          <summary><strong>Antigravity</strong> — <code>~/.gemini/config/mcp_config.json</code></summary>
           <pre>cartog ide --client antigravity</pre>
-          <p>User-global only (no per-project config).</p>
+          <p>User-global only, shared by Antigravity 2.0, IDE and CLI (no per-project config).</p>
           <pre>&#123;
   "mcpServers": &#123;
     "cartog": &#123; "command": "cartog", "args": ["serve"] &#125;

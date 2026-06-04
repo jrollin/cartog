@@ -422,7 +422,7 @@ import { withBase } from "../lib/url";
             <img class="editor-mark" src={withBase("assets/cursor.svg?v=2")} alt="">
             Cursor
           </span>
-          <span class="lang-tag" title="VS Code — project-scoped (.vscode/mcp.json)">
+          <span class="lang-tag" title="VS Code — project (.vscode/mcp.json) + user (Code/User/mcp.json)">
             <img class="editor-mark" src={withBase("assets/visualstudiocode.svg?v=2")} alt="">
             VS Code
           </span>
@@ -450,7 +450,7 @@ import { withBase } from "../lib/url";
             <img class="editor-mark" src={withBase("assets/zedindustries.svg?v=2")} alt="">
             Zed
           </span>
-          <span class="lang-tag" title="Antigravity — user-scope (~/.gemini/antigravity/mcp_config.json)">
+          <span class="lang-tag" title="Antigravity — user-scope (~/.gemini/config/mcp_config.json)">
             <img class="editor-mark" src={withBase("assets/antigravity.svg?v=2")} alt="">
             Antigravity
           </span>
@@ -465,7 +465,7 @@ import { withBase } from "../lib/url";
         </div>
 
         <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 16px; text-align: center;">
-          Claude Code, Cursor, VS Code, and Kiro get project-scoped MCP files in your repo; the rest get user-scope configs in your home directory. Only editors actually installed are touched.
+          Claude Code, VS Code, and Kiro get both project-scoped MCP files in your repo and user-scope configs; Cursor is project-scoped; the rest get user-scope configs in your home directory. Only editors actually installed are touched.
         </p>
       </div>
 
@@ -532,7 +532,7 @@ import { withBase } from "../lib/url";
       </div>
 
       <p style="margin-top: 16px; font-size: 14px; color: var(--text-secondary);">
-        See <a href={withBase("usage.html#mcp-server")}>MCP Server docs</a> and <a href={withBase("usage.html#agent-skill")}>Agent Skill docs</a> for per-client setup. Supported clients: Claude Code (project + user), Claude Desktop, Codex CLI, Cursor, Gemini CLI, OpenCode, VS Code, Windsurf, Zed, Antigravity, Kiro (project + user), Hermes Agent.
+        See <a href={withBase("usage.html#mcp-server")}>MCP Server docs</a> and <a href={withBase("usage.html#agent-skill")}>Agent Skill docs</a> for per-client setup. Supported clients: Claude Code (project + user), Claude Desktop, Codex CLI, Cursor, Gemini CLI, OpenCode, VS Code (project + user), Windsurf, Zed, Antigravity, Kiro (project + user), Hermes Agent.
       </p>
     </div>
   </section>

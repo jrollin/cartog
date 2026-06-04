@@ -549,6 +549,12 @@ const CLIENT_CATALOGUE: &[CatalogueEntry] = &[
         args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
+        kind: ClientKind::Vscode,
+        scope: Scope::User,
+        strategy: MergeStrategy::VsCodeServers,
+        args_kind: ArgsKind::Serve,
+    },
+    CatalogueEntry {
         kind: ClientKind::ClaudeDesktop,
         scope: Scope::User,
         strategy: MergeStrategy::McpServers,
@@ -663,7 +669,9 @@ fn user_path(kind: ClientKind, home: &HomeDirs) -> Option<PathBuf> {
         ClientKind::Hermes => Some(home.hermes.clone()),
         ClientKind::Kiro => Some(home.kiro.clone()),
         // Project-only clients have no user-scope analogue.
-        ClientKind::Cursor | ClientKind::Vscode => None,
+        ClientKind::Vscode => Some(home.vscode.clone()),
+        // Cursor is project-scope only in cartog's catalogue.
+        ClientKind::Cursor => None,
     }
 }
 
@@ -717,6 +725,7 @@ pub struct HomeDirs {
     pub antigravity: PathBuf,
     pub hermes: PathBuf,
     pub kiro: PathBuf,
+    pub vscode: PathBuf,
 }
 
 impl Default for HomeDirs {
@@ -736,7 +745,8 @@ impl Default for HomeDirs {
             zed: stub.clone(),
             antigravity: stub.clone(),
             hermes: stub.clone(),
-            kiro: stub,
+            kiro: stub.clone(),
+            vscode: stub,
         }
     }
 }
@@ -768,6 +778,10 @@ impl HomeDirs {
             xdg_config.join("Claude/claude_desktop_config.json")
         };
 
+        // <config>/Code/User: Library/Application Support (macOS), %APPDATA%
+        // (Windows), ~/.config (Linux) — VS Code uses config_dir, not xdg_config.
+        let vscode = base.config_dir().join("Code/User/mcp.json");
+
         HomeDirs {
             claude_code: home.join(".claude/settings.json"),
             claude_desktop,
@@ -776,9 +790,10 @@ impl HomeDirs {
             windsurf: home.join(".codeium/windsurf/mcp_config.json"),
             opencode: xdg_config.join("opencode/opencode.json"),
             zed: xdg_config.join("zed/settings.json"),
-            antigravity: home.join(".gemini/antigravity/mcp_config.json"),
+            antigravity: home.join(".gemini/config/mcp_config.json"),
             hermes: home.join(".hermes/config.yaml"),
             kiro: home.join(".kiro/settings/mcp.json"),
+            vscode,
         }
     }
 }
@@ -1793,8 +1808,8 @@ mod tests {
         let specs = build_specs(None, IdeScope::All, false, &tmp, &homes);
         // Project: claude-code, cursor, vscode, kiro (4)
         // User: claude-code, claude-desktop, codex, gemini, opencode, windsurf, zed,
-        //       antigravity, kiro, hermes (10)
-        assert_eq!(specs.len(), 14);
+        //       antigravity, kiro, hermes, vscode (11)
+        assert_eq!(specs.len(), 15);
     }
 
     #[test]
@@ -1822,6 +1837,45 @@ mod tests {
         let scopes: Vec<_> = specs.iter().map(|s| s.scope).collect();
         assert!(scopes.contains(&Scope::Project));
         assert!(scopes.contains(&Scope::User));
+    }
+
+    #[test]
+    fn build_specs_vscode_filter_returns_project_and_user() {
+        let tmp = std::env::temp_dir();
+        let homes = HomeDirs {
+            vscode: tmp.join("Code/User/mcp.json"),
+            ..HomeDirs::default()
+        };
+        let specs = build_specs(
+            Some(ClientKind::Vscode),
+            IdeScope::All,
+            false,
+            tmp.as_path(),
+            &homes,
+        );
+        let scopes: Vec<_> = specs.iter().map(|s| s.scope).collect();
+        assert!(
+            scopes.contains(&Scope::Project),
+            "vscode missing project scope"
+        );
+        assert!(scopes.contains(&Scope::User), "vscode missing user scope");
+        let user = specs
+            .iter()
+            .find(|s| s.scope == Scope::User)
+            .expect("vscode user spec");
+        assert!(user.path.ends_with("Code/User/mcp.json"));
+        assert_eq!(user.strategy, MergeStrategy::VsCodeServers);
+    }
+
+    #[test]
+    fn detect_vscode_user_path_under_config_dir() {
+        // VS Code's user mcp.json lives at <config>/Code/User/mcp.json on every OS.
+        let homes = HomeDirs::detect();
+        assert!(
+            homes.vscode.ends_with("Code/User/mcp.json"),
+            "unexpected vscode user path: {}",
+            homes.vscode.display()
+        );
     }
 
     #[test]
@@ -1853,7 +1907,8 @@ mod tests {
         assert!(kinds.contains(&ClientKind::Cursor));
         assert!(kinds.contains(&ClientKind::Vscode));
         assert!(kinds.contains(&ClientKind::Codex));
-        assert_eq!(chosen.len(), 3);
+        // Cursor (1) + VS Code project+user (2) + Codex (1) = 4.
+        assert_eq!(chosen.len(), 4);
     }
 
     #[test]
@@ -2013,8 +2068,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let homes = HomeDirs::default();
         let items = picker_items(tmp.path(), &homes);
-        // Claude Code and Kiro are the only dual-scope clients (project + user).
-        let dual_scope = [ClientKind::ClaudeCode, ClientKind::Kiro];
+        // Claude Code, Kiro and VS Code are the dual-scope clients (project + user).
+        let dual_scope = [ClientKind::ClaudeCode, ClientKind::Kiro, ClientKind::Vscode];
         for item in &items {
             if !dual_scope.contains(&item.kind) {
                 assert_eq!(
