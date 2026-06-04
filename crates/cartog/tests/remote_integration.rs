@@ -557,18 +557,20 @@ fn pull_refuses_non_cartog_sqlite_with_valid_sha() {
         .unwrap();
         conn.close().expect("close foreign.sqlite cleanly");
     }
-    // Belt-and-braces: ensure the OS page cache is flushed to disk before
-    // we hand the file to `aws s3 cp`. Without this we have observed sha256
-    // mismatches in CI where `aws` read stale bytes that didn't match what
-    // our subsequent `std::fs::read` returned. `fsync` on the file handle
-    // forces a durable write barrier.
-    std::fs::File::open(&foreign_db)
+    // Read the live SQLite file once, then FREEZE those exact bytes into an
+    // inert upload file. We hash and upload the SAME frozen file, so the bytes
+    // `aws s3 cp` reads can never diverge from the bytes we hashed. (Earlier
+    // attempts that hashed `foreign.sqlite` and separately let `aws` re-read it
+    // still flaked in CI: the two independent reads of the live file raced.)
+    let bytes = std::fs::read(&foreign_db).unwrap();
+    let upload_db = work.path().join("upload.sqlite");
+    std::fs::write(&upload_db, &bytes).unwrap();
+    std::fs::File::open(&upload_db)
         .unwrap()
         .sync_all()
-        .expect("fsync foreign.sqlite");
-    let bytes = std::fs::read(&foreign_db).unwrap();
-    // Compute the matching sha256 so we attest the bytes correctly — the
-    // guard must still refuse this on schema-version grounds.
+        .expect("fsync upload.sqlite");
+    // Compute the matching sha256 over the frozen bytes — the guard must still
+    // refuse this on "not a cartog database" grounds despite the valid sha.
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(&bytes);
@@ -591,7 +593,7 @@ fn pull_refuses_non_cartog_sqlite_with_valid_sha() {
             &endpoint,
             "s3",
             "cp",
-            &foreign_db.to_string_lossy(),
+            &upload_db.to_string_lossy(),
             "s3://cartog-foreign-sqlite/index.sqlite",
             "--metadata",
             &format!("sha256={sha},schema-version={claimed_v}"),
