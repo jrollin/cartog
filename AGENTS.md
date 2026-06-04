@@ -117,7 +117,7 @@ with a one-line parse smoke test before writing the extractor.
 
 **Docs & counts** (search the repo for the previous count and bump consistently — there are two conventions: marketing "N languages" = code+Markdown, and "N code languages"):
 
-11. README, `docs/{product,structure,tech,usage}.md`, this file (AGENTS.md / CLAUDE.md), `skills/cartog/SKILL.md` + `skills/cartog/references/supported_languages.md`, and `site/src/pages/index.astro` (edit the `.astro` source + add a `lang-tag`; the Pages workflow rebuilds `site/dist`)
+11. README, `docs/{product,structure,tech,usage}.md`, this file (AGENTS.md / CLAUDE.md), `skills/cartog/SKILL.md` + `skills/cartog/references/supported_languages.md`, and the site (`site/src/pages/index.astro` + `usage.astro`): add a `lang-tag` whose icon is an `<img>` pointing at a new `site/public/assets/{lang}.svg` brand mark (24×24, white/brand fill legible on dark), matching the existing language chips. Edit the `.astro` source only; the Pages workflow rebuilds `site/dist`. See the site-sync note under **Documentation Convention**.
 
 ## CI/CD
 
@@ -159,6 +159,13 @@ All documentation lives in `docs/`. Consolidate into the canonical files below �
 The MCP config JSON has one canonical copy in `docs/mcp-setup.md`; other docs link to it rather than re-embedding it. Release runbooks (e.g. `scripts/release-smoke.md`) live with the release scripts, not in `docs/`.
 
 `docs/architecture/*.md` is a **subsystem** explainer that spans features (the indexing pipeline, edge resolution). Use when the topic is too detailed for `tech.md` but not tied to one feature.
+
+**The marketing site mirrors the docs and ships the same facts to users.** When you add or change a feature, command, MCP tool, language, client, config key, or count, update the site alongside the docs — it is not optional:
+
+- `site/src/pages/index.astro` — landing page (feature cards, language/agent grids, counts, comparison tables, slogan).
+- `site/src/pages/usage.astro` — the docs page that mirrors `docs/usage.md` (CLI reference, MCP tools, **every config section must have an explanation + example**, e.g. embedding, remote S3, secret redaction).
+
+Edit the `.astro` source (never `site/dist/`, which is gitignored and rebuilt by the Pages workflow). New brand marks go in `site/public/assets/*.svg` as `<img>`-referenced files (24×24 viewBox, white/brand fill legible on the dark theme), not inline SVG. Run `npm run build` in `site/` to verify before committing.
 
 ## Current State
 

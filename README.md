@@ -615,6 +615,19 @@ Your code never leaves your machine — unless you explicitly opt in to
 [S3-compatible index sync](docs/usage.md#cartog-push---remote-s3-url)
 (`cartog push` / `cartog pull`), which is inert until you configure a remote.
 
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| **"not initialized" / no results** | Run `cartog init` then `cartog index .` in the repo first. |
+| **`cartog index` seems to hang** | Cold index of a large repo takes a few seconds; re-run with `RUST_LOG=info cartog index .` if nothing after 60s. |
+| **MCP "Connection closed" on a 2nd editor window** | Expected: single-writer election makes the 2nd instance read-only (14 of 16 tools). Ensure `cartog --version` ≥ 0.17 and `CARTOG_SINGLE_WRITER` is unset. |
+| **`.cartog.toml` ignored** | Cartog walks up to the git root; with no `.git`, put it in the cwd or pass `--db`. `cartog config` prints the resolved paths. |
+| **Missing symbols / recall lower than expected** | Wait for the watcher (or run `cartog index`), check the file's language is supported and not `.gitignore`d. Install a language server on PATH to lift edge resolution from ~25% to up to ~81%. |
+| **Anything else** | `cartog doctor` checks git, config, DB, and models. |
+
+Full list with detailed fixes: **[docs/troubleshooting.md](docs/troubleshooting.md)**.
+
 ## Documentation
 
 Full index: [docs/README.md](docs/README.md). Highlights:
