@@ -781,6 +781,10 @@ AdminService -&gt; AuthService</pre>
         <pre class="example-output">graph TD
     AuthService["AuthService"] --&gt; BaseService["BaseService"]
     AdminService["AdminService"] --&gt; AuthService["AuthService"]</pre>
+        <p class="example-label">Rendered</p>
+        <pre class="mermaid">graph TD
+    AuthService["AuthService"] --> BaseService["BaseService"]
+    AdminService["AdminService"] --> AuthService["AuthService"]</pre>
 
         <h2 id="cmd-deps"><code>cartog deps &lt;file&gt; [--mermaid]</code></h2>
         <p>List symbols imported by a file — answers "what does this file depend on?". Add <code>--mermaid</code> for a <code>graph LR</code> diagram rooted at the file.</p>
@@ -799,6 +803,12 @@ get_logger       L7</pre>
     auth_service_py --&gt; validate_token["validate_token (L5)"]
     auth_service_py --&gt; generate_token["generate_token (L5)"]
     auth_service_py --&gt; User["User (L6)"]</pre>
+        <p class="example-label">Rendered</p>
+        <pre class="mermaid">graph LR
+    auth_service_py["auth/service.py"]
+    auth_service_py --> validate_token["validate_token (L5)"]
+    auth_service_py --> generate_token["generate_token (L5)"]
+    auth_service_py --> User["User (L6)"]</pre>
 
         <h2 id="cmd-stats"><code>cartog stats [--savings]</code></h2>
         <p>Summary of the index — file count, symbol count, edge resolution rate. On an unindexed repo all counts are <code>0</code> and the output ends with a hint to run <code>cartog index .</code>. Pass <code>--savings</code> to show per-tool query counts and estimated tokens saved instead (or use the <a href="#cmd-savings"><code>cartog savings</code></a> alias).</p>
@@ -886,6 +896,14 @@ cartog map --mermaid          <span class="comment"># paste-into-PR diagram</spa
     auth_tokens_py --&gt; auth_tokens_py__validate_token["validate_token (function)"]
     auth_tokens_py --&gt; auth_tokens_py__generate_token["generate_token (function)"]
     ...</pre>
+        <p class="example-label">Rendered</p>
+        <pre class="mermaid">graph TD
+    repo["Repo"]
+    repo --> README_md["README.md"]
+    repo --> auth_service_py["auth/service.py"]
+    repo --> auth_tokens_py["auth/tokens.py"]
+    auth_tokens_py --> auth_tokens_py__validate_token["validate_token (function)"]
+    auth_tokens_py --> auth_tokens_py__generate_token["generate_token (function)"]</pre>
         <p style="font-size: 13px; color: var(--text-tertiary);"><code>--json</code> wins over <code>--mermaid</code> when both are passed.</p>
 
         <h2 id="cmd-changes"><code>cartog changes</code></h2>
@@ -1130,6 +1148,30 @@ cartog --tokens 200 outline src/db.rs</pre>
       </aside>
     </div>
   </div>
+
+  <!-- Render the --mermaid example outputs below their source. Bundled by
+       Astro/Vite from node_modules (not a CDN). startOnLoad is off so we can
+       theme it to the docs palette before drawing. -->
+  <script>
+    import mermaid from "mermaid";
+
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "dark",
+      securityLevel: "strict",
+      themeVariables: {
+        background: "#0a1620",
+        primaryColor: "#0f2233",
+        primaryBorderColor: "#1f3b50",
+        primaryTextColor: "#e6f0f5",
+        lineColor: "#00e599",
+        fontFamily:
+          "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+      },
+    });
+
+    mermaid.run({ querySelector: "pre.mermaid" });
+  </script>
 
   <script is:inline>
     (function () {

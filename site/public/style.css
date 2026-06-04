@@ -1343,6 +1343,27 @@ pre.example-output {
   margin-bottom: 16px;
 }
 
+/* Rendered --mermaid diagrams. Holds the source until mermaid swaps in the
+   SVG; centered, no code-block chrome. */
+pre.mermaid {
+  background: var(--bg-secondary);
+  border-left: 3px solid var(--accent);
+  margin-bottom: 24px;
+  padding: 16px;
+  text-align: center;
+  overflow-x: auto;
+}
+
+/* Hide the raw source until mermaid has drawn (it adds data-processed). */
+pre.mermaid:not([data-processed]) {
+  color: transparent;
+}
+
+pre.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
 /* Drop the right TOC rail first when the viewport can't fit three columns. */
 @media (max-width: 1100px) {
   .docs-layout {
