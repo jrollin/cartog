@@ -9,7 +9,9 @@ use anyhow::Result;
 use cartog_core::{Edge, EdgeKind, Symbol, SymbolKind, Visibility};
 use tree_sitter::{Language, Node, Parser};
 
-use crate::{node_text, ExtractionResult, ParentScope};
+use crate::{
+    node_text, qualified, tree_depth_exceeds, ExtractionResult, ParentScope, MAX_TREE_DEPTH,
+};
 
 /// Extracts symbols and edges from Swift source files.
 pub struct SwiftExtractor {
@@ -33,12 +35,6 @@ impl Default for SwiftExtractor {
         Self::new()
     }
 }
-
-/// Deepest AST nesting the recursive walkers will descend. The extractor recurses
-/// one stack frame per level; pathological/generated source (thousands of nested
-/// expressions) would otherwise overflow the worker stack and abort the whole
-/// index run. Beyond this depth we skip the file's extraction rather than crash.
-const MAX_TREE_DEPTH: usize = 600;
 
 impl crate::Extractor for SwiftExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
@@ -65,31 +61,6 @@ impl crate::Extractor for SwiftExtractor {
             &mut edges,
         );
         Ok(ExtractionResult { symbols, edges })
-    }
-}
-
-/// Iterative (non-recursive) check that the tree's max depth stays within `limit`.
-/// Uses a `TreeCursor` so it can't itself overflow on the very input it guards.
-fn tree_depth_exceeds(root: Node, limit: usize) -> bool {
-    let mut cursor = root.walk();
-    let mut depth = 0usize;
-    loop {
-        if depth > limit {
-            return true;
-        }
-        if cursor.goto_first_child() {
-            depth += 1;
-            continue;
-        }
-        loop {
-            if cursor.goto_next_sibling() {
-                break;
-            }
-            if !cursor.goto_parent() {
-                return false;
-            }
-            depth -= 1;
-        }
     }
 }
 
@@ -838,14 +809,6 @@ fn doc_comment(node: Node, source: &str) -> Option<String> {
     }
     lines.reverse();
     Some(lines.join(" "))
-}
-
-/// Qualified name: `Parent.Name` when nested, else `Name`.
-fn qualified(parent_qname: Option<&str>, name: &str) -> String {
-    match parent_qname {
-        Some(p) => format!("{p}.{name}"),
-        None => name.to_string(),
-    }
 }
 
 /// Swift stdlib types excluded from References / inheritance edges.

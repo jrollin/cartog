@@ -9,7 +9,7 @@
 
 **Map your codebase. Navigate by graph, not grep.**
 
-**~280 tokens per query, 97% recall, 8 us to 20 ms latency, 11 languages.**
+**~280 tokens per query, 97% recall, 8 us to 20 ms latency, 12 languages.**
 
 Single binary. Microsecond queries. 100% local by default.
 
@@ -65,12 +65,12 @@ Every code navigation tool makes you choose: fast but shallow (grep), or precise
 | **Query speed** | depends on codebase size | seconds to start | **8-450 us** |
 | **Transitive analysis** | impossible | partial | **`impact --depth 5`** |
 | **Setup** | none | per-language config | **one binary, zero config** |
-| **Languages** | all (text) | one per server | **11 languages, one tool** |
+| **Languages** | all (text) | one per server | **12 languages, one tool** |
 | **Token cost** (LLM context) | ~1,700 tokens/query | n/a | **~280 tokens/query** |
 | **Recall** (completeness) | 78% | ~100% | **97%** [*](#benchmark-notes) |
 | **Privacy** | local | local | **100% local** |
 
-Measured across 13 scenarios, 9 languages ([benchmark suite](benchmarks/)).
+Measured across 13 scenarios, 10 languages ([benchmark suite](benchmarks/)).
 
 <a id="benchmark-notes"></a>
 > **\*** 97 % recall requires a matching language server on PATH. The
@@ -125,7 +125,7 @@ Works with Claude Code, Cursor, Windsurf, Zed, OpenCode — any MCP client.
 
 ### LSP precision, built in
 
-Cartog auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls, intelephense, dart, sourcekit-lsp) and uses them to boost edge resolution from ~25% to **up to 81%**. Enabled by default; results persist in SQLite — pay the cost once. Disable at runtime with `--no-lsp`, or omit at build time with `cargo install cartog --no-default-features`.
+Cartog auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls, intelephense, dart, sourcekit-lsp, kotlin-language-server) and uses them to boost edge resolution from ~25% to **up to 81%**. Enabled by default; results persist in SQLite — pay the cost once. Disable at runtime with `--no-lsp`, or omit at build time with `cargo install cartog --no-default-features`.
 
 ## Install
 
@@ -219,7 +219,7 @@ npx skills add jrollin/cartog
 
 **grep/ripgrep?** Great for string literals and config values. But grep can't trace call chains, can't do transitive impact analysis, and floods your context with raw text. Cartog returns structured, ranked, deduplicated results — one `refs` call replaces 6+ discovery steps.
 
-**A language server?** LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 11 languages with one binary and answers in microseconds. When you need LSP precision, cartog can use it as an optional layer.
+**A language server?** LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 12 languages with one binary and answers in microseconds. When you need LSP precision, cartog can use it as an optional layer.
 
 **Python-based graph tools?** They solve a similar problem but require a Python runtime, pip dependencies, and virtual environments. Cartog is a single static binary — download and run. It also queries 10-100x faster thanks to compiled Rust + SQLite.
 
@@ -527,6 +527,7 @@ references  process  routes/auth.py:22
 | PHP | .php | classes, interfaces, traits, methods, functions | calls, inherits, implements, references (traits, new) |
 | Dart | .dart | classes, mixins, extensions, enums, methods, functions, typedefs | calls, imports, inherits, implements, type refs |
 | Swift | .swift | classes, structs, actors, protocols, enums, extensions, methods, functions, typealiases | calls, imports, inherits, implements, type refs |
+| Kotlin | .kt, .kts | classes, data/sealed classes, interfaces, enums, objects, methods, functions, typealiases | calls, imports, inherits, implements, type refs |
 | Markdown | .md | document sections (chunked by heading) | — |
 
 ## How It Works

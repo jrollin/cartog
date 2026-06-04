@@ -4,13 +4,14 @@
 //! Each language implements the [`Extractor`] trait with compiled S-expression
 //! queries for declarative AST pattern matching.
 //!
-//! Supported languages: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift.
+//! Supported languages: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin.
 
 pub mod dart;
 pub mod go;
 pub mod java;
 pub mod javascript;
 mod js_shared;
+pub mod kotlin;
 pub mod markdown;
 pub mod php;
 pub mod python;
@@ -50,6 +51,44 @@ pub(crate) fn node_text<'a>(node: Node, source: &'a str) -> &'a str {
 /// (`a.b.C` → `C`, `pkg/mod` → `mod`, `crate::path::Item` → `Item`).
 pub(crate) fn last_segment<'a>(s: &'a str, sep: &str) -> &'a str {
     s.rsplit(sep).next().unwrap_or(s)
+}
+
+/// Qualified name: `Parent.name` when nested, else `name`.
+pub(crate) fn qualified(parent_qname: Option<&str>, name: &str) -> String {
+    match parent_qname {
+        Some(p) => format!("{p}.{name}"),
+        None => name.to_string(),
+    }
+}
+
+/// Deepest AST nesting a recursive extractor will descend before bailing. Recursive
+/// walkers use one stack frame per level; pathological/generated source would
+/// otherwise overflow the worker stack and abort the whole index run.
+pub(crate) const MAX_TREE_DEPTH: usize = 600;
+
+/// Iterative (non-recursive) check that the tree's max depth stays within `limit`.
+/// Uses a `TreeCursor` so it can't itself overflow on the very input it guards.
+pub(crate) fn tree_depth_exceeds(root: Node, limit: usize) -> bool {
+    let mut cursor = root.walk();
+    let mut depth = 0usize;
+    loop {
+        if depth > limit {
+            return true;
+        }
+        if cursor.goto_first_child() {
+            depth += 1;
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return false;
+            }
+            depth -= 1;
+        }
+    }
 }
 
 /// Enclosing scope while extracting: `id` becomes the child's `parent_id`,
@@ -94,6 +133,7 @@ pub fn get_extractor(language: &str) -> Option<Box<dyn Extractor>> {
         "php" => Some(Box::new(php::PhpExtractor::new())),
         "dart" => Some(Box::new(dart::DartExtractor::new())),
         "swift" => Some(Box::new(swift::SwiftExtractor::new())),
+        "kotlin" => Some(Box::new(kotlin::KotlinExtractor::new())),
         "markdown" => Some(Box::new(markdown::MarkdownExtractor::new())),
         _ => None,
     }
@@ -116,6 +156,7 @@ mod tests {
         assert!(get_extractor("php").is_some());
         assert!(get_extractor("dart").is_some());
         assert!(get_extractor("swift").is_some());
+        assert!(get_extractor("kotlin").is_some());
         assert!(get_extractor("markdown").is_some());
         assert!(get_extractor("unknown").is_none());
     }

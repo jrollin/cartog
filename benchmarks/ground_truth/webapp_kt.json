@@ -1,0 +1,356 @@
+{
+  "01_find_callers": {
+    "description": "Who calls validateToken?",
+    "query": "refs validateToken --kind calls",
+    "expected": [
+      {
+        "source": "authorize",
+        "file": "src/main/kotlin/webapp/middleware/AuthMiddleware.kt"
+      },
+      {
+        "source": "getCurrentUser",
+        "file": "src/main/kotlin/webapp/auth/Service.kt"
+      }
+    ]
+  },
+  "02_file_structure": {
+    "description": "What's in src/main/kotlin/webapp/auth/Service.kt?",
+    "query": "outline src/main/kotlin/webapp/auth/Service.kt",
+    "expected": [
+      {
+        "name": "BaseService",
+        "kind": "class"
+      },
+      {
+        "name": "logger",
+        "kind": "variable"
+      },
+      {
+        "name": "log",
+        "kind": "method"
+      },
+      {
+        "name": "AuthService",
+        "kind": "class"
+      },
+      {
+        "name": "db",
+        "kind": "variable"
+      },
+      {
+        "name": "users",
+        "kind": "variable"
+      },
+      {
+        "name": "login",
+        "kind": "method"
+      },
+      {
+        "name": "logout",
+        "kind": "method"
+      },
+      {
+        "name": "getCurrentUser",
+        "kind": "method"
+      },
+      {
+        "name": "findUser",
+        "kind": "method"
+      },
+      {
+        "name": "AdminService",
+        "kind": "class"
+      },
+      {
+        "name": "impersonate",
+        "kind": "method"
+      }
+    ]
+  },
+  "03_refactor_impact": {
+    "description": "Impact of changing AuthService",
+    "query": "impact AuthService --depth 3",
+    "expected_refs": [
+      "src/main/kotlin/webapp/auth/Service.kt",
+      "src/main/kotlin/webapp/services/AuthenticationService.kt"
+    ]
+  },
+  "04_class_hierarchy": {
+    "description": "Hierarchy of BaseService",
+    "query": "hierarchy BaseService",
+    "expected": [
+      {
+        "child": "AuthService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "AuthenticationService",
+        "parent": "BaseService"
+      }
+    ]
+  },
+  "05_trace_call_chain": {
+    "description": "Trace handleLogin call chain",
+    "query_sequence": [
+      "callees handleLogin",
+      "callees login",
+      "callees generateToken"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handleLogin",
+        "callee": "info"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "authenticate"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "warn"
+      },
+      {
+        "caller": "login",
+        "callee": "findUser"
+      },
+      {
+        "caller": "login",
+        "callee": "checkPassword"
+      },
+      {
+        "caller": "login",
+        "callee": "log"
+      },
+      {
+        "caller": "login",
+        "callee": "generateToken"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "Token"
+      }
+    ]
+  },
+  "06_file_deps": {
+    "description": "What does src/main/kotlin/webapp/routes/AuthRoutes.kt import?",
+    "query": "deps src/main/kotlin/webapp/routes/AuthRoutes.kt",
+    "expected": [
+      "AuthHandlers",
+      "AuthMiddleware",
+      "getLogger"
+    ]
+  },
+  "07_type_references": {
+    "description": "References to TokenError",
+    "query": "refs TokenError",
+    "expected": [
+      {
+        "source": "impersonate",
+        "file": "src/main/kotlin/webapp/auth/Service.kt",
+        "kind": "calls"
+      },
+      {
+        "source": "validateToken",
+        "file": "src/main/kotlin/webapp/auth/Tokens.kt",
+        "kind": "calls"
+      },
+      {
+        "source": "describeTokenError",
+        "file": "src/main/kotlin/webapp/auth/Tokens.kt",
+        "kind": "references"
+      }
+    ]
+  },
+  "08_symbol_search": {
+    "description": "Find all token-related symbols",
+    "query": "search Token",
+    "expected": [
+      {
+        "name": "Token"
+      },
+      {
+        "name": "TokenError"
+      },
+      {
+        "name": "generateToken"
+      },
+      {
+        "name": "validateToken"
+      },
+      {
+        "name": "revokeToken"
+      },
+      {
+        "name": "describeTokenError"
+      },
+      {
+        "name": "token"
+      }
+    ]
+  },
+  "09_ambiguous_symbol": {
+    "description": "Where is 'validate' defined?",
+    "query": "search validate",
+    "expected": [
+      {
+        "name": "validate",
+        "file": "src/main/kotlin/webapp/validators/Validators.kt"
+      },
+      {
+        "name": "validate",
+        "file": "src/main/kotlin/webapp/validators/Validators.kt"
+      },
+      {
+        "name": "validate",
+        "file": "src/main/kotlin/webapp/validators/Validators.kt"
+      },
+      {
+        "name": "validateToken",
+        "file": "src/main/kotlin/webapp/auth/Tokens.kt"
+      }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "Who references getLogger?",
+    "query": "refs getLogger --kind calls",
+    "expected": [
+      {
+        "source": "logger",
+        "file": "src/main/kotlin/webapp/middleware/AuthMiddleware.kt",
+        "kind": "calls"
+      },
+      {
+        "source": "logger",
+        "file": "src/main/kotlin/webapp/database/Connection.kt",
+        "kind": "calls"
+      },
+      {
+        "source": "logger",
+        "file": "src/main/kotlin/webapp/auth/Service.kt",
+        "kind": "calls"
+      },
+      {
+        "source": "validateToken",
+        "file": "src/main/kotlin/webapp/auth/Tokens.kt",
+        "kind": "calls"
+      },
+      {
+        "source": "revokeToken",
+        "file": "src/main/kotlin/webapp/auth/Tokens.kt",
+        "kind": "calls"
+      },
+      {
+        "source": "main",
+        "file": "src/main/kotlin/webapp/Main.kt",
+        "kind": "calls"
+      },
+      {
+        "source": "logger",
+        "file": "src/main/kotlin/webapp/api/AuthHandlers.kt",
+        "kind": "calls"
+      },
+      {
+        "source": "register",
+        "file": "src/main/kotlin/webapp/routes/AuthRoutes.kt",
+        "kind": "calls"
+      }
+    ]
+  },
+  "11_deep_call_chain": {
+    "description": "Deep call chain from handleLogin (5+ hops)",
+    "query_sequence": [
+      "callees handleLogin",
+      "callees authenticate",
+      "callees login",
+      "callees generateToken",
+      "callees executeQuery",
+      "callees getConnection"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handleLogin",
+        "callee": "info"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "authenticate"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "warn"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "log"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "verifyCredentials"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "login"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "AuthenticationError"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "persistSession"
+      },
+      {
+        "caller": "login",
+        "callee": "findUser"
+      },
+      {
+        "caller": "login",
+        "callee": "checkPassword"
+      },
+      {
+        "caller": "login",
+        "callee": "log"
+      },
+      {
+        "caller": "login",
+        "callee": "generateToken"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "Token"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "getConnection"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "info"
+      }
+    ]
+  },
+  "12_deep_impact": {
+    "description": "Deep impact of DatabaseConnection (depth 5)",
+    "query": "impact DatabaseConnection --depth 5",
+    "expected_refs": [
+      "src/main/kotlin/webapp/auth/Service.kt",
+      "src/main/kotlin/webapp/database/Queries.kt",
+      "src/main/kotlin/webapp/services/AuthenticationService.kt"
+    ]
+  },
+  "13_rag_search": {
+    "description": "Semantic search: validate token",
+    "query": "rag search \"validate token\"",
+    "expected": [
+      {
+        "name": "validateToken"
+      },
+      {
+        "name": "Token"
+      },
+      {
+        "name": "TokenError"
+      }
+    ]
+  }
+}
