@@ -83,7 +83,7 @@ simply never names the fourth (criterion's regex filter cannot express exclusion
 | Target | Crate | Scope | Runtime ONNX | CI |
 |--------|-------|-------|--------------|-----|
 | `queries` | `cartog` | 8 query ops (search/refs/impact/outline/callees/hierarchy/deps/stats), Python + Java | no | ✅ |
-| `indexing` | `cartog-indexer` | `index_full_force/<lang>` over all 8 fixtures + 2 incremental scenarios | no (crate has no `cartog-rag` dep) | ✅ |
+| `indexing` | `cartog-indexer` | `index_full_force/<lang>` over all 9 fixtures + 2 incremental scenarios | no (crate has no `cartog-rag` dep) | ✅ |
 | `rag_search` | `cartog` | `hybrid_search` (FTS5 + vector KNN + RRF) via a deterministic stub provider | no (stub vectors) | ✅ |
 | `rag_onnx` | `cartog` | real fastembed embed + cross-encoder rerank | **yes** | ❌ opt-in (`make bench-onnx`) |
 
@@ -92,7 +92,7 @@ so the compiler cannot constant-fold literal inputs or eliminate unused results 
 without it the µs-scale query benches would risk measuring nothing. Query latency
 is language-agnostic (same SQL regardless of source language), so it is benched on
 Python + Java only; per-language cost lives in the tree-sitter grammar/extractor,
-so `index_full_force` is parameterized across all 8 fixtures. The shared scenario
+so `index_full_force` is parameterized across all 9 fixtures. The shared scenario
 bodies live in `cartog_indexer::bench_support` so `queries` and `indexing` cannot
 drift. On PRs the CI `bench` job establishes a same-runner baseline at the merge
 base and reports a `--baseline` delta (controlling for runner variance); it is

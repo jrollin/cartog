@@ -14,10 +14,12 @@ final class DatabaseConnection {
         logger.info("connecting to \(dsn)")
     }
 
-    /// Run a SQL statement on the live handle. Leaf of the login call chain.
-    func executeQuery(_ query: String) -> [String] {
+    /// Run a parameterized SQL statement on the live handle. Bound values are
+    /// passed separately so user data is never interpolated into the query text.
+    /// Leaf of the login call chain.
+    func executeQuery(_ query: String, _ args: [String] = []) -> [String] {
         let handle = getConnection()
-        logger.info("execute on \(handle): \(query)")
+        logger.info("execute on \(handle): \(query) (\(args.count) args)")
         return []
     }
 

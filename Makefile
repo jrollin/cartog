@@ -107,7 +107,7 @@ check-dart: ## Validate Dart fixtures (dart analyze, falls back to Docker)
 
 check-swift: ## Validate Swift fixtures (swift build, falls back to Docker)
 	@echo "==> Checking Swift fixtures..."
-	$(call check_lang,swift,swift:latest,\
+	$(call check_lang,swift,swift:6.1,\
 		cd benchmarks/fixtures/webapp_swift && swift build,\
 		cd webapp_swift && HOME=/tmp swift build --cache-path /tmp/swiftpm --scratch-path /tmp/swiftbuild)
 

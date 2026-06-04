@@ -9,7 +9,7 @@ final class UserQueries {
     }
 
     func findByEmail(_ email: String) -> User? {
-        let rows = db.executeQuery("SELECT * FROM users WHERE email = '\(email)'")
+        let rows = db.executeQuery("SELECT * FROM users WHERE email = ?", [email])
         if rows.isEmpty {
             return nil
         }
@@ -17,7 +17,7 @@ final class UserQueries {
     }
 
     func findById(_ id: Int) -> User? {
-        _ = db.executeQuery("SELECT * FROM users WHERE id = \(id)")
+        _ = db.executeQuery("SELECT * FROM users WHERE id = ?", [String(id)])
         return nil
     }
 }
@@ -31,11 +31,11 @@ final class SessionQueries {
     }
 
     func store(_ session: Session) {
-        _ = db.executeQuery("INSERT INTO sessions VALUES ('\(session.token)')")
+        _ = db.executeQuery("INSERT INTO sessions VALUES (?)", [session.token])
     }
 
     func lookup(_ token: String) -> Session? {
-        let rows = db.executeQuery("SELECT * FROM sessions WHERE token = '\(token)'")
+        let rows = db.executeQuery("SELECT * FROM sessions WHERE token = ?", [token])
         if rows.isEmpty {
             return nil
         }

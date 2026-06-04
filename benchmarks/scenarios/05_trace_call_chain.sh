@@ -32,9 +32,9 @@ run_scenario() {
     local naive_cmds=3
 
     # ── Best-effort grep: targeted search for call sites ──
-    out1=$(cd "$fixture_dir" && grep -rn "${entry_fn}\|${mid_fn}(" . 2>/dev/null | grep -v "def \|fn " || true)
-    out2=$(cd "$fixture_dir" && grep -rn "${mid_fn}\|${leaf_fn}(" . 2>/dev/null | grep -v "def \|fn " || true)
-    out3=$(cd "$fixture_dir" && grep -rn "${leaf_fn}(" . 2>/dev/null | grep -v "def \|fn " || true)
+    out1=$(cd "$fixture_dir" && grep -rn "${entry_fn}\|${mid_fn}(" . 2>/dev/null | grep -v "def \|fn \|func " || true)
+    out2=$(cd "$fixture_dir" && grep -rn "${mid_fn}\|${leaf_fn}(" . 2>/dev/null | grep -v "def \|fn \|func " || true)
+    out3=$(cd "$fixture_dir" && grep -rn "${leaf_fn}(" . 2>/dev/null | grep -v "def \|fn \|func " || true)
     local best_out="${out1}${out2}${out3}"
     local best_tok=$(count_tokens "$best_out")
     local best_cmds=3
