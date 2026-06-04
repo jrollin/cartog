@@ -183,29 +183,47 @@ import { withBase } from "../lib/url";
       <p class="section-subtitle">Single binary, zero config, zero dependencies.</p>
 
       <div class="features-grid" style="margin-top: 40px;">
-        <div class="feature-card" data-reveal style="--reveal-delay: 0s;">
-          <h3><span class="feature-icon">⚡</span> Zero dependencies</h3>
-          <p>Single binary + SQLite file. No Docker, no language servers required, no graph databases. <code>cargo install</code> and you're done.</p>
+        <div class="feature-card feature-card--row" data-reveal style="--reveal-delay: 0s;">
+          <span class="feature-icon">⚡</span>
+          <div>
+            <h3>Zero dependencies</h3>
+            <p>Single binary + SQLite file. No Docker, no language servers required, no graph databases. <code>cargo install</code> and you're done.</p>
+          </div>
         </div>
-        <div class="feature-card" data-reveal style="--reveal-delay: 0.06s;">
-          <h3><span class="feature-icon">🔄</span> Live index</h3>
-          <p><code>cartog watch</code> auto re-indexes on file changes. Debounced, incremental, near-instant. Always query fresh data.</p>
+        <div class="feature-card feature-card--row" data-reveal style="--reveal-delay: 0.06s;">
+          <span class="feature-icon">🔄</span>
+          <div>
+            <h3>Live index</h3>
+            <p><code>cartog watch</code> auto re-indexes on file changes. Debounced, incremental, near-instant. Always query fresh data.</p>
+          </div>
         </div>
-        <div class="feature-card" data-reveal style="--reveal-delay: 0.12s;">
-          <h3><span class="feature-icon">🔍</span> Dual search</h3>
-          <p>Keyword search (sub-ms, symbol names) + semantic search (natural language). Local embeddings with optional GPU acceleration via Ollama.</p>
+        <div class="feature-card feature-card--row" data-reveal style="--reveal-delay: 0.12s;">
+          <span class="feature-icon">🔍</span>
+          <div>
+            <h3>Dual search</h3>
+            <p>Keyword search (sub-ms, symbol names) + semantic search (natural language). Local embeddings with optional GPU acceleration via Ollama.</p>
+          </div>
         </div>
-        <div class="feature-card" data-reveal style="--reveal-delay: 0.18s;">
-          <h3><span class="feature-icon">🎯</span> Impact analysis</h3>
-          <p><code>cartog impact --depth 3</code> traces callers-of-callers instantly. Know the blast radius before you change anything.</p>
+        <div class="feature-card feature-card--row" data-reveal style="--reveal-delay: 0.18s;">
+          <span class="feature-icon">🎯</span>
+          <div>
+            <h3>Impact analysis</h3>
+            <p><code>cartog impact --depth 3</code> traces callers-of-callers instantly. Know the blast radius before you change anything.</p>
+          </div>
         </div>
-        <div class="feature-card" data-reveal style="--reveal-delay: 0.24s;">
-          <h3><span class="feature-icon">🔬</span> LSP precision, built in</h3>
-          <p>Auto-detects language servers on PATH. Boosts edge resolution from ~25% to ~44–81%. Works without them, better with them.</p>
+        <div class="feature-card feature-card--row" data-reveal style="--reveal-delay: 0.24s;">
+          <span class="feature-icon">🔬</span>
+          <div>
+            <h3>LSP precision, built in</h3>
+            <p>Auto-detects language servers on PATH. Boosts edge resolution from ~25% to ~44–81%. Works without them, better with them.</p>
+          </div>
         </div>
-        <div class="feature-card" data-reveal style="--reveal-delay: 0.3s;">
-          <h3><span class="feature-icon">🔒</span> 100% local</h3>
-          <p>tree-sitter parsing, SQLite storage, local embeddings. No API keys, no telemetry. Secrets are redacted and sensitive files (.env, keys) skipped before they reach the index. Works in air-gapped environments.</p>
+        <div class="feature-card feature-card--row" data-reveal style="--reveal-delay: 0.3s;">
+          <span class="feature-icon">🔒</span>
+          <div>
+            <h3>100% local</h3>
+            <p>tree-sitter parsing, SQLite storage, local embeddings. No API keys, no telemetry. Secrets are redacted and sensitive files (.env, keys) skipped before they reach the index. Works in air-gapped environments.</p>
+          </div>
         </div>
       </div>
     </div>
