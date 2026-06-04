@@ -131,9 +131,8 @@ fn extract_type_like(
         SymbolKind::Class
     };
     // An `extension X` is not a definition of X — X is defined elsewhere — so it
-    // does not emit its own type symbol (two extensions of X would otherwise
-    // collide on `file:class:X` and overwrite each other). Its members and
-    // conformances attach to X's qualified name.
+    // emits a placeholder symbol (below) rather than a real type symbol. Its
+    // members and conformances attach to X's class id.
     let is_extension = kw == "extension";
 
     let qname = qualified(parent.qname, &name);
@@ -163,6 +162,23 @@ fn extract_type_like(
     } else {
         id
     };
+
+    // The extended type is defined elsewhere, so emit a placeholder Class symbol
+    // when none exists yet, mirroring Rust's impl-block handling: conformance
+    // edges and member parent_ids need a local symbol with `owner_id`. The guard
+    // keeps two `extension X` in one file collapsing onto a single placeholder.
+    if is_extension && !symbols.iter().any(|s| s.id == owner_id) {
+        symbols.push(Symbol::new(
+            &name,
+            SymbolKind::Class,
+            file_path,
+            node.start_position().row as u32 + 1,
+            node.end_position().row as u32 + 1,
+            node.start_byte() as u32,
+            node.end_byte() as u32,
+            parent.qname,
+        ));
+    }
 
     // class → first specifier inherits, rest conform; others (incl. extension
     // conformances) → all conform.
@@ -983,9 +999,9 @@ mod tests {
     #[test]
     fn extension_members_attach_to_extended_type() {
         let r = extract("extension Greeter { func shout() -> Greeter { return self } }");
-        // An extension does not define its target, so it emits no type symbol;
-        // its members attach to the extended type's class id.
-        assert!(!r.symbols.iter().any(|s| s.name == "Greeter"));
+        // The extended type is defined elsewhere, so the extension emits one
+        // placeholder Class symbol; members attach to its class id.
+        assert_eq!(r.symbols.iter().filter(|s| s.name == "Greeter").count(), 1);
         assert_eq!(
             sym(&r, "shout").parent_id.as_deref(),
             Some("test.swift:class:Greeter")
@@ -993,11 +1009,11 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_extensions_do_not_collide_or_emit_type_symbol() {
+    fn duplicate_extensions_emit_single_placeholder_and_share_scope() {
         let r = extract("extension X { func a() {} }\nextension X { func b() {} }");
-        // Neither extension emits an `X` type symbol (would collide on id), and
-        // both members survive under X's scope.
-        assert!(!r.symbols.iter().any(|s| s.name == "X"));
+        // Two extensions of X collapse onto one placeholder (no id collision),
+        // and both members survive under X's scope.
+        assert_eq!(r.symbols.iter().filter(|s| s.name == "X").count(), 1);
         assert_eq!(
             sym(&r, "a").parent_id.as_deref(),
             Some("test.swift:class:X")
@@ -1012,6 +1028,23 @@ mod tests {
     fn extension_adds_conformance() {
         let r = extract("extension Foo: Bar {}");
         assert!(has_edge(&r, EdgeKind::Implements, "Bar"));
+    }
+
+    #[test]
+    fn extension_conformance_edge_has_local_source_symbol() {
+        // Regression for the cross-file FK crash: the conformance edge's source_id
+        // must match a symbol emitted by this extraction, not a dangling id.
+        let r = extract("extension Foo: Bar {}");
+        let edge = r
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Implements && e.target_name == "Bar")
+            .expect("implements edge");
+        assert!(
+            r.symbols.iter().any(|s| s.id == edge.source_id),
+            "conformance edge source_id {} has no matching local symbol",
+            edge.source_id
+        );
     }
 
     #[test]
