@@ -1229,7 +1229,8 @@ pub fn cmd_rag_search(
         None
     } else {
         let name = provider_config.reranker_provider.clone();
-        Some(move || rag::create_reranker_provider(&name))
+        let threads = provider_config.intra_threads;
+        Some(move || rag::create_reranker_provider(&name, threads))
     };
     let search_result = rag::search::hybrid_search_tuned_lazy(
         &db,
@@ -1312,7 +1313,10 @@ pub fn cmd_context(
         let mut reranker = if provider_config.reranker_provider == "none" {
             None
         } else {
-            rag::create_reranker_provider(&provider_config.reranker_provider)
+            rag::create_reranker_provider(
+                &provider_config.reranker_provider,
+                provider_config.intra_threads,
+            )
         };
         let opts = rag::context::ContextOptions {
             tuning: *tuning,

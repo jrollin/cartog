@@ -51,6 +51,9 @@ pub struct EmbeddingProviderConfig {
     pub base_url: Option<String>,
     /// Reranker provider: "local" (default) or "none".
     pub reranker_provider: String,
+    /// Optional cap on ONNX intra-op threads for the local provider. None =
+    /// fastembed's default (all cores). `CARTOG_ONNX_THREADS` overrides this.
+    pub intra_threads: Option<usize>,
 }
 
 impl Default for EmbeddingProviderConfig {
@@ -63,6 +66,7 @@ impl Default for EmbeddingProviderConfig {
             document_prefix: None,
             base_url: None,
             reranker_provider: "local".to_string(),
+            intra_threads: None,
         }
     }
 }
@@ -88,6 +92,7 @@ pub fn create_embedding_provider(
                 config.model.as_deref(),
                 config.query_prefix.clone(),
                 config.document_prefix.clone(),
+                config.intra_threads,
             )?;
             Ok(Box::new(provider))
         }
@@ -143,11 +148,16 @@ pub fn create_default_embedding_provider() -> anyhow::Result<Box<dyn provider::E
 /// Returns `None` if re-ranking is disabled, the model is unavailable, or the feature is off.
 pub fn create_reranker_provider(
     reranker_provider: &str,
+    intra_threads: Option<usize>,
 ) -> Option<Box<dyn provider::RerankerProvider>> {
+    // `intra_threads` is only consumed by the local provider; without that
+    // feature it would trip `-D unused-variables`.
+    #[cfg(not(feature = "provider-local"))]
+    let _ = intra_threads;
     match reranker_provider {
         "none" => None,
         #[cfg(feature = "provider-local")]
-        "local" => match providers::local::LocalRerankerProvider::load() {
+        "local" => match providers::local::LocalRerankerProvider::load(intra_threads) {
             Ok(r) => Some(Box::new(r)),
             Err(e) => {
                 tracing::warn!(error = %e, "Cross-encoder not available, skipping re-ranking");
@@ -166,7 +176,7 @@ pub fn create_reranker_provider(
 
 /// Create the default local reranker provider (BGE-reranker-base).
 pub fn create_default_reranker_provider() -> Option<Box<dyn provider::RerankerProvider>> {
-    create_reranker_provider("local")
+    create_reranker_provider("local", None)
 }
 
 // ── Local ONNX model cache management (provider-local only) ──

@@ -131,7 +131,14 @@ model = "BAAI/bge-base-en-v1.5"    # any fastembed built-in model
 [embedding.local]
 query_prefix = "search_query: "     # for asymmetric models
 document_prefix = "search_document: "
+intra_threads = 4                   # cap ONNX CPU threads (default: all cores)
 ```
+
+`intra_threads` **caps** the ONNX Runtime threads used while embedding
+(`rag index`) and reranking. Default: **all cores** (fastembed's default); set
+this to leave headroom on a busy machine (e.g. `intra_threads = 4`). The
+`CARTOG_ONNX_THREADS` env var overrides it (e.g. `CARTOG_ONNX_THREADS=1`); env >
+TOML > uncapped. Read at provider load, so restart `cartog serve` to change it.
 
 **Disable re-ranking** (saves ~1.1GB model download):
 
@@ -167,6 +174,21 @@ cargo install cartog                                    # default: LSP + S3 sync
 cargo install cartog --no-default-features              # minimal: drops LSP, S3 sync, and Ollama
 cargo install cartog --no-default-features --features lsp  # selective: LSP only
 ```
+
+### Environment variables
+
+Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `CARTOG_DB` | auto-detect | Database path (same as `--db`). |
+| `CARTOG_ONNX_THREADS` | all cores | Caps ONNX CPU threads for `rag index` + reranking. Overrides `[embedding.local] intra_threads`. `1` forces single-core. |
+| `CARTOG_SINGLE_WRITER` | `1` | `0` disables MCP single-writer election (every `cartog serve` opens read-write). |
+| `CARTOG_MCP_MAX_BYTES` | `65536` | Max bytes per MCP tool response before truncation. |
+| `CARTOG_NO_UPDATE_CHECK` | unset | Set to skip the background self-update check. |
+| `CARTOG_UPDATE_CHECK` | unset | Force an update check regardless of cadence. |
+| `CARTOG_INSTALL_DIR` | `~/.local/bin` | Install location used by `install.sh`. |
+| `CARTOG_VERSION` | latest | Pin the version `install.sh` fetches. |
 
 ---
 

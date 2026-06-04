@@ -935,7 +935,8 @@ impl CartogServer {
             .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
         db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
             .map_err(|e| anyhow::anyhow!("failed to reconcile embedding fingerprint: {e}"))?;
-        let reranker = rag::create_reranker_provider(&rag_config.reranker_provider);
+        let reranker =
+            rag::create_reranker_provider(&rag_config.reranker_provider, rag_config.intra_threads);
         Self::from_parts(db, provider, reranker, redact, Role::Primary)
     }
 
@@ -954,7 +955,8 @@ impl CartogServer {
             .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?;
         let provider = rag::create_embedding_provider(&rag_config)
             .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
-        let reranker = rag::create_reranker_provider(&rag_config.reranker_provider);
+        let reranker =
+            rag::create_reranker_provider(&rag_config.reranker_provider, rag_config.intra_threads);
         Self::from_parts(db, provider, reranker, redact, Role::ReadOnly)
     }
 

@@ -7,6 +7,37 @@ use crate::provider::{EmbeddingProvider, RerankerProvider};
 
 const EMBED_BATCH_SIZE: usize = 64;
 
+/// Optional cap on ONNX intra-op threads. `None` leaves fastembed's default
+/// (all cores); `Some(n)` caps it. Precedence: `CARTOG_ONNX_THREADS` env >
+/// `configured` (`[embedding.local] intra_threads`). Read at provider load.
+fn onnx_intra_threads(configured: Option<usize>) -> Option<usize> {
+    resolve_intra_threads(
+        std::env::var("CARTOG_ONNX_THREADS").ok().as_deref(),
+        configured,
+    )
+}
+
+/// Pure resolver for [`onnx_intra_threads`], split out so tests don't mutate the
+/// process environment. A `Some(0)` or unparseable env/config value is ignored.
+fn resolve_intra_threads(env: Option<&str>, configured: Option<usize>) -> Option<usize> {
+    if let Some(n) = env.and_then(|v| v.trim().parse::<usize>().ok()) {
+        if n >= 1 {
+            return Some(n);
+        }
+    }
+    configured.filter(|&n| n >= 1)
+}
+
+/// Apply an optional intra-op thread cap to a fastembed init builder.
+macro_rules! with_optional_threads {
+    ($opts:expr, $cap:expr) => {
+        match $cap {
+            Some(n) => $opts.with_intra_threads(n),
+            None => $opts,
+        }
+    };
+}
+
 /// Local ONNX embedding provider via fastembed.
 pub struct LocalEmbeddingProvider {
     model: TextEmbedding,
@@ -25,6 +56,7 @@ impl LocalEmbeddingProvider {
         model_name: Option<&str>,
         query_prefix: Option<String>,
         document_prefix: Option<String>,
+        intra_threads: Option<usize>,
     ) -> Result<Self> {
         let embedding_model = match model_name {
             Some(name) => name
@@ -51,12 +83,12 @@ impl LocalEmbeddingProvider {
             info!("Downloading embedding model (first time only)...");
         }
 
-        let model = TextEmbedding::try_new(
-            TextInitOptions::new(embedding_model)
-                .with_cache_dir(model_cache_dir())
-                .with_show_download_progress(true),
-        )
-        .context("Failed to initialize embedding model")?;
+        let opts = with_optional_threads!(
+            TextInitOptions::new(embedding_model).with_cache_dir(model_cache_dir()),
+            onnx_intra_threads(intra_threads)
+        );
+        let model = TextEmbedding::try_new(opts.with_show_download_progress(true))
+            .context("Failed to initialize embedding model")?;
 
         Ok(Self {
             model,
@@ -140,19 +172,31 @@ pub struct LocalRerankerProvider {
 }
 
 impl LocalRerankerProvider {
-    pub fn load() -> Result<Self> {
+    /// Load the local ONNX cross-encoder re-ranker (BGE-reranker-base), fetching
+    /// the weights into the model cache on first use.
+    ///
+    /// `intra_threads` is an optional cap on the ONNX intra-op thread count. The
+    /// effective cap is resolved as `CARTOG_ONNX_THREADS` env var > this argument
+    /// (the TOML `[embedding.local] intra_threads`); when neither is set the
+    /// session is left uncapped (fastembed's default — all available cores).
+    ///
+    /// Returns `Err` if the model weights cannot be downloaded or the ONNX
+    /// session fails to initialize; callers treat this as "re-ranking
+    /// unavailable" and fall back to RRF-only ordering.
+    pub fn load(intra_threads: Option<usize>) -> Result<Self> {
         if crate::is_reranker_model_cached() {
             info!("Loading reranker model...");
         } else {
             info!("Downloading reranker model (~1.1GB, first time only)...");
         }
 
-        let model = fastembed::TextRerank::try_new(
+        let opts = with_optional_threads!(
             fastembed::RerankInitOptions::new(fastembed::RerankerModel::BGERerankerBase)
-                .with_cache_dir(model_cache_dir())
-                .with_show_download_progress(true),
-        )
-        .context("Failed to initialize cross-encoder model")?;
+                .with_cache_dir(model_cache_dir()),
+            onnx_intra_threads(intra_threads)
+        );
+        let model = fastembed::TextRerank::try_new(opts.with_show_download_progress(true))
+            .context("Failed to initialize cross-encoder model")?;
 
         Ok(Self { model })
     }
@@ -220,5 +264,25 @@ mod tests {
             info.model_code, debug_repr,
             "model_code must be the HF path, not the Rust variant name"
         );
+    }
+
+    #[test]
+    fn intra_threads_resolves_env_over_toml_else_none() {
+        // Pure resolver — no process-env mutation, so this is parallel-safe.
+        // None means "leave fastembed's default" (all cores), the desired baseline.
+        assert_eq!(resolve_intra_threads(None, None), None);
+
+        // TOML cap used when env is unset.
+        assert_eq!(resolve_intra_threads(None, Some(4)), Some(4));
+        // 0 / invalid TOML is ignored -> no cap.
+        assert_eq!(resolve_intra_threads(None, Some(0)), None);
+
+        // Env caps and overrides TOML.
+        assert_eq!(resolve_intra_threads(Some("3"), Some(8)), Some(3));
+        assert_eq!(resolve_intra_threads(Some(" 2 "), None), Some(2));
+
+        // Invalid / zero env falls back to TOML, then None.
+        assert_eq!(resolve_intra_threads(Some("0"), Some(8)), Some(8));
+        assert_eq!(resolve_intra_threads(Some("garbage"), None), None);
     }
 }
