@@ -151,12 +151,32 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Bound the release notes by an explicit commit range instead of
+      # --latest. Historical tags are orphaned off main (a past rebase), so
+      # --latest walks back to the last *reachable* tag and dumps all prior
+      # history into the notes. The previous "bump version" commit on main is
+      # reachable, so <prev-bump>..<tag> gives exactly this release's changes.
+      # Mirrors the same logic in scripts/release.sh.
+      - name: Compute changelog range
+        id: range
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          # The bump commit for THIS release is the newest match; the previous
+          # release's bump is the one before it. Take the 2nd match.
+          PREV_BUMP=$(git log "$TAG" --grep='^chore: bump version to' --format='%H' -n2 | tail -n1)
+          if [ -n "$PREV_BUMP" ] && [ "$PREV_BUMP" != "$(git rev-list -n1 "$TAG")" ]; then
+            echo "args=--tag $TAG --strip header ${PREV_BUMP}..${TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=--tag $TAG --strip header" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Generate changelog with git-cliff
         id: cliff
         uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
-          args: --latest --strip header
+          args: ${{ steps.range.outputs.args }}
         env:
           OUTPUT: CHANGELOG.md
 
