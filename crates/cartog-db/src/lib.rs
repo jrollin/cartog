@@ -540,6 +540,41 @@ fn migrate(conn: &Connection) {
         return;
     }
 
+    // Fresh-DB fast path: the SCHEMA bootstrap just created every table at the
+    // current shape, so all columns/tables exist but no schema_version row is
+    // stamped yet (current was read as 1 via unwrap_or). Stamp the version and
+    // skip the ladder, avoiding the needless v2→3 wipe and the
+    // resolution_source "duplicate column" WARN on every fresh open.
+    // Require an empty symbols table AND all four probes: a real pre-versioning
+    // v1 DB has rows, and a crash-mid-migration DB is missing a column, so
+    // neither is misclassified as fresh.
+    let no_version_row = conn
+        .query_row(
+            "SELECT 1 FROM metadata WHERE key = 'schema_version'",
+            [],
+            |_| Ok(()),
+        )
+        .is_err();
+    let symbols_empty = conn
+        .query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get::<_, i64>(0))
+        .map(|c| c == 0)
+        .unwrap_or(false);
+    if no_version_row
+        && symbols_empty
+        && has_hash_cols
+        && has_resolution_state
+        && has_query_log
+        && has_resolution_source
+    {
+        if let Err(e) = conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
+            params![SCHEMA_VERSION.to_string()],
+        ) {
+            warn!(error = %e, "failed to stamp fresh-DB schema version");
+        }
+        return;
+    }
+
     // Migration 1 → 2: add in_degree column for centrality ranking
     if current < 2 {
         let _ = conn.execute(
@@ -3738,6 +3773,107 @@ mod tests {
             backups.is_empty(),
             "fresh DB should not create a backup file"
         );
+    }
+
+    #[test]
+    fn fresh_db_stamps_version_without_running_ladder() {
+        // A fresh DB takes the fast-path stamp and skips the destructive v2→3
+        // wipe. Regression guard for the duplicate-column WARN: the ladder must
+        // not re-fire the additive ALTERs against the bootstrapped v6 shape.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("fresh.db");
+        let db = Database::open(&db_path, DEFAULT_EMBEDDING_DIM).unwrap();
+
+        // The destructive branch deletes the 'last_commit' row; the fast path
+        // never enters it, so a marker written before re-open survives.
+        db.set_metadata("last_commit", "deadbeef").unwrap();
+        drop(db);
+        let db = Database::open(&db_path, DEFAULT_EMBEDDING_DIM).unwrap();
+        let last_commit: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'last_commit'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(
+            last_commit,
+            Some("deadbeef".to_string()),
+            "fresh re-open must not run the v2→3 wipe"
+        );
+
+        let version: String = db
+            .conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION.to_string());
+    }
+
+    #[test]
+    fn populated_v1_db_runs_full_ladder_to_v6() {
+        // Negative guard for the fresh-DB fast path: a real pre-versioning v1 DB
+        // (no schema_version row, narrow v1 columns, but SEEDED with rows) must
+        // NOT be misclassified as fresh. It runs the full v1→v6 ladder including
+        // the intentional v2→3 stable-id wipe and lands at schema_version=6 with
+        // every later column present.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("v1.sqlite");
+        {
+            let conn = Connection::open(&path).unwrap();
+            // True v1 shape: symbols end at docstring, edges end at line, no
+            // query_log, no schema_version row.
+            conn.execute_batch(
+                "CREATE TABLE symbols (
+                    id TEXT PRIMARY KEY, name TEXT, kind TEXT, file_path TEXT,
+                    start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER,
+                    parent_id TEXT, signature TEXT, visibility TEXT, is_async BOOLEAN, docstring TEXT);
+                 CREATE TABLE edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id TEXT NOT NULL, target_name TEXT NOT NULL, target_id TEXT,
+                    kind TEXT NOT NULL, file_path TEXT NOT NULL, line INTEGER);
+                 CREATE TABLE files (path TEXT PRIMARY KEY);
+                 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT);
+                 INSERT INTO symbols (id, name, kind, file_path) VALUES ('s:1', 'foo', 'function', 'a.py');
+                 INSERT INTO edges (source_id, target_name, target_id, kind, file_path, line)
+                   VALUES ('s:1', 'foo', 's:1', 'calls', 'a.py', 1);",
+            )
+            .unwrap();
+        }
+
+        let db = Database::open(&path, DEFAULT_EMBEDDING_DIM).unwrap();
+
+        // Ladder reached v6.
+        let version: String = db
+            .conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION.to_string());
+
+        // v5→6 column exists (the fast path would have skipped this ALTER).
+        assert!(
+            db.conn
+                .prepare("SELECT resolution_source FROM edges LIMIT 0")
+                .is_ok(),
+            "resolution_source must be added by the real upgrade"
+        );
+
+        // The intentional v2→3 wipe cleared the seeded rows for the stable-id
+        // rebuild — proving the fresh-DB fast path was NOT taken.
+        let symbol_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(symbol_count, 0, "v2→3 wipe must run for a populated v1 DB");
     }
 
     #[test]
