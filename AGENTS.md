@@ -92,11 +92,32 @@ Returns `Vec<Symbol>` + `Vec<Edge>`. After all files are extracted, `db.resolve_
 
 ## Adding a New Language
 
+Grammar crates must export `LANGUAGE: LanguageFn` (depend on `tree-sitter-language`),
+not a legacy `language()` fn, to link against the pinned `tree-sitter` core — verify
+with a one-line parse smoke test before writing the extractor.
+
+**Core extractor:**
+
 1. Add `tree-sitter-{lang}` to `[workspace.dependencies]` in root `Cargo.toml` and to `crates/cartog-languages/Cargo.toml`
-2. Create `crates/cartog-languages/src/{lang}.rs` implementing `Extractor`
-3. Register in `crates/cartog-languages/src/lib.rs`: module declaration + `get_extractor()` match arm
-4. Add extension mapping in `crates/cartog-core/src/lib.rs` `detect_language()`
-5. Add tests using the same pattern as `python.rs` tests
+2. Create `crates/cartog-languages/src/{lang}.rs` implementing `Extractor` (keep helpers private to the module; don't fatten `lib.rs`)
+3. Register in `crates/cartog-languages/src/lib.rs`: module declaration + `get_extractor()` match arm + `test_get_extractor` assert + module-doc language list
+4. Add extension mapping + a `detect_language()` test in `crates/cartog-core/src/lib.rs`
+5. Add co-located tests using the same pattern as `python.rs` / `dart.rs` tests
+
+**Edge resolution + agent integration:**
+
+6. Add a `ServerSpec` (+ `test_find_servers_{lang}`) to `crates/cartog-lsp/src/servers.rs` for the language's LSP server
+7. Add the language to the MCP "Languages:" instruction string in `crates/cartog-mcp/src/lib.rs`
+
+**Benchmarks (parity with the other languages):**
+
+8. Add `"{tag}"` to `FIXTURE_LANGS` in `crates/cartog-indexer/src/lib.rs` (`bench_support`)
+9. Create `benchmarks/fixtures/webapp_{lang}/` mirroring the other fixtures' domain shape; add a `check-{lang}` Makefile target (native + Docker fallback) and add it to `.PHONY` + `check-fixtures`; gitignore any build dir
+10. Author `benchmarks/ground_truth/webapp_{lang}.json` (derive expected values from real `cartog` output, then hand-verify) and wire `run_scenario "webapp_{lang}" ...` into all 13 `benchmarks/scenarios/NN_*.sh`; add the tag to `should_skip_fixture` in `benchmarks/lib/common.sh` and the `run.sh` usage text
+
+**Docs & counts** (search the repo for the previous count and bump consistently — there are two conventions: marketing "N languages" = code+Markdown, and "N code languages"):
+
+11. README, `docs/{product,structure,tech,usage}.md`, this file (AGENTS.md / CLAUDE.md), `skills/cartog/SKILL.md` + `skills/cartog/references/supported_languages.md`, and `site/src/pages/index.astro` (edit the `.astro` source + add a `lang-tag`; the Pages workflow rebuilds `site/dist`)
 
 ## CI/CD
 
