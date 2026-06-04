@@ -30,7 +30,7 @@ cartog index                  # 2. build the code graph
 
 That's it for CLI use. Two commands.
 
-If you want MCP wired into your editor (Cursor, VS Code, Claude Desktop, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed), add one more:
+If you want MCP wired into your editor (Claude Code, Cursor, VS Code, Claude Desktop, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, Antigravity, Kiro, Hermes Agent), add one more:
 
 ```bash
 cartog ide                    # optional — only if you want editor integration
@@ -54,7 +54,7 @@ prefer cartog over grep + read. Drop the snippet from
 [docs/agent-snippet.md](docs/agent-snippet.md) into your project's `AGENTS.md`,
 `CLAUDE.md`, `.cursor/rules/`, or equivalent, and the agent will route
 "where is X?" / "who calls X?" / "what breaks if I change X?" through
-cartog's 13 MCP tools instead of flooding context with raw text.
+cartog's 16 MCP tools instead of flooding context with raw text.
 
 ## Why Cartog
 
@@ -117,7 +117,7 @@ cartog watch . --rag             # also re-embed (deferred, non-blocking)
 ### MCP server for AI agents
 
 ```bash
-cartog serve                     # 13 tools over stdio
+cartog serve                     # 16 tools over stdio
 cartog serve --watch --rag       # with live re-indexing + semantic search
 ```
 
@@ -185,7 +185,7 @@ Three setup paths for agents and editors. Pick the one that matches your stack �
 
 | Path | Use it when | What you get |
 |---|---|---|
-| `cartog ide` | You want MCP wired into one or more editors (Cursor, VS Code, Codex CLI, Gemini CLI, Claude Desktop, OpenCode, Windsurf, Zed). | MCP entries written to the right files; interactive picker if you run it without flags. |
+| `cartog ide` | You want MCP wired into one or more editors (Claude Code, Cursor, VS Code, Codex CLI, Gemini CLI, Claude Desktop, OpenCode, Windsurf, Zed, Antigravity, Kiro, Hermes Agent). | MCP entries written to the right files; interactive picker if you run it without flags. |
 | Claude Code plugin | You are on Claude Code and want install + skill + MCP wired in one step. | Bundled: binary install, behavioural skill, MCP server, all preconfigured. |
 | Agent skill | You use an agent that follows the skills protocol (Cursor, Copilot, others) and only need the behavioural rules, not MCP. | Skill files installed into the agent's skill directory; works alongside any install method. |
 
@@ -614,6 +614,19 @@ provider = "none"            # "local" (default) or "none"
 Your code never leaves your machine — unless you explicitly opt in to
 [S3-compatible index sync](docs/usage.md#cartog-push---remote-s3-url)
 (`cartog push` / `cartog pull`), which is inert until you configure a remote.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| **"not initialized" / no results** | Run `cartog init` then `cartog index .` in the repo first. |
+| **`cartog index` seems to hang** | Cold index of a large repo takes a few seconds; re-run with `RUST_LOG=info cartog index .` if nothing after 60s. |
+| **MCP "Connection closed" on a 2nd editor window** | Expected: single-writer election makes the 2nd instance read-only (14 of 16 tools). Ensure `cartog --version` ≥ 0.17 and `CARTOG_SINGLE_WRITER` is unset. |
+| **`.cartog.toml` ignored** | Cartog walks up to the git root; with no `.git`, put it in the cwd or pass `--db`. `cartog config` prints the resolved paths. |
+| **Missing symbols / recall lower than expected** | Wait for the watcher (or run `cartog index`), check the file's language is supported and not `.gitignore`d. Install a language server on PATH to lift edge resolution from ~25% to up to ~81%. |
+| **Anything else** | `cartog doctor` checks git, config, DB, and models. |
+
+Full list with detailed fixes: **[docs/troubleshooting.md](docs/troubleshooting.md)**.
 
 ## Documentation
 

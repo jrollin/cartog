@@ -27,6 +27,8 @@ import Base from "../layouts/Base.astro";
             <summary class="sidebar-label">Configuration</summary>
             <a href="#config">Config File</a>
             <a href="#config-providers">Embedding Providers</a>
+            <a href="#config-remote">Remote Storage (S3)</a>
+            <a href="#config-secrets">Secret Redaction</a>
           </details>
           <details class="sidebar-group">
             <summary class="sidebar-label">Semantic Search</summary>
@@ -35,14 +37,14 @@ import Base from "../layouts/Base.astro";
             <a href="#rag-search">rag search</a>
           </details>
           <details class="sidebar-group">
-            <summary class="sidebar-label">Integration</summary>
+            <summary class="sidebar-label">Agents IA</summary>
             <a href="#agent-skill">Agent Skill</a>
             <a href="#mcp-server">MCP Server</a>
             <a href="#mcp-tools">Tools overview</a>
             <a href="#mcp-tool-shape">Tool metadata &amp; output</a>
-            <a href="#mcp-quickstart">Wiring editors: cartog ide</a>
+            <a href="#mcp-quickstart">IDE setup</a>
             <a href="#mcp-ide">Bootstrap sequence</a>
-            <a href="#mcp-clients">Manual setup</a>
+            <a href="#mcp-clients">IDE Manual setup</a>
             <a href="#teach-agent">Teach your agent</a>
           </details>
           <details class="sidebar-group">
@@ -77,6 +79,10 @@ import Base from "../layouts/Base.astro";
             <a href="#token-budget">Token Budget</a>
             <a href="#languages">Languages</a>
             <a href="#performance">Performance</a>
+          </details>
+          <details class="sidebar-group">
+            <summary class="sidebar-label">Troubleshooting</summary>
+            <a href="#troubleshooting">Common issues</a>
           </details>
         </nav>
       </aside>
@@ -157,33 +163,63 @@ cartog index .          <span class="comment"># 6. re-index after changes</span>
         <!-- ── Configuration ─────────────────────── -->
 
         <h2 id="config">Configuration</h2>
-        <p>Cartog works with zero configuration. Optionally, place a <code>.cartog.toml</code> at your project root to customize database path, embedding provider, and re-ranking.</p>
-        <pre><span class="comment"># .cartog.toml — full reference</span>
-
+        <p>Cartog works with <strong>zero configuration</strong>: every setting has a default, and <code>cartog init</code> writes a <code>.cartog.toml</code> with all sections commented out. Uncomment only the keys you want to override; don't copy the whole file. Run <code>cartog config</code> to print the active (merged) configuration.</p>
+        <table>
+          <thead>
+            <tr><th>Section</th><th>Default</th><th>Override when…</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>[database]</code></td><td><code>.cartog/db.sqlite</code> (git-root relative)</td><td>you want the DB elsewhere</td></tr>
+            <tr><td><code>[embedding]</code></td><td><code>provider = "local"</code> (ONNX, CPU)</td><td>using Ollama / a different model — see <a href="#config-providers">Embedding Providers</a></td></tr>
+            <tr><td><code>[reranker]</code></td><td><code>provider = "local"</code> (cross-encoder)</td><td>disabling rerank (<code>"none"</code>) to skip its model download</td></tr>
+            <tr><td><code>[rag]</code></td><td>tuned retrieval/rerank pools</td><td>tuning hybrid-search recall vs. cost</td></tr>
+            <tr><td><code>[remote]</code></td><td>unset (no sync)</td><td>sharing an index over S3 — see <a href="#config-remote">Remote Storage</a></td></tr>
+            <tr><td><code>[security]</code></td><td><code>redact_secrets = true</code></td><td>opting out of pattern redaction — see <a href="#config-secrets">Secret Redaction</a></td></tr>
+          </tbody>
+        </table>
+        <p>Example — override just the DB path and switch to Ollama, leaving everything else at its default:</p>
+        <pre><span class="comment"># .cartog.toml — only the keys you change; the rest stay default</span>
 [database]
 path = "~/.local/share/cartog/myproject.db"
 
-<span class="comment"># Embedding provider (optional — defaults to local ONNX)</span>
 [embedding]
-provider = "local"               <span class="comment"># "local" (default) or "ollama"</span>
-model = "BAAI/bge-small-en-v1.5" <span class="comment"># model name (provider-specific)</span>
-dimension = 384                  <span class="comment"># auto-detected for built-in models</span>
+provider = "ollama"              <span class="comment"># default is "local"</span></pre>
+        <p>Database path resolution priority: <code>--db</code> flag / <code>CARTOG_DB</code> env > <code>.cartog.toml</code> > git root auto-detection > cwd fallback.</p>
 
-<span class="comment"># Local provider: asymmetric model prefixes</span>
-[embedding.local]
-query_prefix = "search_query: "
-document_prefix = "search_document: "
+        <details class="mcp-client">
+          <summary><strong>Example <code>.cartog.toml</code></strong> — every section, with defaults annotated (read it, don't copy it wholesale)</summary>
+          <pre><span class="comment"># Every key below shows its DEFAULT value. Delete any line you don't</span>
+<span class="comment"># override — cartog applies these defaults whether the file exists or not.</span>
 
-<span class="comment"># Ollama provider settings</span>
-[embedding.ollama]
+[database]
+path = ".cartog/db.sqlite"        <span class="comment"># DEFAULT (relative to git root)</span>
+
+[embedding]
+provider = "local"               <span class="comment"># DEFAULT — "local" (ONNX) or "ollama"</span>
+model = "BAAI/bge-small-en-v1.5" <span class="comment"># DEFAULT for the local provider</span>
+# dimension = 384                <span class="comment"># auto-detected for built-in models</span>
+
+[embedding.ollama]               <span class="comment"># only used when provider = "ollama"</span>
 base_url = "http://localhost:11434"
 model = "nomic-embed-text"
 
-<span class="comment"># Reranker (optional — defaults to local cross-encoder)</span>
 [reranker]
-provider = "local"               <span class="comment"># "local" (default) or "none"</span></pre>
+provider = "local"               <span class="comment"># DEFAULT — "local" or "none"</span>
 
-        <p>Database path resolution priority: <code>--db</code> flag / <code>CARTOG_DB</code> env > <code>.cartog.toml</code> > git root auto-detection > cwd fallback.</p>
+[rag]
+retrieval_multiplier = 4         <span class="comment"># DEFAULT — over-retrieve N× before fusion</span>
+rerank_max = 50                  <span class="comment"># DEFAULT — cap candidates sent to reranker</span>
+
+[security]
+redact_secrets = true            <span class="comment"># DEFAULT — scrub secrets from the index</span>
+
+[remote]                         <span class="comment"># UNSET by default (no remote sync)</span>
+url        = "s3://my-team-bucket/cartog/main"
+# region   = "us-east-1"         <span class="comment"># optional when endpoint is set</span>
+# endpoint = "https://minio.example.com"  <span class="comment"># MinIO / R2 / floci</span>
+# path_style = true              <span class="comment"># set true for most non-AWS endpoints</span>
+<span class="comment"># Credentials are NEVER read from this file — see "Remote Storage (S3)".</span></pre>
+        </details>
 
         <h2 id="config-providers">Embedding Providers</h2>
         <p>Semantic search requires an embedding provider. Two options:</p>
@@ -250,6 +286,75 @@ provider = "none"
 EOF
 
 cartog rag setup     <span class="comment"># only downloads embedding model (~80MB)</span></pre>
+
+        <h2 id="config-remote">Remote Storage (S3)</h2>
+        <p>A pre-built index can be shared across a team or CI instead of being re-indexed everywhere. <code>cartog push</code> uploads the local SQLite index to an S3-compatible bucket; <code>cartog pull</code> downloads it. This is opt-in: configure a <code>[remote]</code> section (or pass <code>--remote</code>), and the binary must be built with the default <code>remote-s3</code> feature.</p>
+        <table>
+          <thead>
+            <tr><th>Key</th><th>Default</th><th>Meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>url</code></td><td><em>required</em></td><td><code>s3://bucket/key</code> target. <code>--remote</code> on push/pull overrides it.</td></tr>
+            <tr><td><code>region</code></td><td>AWS-resolved</td><td>AWS region (e.g. <code>us-east-1</code>). Optional when <code>endpoint</code> is set.</td></tr>
+            <tr><td><code>endpoint</code></td><td>AWS S3</td><td>Custom endpoint for S3-compatible stores (MinIO, Cloudflare R2, floci).</td></tr>
+            <tr><td><code>path_style</code></td><td><code>false</code></td><td>Force path-style addressing. Set <code>true</code> for most non-AWS endpoints.</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Credentials never live in <code>.cartog.toml</code>.</strong> They are resolved exclusively from the standard AWS environment chain (env vars, <code>~/.aws</code> profile, or IMDS). Any credential-shaped key in <code>[remote]</code> (<code>access_key</code>, <code>secret_key</code>, <code>credentials</code>, <code>token</code>, <code>aws_*</code>, …) is <em>rejected at parse time</em> so a secret can't be committed by mistake.</p>
+
+        <h3>Example: AWS S3</h3>
+        <pre><span class="comment"># 1. Point .cartog.toml at your bucket</span>
+cat &gt;&gt; .cartog.toml &lt;&lt;EOF
+[remote]
+url    = "s3://my-team-bucket/cartog/main"
+region = "us-east-1"
+EOF
+
+<span class="comment"># 2. Provide credentials via the AWS environment (never in the toml)</span>
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+<span class="comment"># or: export AWS_PROFILE=my-profile</span>
+
+<span class="comment"># 3. Build the index and push it</span>
+cartog index .
+cartog push                       <span class="comment"># uploads to [remote].url</span>
+
+<span class="comment"># On another machine / in CI: fetch the prebuilt index</span>
+cartog pull                       <span class="comment"># downloads, refuses if schema drifted</span></pre>
+
+        <h3>Example: MinIO / Cloudflare R2 / floci</h3>
+        <pre><span class="comment"># S3-compatible stores need an explicit endpoint + path-style addressing</span>
+cat &gt;&gt; .cartog.toml &lt;&lt;EOF
+[remote]
+url        = "s3://my-bucket/cartog/main"
+endpoint   = "https://minio.example.com"
+path_style = true
+EOF
+
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+
+cartog push                       <span class="comment"># or: cartog push --remote s3://other/key</span></pre>
+        <p>Run <code>cartog doctor</code> to verify the remote: it does a HEAD against the configured URL and reports whether the bucket is reachable with the resolved credentials.</p>
+
+        <h2 id="config-secrets">Secret Redaction</h2>
+        <p>Cartog scrubs your code before it is stored or embedded, so secrets don't leak into the index, semantic search, or MCP responses. Two layers, both on by default:</p>
+        <ul>
+          <li><strong>Pattern redaction</strong> — common secret shapes (AWS / GitHub / Slack / Stripe keys, JWTs, and quoted <code>key=value</code> assignments) are stripped from <code>symbol_content</code>, signatures, docstrings, and embeddings. Toggle with <code>[security] redact_secrets</code>.</li>
+          <li><strong>Sensitive-file deny-list</strong> — files like <code>.env</code>, <code>*.pem</code>, <code>*.key</code>, <code>id_rsa</code> are never indexed at all. This is <em>always</em> enforced, regardless of the <code>redact_secrets</code> flag.</li>
+        </ul>
+        <p>Redaction is best-effort, not a guarantee. Changing <code>redact_secrets</code> forces a full re-index so the stored content matches the new policy.</p>
+
+        <h3>Example: redaction settings</h3>
+        <pre><span class="comment"># Default: redaction ON — nothing to configure.</span>
+
+<span class="comment"># Opt out of pattern redaction (the file deny-list still applies):</span>
+cat &gt;&gt; .cartog.toml &lt;&lt;EOF
+[security]
+redact_secrets = false
+EOF
+
+cartog index .                    <span class="comment"># toggling redact_secrets re-indexes everything</span></pre>
 
         <!-- ── Semantic Search ───────────────────── -->
 
@@ -335,7 +440,7 @@ cartog serve --watch --rag    <span class="comment"># + watcher + deferred seman
         </table>
 
         <h3 id="mcp-tool-shape">Tool metadata &amp; output</h3>
-        <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 13 read-only tools declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
+        <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 13 read-only tools (plus <code>cartog_update</code>) declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
 
         <table>
           <thead>
@@ -382,7 +487,7 @@ cartog serve --watch --rag    <span class="comment"># + watcher + deferred seman
   &#125;
 &#125;</pre>
 
-        <p style="font-size: 13px; color: var(--text-tertiary);">The size cap (<code>CARTOG_MCP_MAX_BYTES</code>, default 64&nbsp;KB) counts the text block plus the structured copy: <code>structuredContent</code> is dropped when the combined size would exceed the cap, so an oversized payload can't blow the caller's context window. The two write tools have no <code>outputSchema</code> and report <code>readOnlyHint: false</code> with <code>destructiveHint: false</code> (they only add to the index).</p>
+        <p style="font-size: 13px; color: var(--text-tertiary);">The size cap (<code>CARTOG_MCP_MAX_BYTES</code>, default 64&nbsp;KB) counts the text block plus the structured copy: <code>structuredContent</code> is dropped when the combined size would exceed the cap, so an oversized payload can't blow the caller's context window. The two index-write tools (<code>cartog_index</code>, <code>cartog_rag_index</code>) have no <code>outputSchema</code> and report <code>readOnlyHint: false</code> with <code>destructiveHint: false</code> (they only add to the index).</p>
 
         <p><strong>Progress notifications:</strong> <code>cartog_index</code> and <code>cartog_rag_index</code> emit standard MCP <code>notifications/progress</code> when the client includes a <code>progressToken</code> in the request's <code>_meta</code>. <code>cartog_index</code> emits 3 phase events (<code>walking</code>, <code>parsing N files</code>, <code>storing N files</code>) plus an optional fourth (<code>resolving with LSP</code>) when the LSP pass runs. <code>cartog_rag_index</code> emits <code>preparing</code>, one <code>embedding processed/total</code> per ~512-symbol batch, then <code>storing</code>. The <code>message</code> field is human-readable, not a contract. Clients that don't supply a <code>progressToken</code> see no notifications.</p>
 
@@ -393,7 +498,7 @@ cartog ide --scope project          <span class="comment"># .mcp.json, .cursor/,
 cartog ide --scope user             <span class="comment"># user-scope clients only</span>
 cartog ide --client cursor          <span class="comment"># one client</span>
 cartog ide --dry-run                <span class="comment"># preview with before/after diff</span></pre>
-        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. User-scope clients whose config directory is missing are skipped (treated as "not installed"). Codex stores all servers in one global <code>~/.codex/config.toml</code>, so cartog writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section. Idempotent: existing servers in each file are preserved.</p>
+        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>, <code>antigravity</code>, <code>kiro</code> (project + user), <code>hermes</code>. User-scope clients whose config directory is missing are skipped (treated as "not installed"). Codex stores all servers in one global <code>~/.codex/config.toml</code>, so cartog writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section. Idempotent: existing servers in each file are preserved.</p>
         <p><strong>Known limitation:</strong> configs containing JSON-with-comments (JSONC) are left untouched and reported as skipped. Configure those clients manually using the snippets below.</p>
 
         <h3 id="mcp-ide">Bootstrap sequence</h3>
@@ -509,12 +614,45 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
+          <summary><strong>Antigravity</strong> — <code>~/.gemini/antigravity/mcp_config.json</code></summary>
+          <pre>cartog ide --client antigravity</pre>
+          <p>User-global only (no per-project config).</p>
+          <pre>&#123;
+  "mcpServers": &#123;
+    "cartog": &#123; "command": "cartog", "args": ["serve"] &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Kiro</strong> — <code>.kiro/settings/mcp.json</code> or <code>~/.kiro/settings/mcp.json</code></summary>
+          <pre>cartog ide --client kiro</pre>
+          <p>Workspace config takes precedence over user config.</p>
+          <pre>&#123;
+  "mcpServers": &#123;
+    "cartog": &#123; "command": "cartog", "args": ["serve"] &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Hermes Agent</strong> — <code>~/.hermes/config.yaml</code></summary>
+          <pre>cartog ide --client hermes</pre>
+          <p>YAML under the <code>mcp_servers</code> key; only the <code>cartog</code> entry is upserted.</p>
+          <pre>mcp_servers:
+  cartog:
+    command: cartog
+    args:
+      - serve</pre>
+        </details>
+
+        <details class="mcp-client">
           <summary><strong>Any other MCP client</strong></summary>
           <p>Point your client at <code>cartog serve</code> over stdio. Command: <code>cartog</code>, args: <code>["serve"]</code>.</p>
         </details>
 
         <h2 id="teach-agent">Teach your agent to use cartog</h2>
-        <p>Wiring MCP is half the job. The other half is telling the LLM <strong>when</strong> to prefer cartog over grep + read. Drop the snippet from <a href="https://github.com/jrollin/cartog/blob/main/docs/agent-snippet.md">docs/agent-snippet.md</a> into your project's <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursor/rules/</code>, or equivalent, and the agent will route navigation questions through cartog's 13 MCP tools instead of flooding context with raw text.</p>
+        <p>Wiring MCP is half the job. The other half is telling the LLM <strong>when</strong> to prefer cartog over grep + read. Drop the snippet from <a href="https://github.com/jrollin/cartog/blob/main/docs/agent-snippet.md">docs/agent-snippet.md</a> into your project's <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursor/rules/</code>, or equivalent, and the agent will route navigation questions through cartog's 16 MCP tools instead of flooding context with raw text.</p>
         <p>Maps the natural-language question to the right tool:</p>
         <ul>
           <li>"where is X defined?" → <code>cartog_search</code></li>
@@ -856,7 +994,7 @@ Dry run only. Re-run without --dry-run to apply.</pre>
 
 2 clients: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
 Dry run only. Re-run without --dry-run to apply.</pre>
-        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>. See the <a href="#mcp-ide">Bootstrap sequence</a> for the recommended verb order.</p>
+        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>, <code>antigravity</code>, <code>kiro</code> (project + user), <code>hermes</code>. See the <a href="#mcp-ide">Bootstrap sequence</a> for the recommended verb order.</p>
 
         <h2 id="cmd-self"><code>cartog self &lt;update|version|rollback|migrate-db&gt;</code></h2>
         <p>Manage the installed cartog binary in place: upgrade, inspect, or roll back. <code>cargo install cartog</code> users get an exit-3 refusal pointing at <code>cargo install cartog --force</code>; release-tarball installs swap atomically with SHA256 verification and a <code>&lt;bin&gt;.old</code> rollback slot.</p>
@@ -963,6 +1101,22 @@ cartog --tokens 200 outline src/db.rs</pre>
             <tr><td>Vue.js SPA (739 files)</td><td>Vue/TS/JS</td><td>31%</td><td><span class="badge">72%</span></td><td>25s</td></tr>
             <tr><td>Rust CLI (358 files)</td><td>Rust</td><td>25%</td><td><span class="badge">44%</span></td><td>72s</td></tr>
             <tr><td>PHP webapp fixture (25 files)</td><td>PHP</td><td>82%</td><td><span class="badge">84%</span></td><td>22s</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="troubleshooting">Troubleshooting</h2>
+        <p>The most common issues and their quick fixes. The full list lives in <a href="https://github.com/jrollin/cartog/blob/main/docs/troubleshooting.md">docs/troubleshooting.md</a>.</p>
+        <table>
+          <thead>
+            <tr><th>Symptom</th><th>Fix</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>"not initialized" / no results</td><td>Run <code>cartog init</code> then <code>cartog index .</code> in the repo first.</td></tr>
+            <tr><td><code>cartog index</code> seems to hang</td><td>A cold index of a large repo takes a few seconds; re-run with <code>RUST_LOG=info cartog index .</code> if nothing happens after 60s.</td></tr>
+            <tr><td>MCP "Connection closed" on a 2nd editor window</td><td>Expected: single-writer election makes the 2nd instance read-only (14 of 16 tools). Ensure <code>cartog --version</code> is ≥ 0.17 and <code>CARTOG_SINGLE_WRITER</code> is unset.</td></tr>
+            <tr><td><code>.cartog.toml</code> is ignored</td><td>Cartog walks up to the git root; with no <code>.git</code>, put it in the cwd or pass <code>--db</code>. <code>cartog config</code> prints the resolved paths.</td></tr>
+            <tr><td>Missing symbols / low recall</td><td>Wait for the watcher (or run <code>cartog index</code>); check the file's language is supported and not <code>.gitignore</code>d. A language server on PATH lifts edge resolution from ~25% to up to ~81%.</td></tr>
+            <tr><td>Anything else</td><td>Run <code>cartog doctor</code> — it checks git, config, database, and model status.</td></tr>
           </tbody>
         </table>
 

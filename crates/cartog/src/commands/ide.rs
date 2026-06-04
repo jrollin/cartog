@@ -1,11 +1,13 @@
 //! `cartog ide` — wire `cartog serve` into MCP-compatible editor config files.
 //!
-//! Supports nine clients across four config shapes:
-//! - `mcpServers` JSON: Claude Code, Claude Desktop, Cursor, Windsurf, Gemini CLI
+//! Supports twelve clients across six config shapes:
+//! - `mcpServers` JSON: Claude Code, Claude Desktop, Cursor, Windsurf, Gemini CLI,
+//!   Antigravity, Kiro
 //! - `mcp` JSON (OpenCode): `type: "local"`, `command` array, `enabled: true`
 //! - `context_servers` JSON: Zed
 //! - `servers` JSON (VS Code Copilot): `type: "stdio"`, flat command + args
 //! - `[mcp_servers.<section>]` TOML: Codex CLI (per-project sections)
+//! - `mcp_servers` YAML: Hermes Agent (`~/.hermes/config.yaml`)
 //!
 //! The JSON branches round-trip through `serde_json::Value`; the Codex TOML
 //! branch uses `toml_edit` so comments and ordering survive. On parse failure
@@ -63,6 +65,9 @@ pub enum MergeStrategy {
     /// so cartog writes one section per project named `cartog-<dir>-<hash8>` to
     /// keep multi-project setups coexisting in the same file.
     CodexToml,
+    /// `mcp_servers: {cartog: {command, args}}` YAML — Hermes Agent (`~/.hermes/config.yaml`).
+    /// Shared config file; only the `cartog` entry is upserted, other keys preserved.
+    HermesYaml,
 }
 
 /// Resolved target for one MCP client: where to write and how to merge.
@@ -214,6 +219,9 @@ pub fn merge_entry(
     if strategy == MergeStrategy::CodexToml {
         return merge_codex_toml(existing, args, "cartog");
     }
+    if strategy == MergeStrategy::HermesYaml {
+        return merge_hermes_yaml(existing, args);
+    }
     let trimmed = existing.map(str::trim).unwrap_or("");
     let parsed_prev: Option<Value> = if trimmed.is_empty() {
         None
@@ -295,6 +303,9 @@ fn apply_strategy(
         MergeStrategy::CodexToml => {
             anyhow::bail!("internal: CodexToml must go through merge_codex_toml")
         }
+        MergeStrategy::HermesYaml => {
+            anyhow::bail!("internal: HermesYaml must go through merge_hermes_yaml")
+        }
     }
     Ok(())
 }
@@ -363,6 +374,65 @@ fn merge_codex_toml(
                 Action::Updated
             }
         }
+    };
+
+    Ok(MergeOutcome { new_json, action })
+}
+
+/// Merge a `cartog` entry into Hermes' `mcp_servers` YAML map (`~/.hermes/config.yaml`).
+///
+/// Shared config file: only the `cartog` server is upserted; every other key and
+/// server is preserved. Hermes' own CLI rewrites this file without preserving
+/// comments, so a value round-trip (parse → upsert → re-serialize) matches its
+/// behavior and won't surprise users.
+fn merge_hermes_yaml(existing: Option<&str>, args: &[String]) -> Result<MergeOutcome> {
+    use serde_norway::{Mapping, Value};
+
+    let trimmed = existing.map(str::trim).unwrap_or("");
+    let mut root: Value = if trimmed.is_empty() {
+        Value::Mapping(Mapping::new())
+    } else {
+        let v: Value = serde_norway::from_str(trimmed).context("config file is not valid YAML")?;
+        match v {
+            Value::Mapping(_) => v,
+            // A null doc (e.g. just comments) parses to Null; treat as empty map.
+            Value::Null => Value::Mapping(Mapping::new()),
+            _ => anyhow::bail!("config root must be a YAML mapping"),
+        }
+    };
+
+    let canonical_prev = serde_norway::to_string(&root).context("re-serialize previous YAML")?;
+
+    let map = root
+        .as_mapping_mut()
+        .expect("root normalized to a mapping above");
+    let servers_key = Value::String("mcp_servers".into());
+    let servers = map
+        .entry(servers_key)
+        .or_insert_with(|| Value::Mapping(Mapping::new()));
+    let servers = servers.as_mapping_mut().ok_or_else(|| {
+        anyhow::anyhow!("top-level `mcp_servers` is not a YAML mapping; refusing to overwrite")
+    })?;
+
+    let mut entry = Mapping::new();
+    entry.insert(
+        Value::String("command".into()),
+        Value::String("cartog".into()),
+    );
+    entry.insert(
+        Value::String("args".into()),
+        Value::Sequence(args.iter().map(|a| Value::String(a.clone())).collect()),
+    );
+    servers.insert(Value::String("cartog".into()), Value::Mapping(entry));
+
+    // serde_norway terminates with a newline, so no manual `\n` like the JSON branch.
+    let new_json = serde_norway::to_string(&root).context("serialize merged YAML")?;
+
+    let action = match existing {
+        None => Action::Created,
+        Some(_) if trimmed.is_empty() => Action::Updated,
+        Some(_) if new_json == canonical_prev => Action::Unchanged,
+        Some(_) => Action::Updated,
     };
 
     Ok(MergeOutcome { new_json, action })
@@ -514,6 +584,30 @@ const CLIENT_CATALOGUE: &[CatalogueEntry] = &[
         strategy: MergeStrategy::McpServers,
         args_kind: ArgsKind::Serve,
     },
+    CatalogueEntry {
+        kind: ClientKind::Antigravity,
+        scope: Scope::User,
+        strategy: MergeStrategy::McpServers,
+        args_kind: ArgsKind::Serve,
+    },
+    CatalogueEntry {
+        kind: ClientKind::Kiro,
+        scope: Scope::Project,
+        strategy: MergeStrategy::McpServers,
+        args_kind: ArgsKind::Serve,
+    },
+    CatalogueEntry {
+        kind: ClientKind::Kiro,
+        scope: Scope::User,
+        strategy: MergeStrategy::McpServers,
+        args_kind: ArgsKind::Serve,
+    },
+    CatalogueEntry {
+        kind: ClientKind::Hermes,
+        scope: Scope::User,
+        strategy: MergeStrategy::HermesYaml,
+        args_kind: ArgsKind::Serve,
+    },
 ];
 
 struct CatalogueEntry {
@@ -548,6 +642,7 @@ fn project_path(kind: ClientKind, cwd: &Path) -> Option<PathBuf> {
         ClientKind::ClaudeCode => Some(cwd.join(".mcp.json")),
         ClientKind::Cursor => Some(cwd.join(".cursor").join("mcp.json")),
         ClientKind::Vscode => Some(cwd.join(".vscode").join("mcp.json")),
+        ClientKind::Kiro => Some(cwd.join(".kiro").join("settings").join("mcp.json")),
         // User-only clients have no project-scope analogue.
         _ => None,
     }
@@ -564,6 +659,9 @@ fn user_path(kind: ClientKind, home: &HomeDirs) -> Option<PathBuf> {
         ClientKind::Opencode => Some(home.opencode.clone()),
         ClientKind::Windsurf => Some(home.windsurf.clone()),
         ClientKind::Zed => Some(home.zed.clone()),
+        ClientKind::Antigravity => Some(home.antigravity.clone()),
+        ClientKind::Hermes => Some(home.hermes.clone()),
+        ClientKind::Kiro => Some(home.kiro.clone()),
         // Project-only clients have no user-scope analogue.
         ClientKind::Cursor | ClientKind::Vscode => None,
     }
@@ -616,6 +714,9 @@ pub struct HomeDirs {
     pub windsurf: PathBuf,
     pub opencode: PathBuf,
     pub zed: PathBuf,
+    pub antigravity: PathBuf,
+    pub hermes: PathBuf,
+    pub kiro: PathBuf,
 }
 
 impl Default for HomeDirs {
@@ -632,7 +733,10 @@ impl Default for HomeDirs {
             gemini: stub.clone(),
             windsurf: stub.clone(),
             opencode: stub.clone(),
-            zed: stub,
+            zed: stub.clone(),
+            antigravity: stub.clone(),
+            hermes: stub.clone(),
+            kiro: stub,
         }
     }
 }
@@ -672,6 +776,9 @@ impl HomeDirs {
             windsurf: home.join(".codeium/windsurf/mcp_config.json"),
             opencode: xdg_config.join("opencode/opencode.json"),
             zed: xdg_config.join("zed/settings.json"),
+            antigravity: home.join(".gemini/antigravity/mcp_config.json"),
+            hermes: home.join(".hermes/config.yaml"),
+            kiro: home.join(".kiro/settings/mcp.json"),
         }
     }
 }
@@ -724,7 +831,7 @@ pub fn cmd_ide(
 /// Pulled out so cmd_install can call eprintln! while keeping the dedup
 /// logic itself unit-testable.
 fn dedupe_preserving_order(clients: Vec<ClientKind>) -> (Vec<ClientKind>, Vec<ClientKind>) {
-    // ClientKind isn't Hash and there are only 9 variants, so a linear
+    // ClientKind isn't Hash and there are only a dozen variants, so a linear
     // membership check is cheaper than deriving Hash just for this.
     let mut unique = Vec::with_capacity(clients.len());
     let mut dropped = Vec::new();
@@ -834,10 +941,10 @@ pub struct ScopeOption {
     pub file_present: bool,
 }
 
-/// One picker row: a client and every scope it supports. The catalogue has 10
-/// entries (Claude Code is the only client with both project + user rows) but
-/// the picker shows one row per *kind* and uses a follow-up `Select` to
-/// resolve scope only when there's a real choice to make.
+/// One picker row: a client and every scope it supports. The catalogue has
+/// multiple entries per dual-scope client (Claude Code and Kiro each have
+/// project + user rows) but the picker shows one row per *kind* and uses a
+/// follow-up `Select` to resolve scope only when there's a real choice to make.
 #[derive(Debug, Clone)]
 pub struct PickerItem {
     pub kind: ClientKind,
@@ -870,13 +977,6 @@ pub enum PickerOutcome {
     Cancelled,
 }
 
-/// Build the picker rows from the static catalogue. Pure: no I/O beyond
-/// `Path::exists`, so it can be unit-tested with a `TempDir`-backed
-/// `HomeDirs` and a sandbox `cwd`.
-///
-/// Returns one row per unique `ClientKind`, with one `ScopeOption` per
-/// (kind, scope) entry in the catalogue. Claude Code ends up with two scope
-/// options; every other client has one.
 /// CLI binary name for a client, if it ships one we can detect on `PATH`.
 fn client_binary(kind: ClientKind) -> Option<&'static str> {
     match kind {
@@ -886,8 +986,13 @@ fn client_binary(kind: ClientKind) -> Option<&'static str> {
         ClientKind::Opencode => Some("opencode"),
         ClientKind::Windsurf => Some("windsurf"),
         ClientKind::Zed => Some("zed"),
-        // No reliable CLI: GUI apps (Claude Desktop) or editor-embedded (Cursor, VS Code).
-        ClientKind::ClaudeDesktop | ClientKind::Cursor | ClientKind::Vscode => None,
+        ClientKind::Hermes => Some("hermes"),
+        ClientKind::Kiro => Some("kiro"),
+        // No reliable CLI: GUI apps (Claude Desktop, Antigravity) or editor-embedded (Cursor, VS Code).
+        ClientKind::ClaudeDesktop
+        | ClientKind::Cursor
+        | ClientKind::Vscode
+        | ClientKind::Antigravity => None,
     }
 }
 
@@ -934,6 +1039,13 @@ fn client_installed(
     path.parent().is_some_and(Path::exists)
 }
 
+/// Build the picker rows from the static catalogue. Pure: no I/O beyond
+/// `Path::exists`, so it can be unit-tested with a `TempDir`-backed
+/// `HomeDirs` and a sandbox `cwd`.
+///
+/// Returns one row per unique `ClientKind`, with one `ScopeOption` per
+/// (kind, scope) entry in the catalogue. Claude Code and Kiro end up with two
+/// scope options; every other client has one.
 pub fn picker_items(cwd: &Path, homes: &HomeDirs) -> Vec<PickerItem> {
     let path_env = std::env::var_os("PATH");
     let mut by_kind: Vec<PickerItem> = Vec::new();
@@ -1145,6 +1257,9 @@ fn client_display_name(kind: ClientKind) -> &'static str {
         ClientKind::Zed => "Zed",
         ClientKind::Codex => "Codex CLI",
         ClientKind::Gemini => "Gemini CLI",
+        ClientKind::Antigravity => "Antigravity",
+        ClientKind::Hermes => "Hermes Agent",
+        ClientKind::Kiro => "Kiro",
     }
 }
 
@@ -1440,6 +1555,9 @@ fn client_name(kind: ClientKind) -> &'static str {
         ClientKind::Vscode => "vscode",
         ClientKind::Windsurf => "windsurf",
         ClientKind::Zed => "zed",
+        ClientKind::Antigravity => "antigravity",
+        ClientKind::Hermes => "hermes",
+        ClientKind::Kiro => "kiro",
     }
 }
 
@@ -1673,9 +1791,10 @@ mod tests {
         let tmp = std::env::temp_dir();
         let homes = HomeDirs::detect();
         let specs = build_specs(None, IdeScope::All, false, &tmp, &homes);
-        // Project: claude-code, cursor, vscode (3)
-        // User: claude-code, claude-desktop, codex, gemini, opencode, windsurf, zed (7)
-        assert_eq!(specs.len(), 10);
+        // Project: claude-code, cursor, vscode, kiro (4)
+        // User: claude-code, claude-desktop, codex, gemini, opencode, windsurf, zed,
+        //       antigravity, kiro, hermes (10)
+        assert_eq!(specs.len(), 14);
     }
 
     #[test]
@@ -1683,7 +1802,8 @@ mod tests {
         let tmp = std::env::temp_dir();
         let homes = HomeDirs::default();
         let specs = build_specs(None, IdeScope::Project, false, &tmp, &homes);
-        assert_eq!(specs.len(), 3);
+        // claude-code, cursor, vscode, kiro
+        assert_eq!(specs.len(), 4);
         assert!(specs.iter().all(|s| s.scope == Scope::Project));
     }
 
@@ -1739,8 +1859,7 @@ mod tests {
     #[test]
     fn install_filter_claude_code_returns_both_project_and_user_scopes() {
         let chosen = filter_catalogue_by_clients(&[ClientKind::ClaudeCode], IdeScope::All);
-        // Claude Code is the only client with both Project and User entries
-        // in CLIENT_CATALOGUE — `cartog install claude-code` must wire both.
+        // Claude Code has both Project and User entries; install must wire both.
         assert_eq!(chosen.len(), 2);
         let scopes: Vec<_> = chosen.iter().map(|(_, s)| *s).collect();
         assert!(scopes.contains(&Scope::Project));
@@ -1874,9 +1993,8 @@ mod tests {
 
     #[test]
     fn picker_items_groups_claude_code_into_two_scopes() {
-        // Claude Code is the only client with both Project and User catalogue
-        // entries; the hybrid picker collapses them into one PickerItem with
-        // two ScopeOptions.
+        // Claude Code has Project + User entries; the picker collapses them
+        // into one PickerItem with two ScopeOptions.
         let tmp = tempfile::tempdir().unwrap();
         let homes = HomeDirs::default();
         let items = picker_items(tmp.path(), &homes);
@@ -1895,8 +2013,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let homes = HomeDirs::default();
         let items = picker_items(tmp.path(), &homes);
+        // Claude Code and Kiro are the only dual-scope clients (project + user).
+        let dual_scope = [ClientKind::ClaudeCode, ClientKind::Kiro];
         for item in &items {
-            if item.kind != ClientKind::ClaudeCode {
+            if !dual_scope.contains(&item.kind) {
                 assert_eq!(
                     item.scopes.len(),
                     1,
@@ -2253,5 +2373,105 @@ mod tests {
             "{ this is not valid json",
             "original content preserved"
         );
+    }
+
+    // ── Antigravity / Kiro / Hermes ────────────────────────────────────
+
+    #[test]
+    fn build_specs_kiro_filter_returns_both_scopes() {
+        let tmp = std::env::temp_dir();
+        let homes = HomeDirs::default();
+        let specs = build_specs(Some(ClientKind::Kiro), IdeScope::All, false, &tmp, &homes);
+        assert_eq!(specs.len(), 2);
+        let scopes: Vec<_> = specs.iter().map(|s| s.scope).collect();
+        assert!(scopes.contains(&Scope::Project));
+        assert!(scopes.contains(&Scope::User));
+    }
+
+    #[test]
+    fn kiro_project_path_is_kiro_settings_mcp_json() {
+        let cwd = Path::new("/tmp/proj");
+        assert_eq!(
+            project_path(ClientKind::Kiro, cwd),
+            Some(cwd.join(".kiro").join("settings").join("mcp.json"))
+        );
+    }
+
+    #[test]
+    fn antigravity_and_hermes_are_user_only() {
+        let cwd = Path::new("/tmp/proj");
+        assert_eq!(project_path(ClientKind::Antigravity, cwd), None);
+        assert_eq!(project_path(ClientKind::Hermes, cwd), None);
+    }
+
+    #[test]
+    fn antigravity_and_kiro_use_mcp_servers_shape() {
+        // Both reuse the existing McpServers JSON strategy.
+        let o = merge_entry(None, MergeStrategy::McpServers, &args()).unwrap();
+        let v: Value = serde_json::from_str(&o.new_json).unwrap();
+        assert_eq!(v["mcpServers"]["cartog"]["command"], "cartog");
+    }
+
+    #[test]
+    fn merge_hermes_yaml_empty_file_creates_entry() {
+        let o = merge_entry(None, MergeStrategy::HermesYaml, &args()).unwrap();
+        assert_eq!(o.action, Action::Created);
+        assert!(o.new_json.ends_with('\n'), "must terminate with a newline");
+        let v: serde_norway::Value = serde_norway::from_str(&o.new_json).unwrap();
+        assert_eq!(
+            v["mcp_servers"]["cartog"]["command"].as_str(),
+            Some("cartog")
+        );
+        assert_eq!(
+            v["mcp_servers"]["cartog"]["args"][0].as_str(),
+            Some("serve")
+        );
+    }
+
+    #[test]
+    fn merge_hermes_yaml_preserves_other_servers_and_keys() {
+        let existing = "model: hermes-4\n\
+            mcp_servers:\n  \
+              filesystem:\n    \
+                command: npx\n    \
+                args: [\"-y\", \"server-filesystem\"]\n";
+        let o = merge_entry(Some(existing), MergeStrategy::HermesYaml, &args()).unwrap();
+        assert_eq!(o.action, Action::Updated);
+        let v: serde_norway::Value = serde_norway::from_str(&o.new_json).unwrap();
+        assert_eq!(v["model"].as_str(), Some("hermes-4"));
+        assert_eq!(
+            v["mcp_servers"]["filesystem"]["command"].as_str(),
+            Some("npx")
+        );
+        assert_eq!(
+            v["mcp_servers"]["cartog"]["command"].as_str(),
+            Some("cartog")
+        );
+    }
+
+    #[test]
+    fn merge_hermes_yaml_idempotent() {
+        let first = merge_entry(None, MergeStrategy::HermesYaml, &args()).unwrap();
+        let second =
+            merge_entry(Some(&first.new_json), MergeStrategy::HermesYaml, &args()).unwrap();
+        assert_eq!(second.action, Action::Unchanged);
+        assert_eq!(first.new_json, second.new_json);
+    }
+
+    #[test]
+    fn merge_hermes_yaml_refuses_when_mcp_servers_is_not_a_mapping() {
+        let existing = "mcp_servers: not-a-mapping\n";
+        let err = merge_entry(Some(existing), MergeStrategy::HermesYaml, &args()).unwrap_err();
+        assert!(
+            err.to_string().contains("refusing to overwrite"),
+            "expected refusal: {err}"
+        );
+    }
+
+    #[test]
+    fn merge_hermes_yaml_rejects_invalid_yaml() {
+        let err =
+            merge_entry(Some("key: [unclosed"), MergeStrategy::HermesYaml, &args()).unwrap_err();
+        assert!(err.to_string().contains("valid YAML"), "got: {err}");
     }
 }

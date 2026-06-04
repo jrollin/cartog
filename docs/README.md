@@ -6,7 +6,7 @@ Start here: the root [README](../README.md) for install and quick start.
 
 - [product.md](product.md) — vision, target users, positioning
 - [usage.md](usage.md) — CLI reference and configuration
-- [mcp-setup.md](mcp-setup.md) — per-editor MCP wiring (Cursor, VS Code, Codex, Gemini, Claude Desktop, OpenCode, Windsurf, Zed)
+- [mcp-setup.md](mcp-setup.md) — per-editor MCP wiring (Cursor, VS Code, Codex, Gemini, Claude Desktop, OpenCode, Windsurf, Zed, Antigravity, Kiro, Hermes)
 - [agent-snippet.md](agent-snippet.md) — drop-in rules that teach your agent when to prefer cartog over grep
 - [editor-integration.md](editor-integration.md) — Neovim, VS Code, Emacs, Zed CLI recipes
 - [updates.md](updates.md) — `cartog self update`, exit codes, env vars, state file

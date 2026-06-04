@@ -195,6 +195,54 @@ VS Code's top-level key is `servers` (no `Mcp` prefix):
 }
 ```
 
+## Antigravity
+
+Edit `~/.gemini/antigravity/mcp_config.json` (user-global; Antigravity has no
+per-project config):
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+## Kiro
+
+Edit `.kiro/settings/mcp.json` in your project root (workspace scope, takes
+precedence) or `~/.kiro/settings/mcp.json` (user scope):
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+## Hermes Agent
+
+Edit `~/.hermes/config.yaml` (Hermes reads MCP servers from this user-global
+YAML file under the `mcp_servers` key):
+
+```yaml
+mcp_servers:
+  cartog:
+    command: cartog
+    args:
+      - serve
+```
+
+`cartog ide` upserts only the `cartog` entry, leaving your other servers and
+top-level keys intact. You can also use Hermes' own `hermes mcp add` CLI.
+
 ## Any other MCP-compatible client
 
 The config pattern is always the same — point the client at `cartog serve` over stdio:

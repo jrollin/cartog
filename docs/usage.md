@@ -325,8 +325,9 @@ cartog ide --dry-run                # preview without writing
 
 Supported clients (matches the per-client list below): `claude-code` (project
 + user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`,
-`windsurf`, `zed`. User-scope clients whose config directory does not exist
-are skipped (treated as "not installed").
+`windsurf`, `zed`, `antigravity`, `kiro` (project + user), `hermes`. User-scope
+clients whose config directory does not exist are skipped (treated as "not
+installed").
 
 Codex stores all MCP servers in a single user-global `~/.codex/config.toml`,
 so cartog writes one per-project section named `cartog-<slug>-<hash8>` (slug
@@ -972,7 +973,7 @@ When `--watch` is passed, a background file watcher keeps the code graph up to d
 
 Opening two Claude Code windows on the same project (or running `cartog serve` in a terminal while a Claude Code window has its own MCP child) is supported via **single-writer election**:
 
-- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 13 MCP tools. The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
+- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 16 MCP tools. The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
 - Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 14 of 16 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) and `cartog_update` (which arms a machine-level deferred update, not a DB write) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
 - If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 16 tools become available on what was the secondary.
 
@@ -1038,7 +1039,7 @@ Dry run only. Re-run without --dry-run to apply.
 
 For `cartog ide --client claude-code --dry-run`, both project (`.mcp.json`) and user (`~/.claude/settings.json`) entries are previewed, and `args` includes `--watch` by default ([see why](#claude-code-watch-default)).
 
-Supported clients: `claude-code` (project + user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`. User-scope clients whose config dir is missing are skipped. See [Per-editor wiring: `cartog ide`](#per-editor-wiring-cartog-ide) for the flag and troubleshooting tables.
+Supported clients: `claude-code` (project + user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`, `antigravity`, `kiro` (project + user), `hermes`. User-scope clients whose config dir is missing are skipped. See [Per-editor wiring: `cartog ide`](#per-editor-wiring-cartog-ide) for the flag and troubleshooting tables.
 
 ### `cartog install [client ...] [--scope ...] [--dry-run] [--no-watch]`
 

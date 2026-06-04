@@ -25,6 +25,8 @@ cartog-process-lock = { path = "crates/cartog-process-lock", version = "0.21.2" 
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+# Maintained serde_yaml fork (serde_yaml deprecated, serde_yml has RUSTSEC-2025-0068).
+serde_norway = "0.9"
 schemars = "1.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
