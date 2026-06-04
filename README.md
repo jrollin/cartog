@@ -30,7 +30,7 @@ cartog index                  # 2. build the code graph
 
 That's it for CLI use. Two commands.
 
-If you want MCP wired into your editor (Cursor, VS Code, Claude Desktop, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed), add one more:
+If you want MCP wired into your editor (Claude Code, Cursor, VS Code, Claude Desktop, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, Antigravity, Kiro, Hermes Agent), add one more:
 
 ```bash
 cartog ide                    # optional â€” only if you want editor integration
@@ -185,7 +185,7 @@ Three setup paths for agents and editors. Pick the one that matches your stack â
 
 | Path | Use it when | What you get |
 |---|---|---|
-| `cartog ide` | You want MCP wired into one or more editors (Cursor, VS Code, Codex CLI, Gemini CLI, Claude Desktop, OpenCode, Windsurf, Zed). | MCP entries written to the right files; interactive picker if you run it without flags. |
+| `cartog ide` | You want MCP wired into one or more editors (Claude Code, Cursor, VS Code, Codex CLI, Gemini CLI, Claude Desktop, OpenCode, Windsurf, Zed, Antigravity, Kiro, Hermes Agent). | MCP entries written to the right files; interactive picker if you run it without flags. |
 | Claude Code plugin | You are on Claude Code and want install + skill + MCP wired in one step. | Bundled: binary install, behavioural skill, MCP server, all preconfigured. |
 | Agent skill | You use an agent that follows the skills protocol (Cursor, Copilot, others) and only need the behavioural rules, not MCP. | Skill files installed into the agent's skill directory; works alongside any install method. |
 

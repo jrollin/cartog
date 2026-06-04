@@ -325,8 +325,9 @@ cartog ide --dry-run                # preview without writing
 
 Supported clients (matches the per-client list below): `claude-code` (project
 + user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`,
-`windsurf`, `zed`. User-scope clients whose config directory does not exist
-are skipped (treated as "not installed").
+`windsurf`, `zed`, `antigravity`, `kiro` (project + user), `hermes`. User-scope
+clients whose config directory does not exist are skipped (treated as "not
+installed").
 
 Codex stores all MCP servers in a single user-global `~/.codex/config.toml`,
 so cartog writes one per-project section named `cartog-<slug>-<hash8>` (slug
@@ -1038,7 +1039,7 @@ Dry run only. Re-run without --dry-run to apply.
 
 For `cartog ide --client claude-code --dry-run`, both project (`.mcp.json`) and user (`~/.claude/settings.json`) entries are previewed, and `args` includes `--watch` by default ([see why](#claude-code-watch-default)).
 
-Supported clients: `claude-code` (project + user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`. User-scope clients whose config dir is missing are skipped. See [Per-editor wiring: `cartog ide`](#per-editor-wiring-cartog-ide) for the flag and troubleshooting tables.
+Supported clients: `claude-code` (project + user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`, `antigravity`, `kiro` (project + user), `hermes`. User-scope clients whose config dir is missing are skipped. See [Per-editor wiring: `cartog ide`](#per-editor-wiring-cartog-ide) for the flag and troubleshooting tables.
 
 ### `cartog install [client ...] [--scope ...] [--dry-run] [--no-watch]`
 

@@ -107,11 +107,14 @@ impl From<EdgeKindFilter> for EdgeKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClientKind {
+    Antigravity,
     ClaudeCode,
     ClaudeDesktop,
     Codex,
     Cursor,
     Gemini,
+    Hermes,
+    Kiro,
     Opencode,
     Vscode,
     Windsurf,
