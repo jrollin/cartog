@@ -266,7 +266,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cartog"
-version = "0.21.2"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-core"
-version = "0.21.2"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "schemars",
@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-db"
-version = "0.21.2"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-indexer"
-version = "0.21.2"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-languages"
-version = "0.21.2"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -371,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-lsp"
-version = "0.21.2"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-mcp"
-version = "0.21.2"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -405,7 +405,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-process-lock"
-version = "0.21.2"
+version = "0.22.0"
 dependencies = [
  "libc",
  "tempfile",
@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-rag"
-version = "0.21.2"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-watch"
-version = "0.21.2"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -1983,9 +1983,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.31"
+version = "0.4.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "113b30b4cd05f7c06868fdb2854f66a7b9fece9a48425351cd532e810d74024f"
+checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
 name = "lru-slab"
@@ -4794,9 +4794,9 @@ dependencies = [
 
 [[package]]
 name = "yoke"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abe8c5fda708d9ca3df187cae8bfb9ceda00dd96231bed36e445a1a48e66f9ca"
+checksum = "709fe23a0424b6a435d82152b1bd3fdfb0833487d5fa90d05d42762a9891fef5"
 dependencies = [
  "stable_deref_trait",
  "yoke-derive",
