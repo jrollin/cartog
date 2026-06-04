@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.21.2] - 2026-06-02
+## [0.22.0] - 2026-06-04
 
 ### Benchmarks
 
@@ -119,6 +119,14 @@
 - **lsp**: Reap child on Drop and detect binaries cross-platform ([`8ea5d3b`](https://github.com/jrollin/cartog/commit/8ea5d3b90893baf1b6bb352535539045cbedc182))
 - **site**: A11y accessible names + SEO metadata ([`419a8c2`](https://github.com/jrollin/cartog/commit/419a8c23ef194532d7de09108b8331c5235ef79e))
 - **skill**: Gate self-update on capability, not version boundary ([`3d3664a`](https://github.com/jrollin/cartog/commit/3d3664a6a1a83558a58eb6eaedb28bcb6847ac45))
+- **mcp**: Make server tests independent of the ONNX embedding model ([`ef4743e`](https://github.com/jrollin/cartog/commit/ef4743ecff5e68a9d11ebfbc206a5474fa4ae46e))
+- **agent-ux**: Address PR review findings on tier-1 tools ([`f878fe2`](https://github.com/jrollin/cartog/commit/f878fe2b59d75429f725526cc9b684533075bee9))
+- **edges**: Persist resolution_state on edge insert ([`dbcaae8`](https://github.com/jrollin/cartog/commit/dbcaae8941568e8087efe942322bd2069c5a2192))
+- **skill**: Surface SIGKILL-interrupted session-end updates via kill-safe marker ([`51384b6`](https://github.com/jrollin/cartog/commit/51384b6440d1242f745200d628370accb99952ee))
+- **bench**: Address PR review on agent benchmark scripts ([`03866de`](https://github.com/jrollin/cartog/commit/03866de2f25a974bf043aba495213523a5229b4f))
+- **bench**: Harden harness error paths, parsers, and eval reliability ([`b04a957`](https://github.com/jrollin/cartog/commit/b04a9573cb5137d02568ed99b5390755f45c2f24))
+- **swift**: Address PR review — bench fairness, parameterized fixture queries, stale counts ([`1091ecb`](https://github.com/jrollin/cartog/commit/1091ecbcd80745f5fcb9f8f4db9ccac00c16dd35))
+- **bench**: Add Swift 'actor' to scenario 02 grep baseline ([`8181a76`](https://github.com/jrollin/cartog/commit/8181a769d7cdfb2f616861b2bc86eab31365c38a))
 
 ### Build
 
@@ -175,6 +183,12 @@
 - **usage**: Note that unknown provider values are rejected at load ([`2ccf4be`](https://github.com/jrollin/cartog/commit/2ccf4be5b2091f6876dd1585c5fa98dbab00ba3c))
 - **site**: Document MCP tool annotations and structured output ([`63a0dc4`](https://github.com/jrollin/cartog/commit/63a0dc45a747fd5c09950a341f1aa403d7e1664c))
 - **site**: Note secret redaction in privacy copy ([`c67221c`](https://github.com/jrollin/cartog/commit/c67221cdfc99c52e2c405cfe418e3312dfe303c2))
+- **skill**: Document trace/context tools and provenance ([`3447eee`](https://github.com/jrollin/cartog/commit/3447eee2239047421601caf309f2db0f0dd61b4e))
+- **skill**: Clarify 14-served vs 13-readOnlyHint MCP tool counts ([`aaba1e9`](https://github.com/jrollin/cartog/commit/aaba1e9b4b7c7a368e0a3cbdca057dcde91990e4))
+- Complete the "Adding a New Language" checklist ([`7b92a4c`](https://github.com/jrollin/cartog/commit/7b92a4c6a97828b97ecb52c2c6594ba2fea62679))
+- **contributing**: Complete the add-a-language guide and fix missed Swift surfaces ([`c8c547d`](https://github.com/jrollin/cartog/commit/c8c547d6b8e6e041ab417a2ca321b1f945414478))
+- Sync tool/command/language counts and sharpen positioning ([`c84da6a`](https://github.com/jrollin/cartog/commit/c84da6aa4136b680941ab17bb7ddada0e7aabc5e))
+- **site**: Expand config docs, add troubleshooting, RAG hero stat ([`0a9245a`](https://github.com/jrollin/cartog/commit/0a9245a1d2efc9fd5d78d3330428e055cb7e6dbb))
 
 ### Features
 
@@ -286,6 +300,16 @@
 - **site**: Add scroll-reveal, stat count-up, and card hover-lift ([`12c0aaf`](https://github.com/jrollin/cartog/commit/12c0aaf0aa3280c0de400fccfa4e342ec42df1aa))
 - **remote**: Record git-commit provenance on push/pull ([`5eda38c`](https://github.com/jrollin/cartog/commit/5eda38c21938248db6b7e56ae5457708fe2642dc))
 - **release**: Add --dry-run flag to release.sh ([`a3fe6fb`](https://github.com/jrollin/cartog/commit/a3fe6fbc686b96308a88a14a0f03795981217d0c))
+- **agent-ux**: Add cartog_trace, cartog_context, staleness banners, onboarding ([`9e7fabd`](https://github.com/jrollin/cartog/commit/9e7fabdaf15ba32f2c6ae007df0903a3f0ef2598))
+- **edges**: Record resolution provenance per edge ([`7a98ff9`](https://github.com/jrollin/cartog/commit/7a98ff939e792f6ef4396a2aaa4dac02ba96f0ca))
+- **bench**: Add end-to-end agent-task benchmark ([`6b02627`](https://github.com/jrollin/cartog/commit/6b026273642bc6ff46d1335813a99fcd1d50a8dd))
+- **bench**: Add --judge-model and persist archived results ([`38b4c42`](https://github.com/jrollin/cartog/commit/38b4c420f6c9871176d02a4bf8b8d4ac63327382))
+- **bench**: Parallelize agent runs, add --no-embed, record first findings ([`6ab610c`](https://github.com/jrollin/cartog/commit/6ab610cd76f53f316f5bf06965ed1ad38694a29f))
+- **bench**: No-prompt A/B, tool_breakdown, and cartog_context discoverability ([`6b713fe`](https://github.com/jrollin/cartog/commit/6b713fef4a0595295a7e8191017daef6d6c0f16d))
+- **languages**: Add Swift extractor with fixtures, benchmarks, and LSP ([`95085f5`](https://github.com/jrollin/cartog/commit/95085f57cd84cbff86adc0f0b62d36c85933b49f))
+- **lang**: Add Kotlin support ([`bddf491`](https://github.com/jrollin/cartog/commit/bddf4915aebff9e52bf31fd0a19cf1c2e9096c36))
+- **ide**: Wire MCP config for Antigravity, Kiro, and Hermes Agent ([`c73c522`](https://github.com/jrollin/cartog/commit/c73c5224c2650d4508df88ba605ae51317837cda))
+- **site**: Add logo SVGs for all languages and IDE clients ([`633b77b`](https://github.com/jrollin/cartog/commit/633b77ba0b016bd62617a1026f4653410caf968d))
 
 ### Miscellaneous
 
@@ -362,6 +386,7 @@
 - Remove flake and no-op patterns from the suite ([`457bb95`](https://github.com/jrollin/cartog/commit/457bb9524caf58624c913891efcaea1b6b033456))
 - Remove duplicate auth fixture under crates/cartog ([`ba69ff5`](https://github.com/jrollin/cartog/commit/ba69ff57bf962a0dfd21aaf884102c93465f4cf1))
 - **indexer**: Use a fake AWS key in the ASIA redaction test ([`9710ae2`](https://github.com/jrollin/cartog/commit/9710ae2190040eb978eff7a2116b09238d6c8255))
+- **skill**: Fix routing eval harness, add context/deps scenarios, de-emphasize --no-lsp ([`9f757d2`](https://github.com/jrollin/cartog/commit/9f757d2fa28ced6c625a9bf4b2e5815196cdfd2f))
 
 ## [0.3.1] - 2026-02-26
 
