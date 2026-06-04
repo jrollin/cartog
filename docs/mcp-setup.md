@@ -180,8 +180,14 @@ Edit `~/.gemini/settings.json`:
 
 ## VS Code (GitHub Copilot)
 
-Edit `.vscode/mcp.json` in your project root (per-workspace) — note that
-VS Code's top-level key is `servers` (no `Mcp` prefix):
+Two scopes — `cartog ide` (or `cartog install vscode`) writes both:
+
+- **Project**: `.vscode/mcp.json` in your repo root (per-workspace).
+- **User** (every workspace): `Code/User/mcp.json` under the VS Code config dir —
+  `~/Library/Application Support/Code/User/mcp.json` (macOS),
+  `~/.config/Code/User/mcp.json` (Linux), `%APPDATA%\Code\User\mcp.json` (Windows).
+
+Note that VS Code's top-level key is `servers` (no `Mcp` prefix):
 
 ```json
 {
@@ -195,10 +201,14 @@ VS Code's top-level key is `servers` (no `Mcp` prefix):
 }
 ```
 
+If VS Code is launched from Finder/Dock (not a terminal), it may not have your
+shell `PATH`, so a bare `"command": "cartog"` can fail to spawn. Use the absolute
+path (e.g. `"command": "/Users/you/.local/bin/cartog"`) if the server won't start.
+
 ## Antigravity
 
-Edit `~/.gemini/antigravity/mcp_config.json` (user-global; Antigravity has no
-per-project config):
+Edit `~/.gemini/config/mcp_config.json` (user-global, shared by Antigravity 2.0,
+IDE and CLI; no per-project config):
 
 ```json
 {
