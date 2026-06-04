@@ -54,7 +54,7 @@ prefer cartog over grep + read. Drop the snippet from
 [docs/agent-snippet.md](docs/agent-snippet.md) into your project's `AGENTS.md`,
 `CLAUDE.md`, `.cursor/rules/`, or equivalent, and the agent will route
 "where is X?" / "who calls X?" / "what breaks if I change X?" through
-cartog's 13 MCP tools instead of flooding context with raw text.
+cartog's 16 MCP tools instead of flooding context with raw text.
 
 ## Why Cartog
 
@@ -117,7 +117,7 @@ cartog watch . --rag             # also re-embed (deferred, non-blocking)
 ### MCP server for AI agents
 
 ```bash
-cartog serve                     # 13 tools over stdio
+cartog serve                     # 16 tools over stdio
 cartog serve --watch --rag       # with live re-indexing + semantic search
 ```
 

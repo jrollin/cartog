@@ -16,13 +16,13 @@ import { withBase } from "../lib/url";
       <div class="hero-eyebrow">Code Graph Navigator</div>
 
       <h1>
-        <span class="line-plain">Stop grepping blind.</span>
-        <span class="line-accent">Query your code graph.</span>
+        <span class="line-plain">Your codebase as a queryable graph,</span>
+        <span class="line-accent">for you and your coding agent.</span>
       </h1>
 
       <p class="subtitle">
-        Pre-computed symbols, calls, imports queried in microseconds.<br>
-        Single binary. No Python, No Docker.
+        Symbols, calls, imports and impact, pre-computed once and answered in microseconds.<br>
+        Single Rust binary, 12 languages, true local semantic search, 100% local. MCP server built in.
       </p>
 
       <!-- Stats bar: anchor the value claim before showing the demo -->
@@ -47,7 +47,7 @@ import { withBase } from "../lib/url";
         </div>
       </div>
       <p id="benchmark-notes" style="margin-top: 8px; font-size: 12px; color: var(--text-tertiary); text-align: center;">
-        <sup>*</sup> Measured across 13 scenarios, 5 languages. Latency is the outline-query median on the Python fixture; 97% recall requires a matching language server on PATH (heuristic-only resolution lands around 25–37%). <a href="https://github.com/jrollin/cartog/tree/main/crates/cartog/benches" style="color: var(--text-tertiary);">Benchmark suite →</a>
+        <sup>*</sup> Measured across 13 scenarios, 10 languages. Latency is the outline-query median on the Python fixture; 97% recall requires a matching language server on PATH (heuristic-only resolution lands around 25–37%). <a href="https://github.com/jrollin/cartog/tree/main/crates/cartog/benches" style="color: var(--text-tertiary);">Benchmark suite →</a>
       </p>
 
       <!-- Demo: show what cartog does before asking users to install it -->
@@ -348,7 +348,7 @@ import { withBase } from "../lib/url";
       </div>
 
       <p style="margin-top: 16px; font-size: 13px; color: var(--text-tertiary);">
-        Measured across 13 scenarios, 5 languages. <a href="https://github.com/jrollin/cartog/tree/main/crates/cartog/benches">Benchmark suite →</a>
+        Measured across 13 scenarios, 10 languages. <a href="https://github.com/jrollin/cartog/tree/main/crates/cartog/benches">Benchmark suite →</a>
       </p>
     </div>
   </section>
@@ -372,8 +372,8 @@ import { withBase } from "../lib/url";
         </div>
         <div class="why-card" data-reveal style="--reveal-delay: 0.16s;">
           <div class="why-number">03</div>
-          <h3>Python-based graph tools</h3>
-          <p>They solve a similar problem but require a Python runtime, pip dependencies, and virtual environments. Cartog is a single static binary — download and run. It also queries 10-100x faster thanks to compiled Rust + SQLite.</p>
+          <h3>Other code-graph indexers</h3>
+          <p>Most ship a runtime to install (Python, Node) and stop at keyword search. Cartog is a single static Rust binary with three things they lack: <strong>true embedding-based semantic search</strong> (vector KNN + cross-encoder re-ranking, not keyword matching), <strong>pluggable local embedding providers</strong> (ONNX or Ollama), and <strong>S3 index sync</strong> (<code>cartog push</code> / <code>pull</code>) to share a pre-built graph across a team or CI. All 100% local by default.</p>
         </div>
       </div>
     </div>
@@ -441,8 +441,8 @@ import { withBase } from "../lib/url";
         </div>
         <div class="why-card" data-reveal style="--reveal-delay: 0.08s;">
           <div class="why-number">02</div>
-          <h3>13 MCP tools</h3>
-          <p><code>cartog serve</code> exposes <code>cartog_map</code>, <code>cartog_search</code>, <code>cartog_refs</code>, <code>cartog_impact</code>, <code>cartog_rag_search</code>, and 8 more. Each tool description tells the agent when (and when not) to use it.</p>
+          <h3>16 MCP tools</h3>
+          <p><code>cartog serve</code> exposes <code>cartog_map</code>, <code>cartog_search</code>, <code>cartog_refs</code>, <code>cartog_impact</code>, <code>cartog_rag_search</code>, and 11 more. Each tool description tells the agent when (and when not) to use it.</p>
         </div>
         <div class="why-card" data-reveal style="--reveal-delay: 0.16s;">
           <div class="why-number">03</div>
@@ -479,7 +479,7 @@ import { withBase } from "../lib/url";
             <tr>
               <td>MCP server (manual)</td>
               <td><code>cartog serve --watch --rag</code></td>
-              <td>13 tools over stdio, live index + semantic search</td>
+              <td>16 tools over stdio, live index + semantic search</td>
             </tr>
             <tr>
               <td>Agent skill</td>
@@ -506,7 +506,7 @@ import { withBase } from "../lib/url";
     <div class="container">
       <div class="section-label">MCP Server</div>
       <h2 class="section-heading">A code graph your agent can call.</h2>
-      <p class="section-subtitle"><code>cartog serve</code> speaks the Model Context Protocol over stdio — 13 tools any MCP client launches as a subprocess. No HTTP port, no daemon, no API keys. The graph stays on your machine.</p>
+      <p class="section-subtitle"><code>cartog serve</code> speaks the Model Context Protocol over stdio: 16 tools any MCP client launches as a subprocess. No HTTP port, no daemon, no API keys. The graph stays on your machine.</p>
 
       <div class="terminal">
         <div class="terminal-header">
@@ -522,7 +522,7 @@ import { withBase } from "../lib/url";
 <span class="highlight">+</span> <span class="output">claude-code (project, .mcp.json): created</span>
 
 <span class="comment"># the editor now spawns this on demand:</span>
-<span class="prompt">$</span> <span class="cmd">cartog serve --watch</span>   <span class="comment"># 13 tools + live re-index</span></div>
+<span class="prompt">$</span> <span class="cmd">cartog serve --watch</span>   <span class="comment"># 16 tools + live re-index</span></div>
       </div>
 
       <div class="features-grid" style="margin-top: 56px;">
@@ -531,8 +531,8 @@ import { withBase } from "../lib/url";
           <p><code>cartog ide</code> is the only verb that writes MCP configs. It merges <code>cartog serve</code> into Claude Code, Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, and Claude Desktop — existing servers preserved, dry-run-able.</p>
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.08s;">
-          <h3><span class="feature-icon">🧰</span> 13 tools, typed output</h3>
-          <p>11 read-only tools (<code>map</code>, <code>search</code>, <code>refs</code>, <code>impact</code>, <code>rag_search</code>, …) declare an <code>outputSchema</code> and ship <code>readOnlyHint</code>, so clients skip approval prompts and get validated <code>structuredContent</code>. 2 write tools build the index.</p>
+          <h3><span class="feature-icon">🧰</span> 16 tools, typed output</h3>
+          <p>14 read tools (<code>map</code>, <code>search</code>, <code>refs</code>, <code>impact</code>, <code>rag_search</code>, …) ship <code>readOnlyHint</code> and declare an <code>outputSchema</code>, so clients skip approval prompts and get validated <code>structuredContent</code>. 2 write tools build the index.</p>
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.16s;">
           <h3><span class="feature-icon">📡</span> Live + progress-aware</h3>

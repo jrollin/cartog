@@ -859,7 +859,7 @@ pub struct CartogServer {
     /// Single-writer election role. `Primary` holds the `serve` PID lock
     /// and owns the RW DB connection. `ReadOnly` attached via
     /// [`Database::open_readonly`] because another cartog process owns
-    /// the slot — the 2 write tools are gated, the 13 read tools work
+    /// the slot — the 2 write tools are gated, the 14 read tools work
     /// unchanged. Mutated atomically when the Phase 5 promoter detects
     /// the primary died and takes over.
     role: Arc<AtomicRole>,

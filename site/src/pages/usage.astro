@@ -335,7 +335,7 @@ cartog serve --watch --rag    <span class="comment"># + watcher + deferred seman
         </table>
 
         <h3 id="mcp-tool-shape">Tool metadata &amp; output</h3>
-        <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 13 read-only tools declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
+        <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 13 read-only tools (plus <code>cartog_update</code>) declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
 
         <table>
           <thead>
@@ -382,7 +382,7 @@ cartog serve --watch --rag    <span class="comment"># + watcher + deferred seman
   &#125;
 &#125;</pre>
 
-        <p style="font-size: 13px; color: var(--text-tertiary);">The size cap (<code>CARTOG_MCP_MAX_BYTES</code>, default 64&nbsp;KB) counts the text block plus the structured copy: <code>structuredContent</code> is dropped when the combined size would exceed the cap, so an oversized payload can't blow the caller's context window. The two write tools have no <code>outputSchema</code> and report <code>readOnlyHint: false</code> with <code>destructiveHint: false</code> (they only add to the index).</p>
+        <p style="font-size: 13px; color: var(--text-tertiary);">The size cap (<code>CARTOG_MCP_MAX_BYTES</code>, default 64&nbsp;KB) counts the text block plus the structured copy: <code>structuredContent</code> is dropped when the combined size would exceed the cap, so an oversized payload can't blow the caller's context window. The two index-write tools (<code>cartog_index</code>, <code>cartog_rag_index</code>) have no <code>outputSchema</code> and report <code>readOnlyHint: false</code> with <code>destructiveHint: false</code> (they only add to the index).</p>
 
         <p><strong>Progress notifications:</strong> <code>cartog_index</code> and <code>cartog_rag_index</code> emit standard MCP <code>notifications/progress</code> when the client includes a <code>progressToken</code> in the request's <code>_meta</code>. <code>cartog_index</code> emits 3 phase events (<code>walking</code>, <code>parsing N files</code>, <code>storing N files</code>) plus an optional fourth (<code>resolving with LSP</code>) when the LSP pass runs. <code>cartog_rag_index</code> emits <code>preparing</code>, one <code>embedding processed/total</code> per ~512-symbol batch, then <code>storing</code>. The <code>message</code> field is human-readable, not a contract. Clients that don't supply a <code>progressToken</code> see no notifications.</p>
 
@@ -514,7 +514,7 @@ args = ["serve"]</pre>
         </details>
 
         <h2 id="teach-agent">Teach your agent to use cartog</h2>
-        <p>Wiring MCP is half the job. The other half is telling the LLM <strong>when</strong> to prefer cartog over grep + read. Drop the snippet from <a href="https://github.com/jrollin/cartog/blob/main/docs/agent-snippet.md">docs/agent-snippet.md</a> into your project's <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursor/rules/</code>, or equivalent, and the agent will route navigation questions through cartog's 13 MCP tools instead of flooding context with raw text.</p>
+        <p>Wiring MCP is half the job. The other half is telling the LLM <strong>when</strong> to prefer cartog over grep + read. Drop the snippet from <a href="https://github.com/jrollin/cartog/blob/main/docs/agent-snippet.md">docs/agent-snippet.md</a> into your project's <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursor/rules/</code>, or equivalent, and the agent will route navigation questions through cartog's 16 MCP tools instead of flooding context with raw text.</p>
         <p>Maps the natural-language question to the right tool:</p>
         <ul>
           <li>"where is X defined?" → <code>cartog_search</code></li>
