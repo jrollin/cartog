@@ -186,6 +186,24 @@ path = "~/.local/share/cartog/myproject.db"
 provider = "ollama"              <span class="comment"># default is "local"</span></pre>
         <p>Database path resolution priority: <code>--db</code> flag / <code>CARTOG_DB</code> env > <code>.cartog.toml</code> > git root auto-detection > cwd fallback.</p>
 
+        <h3 id="config-env">Environment variables</h3>
+        <p>Runtime overrides (per-machine / per-invocation), in addition to <code>.cartog.toml</code>:</p>
+        <table class="config-table">
+          <thead>
+            <tr><th>Variable</th><th>Default</th><th>Effect</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>CARTOG_DB</code></td><td>auto-detect</td><td>Database path (same as <code>--db</code>).</td></tr>
+            <tr><td><code>CARTOG_ONNX_THREADS</code></td><td>all cores</td><td>Caps ONNX CPU threads for <code>rag index</code> + reranking. Overrides <code>[embedding.local] intra_threads</code>; <code>1</code> forces single-core.</td></tr>
+            <tr><td><code>CARTOG_SINGLE_WRITER</code></td><td><code>1</code></td><td><code>0</code> disables MCP single-writer election (every <code>serve</code> opens read-write).</td></tr>
+            <tr><td><code>CARTOG_MCP_MAX_BYTES</code></td><td><code>65536</code></td><td>Max bytes per MCP tool response before truncation.</td></tr>
+            <tr><td><code>CARTOG_NO_UPDATE_CHECK</code></td><td>unset</td><td>Set to skip the background self-update check.</td></tr>
+            <tr><td><code>CARTOG_UPDATE_CHECK</code></td><td>unset</td><td>Force an update check regardless of cadence.</td></tr>
+            <tr><td><code>CARTOG_INSTALL_DIR</code></td><td><code>~/.local/bin</code></td><td>Install location used by <code>install.sh</code>.</td></tr>
+            <tr><td><code>CARTOG_VERSION</code></td><td>latest</td><td>Pin the version <code>install.sh</code> fetches.</td></tr>
+          </tbody>
+        </table>
+
         <details class="mcp-client">
           <summary><strong>Example <code>.cartog.toml</code></strong> — every section, with defaults annotated (read it, don't copy it wholesale)</summary>
           <pre><span class="comment"># Every key below shows its DEFAULT value. Delete any line you don't</span>
@@ -198,6 +216,9 @@ path = ".cartog/db.sqlite"        <span class="comment"># DEFAULT (relative to g
 provider = "local"               <span class="comment"># DEFAULT — "local" (ONNX) or "ollama"</span>
 model = "BAAI/bge-small-en-v1.5" <span class="comment"># DEFAULT for the local provider</span>
 # dimension = 384                <span class="comment"># auto-detected for built-in models</span>
+
+[embedding.local]                <span class="comment"># only used when provider = "local"</span>
+# intra_threads = 4              <span class="comment"># cap ONNX CPU threads (DEFAULT: all cores); CARTOG_ONNX_THREADS overrides</span>
 
 [embedding.ollama]               <span class="comment"># only used when provider = "ollama"</span>
 base_url = "http://localhost:11434"

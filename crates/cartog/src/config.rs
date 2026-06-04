@@ -204,6 +204,10 @@ pub struct LocalEmbeddingConfig {
     pub query_prefix: Option<String>,
     /// Prefix prepended to text during indexing (e.g. "search_document: ").
     pub document_prefix: Option<String>,
+    /// Optional cap on ONNX intra-op threads for indexing/reranking. None =
+    /// all cores (fastembed default). `CARTOG_ONNX_THREADS` overrides; read at
+    /// provider load (restart `serve` to change it).
+    pub intra_threads: Option<usize>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -256,9 +260,13 @@ pub fn to_redaction_config(config: &CartogConfig) -> cartog_indexer::RedactionCo
 pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProviderConfig {
     match &config.embedding {
         Some(embed) => {
-            let (query_prefix, document_prefix) = match &embed.local {
-                Some(local) => (local.query_prefix.clone(), local.document_prefix.clone()),
-                None => (None, None),
+            let (query_prefix, document_prefix, intra_threads) = match &embed.local {
+                Some(local) => (
+                    local.query_prefix.clone(),
+                    local.document_prefix.clone(),
+                    local.intra_threads,
+                ),
+                None => (None, None, None),
             };
             let ollama = embed.ollama.as_ref();
             cartog_rag::EmbeddingProviderConfig {
@@ -276,6 +284,7 @@ pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProvide
                     .as_ref()
                     .map(|r| r.provider().to_string())
                     .unwrap_or_else(|| DEFAULT_RERANKER_PROVIDER.to_string()),
+                intra_threads,
             }
         }
         None => cartog_rag::EmbeddingProviderConfig::default(),
