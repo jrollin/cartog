@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.23.1] - 2026-06-04
+
+### Bug Fixes
+
+- **ide**: Add VS Code user scope, correct Antigravity path ([`409ac51`](https://github.com/jrollin/cartog/commit/409ac51bdd02e4034f0dab3dc802b5ac4e2b0990))
+
+### Features
+
+- **site**: Horizontal feature cards + fix mobile overflow ([`aa4f7f7`](https://github.com/jrollin/cartog/commit/aa4f7f7c54f9165cd27a369038881265df20080f))
+
 ## [0.23.0] - 2026-06-04
 
 ### Bug Fixes
