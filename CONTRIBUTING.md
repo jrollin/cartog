@@ -26,7 +26,7 @@ Individual targets:
 
 ```bash
 make check-rust            # cargo fmt --check + clippy -D warnings + cargo test
-make check-fixtures        # validate all language fixture codebases (py, ts, go, rs, rb, java, php)
+make check-fixtures        # validate all language fixture codebases (py, ts, go, rs, rb, java, php, dart, swift)
 make check-fixtures-docker # same, forcing the Docker fallback for every language
 make check-skill           # bash unit tests for the agent skill
 ```
@@ -64,8 +64,17 @@ docs(usage): add MCP Zed configuration example
 
 ## Adding a new language
 
-End-to-end checklist for landing a new language. PR #35 (PHP) is a good reference;
-the per-language wiring is shallow and the bulk of the work is the benchmark fixture.
+End-to-end checklist for landing a new language. PR #35 (PHP) and PR #89 (Swift)
+are good references; the per-language wiring is shallow and the bulk of the work
+is the benchmark fixture.
+
+> **Pick the grammar carefully.** The `tree-sitter-<lang>` crate must export a
+> `LANGUAGE: LanguageFn` constant (i.e. depend on `tree-sitter-language`), not a
+> legacy `language() -> Language` function — only the former links against the
+> `tree-sitter` core version cartog pins. Confirm with a one-line smoke test
+> (`parser.set_language(&Language::new(tree_sitter_<lang>::LANGUAGE))` then parse
+> a snippet) before writing the extractor. Dumping `node.to_sexp()` for the
+> constructs you care about is the fastest way to learn the grammar's node kinds.
 
 ### 1. Extractor
 
@@ -78,35 +87,51 @@ the per-language wiring is shallow and the bulk of the work is the benchmark fix
        fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> { ... }
    }
    ```
+   Keep all per-language helpers private to this module — don't add anything to
+   `lib.rs` beyond the registration below. Never panic on malformed input: degrade
+   and return partial results (the indexer feeds arbitrary source). Guard recursive
+   walkers against pathologically deep input (see `swift.rs`'s depth check).
 3. Register the module and file extension:
-   - Module + `get_extractor()` arm in `crates/cartog-languages/src/lib.rs`
-   - Extension mapping in `crates/cartog-core/src/lib.rs` `detect_language()`
-4. Add unit tests in the new module (mirror `python.rs` tests).
+   - Module declaration + `get_extractor()` arm + a `test_get_extractor` assert +
+     the module-doc language list in `crates/cartog-languages/src/lib.rs`
+   - Extension mapping + a `detect_language()` test in `crates/cartog-core/src/lib.rs`
+4. Add unit tests in the new module (mirror `dart.rs` / `swift.rs` tests — one
+   behaviour-named test per construct: symbols, edges, visibility, async, docstrings,
+   plus empty-file and syntax-error cases).
 
 ### 2. Benchmark fixture
 
 5. Create `benchmarks/fixtures/webapp_<lang>/` mirroring the shape of an existing
-   fixture (e.g. `webapp_rb` or `webapp_php`). Symbol names must match cross-language
-   so the 13 shared bench scenarios apply unchanged.
-6. Add `benchmarks/ground_truth/webapp_<lang>.json` — easiest path: index the fixture
-   locally with cartog, then transcribe real query output into the 13 scenario entries.
-7. Wire the fixture into the bench harness:
-   - Add a case to the `--fixture` filter in `benchmarks/run.sh` and `benchmarks/lib/common.sh`
+   fixture (e.g. `webapp_php` or `webapp_swift`). Symbol names must match cross-language
+   so the 13 shared bench scenarios apply unchanged — in particular `validateToken`/
+   `validate_token`, `AuthService`, `BaseService`, `handleLogin`→`authenticate`→`login`→
+   `generateToken`→`executeQuery`→`getConnection` (deep chain), `getLogger`, `TokenError`,
+   `DatabaseConnection`. Exercise the constructs your extractor handles (don't author the
+   fixture around its blind spots) so a regression actually shows up.
+6. Add `<tag>` to `FIXTURE_LANGS` in `crates/cartog-indexer/src/lib.rs` (`bench_support`)
+   so the criterion per-language indexing bench picks it up.
+7. Add `benchmarks/ground_truth/webapp_<lang>.json`: index the fixture locally, **derive**
+   the 13 scenario entries from real `cartog --json` query output, then **hand-verify each**
+   — don't invent counts, and don't let a buggy extractor's output become the expected value.
+8. Wire the fixture into the bench harness:
+   - Add the `<tag>` to the `--fixture` filter in `benchmarks/run.sh` and `benchmarks/lib/common.sh`
    - Add `run_scenario "webapp_<lang>" ...` lines in every script under `benchmarks/scenarios/`
-8. Validate: `make check-fixtures`. If your language ships a syntax checker, add a
+9. Validate: `make check-fixtures`. If your language ships a compiler/syntax checker, add a
    `check-<lang>` target to the `Makefile` via the `check_lang` function (native tool,
-   pinned Docker fallback, hard fail), and add it to the `check-fixtures` prerequisites.
-9. Run `make bench` and confirm the new fixture appears in the summary with non-zero
-   recall on every scenario.
+   pinned Docker fallback, hard fail), add it to both `.PHONY` and the `check-fixtures`
+   prerequisites, and gitignore any build dir the checker leaves in the fixture.
+10. Run `make bench` (or `./benchmarks/run.sh --fixture <tag>`) and confirm the fixture
+    appears with non-zero recall on every scenario.
 
 ### 3. LSP wiring (optional but recommended)
 
-10. Pick a language server with a stdio LSP entry point. Add one (or two, for primary +
-    fallback) `ServerSpec` entries to `SERVERS` in `crates/cartog-lsp/src/servers.rs`.
-    Order matters: the first available binary wins.
-11. Add a `test_find_servers_<lang>_*` assertion in the same file's test module to pin
+11. Pick a language server with a stdio LSP entry point. Add one (or two, for primary +
+    fallback) `ServerSpec` entries to `SERVERS` in `crates/cartog-lsp/src/servers.rs`
+    (set `binary`, `args`, `language_id`, and an `install_hint`). Order matters: the
+    first available binary wins.
+12. Add a `test_find_servers_<lang>` assertion in the same file's test module to pin
     the priority order.
-12. Bench-validate the LSP integration: install the server, run `cartog index` with and
+13. Bench-validate the LSP integration: install the server, run `cartog index` with and
     without `--no-lsp` on your fixture, and capture `edges_resolved` vs
     `edges_lsp_resolved`, plus `edges_marked_unresolvable` (true negatives:
     typo, dyn dispatch, macro) and `edges_marked_external` (LSP located the
@@ -117,21 +142,31 @@ the per-language wiring is shallow and the bulk of the work is the benchmark fix
 ### 4. Documentation
 
 Every doc that enumerates supported languages or LSP servers must mention the new one.
-At minimum:
+Note the two counting conventions and bump both consistently: the **marketing count**
+("N languages") counts code languages **plus** Markdown, while the **code-language count**
+excludes Markdown — a doc may use either, so check what each sentence means before editing.
 
-- `README.md` — supported-languages section + LSP server list (~line 106)
-- `docs/product.md`, `docs/tech.md`, `docs/structure.md` — language counts and lists
-- `docs/troubleshooting.md` — LSP server enumeration
-- `skills/cartog/SKILL.md` — supported languages + supported servers
-- `crates/cartog-languages/README.md`
-- `site/src/pages/index.astro` and `site/src/pages/usage.astro` — language cards and tables
-- `crates/cartog-mcp/src/lib.rs` — tool description language list (if mentioned)
+Surfaces to update (all confirmed by the Swift PR):
 
-Grep before committing:
+- `README.md` — headline count, comparison table, the supported-languages table, and the
+  LSP-server auto-detect list
+- `docs/product.md`, `docs/tech.md`, `docs/structure.md` — language counts, grammar list,
+  LSP-server list, and the "N language webapps" bench count
+- `docs/troubleshooting.md` — the LSP-server enumeration (+ an SDK/install note if the
+  server doesn't ship on a common PATH)
+- `skills/cartog/SKILL.md` (description + limitations + supported-servers list) and
+  `skills/cartog/references/supported_languages.md` (count header + a per-language section)
+- `crates/cartog-languages/README.md` — supported-languages line + the per-module API table
+- `crates/cartog-mcp/src/lib.rs` — the MCP server "Languages:" instruction string
+- `AGENTS.md` (= `CLAUDE.md`) — the architecture comment, language list, and bench count
+- `site/src/pages/index.astro` and `site/src/pages/usage.astro` — counts + a language card
+  (edit the `.astro` source; the Pages workflow rebuilds `site/dist`, which is gitignored)
+
+Grep before committing — every match must mention the new language/server:
 
 ```bash
-grep -rn 'Python, TypeScript\|pyright.*typescript-language-server' \
-  README.md docs/ site/ skills/ crates/
+grep -rn 'Java, PHP, Dart\|jdtls, intelephense' \
+  README.md docs/ site/src/ skills/ crates/*/README.md crates/cartog-mcp/ AGENTS.md
 ```
 
 Every match should mention the new language/server.

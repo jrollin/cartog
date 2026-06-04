@@ -27,7 +27,7 @@ run_scenario() {
     local naive_cmds=1
 
     # ── Best-effort: grep for def/class/fn/struct/trait lines ──
-    run_grep "best" "$fixture_dir" "grep -n 'def \|class \|fn \|struct \|trait \|impl \|pub \|enum ' '$file'"
+    run_grep "best" "$fixture_dir" "grep -n 'def \|class \|fn \|struct \|trait \|impl \|pub \|enum \|func \|protocol \|extension \|actor ' '$file'"
     local best_tok=$GREP_TOKENS
     local best_out="$GREP_OUTPUT"
     local best_cmds=1
@@ -62,3 +62,4 @@ run_scenario "webapp_rs" "auth/service.rs"
 run_scenario "webapp_rb" "auth/service.rb"
 run_scenario "webapp_java" "auth/TokenService.java"
 run_scenario "webapp_php" "auth/service.php"
+run_scenario "webapp_swift" "Sources/webapp/auth/Service.swift"

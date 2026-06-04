@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-install-script sync-install-script bench bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-install-script sync-install-script bench bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -52,7 +52,7 @@ check-rust: ## cargo fmt + clippy + test
 
 # --- Fixture syntax/build checks ---
 
-check-fixtures: check-py check-ts check-go check-rs check-rb check-java check-php check-dart ## Validate all fixture codebases
+check-fixtures: check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift ## Validate all fixture codebases
 
 check-fixtures-docker: ## Validate all fixture codebases via Docker (reproducible)
 	@$(MAKE) check-fixtures FORCE_DOCKER=1
@@ -104,6 +104,12 @@ check-dart: ## Validate Dart fixtures (dart analyze, falls back to Docker)
 	$(call check_lang,dart,dart:stable,\
 		cd benchmarks/fixtures/webapp_dart && dart analyze --fatal-infos,\
 		cd webapp_dart && HOME=/tmp PUB_CACHE=/tmp/pub dart analyze --fatal-infos)
+
+check-swift: ## Validate Swift fixtures (swift build, falls back to Docker)
+	@echo "==> Checking Swift fixtures..."
+	$(call check_lang,swift,swift:6.1,\
+		cd benchmarks/fixtures/webapp_swift && swift build,\
+		cd webapp_swift && HOME=/tmp swift build --cache-path /tmp/swiftpm --scratch-path /tmp/swiftbuild)
 
 # --- Skill tests ---
 

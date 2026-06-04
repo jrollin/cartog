@@ -511,7 +511,7 @@ cartog index . --force      # full re-index, bypassing change detection
 
 Incremental by default — skips unchanged files (git diff + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. Stable symbol IDs (`file:kind:qualified_name`) survive line movements, so edges from unchanged files remain valid. The LSP pass skips edges already classified as `resolution_state = 2` (unresolvable: typo, dyn dispatch, macro) or `3` (external: stdlib, deps, node_modules); both auto-retry when a matching symbol is added in-tree. Use `--force` when results seem stale or after updating cartog itself — it also resets state-2 and state-3 markers for a clean retry.
 
-Files whose language cartog doesn't support are reported, not silently dropped: on a mixed repo the summary adds a line like `12 files in unsupported languages not indexed (8 .dart, 4 .swift)`. The `--json` output carries the same data as `files_unsupported` (count) and `unsupported_by_ext` (`[ext, count]`, descending). cartog's own database sidecars (`.cartog.db*`, `db.sqlite*`) are excluded from the tally.
+Files whose language cartog doesn't support are reported, not silently dropped: on a mixed repo the summary adds a line like `12 files in unsupported languages not indexed (8 .kt, 4 .cpp)`. The `--json` output carries the same data as `files_unsupported` (count) and `unsupported_by_ext` (`[ext, count]`, descending). cartog's own database sidecars (`.cartog.db*`, `db.sqlite*`) are excluded from the tally.
 
 ### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N]`
 

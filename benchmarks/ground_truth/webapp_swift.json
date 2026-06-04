@@ -1,0 +1,365 @@
+{
+  "01_find_callers": {
+    "description": "Who calls validateToken?",
+    "query": "refs validateToken --kind calls",
+    "expected": [
+      {
+        "source": "authorize",
+        "file": "Sources/webapp/middleware/AuthMiddleware.swift"
+      },
+      {
+        "source": "getCurrentUser",
+        "file": "Sources/webapp/auth/Service.swift"
+      }
+    ]
+  },
+  "02_file_structure": {
+    "description": "What's in Sources/webapp/auth/Service.swift?",
+    "query": "outline Sources/webapp/auth/Service.swift",
+    "expected": [
+      {
+        "name": "BaseService",
+        "kind": "class"
+      },
+      {
+        "name": "logger",
+        "kind": "variable"
+      },
+      {
+        "name": "init",
+        "kind": "method"
+      },
+      {
+        "name": "log",
+        "kind": "method"
+      },
+      {
+        "name": "AuthService",
+        "kind": "class"
+      },
+      {
+        "name": "db",
+        "kind": "variable"
+      },
+      {
+        "name": "users",
+        "kind": "variable"
+      },
+      {
+        "name": "init",
+        "kind": "method"
+      },
+      {
+        "name": "login",
+        "kind": "method"
+      },
+      {
+        "name": "logout",
+        "kind": "method"
+      },
+      {
+        "name": "getCurrentUser",
+        "kind": "method"
+      },
+      {
+        "name": "findUser",
+        "kind": "method"
+      },
+      {
+        "name": "AdminService",
+        "kind": "class"
+      },
+      {
+        "name": "impersonate",
+        "kind": "method"
+      }
+    ]
+  },
+  "03_refactor_impact": {
+    "description": "Impact of changing AuthService",
+    "query": "impact AuthService --depth 3",
+    "expected_refs": [
+      "Sources/webapp/auth/Service.swift",
+      "Sources/webapp/services/AuthenticationService.swift"
+    ]
+  },
+  "04_class_hierarchy": {
+    "description": "Hierarchy of BaseService",
+    "query": "hierarchy BaseService",
+    "expected": [
+      {
+        "child": "AuthService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "AuthenticationService",
+        "parent": "BaseService"
+      }
+    ]
+  },
+  "05_trace_call_chain": {
+    "description": "Trace handleLogin call chain",
+    "query_sequence": [
+      "callees handleLogin",
+      "callees login",
+      "callees generateToken"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handleLogin",
+        "callee": "info"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "authenticate"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "warn"
+      },
+      {
+        "caller": "login",
+        "callee": "findUser"
+      },
+      {
+        "caller": "login",
+        "callee": "checkPassword"
+      },
+      {
+        "caller": "login",
+        "callee": "log"
+      },
+      {
+        "caller": "login",
+        "callee": "generateToken"
+      },
+      {
+        "caller": "login",
+        "callee": "log"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "Token"
+      }
+    ]
+  },
+  "06_file_deps": {
+    "description": "What does Sources/webapp/routes/AuthRoutes.swift import?",
+    "query": "deps Sources/webapp/routes/AuthRoutes.swift",
+    "expected": [
+      "Foundation"
+    ]
+  },
+  "07_type_references": {
+    "description": "References to TokenError",
+    "query": "refs TokenError",
+    "expected": [
+      {
+        "source": "validateToken",
+        "file": "Sources/webapp/auth/Tokens.swift",
+        "kind": "calls"
+      },
+      {
+        "source": "describeTokenError",
+        "file": "Sources/webapp/auth/Tokens.swift",
+        "kind": "references"
+      },
+      {
+        "source": "impersonate",
+        "file": "Sources/webapp/auth/Service.swift",
+        "kind": "calls"
+      }
+    ]
+  },
+  "08_symbol_search": {
+    "description": "Find all token-related symbols",
+    "query": "search Token",
+    "expected": [
+      {
+        "name": "Token"
+      },
+      {
+        "name": "TokenError"
+      },
+      {
+        "name": "generateToken"
+      },
+      {
+        "name": "validateToken"
+      },
+      {
+        "name": "revokeToken"
+      },
+      {
+        "name": "describeTokenError"
+      },
+      {
+        "name": "token"
+      }
+    ]
+  },
+  "09_ambiguous_symbol": {
+    "description": "Where is 'validate' defined?",
+    "query": "search validate",
+    "expected": [
+      {
+        "name": "validate",
+        "file": "Sources/webapp/validators/Validators.swift"
+      },
+      {
+        "name": "validate",
+        "file": "Sources/webapp/validators/Validators.swift"
+      },
+      {
+        "name": "validate",
+        "file": "Sources/webapp/validators/Validators.swift"
+      },
+      {
+        "name": "validateToken",
+        "file": "Sources/webapp/auth/Tokens.swift"
+      }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "Who references getLogger?",
+    "query": "refs getLogger",
+    "expected": [
+      {
+        "source": "init",
+        "file": "Sources/webapp/middleware/AuthMiddleware.swift",
+        "kind": "calls"
+      },
+      {
+        "source": "init",
+        "file": "Sources/webapp/database/Connection.swift",
+        "kind": "calls"
+      },
+      {
+        "source": "validateToken",
+        "file": "Sources/webapp/auth/Tokens.swift",
+        "kind": "calls"
+      },
+      {
+        "source": "revokeToken",
+        "file": "Sources/webapp/auth/Tokens.swift",
+        "kind": "calls"
+      },
+      {
+        "source": "init",
+        "file": "Sources/webapp/auth/Service.swift",
+        "kind": "calls"
+      },
+      {
+        "source": "init",
+        "file": "Sources/webapp/api/AuthHandlers.swift",
+        "kind": "calls"
+      },
+      {
+        "source": "register",
+        "file": "Sources/webapp/routes/AuthRoutes.swift",
+        "kind": "calls"
+      }
+    ]
+  },
+  "11_deep_call_chain": {
+    "description": "Deep call chain from handleLogin (5+ hops)",
+    "query_sequence": [
+      "callees handleLogin",
+      "callees authenticate",
+      "callees login",
+      "callees generateToken",
+      "callees executeQuery",
+      "callees getConnection"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handleLogin",
+        "callee": "info"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "authenticate"
+      },
+      {
+        "caller": "handleLogin",
+        "callee": "warn"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "log"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "verifyCredentials"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "login"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "AuthenticationError"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "persistSession"
+      },
+      {
+        "caller": "login",
+        "callee": "findUser"
+      },
+      {
+        "caller": "login",
+        "callee": "checkPassword"
+      },
+      {
+        "caller": "login",
+        "callee": "log"
+      },
+      {
+        "caller": "login",
+        "callee": "generateToken"
+      },
+      {
+        "caller": "login",
+        "callee": "log"
+      },
+      {
+        "caller": "generateToken",
+        "callee": "Token"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "getConnection"
+      },
+      {
+        "caller": "executeQuery",
+        "callee": "info"
+      }
+    ]
+  },
+  "12_deep_impact": {
+    "description": "Deep impact of DatabaseConnection (depth 5)",
+    "query": "impact DatabaseConnection --depth 5",
+    "expected_refs": [
+      "Sources/webapp/auth/Service.swift",
+      "Sources/webapp/database/Queries.swift",
+      "Sources/webapp/services/AuthenticationService.swift"
+    ]
+  },
+  "13_rag_search": {
+    "description": "Semantic search: validate token",
+    "query": "rag search \"validate token\"",
+    "expected": [
+      {
+        "name": "validateToken"
+      },
+      {
+        "name": "Token"
+      },
+      {
+        "name": "TokenError"
+      }
+    ]
+  }
+}

@@ -349,6 +349,7 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
         "java" => Some("java"),
         "php" => Some("php"),
         "dart" => Some("dart"),
+        "swift" => Some("swift"),
         "md" => Some("markdown"),
         _ => None,
     }
@@ -464,5 +465,6 @@ mod tests {
         assert_eq!(detect_language(Path::new("Main.java")), Some("java"));
         assert_eq!(detect_language(Path::new("Service.php")), Some("php"));
         assert_eq!(detect_language(Path::new("main.dart")), Some("dart"));
+        assert_eq!(detect_language(Path::new("App.swift")), Some("swift"));
     }
 }

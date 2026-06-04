@@ -36,7 +36,7 @@ Named captures (`@callee`, `@exception_type`, etc.) identify the matched nodes f
 
 ### Supported languages
 
-**Code**: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP, Dart.
+**Code**: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift.
 
 **Documents**: Markdown (`.md`) — chunked by heading for semantic search. Each heading section becomes a `Document` symbol. Large sections are sub-chunked at paragraph boundaries (~1500 bytes). Files without headings use fixed-size paragraph chunking.
 
@@ -50,7 +50,7 @@ A crate-internal `js_shared` module holds extraction logic shared between the Ja
 | `ExtractionResult` | Symbols + edges extracted from a file |
 | `get_extractor()` | Factory: language name → `Box<dyn Extractor>` |
 | `detect_language()` | Re-export from `cartog-core` |
-| `python`, `go`, `java`, `javascript`, `typescript`, `ruby`, `php`, `rust_lang` | Per-language extractor modules (note Rust's module is `rust_lang`) |
+| `python`, `go`, `java`, `javascript`, `typescript`, `ruby`, `php`, `dart`, `swift`, `rust_lang` | Per-language extractor modules (note Rust's module is `rust_lang`) |
 | `markdown` | Markdown document extractor (heading-based chunking) |
 
 ## Crate dependencies

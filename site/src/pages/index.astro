@@ -5,7 +5,7 @@ import { withBase } from "../lib/url";
 
 <Base
   title="Cartog — Code Graph Navigator & Semantic Search for AI Coding Agents"
-  description="Cartog is a local code graph indexer for LLM coding agents: pre-computed symbols, calls, imports and impact analysis queried in microseconds. Single Rust binary, 100% local, 10 languages, MCP server built in."
+  description="Cartog is a local code graph indexer for LLM coding agents: pre-computed symbols, calls, imports and impact analysis queried in microseconds. Single Rust binary, 100% local, 11 languages, MCP server built in."
   ogType="website"
   ogUrl="https://jrollin.github.io/cartog/"
   footerVariant="home"
@@ -37,7 +37,7 @@ import { withBase } from "../lib/url";
             <div class="stat-label">symbol recall<sup><a href="#benchmark-notes" style="color: inherit; text-decoration: none;">*</a></sup></div>
           </div>
           <div class="stat-item">
-            <div class="stat-value">🌐 <span data-count="10">10</span></div>
+            <div class="stat-value">🌐 <span data-count="11">11</span></div>
             <div class="stat-label">languages supported</div>
           </div>
           <div class="stat-item">
@@ -127,7 +127,7 @@ import { withBase } from "../lib/url";
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.08s;">
           <h3><span class="feature-icon">📚</span> <code>cartog index</code></h3>
-          <p>tree-sitter parses 10 languages into a local SQLite file. Incremental on re-runs; only changed files re-parse. Pair with <code>cartog watch</code> for auto-refresh.</p>
+          <p>tree-sitter parses 11 languages into a local SQLite file. Incremental on re-runs; only changed files re-parse. Pair with <code>cartog watch</code> for auto-refresh.</p>
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.16s;">
           <h3><span class="feature-icon">🛠️</span> <code>cartog ide</code> <span style="font-size: 11px; color: var(--text-tertiary); font-weight: 500;">(optional)</span></h3>
@@ -210,7 +210,7 @@ import { withBase } from "../lib/url";
   <section class="languages-section">
     <div class="container">
       <div class="section-label">Languages</div>
-      <h2 class="section-heading">10 languages supported <span style="font-size: 14px; font-weight: 500; color: var(--text-tertiary);">— more coming</span></h2>
+      <h2 class="section-heading">11 languages supported <span style="font-size: 14px; font-weight: 500; color: var(--text-tertiary);">— more coming</span></h2>
       <div class="lang-grid-fixed">
         <span class="lang-tag">
           <svg width="20" height="20" viewBox="0 0 256 255" aria-hidden="true" focusable="false"><defs><linearGradient id="py-a" x1="12.96%" x2="79.68%" y1="12.04%" y2="93.06%"><stop offset="0%" stop-color="#387EB8"/><stop offset="100%" stop-color="#366994"/></linearGradient><linearGradient id="py-b" x1="19.13%" x2="90.43%" y1="20.58%" y2="88.72%"><stop offset="0%" stop-color="#FFC331"/><stop offset="100%" stop-color="#F5A623"/></linearGradient></defs><path fill="url(#py-a)" d="M126.916.072c-64.832 0-60.784 28.115-60.784 28.115l.072 29.128h61.868v8.745H41.631S.145 61.355.145 126.77c0 65.417 36.21 63.097 36.21 63.097h21.61v-30.356s-1.165-36.21 35.632-36.21h61.362s34.475.557 34.475-33.319V33.97S194.67.072 126.916.072zM92.802 19.66a11.12 11.12 0 110 22.24 11.12 11.12 0 010-22.24z"/><path fill="url(#py-b)" d="M128.757 254.126c64.832 0 60.784-28.115 60.784-28.115l-.072-29.127H127.6v-8.745h86.441s41.486 4.705 41.486-60.712c0-65.416-36.21-63.096-36.21-63.096h-21.61v30.355s1.165 36.21-35.632 36.21h-61.362s-34.475-.557-34.475 33.32v56.013s-5.235 33.897 62.518 33.897zm34.114-19.586a11.12 11.12 0 110-22.24 11.12 11.12 0 010 22.24z"/></svg>
@@ -247,6 +247,10 @@ import { withBase } from "../lib/url";
         <span class="lang-tag">
           <img src={withBase("assets/dart.svg")} width="20" height="20" alt="">
           Dart
+        </span>
+        <span class="lang-tag">
+          <svg width="20" height="20" viewBox="0 0 256 256" aria-hidden="true" focusable="false"><path fill="#F05138" d="M0 0h256v256H0z" rx="56" style="rx:56"/><path fill="#fff" d="M200 178c-23 14-56 17-86 4-24-10-44-29-58-50 7 6 16 11 25 15 38 18 76 4 90-7-20-12-37-29-51-46-4-4-9-10-13-16 14 12 36 27 44 31-17-18-32-40-31-39 28 28 54 44 54 44 1 1 1 2 2 3 6-13 8-28 4-43 14 22 11 47 4 64 0 0 16 20 8 40 0 0-7-15-19-16z"/></svg>
+          Swift
         </span>
         <span class="lang-tag">
           <svg width="20" height="20" viewBox="0 0 256 256" fill="none" aria-hidden="true" focusable="false"><rect width="256" height="256" rx="12" fill="#083755"/><path d="M20 220h100v16H20zM20 20h216v16H20zm0 40h180l-40 60 40 60H20v-16h160l-32-44 32-44H20z" fill="#fff"/></svg>
@@ -321,7 +325,7 @@ import { withBase } from "../lib/url";
               <td>Language coverage</td>
               <td>any</td>
               <td>1 per server</td>
-              <td>10 languages</td>
+              <td>11 languages</td>
             </tr>
             <tr>
               <td>Semantic search</td>
@@ -360,7 +364,7 @@ import { withBase } from "../lib/url";
         <div class="why-card" data-reveal style="--reveal-delay: 0.08s;">
           <div class="why-number">02</div>
           <h3>A language server</h3>
-          <p>LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 9 languages with one binary and answers in microseconds. When you need LSP precision, cartog uses it as an optional layer.</p>
+          <p>LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 11 languages with one binary and answers in microseconds. When you need LSP precision, cartog uses it as an optional layer.</p>
         </div>
         <div class="why-card" data-reveal style="--reveal-delay: 0.16s;">
           <div class="why-number">03</div>
