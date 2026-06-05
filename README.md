@@ -600,6 +600,7 @@ base_url = "http://localhost:11434"
 
 [reranker]
 provider = "none"            # "local" (default) or "none"
+# model  = "BAAI/bge-reranker-base"   # default: jinaai/jina-reranker-v1-turbo-en (~150MB)
 ```
 
 ## Privacy

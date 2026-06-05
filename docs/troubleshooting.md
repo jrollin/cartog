@@ -186,6 +186,22 @@ The Ollama provider ships in every default build (install.sh, GitHub Releases,
 `--no-default-features`. Rebuild with default features, or add
 `--features ollama-embedding`.
 
+### Reclaiming the old `bge-reranker-base` model after the reranker default changed
+
+The default reranker is now `jinaai/jina-reranker-v1-turbo-en` (~150MB). If you
+ran an older cartog, the former default `BAAI/bge-reranker-base` (~1.1GB) may still
+sit in the shared model cache. `cartog doctor` flags it; nothing depends on it once
+you're on the new default, so it's safe to delete:
+
+```bash
+rm -rf "${FASTEMBED_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cartog/models}/models--BAAI--bge-reranker-base"
+```
+
+The cache dir resolves in order: `$FASTEMBED_CACHE_DIR`, else
+`$XDG_CACHE_HOME/cartog/models`, else `~/.cache/cartog/models`. To keep the old
+model instead, pin `[reranker] model = "BAAI/bge-reranker-base"` (it reuses the
+already-downloaded weights, no re-download).
+
 ## Queries
 
 ### `cartog refs X` returns fewer hits than I expect
