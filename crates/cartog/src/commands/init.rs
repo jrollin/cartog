@@ -22,7 +22,17 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # path = ".cartog/db.sqlite"
 
 # [embedding]
-# provider = "local"
+# provider = "local"             # "local" (default) | "ollama" | "openai"
+#
+# For an OpenAI-compatible /v1 endpoint (OpenAI, Mistral, Voyage, Jina, OVHcloud,
+# or a local server like Ollama /v1, LM Studio, vLLM), set provider = "openai"
+# and uncomment the [embedding.openai] block below. The API key is read from an
+# env var, never stored here; leave the var unset for keyless local endpoints.
+# model = "text-embedding-3-small"
+
+# [embedding.openai]                            # only used when provider = "openai"
+# base_url    = "https://api.openai.com/v1"     # or http://localhost:11434/v1 (Ollama), etc.
+# api_key_env = "OPENAI_API_KEY"                # env var NAME, not the key itself
 
 # [reranker]
 # enabled = true
@@ -165,6 +175,26 @@ mod tests {
         let body = fs::read_to_string(tmp.path().join(".cartog.toml")).unwrap();
         assert!(body.contains("[database]"));
         assert!(body.contains("[embedding]"));
+    }
+
+    #[test]
+    fn toml_template_has_no_duplicate_table_headers() {
+        // Each [table] / [table.sub] header must appear once, so uncommenting
+        // sibling examples can't produce a duplicate-table TOML parse error.
+        let mut headers = Vec::new();
+        for line in TOML_TEMPLATE.lines() {
+            // Strip the comment marker, then any trailing inline comment, so a
+            // header written as `[embedding.openai]  # note` is still detected.
+            let t = line.trim_start_matches(['#', ' ']);
+            let t = t.split('#').next().unwrap_or(t).trim();
+            if t.starts_with('[') && t.ends_with(']') {
+                headers.push(t);
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for h in &headers {
+            assert!(seen.insert(*h), "duplicate table header in template: {h}");
+        }
     }
 
     #[test]

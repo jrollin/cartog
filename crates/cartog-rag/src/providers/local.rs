@@ -203,7 +203,7 @@ pub(crate) fn load_text_rerank(
 }
 
 impl LocalRerankerProvider {
-    /// Load the local ONNX cross-encoder re-ranker for `model`. See [`load_text_rerank`].
+    /// Load the local ONNX cross-encoder re-ranker for `model`. See `load_text_rerank`.
     pub fn load(model: Option<&str>, intra_threads: Option<usize>) -> Result<Self> {
         Ok(Self {
             model: load_text_rerank(model, intra_threads)?,

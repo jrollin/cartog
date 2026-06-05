@@ -175,10 +175,10 @@ pub struct DatabaseConfig {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct EmbeddingConfig {
-    /// Provider type: "local" (default) or "ollama".
+    /// Provider type: "local" (default), "ollama", or "openai".
     pub provider: Option<String>,
     /// Model name. For "local": fastembed built-in name or HuggingFace repo ID.
-    /// For "ollama": model name on the Ollama server.
+    /// For "ollama"/"openai": model name on the server.
     pub model: Option<String>,
     /// Embedding dimension. Auto-detected for built-in models, required for custom HF models.
     pub dimension: Option<usize>,
@@ -186,6 +186,8 @@ pub struct EmbeddingConfig {
     pub local: Option<LocalEmbeddingConfig>,
     /// Ollama provider settings.
     pub ollama: Option<OllamaConfig>,
+    /// OpenAI-compatible provider settings.
+    pub openai: Option<OpenAiConfig>,
 }
 
 pub const DEFAULT_EMBEDDING_PROVIDER: &str = "local";
@@ -228,6 +230,40 @@ impl OllamaConfig {
 
     pub fn model(&self) -> &str {
         self.model.as_deref().unwrap_or(DEFAULT_OLLAMA_MODEL)
+    }
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct OpenAiConfig {
+    /// OpenAI-compatible base URL (default: "https://api.openai.com/v1").
+    pub base_url: Option<String>,
+    /// Model name (default: "text-embedding-3-small").
+    pub model: Option<String>,
+    /// Env var NAME holding the API key (default: "OPENAI_API_KEY"). The key
+    /// value is never stored in config; unset means a keyless local endpoint.
+    pub api_key_env: Option<String>,
+}
+
+pub const DEFAULT_OPENAI_BASE_URL: &str = cartog_rag::providers::DEFAULT_OPENAI_BASE_URL;
+pub const DEFAULT_OPENAI_MODEL: &str = cartog_rag::providers::DEFAULT_OPENAI_MODEL;
+pub const DEFAULT_OPENAI_API_KEY_ENV: &str = cartog_rag::providers::DEFAULT_OPENAI_API_KEY_ENV;
+
+impl OpenAiConfig {
+    /// Endpoint base URL, or [`DEFAULT_OPENAI_BASE_URL`] when unset.
+    pub fn base_url(&self) -> &str {
+        self.base_url.as_deref().unwrap_or(DEFAULT_OPENAI_BASE_URL)
+    }
+
+    /// Embedding model name, or [`DEFAULT_OPENAI_MODEL`] when unset.
+    pub fn model(&self) -> &str {
+        self.model.as_deref().unwrap_or(DEFAULT_OPENAI_MODEL)
+    }
+
+    /// Env var name holding the API key, or [`DEFAULT_OPENAI_API_KEY_ENV`] when unset.
+    pub fn api_key_env(&self) -> &str {
+        self.api_key_env
+            .as_deref()
+            .unwrap_or(DEFAULT_OPENAI_API_KEY_ENV)
     }
 }
 
@@ -280,17 +316,30 @@ pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProvide
                 ),
                 None => (None, None, None),
             };
-            let ollama = embed.ollama.as_ref();
+            // Resolve base_url/model/api_key_env from the sub-table matching the
+            // active provider — not whichever sub-table happens to be present, or a
+            // lingering [embedding.ollama] block would override an openai config.
+            let (sub_base_url, sub_model, api_key_env) = match embed.provider() {
+                "ollama" => (
+                    embed.ollama.as_ref().map(|o| o.base_url().to_string()),
+                    embed.ollama.as_ref().map(|o| o.model().to_string()),
+                    None,
+                ),
+                "openai" => (
+                    embed.openai.as_ref().map(|o| o.base_url().to_string()),
+                    embed.openai.as_ref().map(|o| o.model().to_string()),
+                    embed.openai.as_ref().map(|o| o.api_key_env().to_string()),
+                ),
+                _ => (None, None, None),
+            };
             cartog_rag::EmbeddingProviderConfig {
                 provider: embed.provider().to_string(),
-                model: embed
-                    .model
-                    .clone()
-                    .or_else(|| ollama.map(|o| o.model().to_string())),
+                model: embed.model.clone().or(sub_model),
                 dimension: embed.dimension,
                 query_prefix,
                 document_prefix,
-                base_url: ollama.map(|o| o.base_url().to_string()),
+                base_url: sub_base_url,
+                api_key_env,
                 reranker_provider,
                 reranker_model,
                 intra_threads,
@@ -502,7 +551,7 @@ fn read_config(path: &Path) -> Option<CartogConfig> {
 /// user typo: surface them at config load rather than at first use. Absent
 /// (`None`) means "use the default" and is always accepted.
 fn validate_providers(config: &CartogConfig) -> Result<(), String> {
-    const EMBEDDING_PROVIDERS: &[&str] = &["local", "ollama"];
+    const EMBEDDING_PROVIDERS: &[&str] = &["local", "ollama", "openai"];
     const RERANKER_PROVIDERS: &[&str] = &["local", "none"];
 
     if let Some(p) = config
@@ -1143,6 +1192,98 @@ model = "mxbai-embed-large"
         let ollama = cfg.embedding.unwrap().ollama.unwrap();
         assert_eq!(ollama.base_url(), "http://gpu-server:11434");
         assert_eq!(ollama.model(), "mxbai-embed-large");
+    }
+
+    #[test]
+    fn test_openai_config_defaults() {
+        let cfg = OpenAiConfig::default();
+        assert_eq!(cfg.base_url(), "https://api.openai.com/v1");
+        assert_eq!(cfg.model(), "text-embedding-3-small");
+        assert_eq!(cfg.api_key_env(), "OPENAI_API_KEY");
+    }
+
+    #[test]
+    fn test_openai_config_from_toml() {
+        let toml_str = r#"
+[embedding.openai]
+base_url = "http://localhost:11434/v1"
+model = "nomic-embed-text"
+api_key_env = "MY_OPENAI_KEY"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let openai = cfg.embedding.unwrap().openai.unwrap();
+        assert_eq!(openai.base_url(), "http://localhost:11434/v1");
+        assert_eq!(openai.model(), "nomic-embed-text");
+        assert_eq!(openai.api_key_env(), "MY_OPENAI_KEY");
+    }
+
+    #[test]
+    fn validate_providers_accepts_openai() {
+        let config: CartogConfig = toml::from_str("[embedding]\nprovider = \"openai\"\n").unwrap();
+        assert!(validate_providers(&config).is_ok());
+    }
+
+    #[test]
+    fn test_to_provider_config_threads_openai_settings() {
+        let toml_str = r#"
+[embedding]
+provider = "openai"
+
+[embedding.openai]
+base_url = "https://api.mistral.ai/v1"
+model = "mistral-embed"
+api_key_env = "MISTRAL_API_KEY"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let pc = to_provider_config(&cfg);
+        assert_eq!(pc.provider, "openai");
+        assert_eq!(pc.model.as_deref(), Some("mistral-embed"));
+        assert_eq!(pc.base_url.as_deref(), Some("https://api.mistral.ai/v1"));
+        assert_eq!(pc.api_key_env.as_deref(), Some("MISTRAL_API_KEY"));
+    }
+
+    #[test]
+    fn test_to_provider_config_openai_ignores_lingering_ollama_block() {
+        // A leftover [embedding.ollama] block must not override an openai config:
+        // resolution keys off the active provider, not sub-table presence.
+        let toml_str = r#"
+[embedding]
+provider = "openai"
+
+[embedding.openai]
+base_url = "https://api.openai.com/v1"
+model = "text-embedding-3-small"
+
+[embedding.ollama]
+base_url = "http://localhost:11434"
+model = "nomic-embed-text"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let pc = to_provider_config(&cfg);
+        assert_eq!(pc.provider, "openai");
+        assert_eq!(pc.base_url.as_deref(), Some("https://api.openai.com/v1"));
+        assert_eq!(pc.model.as_deref(), Some("text-embedding-3-small"));
+    }
+
+    #[test]
+    fn test_to_provider_config_ollama_ignores_lingering_openai_block() {
+        let toml_str = r#"
+[embedding]
+provider = "ollama"
+
+[embedding.ollama]
+base_url = "http://gpu:11434"
+
+[embedding.openai]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let pc = to_provider_config(&cfg);
+        assert_eq!(pc.provider, "ollama");
+        assert_eq!(pc.base_url.as_deref(), Some("http://gpu:11434"));
+        // api_key_env belongs to openai only — never leaks into an ollama config.
+        assert!(pc.api_key_env.is_none());
     }
 
     #[test]

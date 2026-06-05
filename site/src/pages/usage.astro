@@ -213,8 +213,8 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
 path = ".cartog/db.sqlite"        <span class="comment"># DEFAULT (relative to git root)</span>
 
 [embedding]
-provider = "local"               <span class="comment"># DEFAULT — "local" (ONNX) or "ollama"</span>
-# model = "BAAI/bge-small-en-v1.5" <span class="comment"># DEFAULT: unset → built-in bge-small-en-v1.5 (Qdrant/bge-small-en-v1.5-onnx-Q); set only to override</span>
+provider = "local"               <span class="comment"># DEFAULT — "local" (ONNX), "ollama", or "openai"</span>
+# model = "BAAI/bge-small-en-v1.5" <span class="comment"># top-level for ALL providers; unset → built-in bge-small (local) / text-embedding-3-small (openai)</span>
 # dimension = 384                <span class="comment"># auto-detected for built-in models</span>
 
 [embedding.local]                <span class="comment"># only used when provider = "local"</span>
@@ -223,6 +223,10 @@ provider = "local"               <span class="comment"># DEFAULT — "local" (ON
 [embedding.ollama]               <span class="comment"># only used when provider = "ollama"</span>
 base_url = "http://localhost:11434"
 model = "nomic-embed-text"
+
+[embedding.openai]               <span class="comment"># only used when provider = "openai"; set model under [embedding]</span>
+base_url    = "https://api.openai.com/v1"  <span class="comment"># or http://localhost:11434/v1 (Ollama), LM Studio, vLLM, ...</span>
+api_key_env = "OPENAI_API_KEY"   <span class="comment"># env var NAME, not the key; unset = keyless local endpoint</span>
 
 [reranker]
 provider = "local"               <span class="comment"># DEFAULT — "local" or "none"</span>
@@ -243,7 +247,7 @@ url        = "s3://my-team-bucket/cartog/main"
         </details>
 
         <h2 id="config-providers">Embedding Providers</h2>
-        <p>Semantic search requires an embedding provider. Two options:</p>
+        <p>Semantic search requires an embedding provider. Three options (all compiled into the default build; local ONNX stays the runtime default):</p>
         <table>
           <thead>
             <tr><th>Provider</th><th>Config</th><th>Setup</th><th>Notes</th></tr>
@@ -260,6 +264,12 @@ url        = "s3://my-team-bucket/cartog/main"
               <td><code>[embedding]<br>provider = "ollama"</code></td>
               <td><code>ollama pull nomic-embed-text</code></td>
               <td>HTTP API. GPU acceleration via Ollama. No model download by cartog.</td>
+            </tr>
+            <tr>
+              <td><strong>openai</strong></td>
+              <td><code>[embedding]<br>provider = "openai"</code></td>
+              <td>Reachable OpenAI-compatible <code>/v1</code> endpoint; API key in an env var</td>
+              <td>One generic client for OpenAI, Mistral, Voyage, Jina, OVHcloud, and local <code>/v1</code> servers (Ollama, LM Studio, vLLM) — switch vendors by changing <code>base_url</code>. API key read from the <code>api_key_env</code> env var, <strong>never stored in <code>.cartog.toml</code></strong>; unset = keyless local. Dimension auto-detected. (Azure OpenAI's deployment-path shape is not supported.)</td>
             </tr>
           </tbody>
         </table>

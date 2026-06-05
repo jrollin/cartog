@@ -11,6 +11,7 @@ repository.workspace = true
 default = ["provider-local"]
 provider-local = ["dep:fastembed"]
 provider-ollama = ["dep:reqwest", "dep:serde_json"]
+provider-openai = ["dep:reqwest", "dep:serde_json"]
 # Exposes deterministic mock providers (test_utils) to dependent crates' tests
 # so they avoid loading the real ONNX model.
 test-util = []

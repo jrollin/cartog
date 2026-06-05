@@ -6,6 +6,7 @@
 //! Supports pluggable embedding providers via the [`provider::EmbeddingProvider`] trait:
 //! - **local** (default): ONNX models via fastembed (feature `provider-local`)
 //! - **ollama**: HTTP API to an Ollama server (feature `provider-ollama`)
+//! - **openai**: OpenAI-compatible `/v1/embeddings` endpoints (feature `provider-openai`)
 
 pub mod context;
 #[cfg(feature = "provider-local")]
@@ -41,7 +42,7 @@ pub fn fingerprint_of(p: &dyn provider::EmbeddingProvider) -> cartog_db::Embeddi
 /// Parameters for creating an embedding provider.
 #[derive(Clone)]
 pub struct EmbeddingProviderConfig {
-    /// Provider type: "local" or "ollama".
+    /// Provider type: "local", "ollama", or "openai".
     pub provider: String,
     /// Model name (provider-specific). None = provider default.
     pub model: Option<String>,
@@ -51,8 +52,10 @@ pub struct EmbeddingProviderConfig {
     pub query_prefix: Option<String>,
     /// Document prefix for asymmetric models.
     pub document_prefix: Option<String>,
-    /// Base URL for remote providers (Ollama). None = provider default.
+    /// Base URL for remote providers (Ollama, OpenAI). None = provider default.
     pub base_url: Option<String>,
+    /// Env var name holding the OpenAI API key. None = provider default (`OPENAI_API_KEY`).
+    pub api_key_env: Option<String>,
     /// Reranker provider: "local" (default) or "none".
     pub reranker_provider: String,
     /// Reranker model as a fastembed HF repo path (e.g. `BAAI/bge-reranker-base`).
@@ -72,6 +75,7 @@ impl Default for EmbeddingProviderConfig {
             query_prefix: None,
             document_prefix: None,
             base_url: None,
+            api_key_env: None,
             reranker_provider: "local".to_string(),
             reranker_model: None,
             intra_threads: None,
@@ -113,15 +117,30 @@ pub fn create_embedding_provider(
             )?;
             Ok(Box::new(provider))
         }
+        #[cfg(feature = "provider-openai")]
+        "openai" => {
+            let provider = providers::openai::OpenAiEmbeddingProvider::new(
+                config.base_url.as_deref(),
+                config.model.as_deref(),
+                config.dimension,
+                config.api_key_env.as_deref(),
+            )?;
+            Ok(Box::new(provider))
+        }
         other => {
-            // `ollama` ships in the default build; it is only absent from a
-            // feature-stripped `--no-default-features` rebuild. Point such a
-            // user at restoring the feature instead of a bare "unknown".
-            let remediation = if other == "ollama" && !cfg!(feature = "provider-ollama") {
-                " — this build was compiled with `--no-default-features`; rebuild with \
-                 default features or add `--features ollama-embedding`"
-            } else {
-                ""
+            // `ollama`/`openai` ship in the default build; they are only absent
+            // from a feature-stripped `--no-default-features` rebuild. Point such
+            // a user at restoring the feature instead of a bare "unknown".
+            let remediation = match other {
+                "ollama" if !cfg!(feature = "provider-ollama") => {
+                    " — this build was compiled with `--no-default-features`; rebuild with \
+                     default features or add `--features ollama-embedding`"
+                }
+                "openai" if !cfg!(feature = "provider-openai") => {
+                    " — this build was compiled with `--no-default-features`; rebuild with \
+                     default features or add `--features openai-embedding`"
+                }
+                _ => "",
             };
             anyhow::bail!(
                 "Unknown or disabled embedding provider: '{other}'. Supported: {}{remediation}",
@@ -131,16 +150,21 @@ pub fn create_embedding_provider(
     }
 }
 
-fn supported_providers() -> &'static str {
-    match (
-        cfg!(feature = "provider-local"),
-        cfg!(feature = "provider-ollama"),
-    ) {
-        (true, true) => "local, ollama",
-        (true, false) => "local",
-        (false, true) => "ollama",
-        (false, false) => "none (enable provider features)",
+fn supported_providers() -> String {
+    let mut names = Vec::new();
+    if cfg!(feature = "provider-local") {
+        names.push("local");
     }
+    if cfg!(feature = "provider-ollama") {
+        names.push("ollama");
+    }
+    if cfg!(feature = "provider-openai") {
+        names.push("openai");
+    }
+    if names.is_empty() {
+        return "none (enable provider features)".to_string();
+    }
+    names.join(", ")
 }
 
 /// Create the default local embedding provider (BGE-small-en-v1.5 quantized).
@@ -276,7 +300,7 @@ pub fn is_reranker_resolved_cached(rm: &fastembed::RerankerModel) -> bool {
 /// hf-hub cache directory for the former default reranker (`bge-reranker-base`).
 ///
 /// Derives the `models--<org>--<name>` dir from fastembed's model code (the same
-/// transform [`is_model_cached`] uses) rather than hardcoding the literal, so it tracks
+/// transform `is_model_cached` uses) rather than hardcoding the literal, so it tracks
 /// any fastembed repo-path change. Used by `cartog doctor` to offer a reclaim hint when
 /// the now-orphaned ~1.1GB model lingers under the new default.
 #[cfg(feature = "provider-local")]
@@ -418,6 +442,7 @@ mod tests {
         assert!(config.query_prefix.is_none());
         assert!(config.document_prefix.is_none());
         assert!(config.base_url.is_none());
+        assert!(config.api_key_env.is_none());
         assert_eq!(config.reranker_provider, "local");
         assert!(config.reranker_model.is_none());
         assert_eq!(config.resolved_dimension(), 384);

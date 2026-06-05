@@ -121,7 +121,7 @@ All examples below use CLI syntax. MCP tool names and parameters:
 
 Before first use, ensure cartog is installed and indexed.
 
-If the project uses Ollama (check `.cartog.toml` for `[embedding] provider = "ollama"`), Ollama manages the **embedding** model itself — but `cartog rag setup` still downloads the cross-encoder **reranker** (~150MB default, provider-agnostic). Skip `rag setup` only if you also disable the reranker; otherwise run it once.
+If the project uses a remote embedding provider (`.cartog.toml` has `[embedding] provider = "ollama"` or `provider = "openai"`), that provider supplies the **embedding** model — but `cartog rag setup` still downloads the cross-encoder **reranker** (~150MB default, provider-agnostic; there is no remote reranker). Skip `rag setup` only if you also disable the reranker (`[reranker] provider = "none"`); otherwise run it once. The `openai` provider reads its API key from an env var (`api_key_env`, default `OPENAI_API_KEY`), never from `.cartog.toml`.
 
 The plugin's SessionStart hook handles install + indexing automatically:
 

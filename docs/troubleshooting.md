@@ -179,12 +179,30 @@ confirm `[embedding.ollama].base_url` in `.cartog.toml` matches it (default
 The configured embedding model isn't pulled. Run `ollama pull <model>` (e.g.
 `ollama pull nomic-embed-text`), then re-run `cartog rag index`.
 
+### "cannot reach OpenAI endpoint at `<url>`"
+
+The `openai` provider couldn't connect. Confirm `[embedding.openai].base_url`
+points at a reachable OpenAI-compatible `/v1` endpoint (the path ends in `/v1`,
+e.g. `https://api.openai.com/v1` or `http://localhost:11434/v1`).
+
+### "auth failed; set the `<ENV>` environment variable"
+
+The endpoint returned 401/403. Export the API key in the env var named by
+`[embedding.openai].api_key_env` (default `OPENAI_API_KEY`):
+`export OPENAI_API_KEY=sk-...`. The key value is never read from `.cartog.toml`.
+Keyless local endpoints (Ollama `/v1`, LM Studio) need no key.
+
+### "endpoint has no model `<model>`"
+
+The `openai` endpoint returned 404 for the configured `[embedding] model`. Use a
+model the endpoint actually serves (OpenAI default: `text-embedding-3-small`).
+
 ### "this build was compiled with `--no-default-features`"
 
-The Ollama provider ships in every default build (install.sh, GitHub Releases,
-`cargo install cartog`). You only see this if you rebuilt with
+The Ollama and OpenAI providers ship in every default build (install.sh, GitHub
+Releases, `cargo install cartog`). You only see this if you rebuilt with
 `--no-default-features`. Rebuild with default features, or add
-`--features ollama-embedding`.
+`--features ollama-embedding` / `--features openai-embedding`.
 
 ### Reclaiming the old `bge-reranker-base` model after the reranker default changed
 

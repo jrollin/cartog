@@ -21,6 +21,7 @@ Always run `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` b
 ```bash
 cargo check --no-default-features -p cartog-rag     # verify builds without ONNX
 cargo check --features provider-ollama -p cartog-rag # verify Ollama feature
+cargo check --features provider-openai -p cartog-rag # verify OpenAI feature
 ```
 
 ### Integrity checks
@@ -187,7 +188,7 @@ Edit the `.astro` source (never `site/dist/`, which is gitignored and rebuilt by
 - **AST-aware embeddings**: significant body lines (skip blanks/comments/braces) for better vector search recall
 - **Embedding format versioning**: auto-detects embedding strategy changes, triggers re-embed on next `rag index`
 - **Schema versioning**: metadata-based migration system for DB schema evolution
-- **Pluggable embedding providers**: local ONNX (default) and Ollama, configured via `.cartog.toml`
+- **Pluggable embedding providers**: local ONNX (default), Ollama, and a generic OpenAI-compatible `/v1/embeddings` provider (OpenAI, Mistral, Voyage, Jina, OVHcloud, or local `/v1` servers — switch vendors via `base_url`; API key from an env var named by `[embedding.openai] api_key_env`, never in TOML; Azure's deployment-path shape is out of scope), configured via `.cartog.toml`
 - **Secret redaction**: default-on, best-effort. Scrubs common secret patterns (AWS/GitHub/Slack/Stripe/JWT + quoted key=value assignments) from `symbol_content`, `signature`, `docstring`, and embeddings; always excludes sensitive files (`.env`, `*.pem`, `id_rsa`, ...). Toggling `[security] redact_secrets` force-reindexes. See [docs/tech.md](docs/tech.md#secret-redaction)
-- **Feature flags**: binary `cartog` default = `lsp` + `remote-s3` + `ollama-embedding` (all on); advanced users strip via `--no-default-features`. Runtime embedding default stays local ONNX (`provider = "local"`); Ollama is opt-in via `.cartog.toml`. Crate `cartog-rag` — `provider-local` (default), `provider-ollama`
+- **Feature flags**: binary `cartog` default = `lsp` + `remote-s3` + `ollama-embedding` + `openai-embedding` (all on); advanced users strip via `--no-default-features`. Runtime embedding default stays local ONNX (`provider = "local"`); Ollama and OpenAI are opt-in via `.cartog.toml`. Crate `cartog-rag` — `provider-local` (default), `provider-ollama`, `provider-openai`
 - **Pending**: next language TBD; Java extractor improvements
