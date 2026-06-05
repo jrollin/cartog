@@ -214,7 +214,7 @@ path = ".cartog/db.sqlite"        <span class="comment"># DEFAULT (relative to g
 
 [embedding]
 provider = "local"               <span class="comment"># DEFAULT — "local" (ONNX) or "ollama"</span>
-model = "BAAI/bge-small-en-v1.5" <span class="comment"># DEFAULT for the local provider</span>
+# model = "BAAI/bge-small-en-v1.5" <span class="comment"># DEFAULT: unset → built-in bge-small-en-v1.5 (Qdrant/bge-small-en-v1.5-onnx-Q); set only to override</span>
 # dimension = 384                <span class="comment"># auto-detected for built-in models</span>
 
 [embedding.local]                <span class="comment"># only used when provider = "local"</span>
@@ -228,7 +228,7 @@ model = "nomic-embed-text"
 provider = "local"               <span class="comment"># DEFAULT — "local" or "none"</span>
 
 [rag]
-retrieval_multiplier = 4         <span class="comment"># DEFAULT — over-retrieve N× before fusion</span>
+retrieval_multiplier = 3         <span class="comment"># DEFAULT — over-retrieve N× before fusion</span>
 rerank_max = 50                  <span class="comment"># DEFAULT — cap candidates sent to reranker</span>
 
 [security]

@@ -198,7 +198,9 @@ rm -rf "${FASTEMBED_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cartog/models}/mo
 ```
 
 The cache dir resolves in order: `$FASTEMBED_CACHE_DIR`, else
-`$XDG_CACHE_HOME/cartog/models`, else `~/.cache/cartog/models`. To keep the old
+`$XDG_CACHE_HOME/cartog/models`, else `~/.cache/cartog/models`, else (only when
+no home directory can be resolved) `./.fastembed_cache` in the current working
+directory. To keep the old
 model instead, pin `[reranker] model = "BAAI/bge-reranker-base"` (it reuses the
 already-downloaded weights, no re-download).
 

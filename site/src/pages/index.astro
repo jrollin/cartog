@@ -201,7 +201,7 @@ import { withBase } from "../lib/url";
           <span class="feature-icon">🔍</span>
           <div>
             <h3>Dual search</h3>
-            <p>Keyword search (sub-ms, symbol names) + semantic search (natural language). Local embeddings with optional GPU acceleration via Ollama.</p>
+            <p>Keyword search (sub-ms, symbol names) + semantic search (natural language). CPU-only local embeddings by default (ONNX via fastembed); optional Ollama provider for GPU-backed embedding on its own server.</p>
           </div>
         </div>
         <div class="feature-card feature-card--row" data-reveal style="--reveal-delay: 0.18s;">

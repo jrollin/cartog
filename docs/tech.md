@@ -121,7 +121,7 @@ locally with `make bench-criterion`.
 | Secret redaction | Default-on, best-effort | Scrubs common secret patterns from stored symbol text and skips sensitive files. See [Secret redaction](#secret-redaction) below |
 | Watch mode | Debounced re-index + deferred RAG | 5s debounce, 30s RAG delay. Embedding only fires after editing stops — avoids embedding code that changes seconds later |
 | Vector search | sqlite-vec (opt-in) | Embedded in SQLite, no external infra. Models downloaded via `cartog rag setup` |
-| Model cache | `~/.cache/cartog/models` | XDG-compliant shared cache avoids downloading ~1.2 GB of models per project. Precedence: `FASTEMBED_CACHE_DIR` > `XDG_CACHE_HOME/cartog/models` > `~/.cache/cartog/models` |
+| Model cache | `~/.cache/cartog/models` | XDG-compliant shared cache avoids downloading ~1.2 GB of models per project. Precedence: `FASTEMBED_CACHE_DIR` > `XDG_CACHE_HOME/cartog/models` > `~/.cache/cartog/models` > `./.fastembed_cache` (CWD last resort, only when neither HOME nor XDG resolves) |
 | Output format | Human default + `--json` flag (global) | Readable for humans, parseable for scripts. Both `cartog --json stats` and `cartog stats --json` work |
 | Distribution | `cargo install` + pre-built binaries | GitHub Releases for 4 targets (Linux x86/ARM, macOS ARM, Windows x86), crates.io publish, in-place upgrade via `cartog self update` |
 | LSP | Auto-detected (default feature) | Index-time refinement for edges unresolved by heuristics. Auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls, intelephense, dart, sourcekit-lsp, kotlin-language-server), sends `textDocument/definition`, shuts down after. Silently skips when no server found. Ready-timeout 20s (override via `CARTOG_LSP_READY_TIMEOUT_SECS`). Edges LSP cannot map in-graph are persisted as `resolution_state=2` (truly unresolvable: typo, dyn dispatch, macro) or `=3` (external: stdlib, deps, node_modules); both are skipped on subsequent runs until a matching symbol is added. Disable at runtime with `--no-lsp`; opt out at build time with `cargo install cartog --no-default-features` |
@@ -218,7 +218,7 @@ Query
   │     Over-retrieval: max(limit × 3, 20) per source
   │
   └─→ Cross-encoder re-ranking (optional)
-        jina-reranker-v1-turbo-en (`jinaai/jina-reranker-v1-turbo-en`, default; configurable via `[reranker] model`), scores (query, full_content) pairs jointly
+        jina-reranker-v1-turbo-en (`jinaai/jina-reranker-v1-turbo-en`, default; configurable via `[reranker] model`, or disable with `[reranker] provider = "none"`), scores (query, full_content) pairs jointly
         Capped at 50 candidates to bound latency
         Graceful degradation: tri-state cache (not attempted / failed / ready)
         If model unavailable → search works with RRF-only ordering
@@ -246,7 +246,8 @@ Returns the first non-empty result. Only FTS5 syntax errors trigger fallback —
 | `MIN_CONTENT_BYTES` | 50 | Below this → noise, not embedded |
 | `MAX_EMBED_TEXT_BYTES` | 800 | ~200 tokens for bi-encoder input (AST-aware significant lines) |
 | `EMBEDDING_FORMAT_VERSION` | 2 | Auto-triggers re-embed when embedding strategy changes |
-| `RERANK_MAX` | 50 | Cross-encoder candidate cap |
+| `RERANK_MAX` | 50 | Cross-encoder candidate cap; configurable via `[rag] rerank_max` |
+| `RERANK_MIN` | 8 | Skip the cross-encoder entirely if fewer than this many candidates survived RRF merge; configurable via `[rag] rerank_min`, capped at `RERANK_MAX` |
 | RRF `k` | 60.0 | Standard constant from Cormack et al. 2009 |
 | Over-retrieval | `limit × 3` (min 20) | Enough candidates for effective RRF merge |
 | `MAX_SEARCH_LIMIT` | 100 | Hard cap on returned results |
