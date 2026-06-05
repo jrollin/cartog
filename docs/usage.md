@@ -110,6 +110,16 @@ model = "nomic-embed-text"
 
 [embedding.ollama]
 base_url = "http://localhost:11434"
+
+# Or any OpenAI-compatible /v1/embeddings endpoint (OpenAI, Mistral, Voyage,
+# Jina, OVHcloud, or a local server like Ollama /v1, LM Studio, vLLM)
+[embedding]
+provider = "openai"
+model    = "text-embedding-3-small"
+
+[embedding.openai]
+base_url    = "https://api.openai.com/v1"  # or http://localhost:11434/v1 (Ollama), etc.
+api_key_env = "OPENAI_API_KEY"             # env var NAME, not the key itself
 ```
 
 **Provider options:**
@@ -118,6 +128,7 @@ base_url = "http://localhost:11434"
 |----------|--------|-------|-------|
 | `local` (default) | No config needed | `cartog rag setup` to download models | ONNX Runtime via fastembed, ~230MB models |
 | `ollama` | `provider = "ollama"` | Ollama server running with model pulled | No model download needed, dimension auto-detected. Compiled into every default build; **local ONNX stays the default provider** — set `provider = "ollama"` to use it. |
+| `openai` | `provider = "openai"` | Reachable OpenAI-compatible `/v1` endpoint; API key in an env var (keyless for local servers) | One generic client for OpenAI, Mistral, Voyage, Jina, OVHcloud AI Endpoints, Together/Fireworks/DeepInfra, and local `/v1` servers (Ollama, LM Studio, vLLM) — switch vendors by changing `base_url`. Dimension auto-detected. **API key read from the `api_key_env` env var, never stored in `.cartog.toml`**; unset → no auth header (keyless local). Compiled into every default build; opt in with `provider = "openai"`. Azure OpenAI is not supported (its `…/deployments/{id}/embeddings?api-version=…` path + `api-key:` header differ from the plain `/v1` + `Bearer` shape). |
 
 **Default models (local provider):**
 
@@ -133,7 +144,7 @@ shared model cache (`$FASTEMBED_CACHE_DIR`, else `$XDG_CACHE_HOME/cartog/models`
 degraded embeddings. Override the embedding model with any fastembed built-in via
 `[embedding] model = "..."`.
 
-An unknown `provider` value (embedding: `local`, `ollama`; reranker: `local`, `none`) is rejected when `.cartog.toml` is loaded, with an error naming the bad value — a typo like `provider = "ollma"` fails fast instead of silently falling back to the default.
+An unknown `provider` value (embedding: `local`, `ollama`, `openai`; reranker: `local`, `none`) is rejected when `.cartog.toml` is loaded, with an error naming the bad value — a typo like `provider = "ollma"` fails fast instead of silently falling back to the default.
 
 **Advanced local configuration:**
 
@@ -204,8 +215,8 @@ redact_secrets = false
 **Compile-time feature flags**:
 
 ```bash
-cargo install cartog                                    # default: LSP + S3 sync + Ollama provider (local ONNX is the runtime default)
-cargo install cartog --no-default-features              # minimal: drops LSP, S3 sync, and Ollama
+cargo install cartog                                    # default: LSP + S3 sync + Ollama + OpenAI providers (local ONNX is the runtime default)
+cargo install cartog --no-default-features              # minimal: drops LSP, S3 sync, Ollama, and OpenAI
 cargo install cartog --no-default-features --features lsp  # selective: LSP only
 ```
 

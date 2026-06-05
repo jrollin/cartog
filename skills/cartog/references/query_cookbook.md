@@ -161,11 +161,25 @@ cartog rag search "error handling"  # search works the same
 
 Ollama manages only the embedding model. The reranker (~150MB cross-encoder, default `jinaai/jina-reranker-v1-turbo-en`) is provider-agnostic and still comes from HuggingFace via `cartog rag setup`. Skip `rag setup` only if you intentionally disable the reranker.
 
+#### OpenAI-compatible provider
+
+For any OpenAI-style `/v1/embeddings` endpoint (OpenAI, Mistral, Voyage, Jina, OVHcloud, or a local `/v1` server like Ollama, LM Studio, vLLM), set `provider = "openai"` and point `[embedding.openai] base_url` at the endpoint:
+
+```bash
+export OPENAI_API_KEY=sk-...        # env var; never put the key in .cartog.toml. Unset for keyless local endpoints
+cartog rag setup                    # still needed: downloads the cross-encoder reranker
+cartog rag index .                  # embed via the OpenAI endpoint
+cartog rag search "error handling"  # search works the same
+```
+
+Like Ollama, the OpenAI provider supplies only embeddings; the reranker is independent (`[reranker] provider = "local"` by default, or `"none"`). There is no OpenAI reranker — the cross-encoder always comes from HuggingFace via `cartog rag setup`. Switching from local (384-dim) to an OpenAI model (e.g. 1536-dim) is detected automatically and re-embeds on the next `cartog rag index`.
+
 #### Troubleshooting
 
-- **"Unknown or disabled embedding provider: 'ollama'"** — Only happens on a `--no-default-features` build; the Ollama provider ships by default. Reinstall with `cargo install cartog` (or add `--features ollama-embedding`).
+- **"Unknown or disabled embedding provider: 'ollama'/'openai'"** — Only happens on a `--no-default-features` build; both providers ship by default. Reinstall with `cargo install cartog` (or add `--features ollama-embedding` / `--features openai-embedding`).
 - **"Failed to connect to Ollama server"** — Ensure Ollama is running (`ollama serve`). For non-default hosts, set `base_url` under `[embedding.ollama]` in `.cartog.toml`.
-- **"Embedding dimension changed"** — Provider switch detected. Run `cartog rag index` to re-embed.
+- **"cannot reach OpenAI endpoint"** — Check `[embedding.openai] base_url` and that the endpoint is reachable. **"auth failed"** — set the env var named by `api_key_env` (default `OPENAI_API_KEY`).
+- **"Embedding dimension changed"** — Provider/model switch detected. Run `cartog rag index` to re-embed.
 
 ### "Find code related to a concept"
 ```bash

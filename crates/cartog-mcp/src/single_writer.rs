@@ -223,9 +223,19 @@ pub async fn run_server(
         None
     };
 
-    let server = match role {
-        Role::Primary => CartogServer::new(db_path, rag_config.clone(), redact)?,
-        Role::ReadOnly => CartogServer::new_read_only(db_path, rag_config.clone(), redact)?,
+    // Construction opens the DB and builds the embedding provider — both
+    // blocking, and a remote provider (openai/ollama) probes the network for its
+    // dimension. Run off the runtime thread so a slow endpoint can't stall the
+    // async server before it serves request #1.
+    let server = {
+        let db_path = db_path.to_path_buf();
+        let rag_config = rag_config.clone();
+        tokio::task::spawn_blocking(move || match role {
+            Role::Primary => CartogServer::new(&db_path, rag_config, redact),
+            Role::ReadOnly => CartogServer::new_read_only(&db_path, rag_config, redact),
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("server construction task panicked: {e}"))??
     };
 
     // Reflect initial watcher state on the server's flag so `cartog_stats`

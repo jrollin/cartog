@@ -105,7 +105,7 @@ cartog rag search "authentication token validation"
 
 Three-tier hybrid pipeline: **FTS5 keyword** + **vector KNN** + **cross-encoder re-ranking**. Indexes both code (functions, classes, methods) and Markdown documents. Models run locally via ONNX Runtime — no API keys, no network calls.
 
-> **Prefer Ollama?** Set `provider = "ollama"` in `.cartog.toml`. See [Configuration](#configuration).
+> **Prefer Ollama or a hosted endpoint?** Set `provider = "ollama"` or `provider = "openai"` (any OpenAI-compatible `/v1` endpoint) in `.cartog.toml`. See [Configuration](#configuration).
 
 ### Live index
 
@@ -143,8 +143,8 @@ version with `CARTOG_VERSION=<version>` (e.g. the tag from [Releases](https://gi
 ### From crates.io (Rust toolchain required)
 
 ```bash
-cargo install cartog                                  # default: LSP + S3 sync + Ollama provider
-cargo install cartog --no-default-features            # minimal: drops LSP, S3, Ollama
+cargo install cartog                                  # default: LSP + S3 sync + Ollama + OpenAI providers
+cargo install cartog --no-default-features            # minimal: drops LSP, S3, Ollama, OpenAI
 cargo install cartog --no-default-features --features lsp  # LSP only
 ```
 
@@ -592,11 +592,20 @@ Database path is resolved automatically — no config needed for standard use:
 path = "~/.local/share/cartog/myproject.db"
 
 [embedding]
-provider = "ollama"          # "local" (default) or "ollama"
+provider = "ollama"          # "local" (default), "ollama", or "openai"
 model = "nomic-embed-text"
 
 [embedding.ollama]
 base_url = "http://localhost:11434"
+
+# Or an OpenAI-compatible /v1 endpoint (OpenAI, Mistral, Voyage, Jina, OVHcloud,
+# or a local server like Ollama /v1, LM Studio, vLLM):
+# [embedding]
+# provider = "openai"
+# model    = "text-embedding-3-small"
+# [embedding.openai]
+# base_url    = "https://api.openai.com/v1"  # swap base_url to change vendor
+# api_key_env = "OPENAI_API_KEY"             # env var NAME; never the key itself
 
 [reranker]
 provider = "none"            # "local" (default) or "none"
@@ -607,7 +616,7 @@ provider = "none"            # "local" (default) or "none"
 
 - **Parsing**: tree-sitter runs in-process
 - **Storage**: SQLite file in your project directory
-- **Embeddings**: local ONNX or Ollama on localhost
+- **Embeddings**: local ONNX, Ollama on localhost, or an OpenAI-compatible endpoint you configure (API key from env, never from config)
 - **Re-ranking**: cross-encoder runs locally via ONNX
 - **MCP server**: stdio only, no network sockets
 - **No telemetry**, no analytics, no phone-home

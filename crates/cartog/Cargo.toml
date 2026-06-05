@@ -40,9 +40,10 @@ tempfile = { workspace = true }
 rust-s3 = { workspace = true, optional = true }
 
 [features]
-default = ["lsp", "remote-s3", "ollama-embedding"]
+default = ["lsp", "remote-s3", "ollama-embedding", "openai-embedding"]
 lsp = ["dep:cartog-lsp", "cartog-indexer/lsp", "cartog-mcp/lsp"]
 ollama-embedding = ["cartog-rag/provider-ollama"]
+openai-embedding = ["cartog-rag/provider-openai"]
 remote-s3 = ["dep:rust-s3"]
 
 [dev-dependencies]

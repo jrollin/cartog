@@ -212,6 +212,34 @@ fn check_embedding_provider(config: &rag::EmbeddingProviderConfig) -> CheckResul
                 },
             }
         }
+        "openai" => {
+            let base_url = config
+                .base_url
+                .as_deref()
+                .unwrap_or(rag::providers::DEFAULT_OPENAI_BASE_URL);
+            let env = config
+                .api_key_env
+                .as_deref()
+                .unwrap_or(rag::providers::DEFAULT_OPENAI_API_KEY_ENV);
+            // No TCP probe: hosted endpoints sit behind auth and CDNs, so a
+            // socket connect is misleading. Report the endpoint + key presence;
+            // an unset OR empty key is fine for keyless local /v1 servers.
+            if std::env::var(env).is_ok_and(|v| !v.is_empty()) {
+                CheckResult {
+                    name: "embedding".into(),
+                    status: CheckStatus::Ok,
+                    message: format!("openai endpoint {base_url} (key from ${env})"),
+                }
+            } else {
+                CheckResult {
+                    name: "embedding".into(),
+                    status: CheckStatus::Warn,
+                    message: format!(
+                        "openai endpoint {base_url}; ${env} unset (ok for keyless local endpoints)"
+                    ),
+                }
+            }
+        }
         other => CheckResult {
             name: "embedding".into(),
             status: CheckStatus::Error,
@@ -551,6 +579,56 @@ mod tests {
         let result = check_embedding_provider(&config);
         assert_eq!(result.status, CheckStatus::Error);
         assert!(result.message.contains("cannot reach"));
+    }
+
+    // These mutate the process-global env, so #[serial] keeps them off the
+    // shared environment at the same time as any other env-touching test.
+    #[test]
+    #[serial]
+    fn test_check_embedding_openai_key_present_is_ok() {
+        let env = "CARTOG_TEST_OPENAI_KEY_PRESENT";
+        std::env::set_var(env, "sk-test");
+        let config = rag::EmbeddingProviderConfig {
+            provider: "openai".into(),
+            api_key_env: Some(env.into()),
+            ..Default::default()
+        };
+        let result = check_embedding_provider(&config);
+        std::env::remove_var(env);
+        assert_eq!(result.status, CheckStatus::Ok);
+        assert!(result.message.contains("openai endpoint"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_check_embedding_openai_key_unset_warns() {
+        let env = "CARTOG_TEST_OPENAI_KEY_UNSET";
+        std::env::remove_var(env);
+        let config = rag::EmbeddingProviderConfig {
+            provider: "openai".into(),
+            api_key_env: Some(env.into()),
+            ..Default::default()
+        };
+        let result = check_embedding_provider(&config);
+        assert_eq!(result.status, CheckStatus::Warn);
+        assert!(result.message.contains("unset"));
+    }
+
+    #[test]
+    #[serial]
+    fn test_check_embedding_openai_empty_key_warns() {
+        // An exported-but-empty key is treated as absent, not a usable token.
+        let env = "CARTOG_TEST_OPENAI_KEY_EMPTY";
+        std::env::set_var(env, "");
+        let config = rag::EmbeddingProviderConfig {
+            provider: "openai".into(),
+            api_key_env: Some(env.into()),
+            ..Default::default()
+        };
+        let result = check_embedding_provider(&config);
+        std::env::remove_var(env);
+        assert_eq!(result.status, CheckStatus::Warn);
+        assert!(result.message.contains("unset"));
     }
 
     #[test]
