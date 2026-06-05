@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.25.0] - 2026-06-05
+
+### Bug Fixes
+
+- **rag**: Address openai provider review comments ([`b6b69c5`](https://github.com/jrollin/cartog/commit/b6b69c5354655d74fe4d3b38fa8cead206f22a97))
+- **rag**: Address PR review on watch auto-embed ([`844a5be`](https://github.com/jrollin/cartog/commit/844a5be400fba66a51cd689ff031941e0ed83a6a))
+
+### Documentation
+
+- **rag**: List openai provider on landing page and structure.md ([`c9be133`](https://github.com/jrollin/cartog/commit/c9be13332f94214740d4abc7a87f9ab18840da2e))
+- **rag**: Document auto_embed in init template + README, tidy env table ([`7f962e3`](https://github.com/jrollin/cartog/commit/7f962e3e33a637ed818183df327901adcb0cadbf))
+
+### Features
+
+- **rag**: Add generic OpenAI-compatible embedding provider ([`94c3d58`](https://github.com/jrollin/cartog/commit/94c3d5822dc0dfbf53482653c1e6f734eaffd0c3))
+- **rag**: Auto-embed under watch without --rag, fix edited-symbol embedding drift ([`fdc02ad`](https://github.com/jrollin/cartog/commit/fdc02ad14cb12d33560c85f1193693e3b142c804))
+
 ## [0.24.0] - 2026-06-05
 
 ### Bug Fixes

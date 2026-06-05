@@ -13,7 +13,7 @@ The plugin pins a specific cartog binary version. This skill installs that
 version, or upgrades an existing install to match.
 
 ```
-PLUGIN_VERSION=0.24.0
+PLUGIN_VERSION=0.25.0
 ```
 
 `scripts/release.sh` bumps the `PLUGIN_VERSION=` line above at release time;
