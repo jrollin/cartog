@@ -4,6 +4,18 @@
 
 use super::*;
 
+/// Kind scope for [`Database::fts5_search_kinded`], so retrieval can filter by
+/// kind in SQL. Mirrors the rag layer's `KindFilter`.
+#[derive(Debug, Clone, Copy)]
+pub enum KindScope {
+    /// No kind restriction (the historical `fts5_search` behaviour).
+    All,
+    /// Exclude `Document` and `Import` symbols.
+    CodeOnly,
+    /// Only the given kind.
+    Exact(SymbolKind),
+}
+
 impl Database {
     // ── RAG: Symbol Content ──
 
@@ -136,17 +148,57 @@ impl Database {
     ///
     /// Returns symbol IDs ordered by relevance (best match first).
     pub fn fts5_search(&self, query: &str, limit: u32) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
+        self.fts5_search_kinded(query, limit, KindScope::All)
+    }
+
+    /// Like [`Self::fts5_search`] but filters by kind in SQL, so a prose query
+    /// doesn't spend the whole `limit` budget on `Document` (markdown) hits.
+    pub fn fts5_search_kinded(
+        &self,
+        query: &str,
+        limit: u32,
+        scope: KindScope,
+    ) -> Result<Vec<String>> {
+        // `All` keeps the lean no-JOIN path; the others join `symbols` for `kind`.
+        let (where_kind, kind_param): (&str, Option<&str>) = match scope {
+            KindScope::All => ("", None),
+            KindScope::CodeOnly => ("AND s.kind NOT IN ('document', 'import')", None),
+            KindScope::Exact(k) => ("AND s.kind = ?3", Some(k.as_str())),
+        };
+        let sql = if matches!(scope, KindScope::All) {
             "SELECT sc.symbol_id
              FROM symbol_fts f
              JOIN symbol_content sc ON sc.rowid = f.rowid
              WHERE symbol_fts MATCH ?1
              ORDER BY rank
-             LIMIT ?2",
-        )?;
-        let rows = stmt
-            .query_map(params![query, limit], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+             LIMIT ?2"
+                .to_string()
+        } else {
+            format!(
+                "SELECT sc.symbol_id
+                 FROM symbol_fts f
+                 JOIN symbol_content sc ON sc.rowid = f.rowid
+                 JOIN symbols s ON s.id = sc.symbol_id
+                 WHERE symbol_fts MATCH ?1 {where_kind}
+                 ORDER BY rank
+                 LIMIT ?2"
+            )
+        };
+        let ctx =
+            || format!("fts5_search_kinded (scope={scope:?}, query={query:?}, limit={limit})");
+        let mut stmt = self.conn.prepare(&sql).with_context(ctx)?;
+        let rows: Vec<String> = match kind_param {
+            Some(k) => stmt
+                .query_map(params![query, limit, k], |row| row.get(0))
+                .with_context(ctx)?
+                .collect::<std::result::Result<_, _>>()
+                .with_context(ctx)?,
+            None => stmt
+                .query_map(params![query, limit], |row| row.get(0))
+                .with_context(ctx)?
+                .collect::<std::result::Result<_, _>>()
+                .with_context(ctx)?,
+        };
         Ok(rows)
     }
 
