@@ -107,7 +107,7 @@ Configure the embedding provider in `.cartog.toml`:
 #   omitted / unset → auto-detect: embed only if the repo already has embeddings
 #   auto_embed = true  → always auto-embed (even a never-indexed repo)
 #   auto_embed = false → never auto-embed
-# Precedence: CARTOG_WATCH_RAG env > this key > --rag flag (this key overrides --rag).
+# Precedence: CARTOG_WATCH_RAG env > this key > --rag flag.
 [embedding]
 auto_embed = true
 
@@ -389,7 +389,8 @@ cartog serve --watch --rag    # force auto-embed even on a not-yet-embedded repo
 Under `--watch`, embeddings auto-refresh on edits when the repo already has
 embeddings (i.e. you have run `cartog rag index` at least once) — no `--rag`
 needed. Repos that never used RAG pay nothing: no model loads. Force it on/off
-with `--rag`, `[embedding] auto_embed`, or `CARTOG_WATCH_RAG`. `--rag` without
+with three controls, highest precedence first: `CARTOG_WATCH_RAG` (env) overrides
+`[embedding] auto_embed` (config), which overrides `--rag` (flag). `--rag` without
 `--watch` is a no-op (the watcher owns embedding) and warns.
 
 ### Per-editor wiring: `cartog ide`

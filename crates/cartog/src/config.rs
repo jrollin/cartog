@@ -296,6 +296,7 @@ impl RerankerConfig {
 /// Precedence: `CARTOG_WATCH_RAG` env (`0`/`false`/`1`/`true`) > `[embedding]
 /// auto_embed` > `--rag` flag. Returns `None` when no explicit signal is set,
 /// leaving the watcher to decide from the live `embedding_count` (auto-detect).
+#[must_use]
 pub fn resolve_auto_embed(cli_rag: bool, config: &CartogConfig) -> Option<bool> {
     resolve_auto_embed_with(
         std::env::var("CARTOG_WATCH_RAG").ok().as_deref(),

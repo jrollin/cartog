@@ -97,6 +97,7 @@ fn stored_format_version(db: &Database) -> Result<u32> {
 /// Lets the watcher trigger the heal even when no symbol is *missing* an
 /// embedding (drifted-but-present vectors aren't caught by
 /// `symbols_needing_embeddings`).
+#[must_use = "the pending status decides whether to trigger a re-embed"]
 pub fn embedding_format_upgrade_pending(db: &Database) -> Result<bool> {
     Ok(stored_format_version(db)? < EMBEDDING_FORMAT_VERSION && db.symbol_content_count()? > 0)
 }

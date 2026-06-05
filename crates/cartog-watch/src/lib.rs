@@ -422,6 +422,13 @@ fn watch_loop(
                     Ok(needing) => initial_pending = needing.len() as u32,
                     Err(e) => warn!(error = %e, "failed to check embedding status"),
                 }
+                // A pending format upgrade re-embeds all symbols; count it so the
+                // staleness banner reflects the queued re-embed.
+                if initial_pending == 0
+                    && rag::indexer::embedding_format_upgrade_pending(&db).unwrap_or(false)
+                {
+                    initial_pending = db.symbol_content_count().unwrap_or(1).max(1);
+                }
             }
             // Publish the post-initial-index state (no changes observed yet, so
             // change_seq is 0; caught up to 0).
@@ -480,13 +487,8 @@ fn watch_loop(
             }
         };
 
-    // RAG timer state: when we last indexed (to defer embedding). Seed from the
-    // initial index so its pending symbols embed on the deferred schedule. Also
-    // arm when an embedding-format upgrade is pending so a drifted-but-fully-
-    // embedded repo (nothing "missing") still heals via the deferred path.
-    let mut rag_pending = rag_enabled(&db)
-        && (initial_pending > 0
-            || rag::indexer::embedding_format_upgrade_pending(&db).unwrap_or(false));
+    // RAG timer seed. `initial_pending` already folds in a pending format upgrade.
+    let mut rag_pending = initial_pending > 0;
     let mut last_index_time: Option<Instant> = rag_pending.then(Instant::now);
 
     loop {
