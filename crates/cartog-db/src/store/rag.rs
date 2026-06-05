@@ -322,13 +322,16 @@ impl Database {
         Ok(rows)
     }
 
-    /// Count the number of embeddings stored.
+    /// Count usable embeddings: map rows that have a matching `symbol_vec` row.
+    /// Orphan map rows (from a partially-failed embed) are excluded so callers
+    /// that gate on "repo has embeddings" don't trip on non-functional rows.
     pub fn embedding_count(&self) -> Result<u32> {
-        Ok(self
-            .conn
-            .query_row("SELECT COUNT(*) FROM symbol_embedding_map", [], |row| {
-                row.get(0)
-            })?)
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM symbol_embedding_map em
+             JOIN symbol_vec sv ON sv.rowid = em.id",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     /// Check if a symbol already has an embedding.
@@ -372,6 +375,53 @@ impl Database {
         )?;
         // Delete content (triggers will clean up FTS)
         self.clear_symbol_content_for_file(file_path)?;
+        Ok(())
+    }
+
+    /// Drop the embedding (vector + map row) for a single symbol id. Deletes the
+    /// `symbol_vec` row first so it isn't orphaned, then the map row. No-op for an
+    /// id with no embedding. Shared by [`Self::clear_embeddings_for_symbols_in_tx`]
+    /// and `delete_symbols_in_tx` so the vec+map delete lives in one place.
+    /// Assumes an open transaction; statements are cached so repeated calls are cheap.
+    pub(crate) fn delete_embedding_rows_for_id_in_tx(&self, id: &str) -> Result<()> {
+        self.conn
+            .prepare_cached(
+                "DELETE FROM symbol_vec WHERE rowid IN \
+                 (SELECT id FROM symbol_embedding_map WHERE symbol_id = ?1)",
+            )?
+            .execute(params![id])?;
+        self.conn
+            .prepare_cached("DELETE FROM symbol_embedding_map WHERE symbol_id = ?1")?
+            .execute(params![id])?;
+        Ok(())
+    }
+
+    /// Drop the embedding (vector + map row) for each id so it re-enters
+    /// [`Self::symbols_needing_embeddings`]. Used on incremental re-index when a
+    /// symbol's content changed but its stable id stayed the same — its content
+    /// row is rewritten elsewhere; only the now-drifted vector must be cleared.
+    /// Leaves `symbol_content` untouched. Assumes an open transaction.
+    pub fn clear_embeddings_for_symbols_in_tx(&self, ids: &[String]) -> Result<()> {
+        for id in ids {
+            self.delete_embedding_rows_for_id_in_tx(id)?;
+        }
+        Ok(())
+    }
+
+    /// Delete the stored content (and via the FTS trigger, the FTS row) for each
+    /// id. Used on incremental re-index for a modified symbol whose new body no
+    /// longer yields embeddable content, so its pre-edit content row doesn't
+    /// linger and re-embed stale text. Assumes an open transaction.
+    pub fn clear_content_for_symbols_in_tx(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut del = self
+            .conn
+            .prepare_cached("DELETE FROM symbol_content WHERE symbol_id = ?1")?;
+        for id in ids {
+            del.execute(params![id])?;
+        }
         Ok(())
     }
 

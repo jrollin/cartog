@@ -195,6 +195,7 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
           <tbody>
             <tr><td><code>CARTOG_DB</code></td><td>auto-detect</td><td>Database path (same as <code>--db</code>).</td></tr>
             <tr><td><code>CARTOG_ONNX_THREADS</code></td><td>all cores</td><td>Caps ONNX CPU threads for <code>rag index</code> + reranking. Overrides <code>[embedding.local] intra_threads</code>; <code>1</code> forces single-core.</td></tr>
+            <tr><td><code>CARTOG_WATCH_RAG</code></td><td>unset</td><td>Force watcher auto-embed on/off (<code>1</code>/<code>0</code>). Overrides <code>[embedding] auto_embed</code> and <code>--rag</code>. Unset = auto-detect from the DB.</td></tr>
             <tr><td><code>CARTOG_SINGLE_WRITER</code></td><td><code>1</code></td><td><code>0</code> disables MCP single-writer election (every <code>serve</code> opens read-write).</td></tr>
             <tr><td><code>CARTOG_MCP_MAX_BYTES</code></td><td><code>65536</code></td><td>Max bytes per MCP tool response before truncation.</td></tr>
             <tr><td><code>CARTOG_NO_UPDATE_CHECK</code></td><td>unset</td><td>Set to skip the background self-update check.</td></tr>
@@ -216,6 +217,7 @@ path = ".cartog/db.sqlite"        <span class="comment"># DEFAULT (relative to g
 provider = "local"               <span class="comment"># DEFAULT — "local" (ONNX), "ollama", or "openai"</span>
 # model = "BAAI/bge-small-en-v1.5" <span class="comment"># top-level for ALL providers; unset → built-in bge-small (local) / text-embedding-3-small (openai)</span>
 # dimension = 384                <span class="comment"># auto-detected for built-in models</span>
+# auto_embed = true              <span class="comment"># watcher auto-embed: unset → auto-detect (embed if repo already has embeddings); true/false force. Precedence: CARTOG_WATCH_RAG > this key > --rag</span>
 
 [embedding.local]                <span class="comment"># only used when provider = "local"</span>
 # intra_threads = 4              <span class="comment"># cap ONNX CPU threads (DEFAULT: all cores); CARTOG_ONNX_THREADS overrides</span>
@@ -478,8 +480,8 @@ cartog rag search "deployment architecture" --kind document</pre>
         <h2 id="mcp-server">MCP Server</h2>
         <p><code>cartog serve</code> runs cartog as a <a href="https://modelcontextprotocol.io">Model Context Protocol</a> server over stdio, exposing the code graph as 16 tools any MCP-compatible client (Claude Code, Cursor, VS Code, Codex CLI, …) can call. No HTTP port, no daemon to manage — the client launches <code>cartog serve</code> as a subprocess and talks JSON-RPC over stdin/stdout.</p>
         <pre>cartog serve                  <span class="comment"># MCP server only</span>
-cartog serve --watch          <span class="comment"># + background file watcher (auto re-index)</span>
-cartog serve --watch --rag    <span class="comment"># + watcher + deferred semantic embedding</span></pre>
+cartog serve --watch          <span class="comment"># + watcher; auto-embeds if the repo already has embeddings</span>
+cartog serve --watch --rag    <span class="comment"># force auto-embed even on a not-yet-embedded repo</span></pre>
         <p>Most users never run <code>cartog serve</code> by hand: <a href="#mcp-quickstart"><code>cartog ide</code></a> writes it into your editor's MCP config and the editor spawns it on demand. Run it directly only when wiring a client cartog doesn't know about, or to debug the JSON-RPC stream.</p>
 
         <h3 id="mcp-tools">The 16 tools</h3>
@@ -593,7 +595,7 @@ claude mcp add --scope project cartog -- cartog serve --watch       <span class=
     "cartog": &#123; "command": "cartog", "args": ["serve", "--watch"] &#125;
   &#125;
 &#125;</pre>
-          <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px;">Only Claude Code gets <code>--watch</code> by default — other clients ship plain <code>["serve"]</code>. Agent-driven flows churn files faster than human-driven editor flows, so the in-process file watcher pays off. Drop it with <code>cartog ide --no-watch</code>.</p>
+          <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px;">Every client gets <code>--watch</code> by default. The single-writer election makes concurrent watchers safe — the first <code>serve</code> owns the watcher, the rest attach read-only and ride its updates over WAL. Drop it with <code>cartog ide --no-watch</code>.</p>
         </details>
 
         <details class="mcp-client">
@@ -1007,9 +1009,9 @@ Database:    /your/repo/.cartog/db.sqlite
 
         <h2 id="cmd-watch"><code>cartog watch</code></h2>
         <p>Watch for file changes and auto-re-index. Keeps the graph fresh during development.</p>
-        <pre>cartog watch                       <span class="comment"># watch CWD</span>
+        <pre>cartog watch                       <span class="comment"># watch CWD; auto-embeds if the repo already has embeddings</span>
 cartog watch src/                  <span class="comment"># watch subdirectory</span>
-cartog watch --rag                 <span class="comment"># also auto-embed</span>
+cartog watch --rag                 <span class="comment"># force auto-embed (even on a not-yet-embedded repo)</span>
 cartog watch --rag --rag-delay 60  <span class="comment"># embed after 60s idle</span>
 cartog watch --debounce 10         <span class="comment"># 10s debounce window</span>
 cartog watch --json                <span class="comment"># NDJSON event stream</span></pre>
@@ -1020,8 +1022,8 @@ cartog watch --json                <span class="comment"># NDJSON event stream</
         <h2 id="cmd-serve"><code>cartog serve</code></h2>
         <p>Start cartog as an MCP server over stdio. No banner — stdio is reserved for JSON-RPC traffic between the client and the server. Run <code>cartog stats</code> in another shell to confirm it's up; <code>role: primary</code> means the writer, <code>role: read-only</code> means an attached secondary. See <a href="#mcp-server">MCP Server</a> for the full tool list and client wiring.</p>
         <pre>cartog serve                  <span class="comment"># MCP server only</span>
-cartog serve --watch          <span class="comment"># + background file watcher</span>
-cartog serve --watch --rag    <span class="comment"># + watcher + auto RAG</span></pre>
+cartog serve --watch          <span class="comment"># + watcher; auto-embeds if the repo has embeddings</span>
+cartog serve --watch --rag    <span class="comment"># force auto-embed even on a not-yet-embedded repo</span></pre>
 
         <h2 id="cmd-init"><code>cartog init</code></h2>
         <p>Scaffold a <code>.cartog.toml</code> template in the current project. That's all it does — config only, no editor wiring, no indexing. The next-steps hint points at <code>cartog ide</code> and <code>cartog index</code>.</p>

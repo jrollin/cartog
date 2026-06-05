@@ -51,16 +51,17 @@ claude mcp add cartog -- cartog serve --watch              # user scope
 claude mcp add --scope project cartog -- cartog serve --watch
 ```
 
-Add `"--rag"` to `args` if you want automatic embedding updates on file change.
+Under `--watch`, embeddings auto-refresh on file change when the repo already
+has embeddings (run `cartog rag index` once to opt in) — no `--rag` needed. Add
+`"--rag"` to `args` only to force embedding on a repo that has never been
+indexed.
 
-> **Why `--watch` only here?** Of all clients, Claude Code is the only one
-> `cartog ide` defaults to `["serve", "--watch"]`; the rest ship plain
-> `["serve"]`. Agent-driven workflows churn files faster than human-driven
-> editor flows, so the in-process file watcher pays for itself. Drop it with
-> `cartog ide --no-watch`, or call `cartog index` manually when you want a
-> refresh. Multiple watchers compete for the single-writer lock, so keeping the
-> default off elsewhere avoids surprises when a user wires cartog into several
-> editors at once.
+> **`--watch` for every client.** `cartog ide`/`install` registers
+> `["serve", "--watch"]` for all editors. The single-writer election makes
+> concurrent watchers safe: the first `cartog serve` instance owns the watcher,
+> the rest attach read-only and ride its updates over WAL — no lock contention,
+> no double-indexing. Drop the watcher with `cartog ide --no-watch`, or call
+> `cartog index` manually when you prefer a manual refresh.
 
 ## Claude Desktop
 

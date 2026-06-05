@@ -573,6 +573,20 @@ pub fn index_directory(
             changed.extend(diff.children_changed.iter().map(|&i| symbols[i].clone()));
             db.insert_symbols_in_tx(&changed)?;
 
+            // A modified symbol keeps its stable id, so its old embedding lingers
+            // and `symbols_needing_embeddings` would skip it — drop the drifted
+            // vector so it re-embeds. children_changed symbols have unchanged own
+            // content, so their embeddings are still valid. Skip the work entirely
+            // for repos with no embeddings (the common non-RAG case).
+            let modified_ids: Vec<String> = diff
+                .modified
+                .iter()
+                .map(|&i| symbols[i].id.clone())
+                .collect();
+            if !modified_ids.is_empty() && db.embedding_count()? > 0 {
+                db.clear_embeddings_for_symbols_in_tx(&modified_ids)?;
+            }
+
             result.symbols_added += diff.added.len() as u32;
             result.symbols_modified += diff.modified.len() as u32;
             result.symbols_unchanged += diff.unchanged as u32;
@@ -597,6 +611,17 @@ pub fn index_directory(
                     )
                 })
                 .collect();
+            // A modified symbol whose new body no longer yields content is absent
+            // from `contents`, so its pre-edit content row would linger and
+            // re-embed stale text. Delete content for any modified id not rewritten.
+            let rewritten: std::collections::HashSet<&str> =
+                contents.iter().map(|(id, ..)| id.as_str()).collect();
+            let lost_content: Vec<String> = modified_ids
+                .iter()
+                .filter(|id| !rewritten.contains(id.as_str()))
+                .cloned()
+                .collect();
+            db.clear_content_for_symbols_in_tx(&lost_content)?;
             if !contents.is_empty() {
                 db.insert_symbol_contents_in_tx(&contents)?;
             }
@@ -1435,6 +1460,173 @@ mod tests {
         assert!(
             !db.is_edge_unresolvable(edge_id).unwrap(),
             "edge must not stay state=2 after a matching target appears"
+        );
+    }
+
+    #[test]
+    fn reindex_invalidates_embedding_of_modified_symbol() {
+        // Drift regression: a symbol whose body changes keeps its stable id, so
+        // its old embedding must be dropped on re-index — otherwise
+        // symbols_needing_embeddings() skips it and the vector stays stale.
+        use cartog_db::Database;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        // Body must exceed MIN_CONTENT_BYTES (50) so content is extracted.
+        std::fs::write(
+            root.join("a.py"),
+            "def greet(name):\n    message = 'hello there ' + name\n    return message\n",
+        )
+        .unwrap();
+
+        let db = Database::open_memory().unwrap();
+        let idx = |db: &Database| {
+            index_directory(
+                db,
+                &root,
+                false,
+                false,
+                None,
+                None,
+                crate::RedactionConfig::disabled(),
+            )
+            .unwrap()
+        };
+        idx(&db);
+
+        // Simulate a prior `rag index`: embed the only content symbol.
+        let needing = db.symbols_needing_embeddings().unwrap();
+        assert_eq!(needing.len(), 1, "expected greet() to need embedding");
+        let greet_id = needing[0].clone();
+        let bytes: Vec<u8> = vec![0.0f32; 384]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        let eid = db.get_or_create_embedding_id(&greet_id).unwrap();
+        db.upsert_embedding(eid, &bytes).unwrap();
+        assert!(db.symbols_needing_embeddings().unwrap().is_empty());
+
+        // Edit the body (same name/kind/file → same stable id) and re-index.
+        std::fs::write(
+            root.join("a.py"),
+            "def greet(name):\n    message = 'goodbye and farewell ' + name\n    return message\n",
+        )
+        .unwrap();
+        idx(&db);
+
+        // The drifted embedding is gone and the symbol re-enters the queue.
+        assert!(
+            !db.has_embedding(&greet_id).unwrap(),
+            "modified symbol's stale embedding must be cleared"
+        );
+        assert_eq!(
+            db.symbols_needing_embeddings().unwrap(),
+            vec![greet_id],
+            "modified symbol must re-enter the needs-embedding set"
+        );
+    }
+
+    #[test]
+    fn reindex_keeps_embedding_of_unchanged_sibling() {
+        // The drift-clear is scoped to modified symbols: a sibling whose own
+        // content is untouched keeps its embedding even when the file is dirty.
+        use cartog_db::Database;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let greet_v1 =
+            "def greet(name):\n    message = 'hello there ' + name\n    return message\n";
+        let farewell = "def farewell(name):\n    message = 'goodbye and take care ' + name\n    return message\n";
+        std::fs::write(root.join("a.py"), format!("{greet_v1}\n\n{farewell}")).unwrap();
+
+        let db = Database::open_memory().unwrap();
+        let idx = |db: &Database| {
+            index_directory(
+                db,
+                &root,
+                false,
+                false,
+                None,
+                None,
+                crate::RedactionConfig::disabled(),
+            )
+            .unwrap()
+        };
+        idx(&db);
+
+        let bytes: Vec<u8> = vec![0.0f32; 384]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        for id in db.symbols_needing_embeddings().unwrap() {
+            let eid = db.get_or_create_embedding_id(&id).unwrap();
+            db.upsert_embedding(eid, &bytes).unwrap();
+        }
+        let farewell_id = db
+            .all_content_symbol_ids()
+            .unwrap()
+            .into_iter()
+            .find(|id| id.contains("farewell"))
+            .expect("farewell symbol id");
+
+        // Change only greet(); farewell()'s own content is identical.
+        let greet_v2 =
+            "def greet(name):\n    message = 'goodbye and farewell ' + name\n    return message\n";
+        std::fs::write(root.join("a.py"), format!("{greet_v2}\n\n{farewell}")).unwrap();
+        idx(&db);
+
+        assert!(
+            db.has_embedding(&farewell_id).unwrap(),
+            "unchanged sibling must keep its embedding"
+        );
+    }
+
+    #[test]
+    fn reindex_drops_stale_content_when_modified_body_shrinks_below_threshold() {
+        // A modified symbol whose new body no longer yields content must not keep
+        // its pre-edit content row (else it re-embeds stale text forever).
+        use cartog_db::Database;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        // v1 body is well over MIN_CONTENT_BYTES (50) so content is stored.
+        std::fs::write(
+            root.join("a.py"),
+            "def greet(name):\n    message = 'a long enough greeting for ' + name\n    return message\n",
+        )
+        .unwrap();
+
+        let db = Database::open_memory().unwrap();
+        let idx = |db: &Database| {
+            index_directory(
+                db,
+                &root,
+                false,
+                false,
+                None,
+                None,
+                crate::RedactionConfig::disabled(),
+            )
+            .unwrap()
+        };
+        idx(&db);
+        let greet_id = db.symbols_needing_embeddings().unwrap()[0].clone();
+        assert!(db.get_symbol_content(&greet_id).unwrap().is_some());
+
+        // Shrink the body below the content threshold; same stable id (same name).
+        std::fs::write(root.join("a.py"), "def greet(name):\n    pass\n").unwrap();
+        idx(&db);
+
+        assert!(
+            db.get_symbol_content(&greet_id).unwrap().is_none(),
+            "stale content row must be deleted when the modified body loses content"
+        );
+        assert!(
+            !db.symbols_needing_embeddings().unwrap().contains(&greet_id),
+            "a symbol with no content must not be queued for embedding"
         );
     }
 

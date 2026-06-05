@@ -103,6 +103,14 @@ Configure the embedding provider in `.cartog.toml`:
 ```toml
 # Default: BGE-small-en-v1.5 quantized embedding + jina-turbo reranker (no config needed)
 
+# Auto-embed under `serve --watch` / `watch`:
+#   omitted / unset → auto-detect: embed only if the repo already has embeddings
+#   auto_embed = true  → always auto-embed (even a never-indexed repo)
+#   auto_embed = false → never auto-embed
+# Precedence: CARTOG_WATCH_RAG env > this key > --rag flag (this key overrides --rag).
+[embedding]
+auto_embed = true
+
 # Use Ollama instead of local ONNX
 [embedding]
 provider = "ollama"
@@ -228,6 +236,7 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 |----------|---------|--------|
 | `CARTOG_DB` | auto-detect | Database path (same as `--db`). |
 | `CARTOG_ONNX_THREADS` | all cores | Caps ONNX CPU threads for `rag index` + reranking. Overrides `[embedding.local] intra_threads`. `1` forces single-core. |
+| `CARTOG_WATCH_RAG` | unset | Force watcher auto-embed on/off (`1`/`0`). Overrides `[embedding] auto_embed` and `--rag`. Unset = auto-detect from the DB. |
 | `CARTOG_SINGLE_WRITER` | `1` | `0` disables MCP single-writer election (every `cartog serve` opens read-write). |
 | `CARTOG_MCP_MAX_BYTES` | `65536` | Max bytes per MCP tool response before truncation. |
 | `CARTOG_NO_UPDATE_CHECK` | unset | Set to skip the background self-update check. |
@@ -365,7 +374,7 @@ bash skills/cartog/scripts/ensure_indexed.sh
 
 `cartog serve` runs cartog as an MCP server over stdio, exposing 16 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 13 query tools are read-only (including `cartog_trace` for call paths and `cartog_context` for one-shot task bundles); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones.
 
-When `cartog serve --watch` is running and a file changes (or RAG embeddings are still catching up), affected read-tool responses are prefixed with a `⚠️` staleness banner so the agent knows the answer may be momentarily behind the working tree. Read-only secondaries and `cartog serve` without `--watch` never show the banner.
+When `cartog serve --watch` is running and a file changes (or RAG embeddings are still catching up — including symbols whose body was just edited and not yet re-embedded), affected read-tool responses are prefixed with a `⚠️` staleness banner so the agent knows the answer may be momentarily behind the working tree. Read-only secondaries and `cartog serve` without `--watch` never show the banner.
 
 Read tools also declare an `outputSchema` and return `structuredContent` (the typed result mirrored alongside the human-readable text block) so schema-aware clients get validated, machine-readable output. To keep responses within the caller's context window, the size cap (`CARTOG_MCP_MAX_BYTES`, default 64 KB) counts the text block plus the structured copy: `structuredContent` is dropped when the combined size would exceed the cap (and when the text block itself is truncated, which adds a truncation notice).
 
@@ -373,9 +382,15 @@ For editor-specific recipes (Neovim keymaps, VS Code tasks, Emacs `compile`, Tel
 
 ```bash
 cartog serve                  # basic MCP server
-cartog serve --watch          # auto-re-index on file changes
-cartog serve --watch --rag    # auto-re-index + auto-embed
+cartog serve --watch          # auto-re-index + auto-embed when the repo already has embeddings
+cartog serve --watch --rag    # force auto-embed even on a not-yet-embedded repo
 ```
+
+Under `--watch`, embeddings auto-refresh on edits when the repo already has
+embeddings (i.e. you have run `cartog rag index` at least once) — no `--rag`
+needed. Repos that never used RAG pay nothing: no model loads. Force it on/off
+with `--rag`, `[embedding] auto_embed`, or `CARTOG_WATCH_RAG`. `--rag` without
+`--watch` is a no-op (the watcher owns embedding) and warns.
 
 ### Per-editor wiring: `cartog ide`
 
@@ -1008,9 +1023,9 @@ Exits with code 1 if any check is an error. Supports `--json` for structured out
 Watch for file changes and auto-re-index. Keeps the code graph fresh during development.
 
 ```bash
-cartog watch                          # watch CWD, code graph only
+cartog watch                          # watch CWD; auto-embeds if the repo already has embeddings
 cartog watch src/                     # watch subdirectory
-cartog watch --rag                    # also auto-embed for semantic search
+cartog watch --rag                    # force auto-embed (even on a not-yet-embedded repo)
 cartog watch --rag --rag-delay 60     # embed after 60s of inactivity
 cartog watch --debounce 10            # 10s debounce window
 cartog watch --json                   # NDJSON event stream on stdout
@@ -1018,7 +1033,7 @@ cartog watch --json                   # NDJSON event stream on stdout
 
 The watcher runs an initial incremental index on startup, then re-indexes when supported source files change. Changes are debounced (default 5s) to avoid re-indexing on every keystroke and to absorb bulk file changes (e.g. `git pull`).
 
-When `--rag` is enabled, embedding generation is deferred until `--rag-delay` seconds (default 30) have elapsed without new file changes, batching all pending symbols in one pass.
+Auto-embed is on when the repo already has embeddings (auto-detected from the DB), forced by `--rag`, or set via `[embedding] auto_embed` / `CARTOG_WATCH_RAG`; otherwise off. When on, embedding is deferred until `--rag-delay` seconds (default 30) have elapsed without new file changes, batching all pending symbols in one pass. A symbol whose body is edited has its stale embedding invalidated on re-index, so it is re-embedded on the next pass.
 
 With `--json`, every lifecycle event is emitted as one NDJSON record on stdout (`started`, `reindex`, `reindex_failed`, `rag_embedded`, `rag_failed`, `shutdown`). Human-readable tracing still goes to stderr.
 
@@ -1030,11 +1045,11 @@ Start cartog as an MCP server over stdio. See the [MCP Server](#mcp-server) sect
 
 ```bash
 cartog serve                  # MCP server only
-cartog serve --watch          # MCP server + background file watcher
-cartog serve --watch --rag    # MCP server + watcher + auto RAG embedding
+cartog serve --watch          # MCP server + watcher; auto-embeds if the repo has embeddings
+cartog serve --watch --rag    # force auto-embed even on a not-yet-embedded repo
 ```
 
-When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
+When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit, and (when the repo already has embeddings) refreshes RAG embeddings on a deferred timer — no `--rag` needed. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
 
 #### Multiple `cartog serve` instances on the same project
 

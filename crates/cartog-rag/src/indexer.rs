@@ -74,11 +74,32 @@ fn flush_embedding_batch<P: EmbeddingProvider + ?Sized>(
     }
 }
 
-/// Embedding format version. Increment when changing `compact_embedding_text` logic.
+/// Embedding format version. Increment when `compact_embedding_text` logic changes
+/// or to force a one-time full re-embed (e.g. healing embeddings drifted by an
+/// older indexer that left modified symbols' vectors stale).
 ///
 /// Stored in metadata as `embedding_format_version`. When the stored version differs
 /// from this constant, `index_embeddings` automatically forces a full re-embed.
-pub const EMBEDDING_FORMAT_VERSION: u32 = 3;
+///
+/// v4: heal drift from the pre-fix incremental path (modified symbols not re-embedded).
+pub const EMBEDDING_FORMAT_VERSION: u32 = 4;
+
+/// The embedding format version recorded in the DB (`1` if never stamped).
+fn stored_format_version(db: &Database) -> Result<u32> {
+    Ok(db
+        .get_metadata("embedding_format_version")?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1))
+}
+
+/// True when the stored embedding format is behind the current version and there
+/// is content to re-embed — i.e. `index_embeddings` would force a full re-embed.
+/// Lets the watcher trigger the heal even when no symbol is *missing* an
+/// embedding (drifted-but-present vectors aren't caught by
+/// `symbols_needing_embeddings`).
+pub fn embedding_format_upgrade_pending(db: &Database) -> Result<bool> {
+    Ok(stored_format_version(db)? < EMBEDDING_FORMAT_VERSION && db.symbol_content_count()? > 0)
+}
 
 /// Maximum bytes for the embedding text sent to the model.
 ///
@@ -229,10 +250,7 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
     let total_content_symbols = db.symbol_content_count()?;
 
     // Auto-detect embedding format change and force re-embed
-    let stored_version: u32 = db
-        .get_metadata("embedding_format_version")?
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
+    let stored_version = stored_format_version(db)?;
     let format_changed = stored_version < EMBEDDING_FORMAT_VERSION;
     let force = force || format_changed;
 
@@ -483,7 +501,7 @@ mod tests {
 
     #[test]
     fn test_embedding_format_version_is_current() {
-        assert_eq!(EMBEDDING_FORMAT_VERSION, 3);
+        assert_eq!(EMBEDDING_FORMAT_VERSION, 4);
     }
 
     // ── index_embeddings tests with mock provider ──
@@ -524,6 +542,27 @@ mod tests {
         assert_eq!(result.symbols_skipped, 0);
         assert_eq!(result.total_content_symbols, 5);
         assert!(provider.embed_count > 0);
+    }
+
+    #[test]
+    fn format_upgrade_pending_only_with_old_version_and_content() {
+        // No content → nothing to re-embed → not pending even at an old version.
+        let empty = Database::open_memory().unwrap();
+        empty.set_metadata("embedding_format_version", "1").unwrap();
+        assert!(!embedding_format_upgrade_pending(&empty).unwrap());
+
+        // Old stored version + content → pending.
+        let db = setup_db_with_symbols(2);
+        db.set_metadata("embedding_format_version", "1").unwrap();
+        assert!(embedding_format_upgrade_pending(&db).unwrap());
+
+        // Current version → not pending.
+        db.set_metadata(
+            "embedding_format_version",
+            &EMBEDDING_FORMAT_VERSION.to_string(),
+        )
+        .unwrap();
+        assert!(!embedding_format_upgrade_pending(&db).unwrap());
     }
 
     #[test]

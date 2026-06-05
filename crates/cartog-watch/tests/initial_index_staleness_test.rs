@@ -63,7 +63,7 @@ def generate_token(user, password, mfa_token):
 
     let stale = StaleState::new();
     let mut config = WatchConfig::new(root.to_path_buf());
-    config.rag = true;
+    config.rag_override = Some(true);
     // Long delay so the deferred embed (which would need an ONNX model) never
     // fires during the test — we only assert the *initial* publish.
     config.rag_delay = Duration::from_secs(3600);

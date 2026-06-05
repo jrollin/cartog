@@ -1395,7 +1395,7 @@ pub fn cmd_watch(
     db_path: &Path,
     path: &str,
     debounce: u64,
-    rag: bool,
+    rag_override: Option<bool>,
     rag_delay: u64,
     provider_config: rag::EmbeddingProviderConfig,
     redact: indexer::RedactionConfig,
@@ -1403,7 +1403,7 @@ pub fn cmd_watch(
 ) -> Result<()> {
     let mut config = WatchConfig::new(PathBuf::from(path));
     config.debounce = Duration::from_secs(debounce);
-    config.rag = rag;
+    config.rag_override = rag_override;
     config.rag_delay = Duration::from_secs(rag_delay);
     config.rag_config = provider_config;
     config.redact = redact;

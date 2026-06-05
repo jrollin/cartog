@@ -188,6 +188,11 @@ pub struct EmbeddingConfig {
     pub ollama: Option<OllamaConfig>,
     /// OpenAI-compatible provider settings.
     pub openai: Option<OpenAiConfig>,
+    /// Auto-embed under `serve --watch` / `watch`. `None` = auto-detect (embed
+    /// only if the repo already has embeddings); `Some(false)` = never;
+    /// `Some(true)` = always. Precedence: `CARTOG_WATCH_RAG` env > this key >
+    /// `--rag` flag (so this key overrides `--rag`, not the other way around).
+    pub auto_embed: Option<bool>,
 }
 
 pub const DEFAULT_EMBEDDING_PROVIDER: &str = "local";
@@ -283,6 +288,37 @@ impl RerankerConfig {
         self.provider
             .as_deref()
             .unwrap_or(DEFAULT_RERANKER_PROVIDER)
+    }
+}
+
+/// Resolve whether the watcher should auto-embed, as an explicit override.
+///
+/// Precedence: `CARTOG_WATCH_RAG` env (`0`/`false`/`1`/`true`) > `[embedding]
+/// auto_embed` > `--rag` flag. Returns `None` when no explicit signal is set,
+/// leaving the watcher to decide from the live `embedding_count` (auto-detect).
+pub fn resolve_auto_embed(cli_rag: bool, config: &CartogConfig) -> Option<bool> {
+    resolve_auto_embed_with(
+        std::env::var("CARTOG_WATCH_RAG").ok().as_deref(),
+        config.embedding.as_ref().and_then(|e| e.auto_embed),
+        cli_rag,
+    )
+}
+
+/// Pure resolver for [`resolve_auto_embed`], split out so tests don't mutate the
+/// process environment. An unparseable env value falls through to the next tier.
+fn resolve_auto_embed_with(env: Option<&str>, cfg: Option<bool>, cli_rag: bool) -> Option<bool> {
+    if let Some(v) = env.and_then(parse_bool_flag) {
+        return Some(v);
+    }
+    cfg.or_else(|| cli_rag.then_some(true))
+}
+
+/// Parse a permissive boolean env value; `None` if unrecognized.
+fn parse_bool_flag(s: &str) -> Option<bool> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -1513,5 +1549,38 @@ provider = "local"
         assert_eq!(t.retrieval_floor, 40);
         assert_eq!(t.rerank_max, 100);
         assert_eq!(t.rerank_min, 10);
+    }
+
+    #[test]
+    fn auto_embed_env_beats_config_and_flag() {
+        assert_eq!(
+            resolve_auto_embed_with(Some("0"), Some(true), true),
+            Some(false)
+        );
+        assert_eq!(
+            resolve_auto_embed_with(Some("on"), Some(false), false),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn auto_embed_config_beats_flag() {
+        assert_eq!(
+            resolve_auto_embed_with(None, Some(false), true),
+            Some(false)
+        );
+        assert_eq!(resolve_auto_embed_with(None, Some(true), false), Some(true));
+    }
+
+    #[test]
+    fn auto_embed_flag_only_when_no_other_signal() {
+        assert_eq!(resolve_auto_embed_with(None, None, true), Some(true));
+    }
+
+    #[test]
+    fn auto_embed_none_when_no_signal_defers_to_watcher() {
+        assert_eq!(resolve_auto_embed_with(None, None, false), None);
+        // Unparseable env falls through to the next tier.
+        assert_eq!(resolve_auto_embed_with(Some("maybe"), None, false), None);
     }
 }

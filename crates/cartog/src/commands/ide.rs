@@ -516,103 +516,86 @@ fn value_kind(v: &Value) -> &'static str {
     }
 }
 
-/// Static catalogue of every client cartog knows about: kind, scope, JSON/TOML
-/// shape, and which set of serve-args to register. Adding a new client = one
-/// row in this table + matching path resolution in [`HomeDirs::detect`] (for
-/// User-scope rows) or a `cwd.join(...)` in [`project_path`] (for Project rows).
-///
-/// `args_kind` is decoupled from the on-disk format so `--no-watch` can affect
-/// only Claude Code without per-row plumbing.
+/// Static catalogue of every client cartog knows about: kind, scope, and JSON/TOML
+/// shape. Adding a new client = one row in this table + matching path resolution
+/// in [`HomeDirs::detect`] (for User-scope rows) or a `cwd.join(...)` in
+/// [`project_path`] (for Project rows). Every client registers `serve --watch`
+/// (see [`serve_args`]); `--no-watch` drops `--watch` for all of them.
 const CLIENT_CATALOGUE: &[CatalogueEntry] = &[
     CatalogueEntry {
         kind: ClientKind::ClaudeCode,
         scope: Scope::Project,
         strategy: MergeStrategy::McpServers,
-        args_kind: ArgsKind::ServeWithWatch,
     },
     CatalogueEntry {
         kind: ClientKind::ClaudeCode,
         scope: Scope::User,
         strategy: MergeStrategy::McpServers,
-        args_kind: ArgsKind::ServeWithWatch,
     },
     CatalogueEntry {
         kind: ClientKind::Cursor,
         scope: Scope::Project,
         strategy: MergeStrategy::McpServers,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::Vscode,
         scope: Scope::Project,
         strategy: MergeStrategy::VsCodeServers,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::Vscode,
         scope: Scope::User,
         strategy: MergeStrategy::VsCodeServers,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::ClaudeDesktop,
         scope: Scope::User,
         strategy: MergeStrategy::McpServers,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::Windsurf,
         scope: Scope::User,
         strategy: MergeStrategy::McpServers,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::Opencode,
         scope: Scope::User,
         strategy: MergeStrategy::Mcp,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::Zed,
         scope: Scope::User,
         strategy: MergeStrategy::ContextServers,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::Codex,
         scope: Scope::User,
         strategy: MergeStrategy::CodexToml,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::Gemini,
         scope: Scope::User,
         strategy: MergeStrategy::McpServers,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::Antigravity,
         scope: Scope::User,
         strategy: MergeStrategy::McpServers,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::Kiro,
         scope: Scope::Project,
         strategy: MergeStrategy::McpServers,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::Kiro,
         scope: Scope::User,
         strategy: MergeStrategy::McpServers,
-        args_kind: ArgsKind::Serve,
     },
     CatalogueEntry {
         kind: ClientKind::Hermes,
         scope: Scope::User,
         strategy: MergeStrategy::HermesYaml,
-        args_kind: ArgsKind::Serve,
     },
 ];
 
@@ -620,24 +603,16 @@ struct CatalogueEntry {
     kind: ClientKind,
     scope: Scope,
     strategy: MergeStrategy,
-    args_kind: ArgsKind,
 }
 
-#[derive(Clone, Copy)]
-enum ArgsKind {
-    /// `["serve"]`
-    Serve,
-    /// `["serve", "--watch"]` unless `--no-watch` was given.
-    ServeWithWatch,
-}
-
-impl ArgsKind {
-    fn resolve(self, no_watch: bool) -> Vec<String> {
-        match self {
-            ArgsKind::Serve => vec!["serve".into()],
-            ArgsKind::ServeWithWatch if no_watch => vec!["serve".into()],
-            ArgsKind::ServeWithWatch => vec!["serve".into(), "--watch".into()],
-        }
+/// Serve args every client is wired with: `["serve", "--watch"]`, dropping
+/// `--watch` when `--no-watch` was given. Concurrent watchers are safe — the
+/// single-writer election makes secondaries skip their own watcher.
+fn serve_args(no_watch: bool) -> Vec<String> {
+    if no_watch {
+        vec!["serve".into()]
+    } else {
+        vec!["serve".into(), "--watch".into()]
     }
 }
 
@@ -704,7 +679,7 @@ pub fn build_specs(
                 scope: e.scope,
                 path,
                 strategy: e.strategy,
-                args: e.args_kind.resolve(no_watch),
+                args: serve_args(no_watch),
             })
         })
         .collect()
@@ -1334,7 +1309,7 @@ fn spec_for(
         scope: entry.scope,
         path,
         strategy: entry.strategy,
-        args: entry.args_kind.resolve(no_watch),
+        args: serve_args(no_watch),
     })
 }
 
@@ -2002,6 +1977,28 @@ mod tests {
         );
         let without = build_specs(
             Some(ClientKind::ClaudeCode),
+            IdeScope::Project,
+            true,
+            &tmp,
+            &homes,
+        );
+        assert_eq!(with[0].args, vec!["serve", "--watch"]);
+        assert_eq!(without[0].args, vec!["serve"]);
+    }
+
+    #[test]
+    fn non_claude_clients_also_get_watch_by_default() {
+        let tmp = std::env::temp_dir();
+        let homes = HomeDirs::default();
+        let with = build_specs(
+            Some(ClientKind::Cursor),
+            IdeScope::Project,
+            false,
+            &tmp,
+            &homes,
+        );
+        let without = build_specs(
+            Some(ClientKind::Cursor),
             IdeScope::Project,
             true,
             &tmp,

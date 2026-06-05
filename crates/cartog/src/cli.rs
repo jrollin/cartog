@@ -374,7 +374,7 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
 
-        /// Omit `--watch` from Claude Code's serve args.
+        /// Omit `--watch` from every client's serve args (default wires `--watch` for all).
         #[arg(long)]
         no_watch: bool,
     },
@@ -402,7 +402,7 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
 
-        /// Omit `--watch` from Claude Code's serve args.
+        /// Omit `--watch` from every client's serve args (default wires `--watch` for all).
         #[arg(long)]
         no_watch: bool,
     },
