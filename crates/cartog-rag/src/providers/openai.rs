@@ -96,6 +96,19 @@ fn status_err(model: &str, api_key_env: &str, e: reqwest::Error) -> anyhow::Erro
 }
 
 impl OpenAiEmbeddingProvider {
+    /// Build a provider for an OpenAI-compatible `/v1/embeddings` endpoint.
+    ///
+    /// - `base_url`: endpoint base ending in `/v1` (default [`DEFAULT_OPENAI_BASE_URL`]).
+    /// - `model`: embedding model name (default [`DEFAULT_OPENAI_MODEL`]).
+    /// - `dimension`: explicit output dimension; `None` auto-detects via a probe request.
+    /// - `api_key_env`: env var holding the API key (default [`DEFAULT_OPENAI_API_KEY_ENV`]);
+    ///   an unset or empty value sends no auth header (keyless local endpoints).
+    ///
+    /// Errors if the HTTP client cannot be built or the dimension probe fails.
+    ///
+    /// [`DEFAULT_OPENAI_BASE_URL`]: super::DEFAULT_OPENAI_BASE_URL
+    /// [`DEFAULT_OPENAI_MODEL`]: super::DEFAULT_OPENAI_MODEL
+    /// [`DEFAULT_OPENAI_API_KEY_ENV`]: super::DEFAULT_OPENAI_API_KEY_ENV
     pub fn new(
         base_url: Option<&str>,
         model: Option<&str>,

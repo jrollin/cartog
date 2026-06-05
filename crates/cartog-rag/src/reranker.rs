@@ -13,7 +13,7 @@ pub struct CrossEncoderEngine {
 impl CrossEncoderEngine {
     /// Load the cross-encoder re-ranker for `model`, downloading the weights from
     /// HuggingFace on first use. Routes through
-    /// [`super::providers::local::load_text_rerank`] so the fastembed variant is selected
+    /// `super::providers::local::load_text_rerank` so the fastembed variant is selected
     /// in exactly one place. Models are cached in the shared directory
     /// (see [`super::model_cache_dir`]).
     pub fn load(model: Option<&str>, intra_threads: Option<usize>) -> Result<Self> {

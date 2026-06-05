@@ -214,7 +214,7 @@ path = ".cartog/db.sqlite"        <span class="comment"># DEFAULT (relative to g
 
 [embedding]
 provider = "local"               <span class="comment"># DEFAULT — "local" (ONNX), "ollama", or "openai"</span>
-# model = "BAAI/bge-small-en-v1.5" <span class="comment"># DEFAULT: unset → built-in bge-small-en-v1.5 (Qdrant/bge-small-en-v1.5-onnx-Q); set only to override</span>
+# model = "BAAI/bge-small-en-v1.5" <span class="comment"># top-level for ALL providers; unset → built-in bge-small (local) / text-embedding-3-small (openai)</span>
 # dimension = 384                <span class="comment"># auto-detected for built-in models</span>
 
 [embedding.local]                <span class="comment"># only used when provider = "local"</span>
@@ -224,9 +224,8 @@ provider = "local"               <span class="comment"># DEFAULT — "local" (ON
 base_url = "http://localhost:11434"
 model = "nomic-embed-text"
 
-[embedding.openai]               <span class="comment"># only used when provider = "openai"</span>
+[embedding.openai]               <span class="comment"># only used when provider = "openai"; set model under [embedding]</span>
 base_url    = "https://api.openai.com/v1"  <span class="comment"># or http://localhost:11434/v1 (Ollama), LM Studio, vLLM, ...</span>
-model       = "text-embedding-3-small"
 api_key_env = "OPENAI_API_KEY"   <span class="comment"># env var NAME, not the key; unset = keyless local endpoint</span>
 
 [reranker]

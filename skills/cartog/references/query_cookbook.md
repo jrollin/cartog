@@ -176,7 +176,7 @@ Like Ollama, the OpenAI provider supplies only embeddings; the reranker is indep
 
 #### Troubleshooting
 
-- **"Unknown or disabled embedding provider: 'ollama'/'openai'"** — Only happens on a `--no-default-features` build; both providers ship by default. Reinstall with `cargo install cartog` (or add `--features ollama-embedding` / `--features openai-embedding`).
+- **"Unknown or disabled embedding provider: 'ollama'/'openai'"** — Usually a build compiled with `--no-default-features` (both providers ship by default), but can also be a missing feature flag or a `provider` typo/misconfiguration. Check `[embedding] provider` in `.cartog.toml` first; if the value is correct, reinstall with `cargo install cartog` or add the matching feature (`--features ollama-embedding` / `--features openai-embedding`).
 - **"Failed to connect to Ollama server"** — Ensure Ollama is running (`ollama serve`). For non-default hosts, set `base_url` under `[embedding.ollama]` in `.cartog.toml`.
 - **"cannot reach OpenAI endpoint"** — Check `[embedding.openai] base_url` and that the endpoint is reachable. **"auth failed"** — set the env var named by `api_key_env` (default `OPENAI_API_KEY`).
 - **"Embedding dimension changed"** — Provider/model switch detected. Run `cartog rag index` to re-embed.

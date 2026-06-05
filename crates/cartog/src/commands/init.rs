@@ -183,7 +183,10 @@ mod tests {
         // sibling examples can't produce a duplicate-table TOML parse error.
         let mut headers = Vec::new();
         for line in TOML_TEMPLATE.lines() {
+            // Strip the comment marker, then any trailing inline comment, so a
+            // header written as `[embedding.openai]  # note` is still detected.
             let t = line.trim_start_matches(['#', ' ']);
+            let t = t.split('#').next().unwrap_or(t).trim();
             if t.starts_with('[') && t.ends_with(']') {
                 headers.push(t);
             }

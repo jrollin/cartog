@@ -249,14 +249,17 @@ pub const DEFAULT_OPENAI_MODEL: &str = cartog_rag::providers::DEFAULT_OPENAI_MOD
 pub const DEFAULT_OPENAI_API_KEY_ENV: &str = cartog_rag::providers::DEFAULT_OPENAI_API_KEY_ENV;
 
 impl OpenAiConfig {
+    /// Endpoint base URL, or [`DEFAULT_OPENAI_BASE_URL`] when unset.
     pub fn base_url(&self) -> &str {
         self.base_url.as_deref().unwrap_or(DEFAULT_OPENAI_BASE_URL)
     }
 
+    /// Embedding model name, or [`DEFAULT_OPENAI_MODEL`] when unset.
     pub fn model(&self) -> &str {
         self.model.as_deref().unwrap_or(DEFAULT_OPENAI_MODEL)
     }
 
+    /// Env var name holding the API key, or [`DEFAULT_OPENAI_API_KEY_ENV`] when unset.
     pub fn api_key_env(&self) -> &str {
         self.api_key_env
             .as_deref()

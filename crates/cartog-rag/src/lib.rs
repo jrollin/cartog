@@ -300,7 +300,7 @@ pub fn is_reranker_resolved_cached(rm: &fastembed::RerankerModel) -> bool {
 /// hf-hub cache directory for the former default reranker (`bge-reranker-base`).
 ///
 /// Derives the `models--<org>--<name>` dir from fastembed's model code (the same
-/// transform [`is_model_cached`] uses) rather than hardcoding the literal, so it tracks
+/// transform `is_model_cached` uses) rather than hardcoding the literal, so it tracks
 /// any fastembed repo-path change. Used by `cartog doctor` to offer a reclaim hint when
 /// the now-orphaned ~1.1GB model lingers under the new default.
 #[cfg(feature = "provider-local")]

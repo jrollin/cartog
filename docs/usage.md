@@ -897,8 +897,8 @@ Users who want the smallest possible binary, or who run in fully air-gapped
 environments, can drop the default features and add back only what they need:
 
 ```bash
-cargo install cartog --no-default-features                 # drops LSP, S3, Ollama
-cargo install cartog --no-default-features --features lsp   # keep LSP only
+cargo install cartog --no-default-features                 # drops LSP, S3, Ollama, OpenAI
+cargo install cartog --no-default-features --features lsp   # keep LSP only (still drops OpenAI)
 ```
 
 A binary built without `remote-s3` refuses `cartog push` and `cartog pull` with

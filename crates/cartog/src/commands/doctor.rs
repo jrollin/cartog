@@ -222,8 +222,20 @@ fn check_embedding_provider(config: &rag::EmbeddingProviderConfig) -> CheckResul
                 .as_deref()
                 .unwrap_or(rag::providers::DEFAULT_OPENAI_API_KEY_ENV);
             // No TCP probe: hosted endpoints sit behind auth and CDNs, so a
-            // socket connect is misleading. Report the endpoint + key presence;
-            // an unset OR empty key is fine for keyless local /v1 servers.
+            // socket connect is misleading. But a base_url without an
+            // http(s):// scheme + host is a config typo we can catch here.
+            if parse_host_port(base_url).is_none() {
+                return CheckResult {
+                    name: "embedding".into(),
+                    status: CheckStatus::Error,
+                    message: format!(
+                        "invalid [embedding.openai].base_url {base_url:?} — expected an \
+                         http(s):// URL ending in /v1"
+                    ),
+                };
+            }
+            // Report the endpoint + key presence; an unset OR empty key is
+            // fine for keyless local /v1 servers.
             if std::env::var(env).is_ok_and(|v| !v.is_empty()) {
                 CheckResult {
                     name: "embedding".into(),
@@ -612,6 +624,18 @@ mod tests {
         let result = check_embedding_provider(&config);
         assert_eq!(result.status, CheckStatus::Warn);
         assert!(result.message.contains("unset"));
+    }
+
+    #[test]
+    fn test_check_embedding_openai_malformed_base_url_errors() {
+        let config = rag::EmbeddingProviderConfig {
+            provider: "openai".into(),
+            base_url: Some("api.openai.com/v1".into()), // missing scheme
+            ..Default::default()
+        };
+        let result = check_embedding_provider(&config);
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(result.message.contains("invalid"));
     }
 
     #[test]
