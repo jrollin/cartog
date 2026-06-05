@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.24.0] - 2026-06-05
+
+### Bug Fixes
+
+- **db**: Skip migration ladder on a freshly-bootstrapped database ([`47f07f3`](https://github.com/jrollin/cartog/commit/47f07f357f82666a5c9cc705c9056087123c9d7a))
+- **languages**: Emit placeholder symbol for Swift extension of external type ([`ea6d8ad`](https://github.com/jrollin/cartog/commit/ea6d8ad2bdfca29bd34620ec4153cc0f3e79882a))
+- **rag**: Surface code for prose queries by filtering kind at retrieval ([`5a3fd93`](https://github.com/jrollin/cartog/commit/5a3fd9380f7929abb6271c313856a3ebb5f62202))
+
+### Documentation
+
+- **rag**: Sync reranker model docs to jina-turbo default ([`81f58dd`](https://github.com/jrollin/cartog/commit/81f58dd930285e8b91ccceb89ef04d31ed1399f5))
+- **rag**: Correct embedding/rerank config facts in docs + site ([`f1c89ad`](https://github.com/jrollin/cartog/commit/f1c89adf7670483ac49d38bee093f65a9da522bc))
+
+### Features
+
+- **rag**: Allow capping ONNX intra-op threads for local provider ([`e2ed63b`](https://github.com/jrollin/cartog/commit/e2ed63b820f7e9a8ee7d4d159f6723d82d7bca63))
+- **rag**: Default reranker to jina-turbo + configurable [reranker] model [**BREAKING**] ([`131b10f`](https://github.com/jrollin/cartog/commit/131b10f904d5cac5ab630264c1d24451eacf6e30))
+
+### Refactor
+
+- **rag**: Add error context to kinded FTS + reuse kind_in_scope ([`63dd7e8`](https://github.com/jrollin/cartog/commit/63dd7e84faf3df931e099b4c84c1348e48b3fef6))
+
+### Testing
+
+- **remote**: Fix flaky sha256 mismatch in pull_refuses_non_cartog_sqlite ([`af48a1e`](https://github.com/jrollin/cartog/commit/af48a1e1107a4e3996d32fd9b8efd6f5a2c2dd96))
+
 ## [0.23.1] - 2026-06-04
 
 ### Bug Fixes
