@@ -7,5 +7,5 @@ mod crud;
 mod lifecycle;
 mod lsp;
 pub(crate) mod queries;
-mod rag;
+pub(crate) mod rag;
 mod resolution;

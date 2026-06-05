@@ -17,7 +17,19 @@ pub enum KindFilter {
     CodeOnly,
 }
 
+impl KindFilter {
+    /// Lower to the DB-layer [`KindScope`] for kind-biased retrieval.
+    fn scope(&self) -> KindScope {
+        match self {
+            KindFilter::Exact(k) => KindScope::Exact(*k),
+            KindFilter::All => KindScope::All,
+            KindFilter::CodeOnly => KindScope::CodeOnly,
+        }
+    }
+}
+
 use super::provider::{embedding_to_bytes, EmbeddingProvider, RerankerProvider};
+use cartog_db::KindScope;
 
 /// Retrieval method that surfaced a search result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
@@ -172,11 +184,13 @@ pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
         .saturating_mul(tuning.retrieval_multiplier)
         .max(tuning.retrieval_floor);
 
-    let fts_results = fts5_search_safe(db, query, retrieval_limit)?;
+    // Bias retrieval to the wanted kind so the budget isn't all docs.
+    let scope = kind_filter.scope();
+    let fts_results = fts5_search_safe(db, query, retrieval_limit, scope)?;
     let fts_count = fts_results.len() as u32;
 
     let vec_results = if db.embedding_count()? > 0 {
-        vector_search(db, query, retrieval_limit, embedding_provider)?
+        vector_search(db, query, retrieval_limit, scope, embedding_provider)?
     } else {
         Vec::new()
     };
@@ -263,11 +277,13 @@ where
         .saturating_mul(tuning.retrieval_multiplier)
         .max(tuning.retrieval_floor);
 
-    let fts_results = fts5_search_safe(db, query, retrieval_limit)?;
+    // Bias retrieval to the wanted kind so the budget isn't all docs.
+    let scope = kind_filter.scope();
+    let fts_results = fts5_search_safe(db, query, retrieval_limit, scope)?;
     let fts_count = fts_results.len() as u32;
 
     let vec_results = if db.embedding_count()? > 0 {
-        vector_search(db, query, retrieval_limit, embedding_provider)?
+        vector_search(db, query, retrieval_limit, scope, embedding_provider)?
     } else {
         Vec::new()
     };
@@ -361,27 +377,20 @@ fn sort_filter_and_pack(
     // 5b. Stable tiebreaker: within same score, prefer higher in-degree (more referenced).
     candidates.sort_by(rerank_ordering);
 
-    // 6. Apply kind filter + limit on (re-ranked) candidates.
-    let mut results = Vec::new();
-    for candidate in candidates {
-        if results.len() >= limit as usize {
-            break;
-        }
-        match &kind_filter {
-            KindFilter::Exact(k) => {
-                if &candidate.symbol.kind != k {
-                    continue;
-                }
-            }
+    // Filter by kind before capping to `limit` so we never return fewer than
+    // `limit` qualifying results just because docs ranked above code.
+    let results: Vec<SearchResult> = candidates
+        .into_iter()
+        .filter(|candidate| match &kind_filter {
+            KindFilter::Exact(k) => &candidate.symbol.kind == k,
             KindFilter::CodeOnly => {
-                if candidate.symbol.kind == SymbolKind::Document {
-                    continue;
-                }
+                candidate.symbol.kind != SymbolKind::Document
+                    && candidate.symbol.kind != SymbolKind::Import
             }
-            KindFilter::All => {}
-        }
-        results.push(candidate);
-    }
+            KindFilter::All => true,
+        })
+        .take(limit as usize)
+        .collect();
 
     HybridSearchResult {
         results,
@@ -439,7 +448,12 @@ fn rerank_candidates(
 /// 3. **OR**: `"validate" OR "token"` — any term present (highest recall, lowest precision)
 ///
 /// Only FTS5 syntax errors trigger fallback; real DB errors are propagated.
-fn fts5_search_safe(db: &Database, query: &str, limit: u32) -> Result<Vec<String>> {
+fn fts5_search_safe(
+    db: &Database,
+    query: &str,
+    limit: u32,
+    scope: KindScope,
+) -> Result<Vec<String>> {
     let terms: Vec<String> = query
         .split_whitespace()
         .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
@@ -450,7 +464,7 @@ fn fts5_search_safe(db: &Database, query: &str, limit: u32) -> Result<Vec<String
 
     // 1. Phrase search (exact adjacency)
     let phrase_query = format!("\"{}\"", query.replace('"', "\"\""));
-    match db.fts5_search(&phrase_query, limit) {
+    match db.fts5_search_kinded(&phrase_query, limit, scope) {
         Ok(results) if !results.is_empty() => return Ok(results),
         Err(e) if !is_fts5_syntax_error(&e) => return Err(e),
         _ => {}
@@ -459,7 +473,7 @@ fn fts5_search_safe(db: &Database, query: &str, limit: u32) -> Result<Vec<String
     // 2. AND search (all terms present, any order)
     if terms.len() > 1 {
         let and_query = terms.join(" AND ");
-        match db.fts5_search(&and_query, limit) {
+        match db.fts5_search_kinded(&and_query, limit, scope) {
             Ok(results) if !results.is_empty() => return Ok(results),
             Err(e) if !is_fts5_syntax_error(&e) => return Err(e),
             _ => {}
@@ -468,7 +482,7 @@ fn fts5_search_safe(db: &Database, query: &str, limit: u32) -> Result<Vec<String
 
     // 3. OR search (any term present — broadest, lowest precision)
     let or_query = terms.join(" OR ");
-    match db.fts5_search(&or_query, limit) {
+    match db.fts5_search_kinded(&or_query, limit, scope) {
         Ok(results) => Ok(results),
         Err(e) if !is_fts5_syntax_error(&e) => Err(e),
         _ => Ok(Vec::new()),
@@ -481,11 +495,21 @@ fn is_fts5_syntax_error(err: &anyhow::Error) -> bool {
     msg.contains("fts5") || msg.contains("syntax") || msg.contains("parse")
 }
 
-/// Vector search: embed the query and find nearest neighbors.
+/// Post-filter predicate for vector hits (`vec0` KNN can't filter by kind).
+fn kind_in_scope(kind: SymbolKind, scope: KindScope) -> bool {
+    match scope {
+        KindScope::All => true,
+        KindScope::CodeOnly => kind != SymbolKind::Document && kind != SymbolKind::Import,
+        KindScope::Exact(k) => kind == k,
+    }
+}
+
+/// Vector search: embed the query and find nearest neighbors, biased to `scope`.
 fn vector_search<E: EmbeddingProvider + ?Sized>(
     db: &Database,
     query: &str,
     limit: u32,
+    scope: KindScope,
     provider: &mut E,
 ) -> Result<Vec<String>> {
     let query_embedding = provider.embed_query(query)?;
@@ -504,7 +528,19 @@ fn vector_search<E: EmbeddingProvider + ?Sized>(
         .filter_map(|(eid, _)| id_lookup.get(eid).cloned())
         .collect();
 
-    Ok(symbol_ids)
+    // Post-filter by kind; `All` skips the lookup (unchanged behaviour).
+    if matches!(scope, KindScope::All) {
+        return Ok(symbol_ids);
+    }
+    let kinds: HashMap<String, SymbolKind> = db
+        .get_symbols_by_ids(&symbol_ids)?
+        .into_iter()
+        .map(|s| (s.id, s.kind))
+        .collect();
+    Ok(symbol_ids
+        .into_iter()
+        .filter(|id| kinds.get(id).is_some_and(|&k| kind_in_scope(k, scope)))
+        .collect())
 }
 
 #[cfg(test)]
@@ -1664,6 +1700,194 @@ mod tests {
                 .iter()
                 .all(|r| r.symbol.kind == SymbolKind::Function),
             "kind filter keeps only functions"
+        );
+    }
+
+    // ── prose→0 regression: kind filtering at retrieval + result tail ──
+
+    fn candidate(name: &str, kind: SymbolKind, rrf: f64) -> SearchResult {
+        SearchResult {
+            symbol: Symbol::new(name, kind, "test.py", 1, 10, 0, 100, None),
+            content: Some("content".to_string()),
+            rrf_score: rrf,
+            rerank_score: None,
+            sources: vec![Source::Fts5],
+        }
+    }
+
+    #[test]
+    fn sort_filter_and_pack_filters_before_limit() {
+        // Top-ranked candidates are Documents; qualifying code sits lower. Under
+        // CodeOnly + limit=2 we must still return the two code symbols, not [].
+        let candidates = vec![
+            candidate("readme", SymbolKind::Document, 0.9),
+            candidate("guide", SymbolKind::Document, 0.8),
+            candidate("do_thing", SymbolKind::Function, 0.7),
+            candidate("do_method", SymbolKind::Method, 0.6),
+        ];
+        let out = sort_filter_and_pack(candidates, (4, 4, 4), 2, KindFilter::CodeOnly);
+        let names: Vec<&str> = out.results.iter().map(|r| r.symbol.name.as_str()).collect();
+        assert_eq!(names, vec!["do_thing", "do_method"]);
+        // Counts stay pre-filter (diagnostic).
+        assert_eq!((out.fts_count, out.vec_count, out.merged_count), (4, 4, 4));
+    }
+
+    #[test]
+    fn sort_filter_and_pack_all_filtered_is_empty() {
+        // Genuinely no code → empty is the correct, honest answer.
+        let candidates = vec![
+            candidate("a", SymbolKind::Document, 0.9),
+            candidate("b", SymbolKind::Document, 0.8),
+        ];
+        let out = sort_filter_and_pack(candidates, (2, 2, 2), 5, KindFilter::CodeOnly);
+        assert!(out.results.is_empty());
+    }
+
+    #[test]
+    fn fts5_kinded_retrieval_excludes_documents() {
+        // A prose word that appears in markdown docs and in code content. The
+        // CodeOnly scope must retrieve the code symbol, not just the docs.
+        let db = Database::open_memory().unwrap();
+        for i in 0..10 {
+            insert_symbol_with_content(
+                &db,
+                &format!("release_notes_{i}"),
+                SymbolKind::Document,
+                &format!("docs/CHANGELOG_{i}.md"),
+                i * 5,
+                "this release improves performance and fixes several issues",
+            );
+        }
+        insert_symbol_with_content(
+            &db,
+            "improve_performance",
+            SymbolKind::Function,
+            "perf.py",
+            1,
+            "def improve_performance(): # improves performance, fixes issues",
+        );
+
+        // CodeOnly retrieval surfaces the function despite 10 doc matches.
+        let code = db
+            .fts5_search_kinded("\"performance\" OR \"fixes\"", 20, KindScope::CodeOnly)
+            .unwrap();
+        assert!(
+            code.iter().any(|id| id.contains("improve_performance")),
+            "code symbol must be retrieved under CodeOnly: {code:?}"
+        );
+        assert!(
+            !code.iter().any(|id| id.contains("CHANGELOG")),
+            "documents must be excluded under CodeOnly: {code:?}"
+        );
+
+        // All scope still returns documents (unchanged behaviour).
+        let all = db
+            .fts5_search_kinded("\"performance\" OR \"fixes\"", 20, KindScope::All)
+            .unwrap();
+        assert!(all.iter().any(|id| id.contains("CHANGELOG")));
+    }
+
+    #[test]
+    fn prose_query_returns_code_when_docs_dominate() {
+        // End-to-end: a doc-heavy corpus + a prose query under the default
+        // CodeOnly must still surface code (the prose→0 bug returned nothing).
+        let db = Database::open_memory().unwrap();
+        for i in 0..12 {
+            insert_symbol_with_content(
+                &db,
+                &format!("changelog_entry_{i}"),
+                SymbolKind::Document,
+                &format!("docs/notes_{i}.md"),
+                i * 5,
+                "this change improves the documentation and fixes several issues going forward",
+            );
+        }
+        insert_symbol_with_content(
+            &db,
+            "fix_documentation_issues",
+            SymbolKind::Function,
+            "fixer.py",
+            1,
+            "def fix_documentation_issues(): # improves documentation, fixes issues",
+        );
+
+        let out = hybrid_search(
+            &db,
+            "this change improves the documentation and fixes several issues going forward",
+            10,
+            KindFilter::CodeOnly,
+            &mut MockEmbeddingProvider::new(384),
+            None,
+        )
+        .unwrap();
+        assert!(
+            out.results
+                .iter()
+                .any(|r| r.symbol.name == "fix_documentation_issues"),
+            "prose query under CodeOnly must surface the code symbol, got: {:?}",
+            out.results
+                .iter()
+                .map(|r| &r.symbol.name)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            out.results
+                .iter()
+                .all(|r| r.symbol.kind != SymbolKind::Document),
+            "CodeOnly must not return documents"
+        );
+    }
+
+    #[test]
+    fn vector_path_kind_post_filter_excludes_documents() {
+        // Exercises the vector arm (the FTS-only tests never build embeddings,
+        // so kind_in_scope / the vector post-filter would otherwise be untested).
+        let db = Database::open_memory().unwrap();
+        insert_symbol_with_content(
+            &db,
+            "release_doc",
+            SymbolKind::Document,
+            "docs/NOTES.md",
+            1,
+            "notes about validation and tokens across the project",
+        );
+        insert_symbol_with_content(
+            &db,
+            "validate_token",
+            SymbolKind::Function,
+            "auth.py",
+            1,
+            "def validate_token(t): # validation of tokens",
+        );
+
+        // Build embeddings so embedding_count() > 0 and vector_search runs.
+        let mut provider = MockEmbeddingProvider::new(384);
+        crate::indexer::index_embeddings(&db, &mut provider, false, None, None).unwrap();
+        assert!(
+            db.embedding_count().unwrap() > 0,
+            "embeddings must be built"
+        );
+
+        let out = hybrid_search(
+            &db,
+            "token validation",
+            10,
+            KindFilter::CodeOnly,
+            &mut provider,
+            None,
+        )
+        .unwrap();
+        assert!(
+            out.results
+                .iter()
+                .any(|r| r.symbol.name == "validate_token"),
+            "code symbol must survive the vector + result kind filters"
+        );
+        assert!(
+            out.results
+                .iter()
+                .all(|r| r.symbol.kind != SymbolKind::Document),
+            "vector path must not surface documents under CodeOnly"
         );
     }
 }

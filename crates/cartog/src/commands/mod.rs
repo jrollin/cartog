@@ -1243,11 +1243,16 @@ pub fn cmd_rag_search(
     )?;
     db.log_query("rag_search", "cli");
     let query = query.to_string();
+    // Gate the "build the index" hint on whether embeddings actually exist, not
+    // on the result counts: kind-filtered retrieval can legitimately yield
+    // fts/vec_count == 0 for a code query that only matched docs, even with a
+    // fully-built index.
+    let embeddings_built = db.embedding_count().map(|n| n > 0).unwrap_or(false);
 
     output(&search_result, json, token_budget, |sr| {
         if sr.results.is_empty() {
             let mut out = format!("No results found for '{query}'\n");
-            if sr.fts_count == 0 && sr.vec_count == 0 {
+            if !embeddings_built {
                 out.push_str("Hint: run 'cartog rag index' to build the semantic search index.\n");
             }
             return out;

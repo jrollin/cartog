@@ -848,6 +848,7 @@ fn backup_before_destructive_migration(
 // navigability; each file holds one cohesive cluster of methods.
 mod store;
 pub use store::queries::PathHop;
+pub use store::rag::KindScope;
 
 /// An unresolved edge from the database (used by LSP resolution).
 #[derive(Debug, Clone)]
