@@ -1,12 +1,9 @@
 use anyhow::{Context, Result};
-use fastembed::{RerankInitOptions, RerankerModel, TextRerank};
-use tracing::info;
-
-use super::model_cache_dir;
+use fastembed::TextRerank;
 
 /// Cross-encoder re-ranker for scoring (query, document) pairs.
 ///
-/// Uses ONNX Runtime via fastembed for inference. The BGE-reranker-base model
+/// Uses ONNX Runtime via fastembed for inference. The configured reranker model
 /// processes query and document jointly through all transformer layers,
 /// producing a relevance score for each pair.
 pub struct CrossEncoderEngine {
@@ -14,27 +11,15 @@ pub struct CrossEncoderEngine {
 }
 
 impl CrossEncoderEngine {
-    /// Load the cross-encoder re-ranker model.
-    ///
-    /// Downloads the model from HuggingFace on first use (~1.1GB).
-    /// Progress is always enabled (visible in TTY via indicatif, logged via tracing
-    /// for non-TTY environments like AI editors).
-    /// Models are cached in the shared directory (see [`super::model_cache_dir`]).
-    pub fn load() -> Result<Self> {
-        if super::is_reranker_model_cached() {
-            info!("Loading reranker model...");
-        } else {
-            info!("Downloading reranker model (~1.1GB, first time only)...");
-        }
-
-        let model = TextRerank::try_new(
-            RerankInitOptions::new(RerankerModel::BGERerankerBase)
-                .with_cache_dir(model_cache_dir())
-                .with_show_download_progress(true),
-        )
-        .context("Failed to initialize cross-encoder model")?;
-
-        Ok(Self { model })
+    /// Load the cross-encoder re-ranker for `model`, downloading the weights from
+    /// HuggingFace on first use. Routes through
+    /// [`super::providers::local::load_text_rerank`] so the fastembed variant is selected
+    /// in exactly one place. Models are cached in the shared directory
+    /// (see [`super::model_cache_dir`]).
+    pub fn load(model: Option<&str>, intra_threads: Option<usize>) -> Result<Self> {
+        Ok(Self {
+            model: super::providers::local::load_text_rerank(model, intra_threads)?,
+        })
     }
 
     /// Score multiple documents against a single query.

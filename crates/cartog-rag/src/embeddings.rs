@@ -25,7 +25,7 @@ impl EmbeddingEngine {
     /// for non-TTY environments like AI editors).
     /// Models are cached in the shared directory (see [`super::model_cache_dir`]).
     pub fn new() -> Result<Self> {
-        if super::is_embedding_model_cached() {
+        if super::is_embedding_model_cached(None) {
             info!("Loading embedding model...");
         } else {
             info!("Downloading embedding model (~80MB, first time only)...");

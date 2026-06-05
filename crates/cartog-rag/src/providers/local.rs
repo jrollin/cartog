@@ -76,7 +76,7 @@ impl LocalEmbeddingProvider {
         // path is wire-stable across fastembed releases.
         let model_code = model_info.model_code.clone();
 
-        let is_cached = crate::is_embedding_model_cached();
+        let is_cached = crate::is_embedding_model_cached(model_name);
         if is_cached {
             info!("Loading embedding model...");
         } else {
@@ -171,34 +171,43 @@ pub struct LocalRerankerProvider {
     model: fastembed::TextRerank,
 }
 
+/// Load a fastembed `TextRerank` for the given reranker model, fetching the weights
+/// into the shared model cache on first use. The single place the fastembed reranker
+/// variant is loaded — both [`LocalRerankerProvider::load`] and
+/// [`crate::reranker::CrossEncoderEngine::load`] route through here.
+///
+/// `intra_threads` caps the ONNX intra-op thread count: `CARTOG_ONNX_THREADS` env var >
+/// this argument (`[embedding.local] intra_threads`); neither set leaves it uncapped
+/// (fastembed's default — all cores).
+///
+/// Returns `Err` if the weights cannot be downloaded or the ONNX session fails to
+/// initialize; callers treat this as "re-ranking unavailable" and fall back to RRF-only.
+pub(crate) fn load_text_rerank(
+    model: Option<&str>,
+    intra_threads: Option<usize>,
+) -> Result<fastembed::TextRerank> {
+    let rm = crate::resolve_reranker_model(model)?;
+    if crate::is_reranker_resolved_cached(&rm) {
+        info!("Loading reranker model...");
+    } else {
+        let code = fastembed::TextRerank::get_model_info(&rm).model_code;
+        info!("Downloading reranker model ({code}, first time only)...");
+    }
+
+    let opts = with_optional_threads!(
+        fastembed::RerankInitOptions::new(rm).with_cache_dir(model_cache_dir()),
+        onnx_intra_threads(intra_threads)
+    );
+    fastembed::TextRerank::try_new(opts.with_show_download_progress(true))
+        .context("Failed to initialize cross-encoder model")
+}
+
 impl LocalRerankerProvider {
-    /// Load the local ONNX cross-encoder re-ranker (BGE-reranker-base), fetching
-    /// the weights into the model cache on first use.
-    ///
-    /// `intra_threads` is an optional cap on the ONNX intra-op thread count. The
-    /// effective cap is resolved as `CARTOG_ONNX_THREADS` env var > this argument
-    /// (the TOML `[embedding.local] intra_threads`); when neither is set the
-    /// session is left uncapped (fastembed's default — all available cores).
-    ///
-    /// Returns `Err` if the model weights cannot be downloaded or the ONNX
-    /// session fails to initialize; callers treat this as "re-ranking
-    /// unavailable" and fall back to RRF-only ordering.
-    pub fn load(intra_threads: Option<usize>) -> Result<Self> {
-        if crate::is_reranker_model_cached() {
-            info!("Loading reranker model...");
-        } else {
-            info!("Downloading reranker model (~1.1GB, first time only)...");
-        }
-
-        let opts = with_optional_threads!(
-            fastembed::RerankInitOptions::new(fastembed::RerankerModel::BGERerankerBase)
-                .with_cache_dir(model_cache_dir()),
-            onnx_intra_threads(intra_threads)
-        );
-        let model = fastembed::TextRerank::try_new(opts.with_show_download_progress(true))
-            .context("Failed to initialize cross-encoder model")?;
-
-        Ok(Self { model })
+    /// Load the local ONNX cross-encoder re-ranker for `model`. See [`load_text_rerank`].
+    pub fn load(model: Option<&str>, intra_threads: Option<usize>) -> Result<Self> {
+        Ok(Self {
+            model: load_text_rerank(model, intra_threads)?,
+        })
     }
 }
 

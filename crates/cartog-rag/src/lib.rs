@@ -19,6 +19,10 @@ pub mod search;
 #[cfg(feature = "provider-local")]
 pub mod setup;
 
+/// Default reranker model (HuggingFace repo path). Small, fast, higher BEIR NDCG@10
+/// than the former bge-reranker-base default. Resolved when `[reranker] model` is unset.
+pub const DEFAULT_RERANKER_MODEL: &str = "jinaai/jina-reranker-v1-turbo-en";
+
 /// Default embedding dimension (re-exported from cartog-db for convenience).
 pub const EMBEDDING_DIM: usize = cartog_db::DEFAULT_EMBEDDING_DIM;
 
@@ -51,6 +55,9 @@ pub struct EmbeddingProviderConfig {
     pub base_url: Option<String>,
     /// Reranker provider: "local" (default) or "none".
     pub reranker_provider: String,
+    /// Reranker model as a fastembed HF repo path (e.g. `BAAI/bge-reranker-base`).
+    /// None = [`DEFAULT_RERANKER_MODEL`]. Mirrors `model` for embeddings.
+    pub reranker_model: Option<String>,
     /// Optional cap on ONNX intra-op threads for the local provider. None =
     /// fastembed's default (all cores). `CARTOG_ONNX_THREADS` overrides this.
     pub intra_threads: Option<usize>,
@@ -66,6 +73,7 @@ impl Default for EmbeddingProviderConfig {
             document_prefix: None,
             base_url: None,
             reranker_provider: "local".to_string(),
+            reranker_model: None,
             intra_threads: None,
         }
     }
@@ -145,19 +153,23 @@ pub fn create_default_embedding_provider() -> anyhow::Result<Box<dyn provider::E
 /// - `"local"` — loads the local ONNX cross-encoder (requires `provider-local` feature)
 /// - `"none"` — disables re-ranking
 ///
+/// `model` is the fastembed reranker HF repo path; `None` = [`DEFAULT_RERANKER_MODEL`].
+/// Ignored for `"none"`.
+///
 /// Returns `None` if re-ranking is disabled, the model is unavailable, or the feature is off.
 pub fn create_reranker_provider(
     reranker_provider: &str,
+    model: Option<&str>,
     intra_threads: Option<usize>,
 ) -> Option<Box<dyn provider::RerankerProvider>> {
-    // `intra_threads` is only consumed by the local provider; without that
-    // feature it would trip `-D unused-variables`.
+    // `model`/`intra_threads` are only consumed by the local provider; without that
+    // feature they would trip `-D unused-variables`.
     #[cfg(not(feature = "provider-local"))]
-    let _ = intra_threads;
+    let _ = (model, intra_threads);
     match reranker_provider {
         "none" => None,
         #[cfg(feature = "provider-local")]
-        "local" => match providers::local::LocalRerankerProvider::load(intra_threads) {
+        "local" => match providers::local::LocalRerankerProvider::load(model, intra_threads) {
             Ok(r) => Some(Box::new(r)),
             Err(e) => {
                 tracing::warn!(error = %e, "Cross-encoder not available, skipping re-ranking");
@@ -174,21 +186,12 @@ pub fn create_reranker_provider(
     }
 }
 
-/// Create the default local reranker provider (BGE-reranker-base).
+/// Create the default local reranker provider ([`DEFAULT_RERANKER_MODEL`]).
 pub fn create_default_reranker_provider() -> Option<Box<dyn provider::RerankerProvider>> {
-    create_reranker_provider("local", None)
+    create_reranker_provider("local", None, None)
 }
 
 // ── Local ONNX model cache management (provider-local only) ──
-
-#[cfg(feature = "provider-local")]
-const EMBEDDING_MODEL_CODE: &str = "Qdrant/bge-small-en-v1.5-onnx-Q";
-#[cfg(feature = "provider-local")]
-const EMBEDDING_MODEL_FILE: &str = "model_optimized.onnx";
-#[cfg(feature = "provider-local")]
-const RERANKER_MODEL_CODE: &str = "BAAI/bge-reranker-base";
-#[cfg(feature = "provider-local")]
-const RERANKER_MODEL_FILE: &str = "onnx/model.onnx";
 
 /// Check if a model is already downloaded in the hf-hub cache (no network access).
 ///
@@ -211,14 +214,89 @@ fn is_model_cached(model_code: &str, model_file: &str) -> bool {
     model_path.exists()
 }
 
+/// Check whether every file of an `(model_code, model_file, additional_files)` triple
+/// is present in the hf-hub cache. The `additional_files` cover models with a separate
+/// weights sidecar (e.g. `model.onnx.data`).
 #[cfg(feature = "provider-local")]
-pub fn is_embedding_model_cached() -> bool {
-    is_model_cached(EMBEDDING_MODEL_CODE, EMBEDDING_MODEL_FILE)
+fn are_model_files_cached(model_code: &str, model_file: &str, additional_files: &[String]) -> bool {
+    is_model_cached(model_code, model_file)
+        && additional_files
+            .iter()
+            .all(|f| is_model_cached(model_code, f))
 }
 
+/// Resolve an embedding `model` name (None = the default BGE-small) to its fastembed
+/// variant. Errors on an unknown name, mirroring [`resolve_reranker_model`].
 #[cfg(feature = "provider-local")]
-pub fn is_reranker_model_cached() -> bool {
-    is_model_cached(RERANKER_MODEL_CODE, RERANKER_MODEL_FILE)
+pub(crate) fn resolve_embedding_model(
+    model: Option<&str>,
+) -> anyhow::Result<fastembed::EmbeddingModel> {
+    match model {
+        Some(name) => name
+            .parse::<fastembed::EmbeddingModel>()
+            .map_err(|e| anyhow::anyhow!("{e}")),
+        None => Ok(fastembed::EmbeddingModel::BGESmallENV15Q),
+    }
+}
+
+/// Check if `model`'s embedding weights are already in the hf-hub cache (no network).
+///
+/// Derives the cache identity from fastembed so a configured non-default `[embedding]
+/// model` is checked against its own cache dir, not the default's. An unknown/unparseable
+/// `model` is treated as "not cached" (the loader surfaces the error).
+#[cfg(feature = "provider-local")]
+pub fn is_embedding_model_cached(model: Option<&str>) -> bool {
+    let Ok(em) = resolve_embedding_model(model) else {
+        return false;
+    };
+    let Ok(info) = fastembed::TextEmbedding::get_model_info(&em) else {
+        return false;
+    };
+    are_model_files_cached(&info.model_code, &info.model_file, &info.additional_files)
+}
+
+/// Resolve a reranker `model` repo path (None = [`DEFAULT_RERANKER_MODEL`]) to its
+/// fastembed variant. Errors on an unknown repo path. Mirrors embedding's model parse.
+#[cfg(feature = "provider-local")]
+pub fn resolve_reranker_model(model: Option<&str>) -> anyhow::Result<fastembed::RerankerModel> {
+    model
+        .unwrap_or(DEFAULT_RERANKER_MODEL)
+        .parse::<fastembed::RerankerModel>()
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Check if a already-resolved reranker model's weights are in the hf-hub cache.
+/// Takes the resolved variant so the caller (which already parsed it) avoids re-parsing.
+#[cfg(feature = "provider-local")]
+pub fn is_reranker_resolved_cached(rm: &fastembed::RerankerModel) -> bool {
+    let info = fastembed::TextRerank::get_model_info(rm);
+    are_model_files_cached(&info.model_code, &info.model_file, &info.additional_files)
+}
+
+/// hf-hub cache directory for the former default reranker (`bge-reranker-base`).
+///
+/// Derives the `models--<org>--<name>` dir from fastembed's model code (the same
+/// transform [`is_model_cached`] uses) rather than hardcoding the literal, so it tracks
+/// any fastembed repo-path change. Used by `cartog doctor` to offer a reclaim hint when
+/// the now-orphaned ~1.1GB model lingers under the new default.
+#[cfg(feature = "provider-local")]
+pub fn legacy_bge_reranker_cache_dir() -> std::path::PathBuf {
+    let code = fastembed::TextRerank::get_model_info(&fastembed::RerankerModel::BGERerankerBase)
+        .model_code;
+    model_cache_dir().join(format!("models--{}", code.replace('/', "--")))
+}
+
+/// Check if `model`'s reranker weights are already in the hf-hub cache (no network).
+///
+/// Convenience wrapper over [`is_reranker_resolved_cached`] for callers holding a config
+/// string. An unknown/unparseable `model` is treated as "not cached"; callers that need to
+/// distinguish "invalid" from "uncached" should call [`resolve_reranker_model`] first.
+#[cfg(feature = "provider-local")]
+pub fn is_reranker_model_cached(model: Option<&str>) -> bool {
+    match resolve_reranker_model(model) {
+        Ok(rm) => is_reranker_resolved_cached(&rm),
+        Err(_) => false,
+    }
 }
 
 /// Shared model cache directory for ONNX models (embedding + reranker).
@@ -340,7 +418,44 @@ mod tests {
         assert!(config.query_prefix.is_none());
         assert!(config.document_prefix.is_none());
         assert!(config.base_url.is_none());
+        assert_eq!(config.reranker_provider, "local");
+        assert!(config.reranker_model.is_none());
         assert_eq!(config.resolved_dimension(), 384);
+    }
+
+    #[cfg(feature = "provider-local")]
+    #[test]
+    fn test_resolve_reranker_model_default_and_known_and_unknown() {
+        // None resolves to the default; a known repo path parses; an unknown errors.
+        assert_eq!(
+            resolve_reranker_model(None).unwrap(),
+            fastembed::RerankerModel::JINARerankerV1TurboEn
+        );
+        assert_eq!(
+            resolve_reranker_model(Some("BAAI/bge-reranker-base")).unwrap(),
+            fastembed::RerankerModel::BGERerankerBase
+        );
+        let err = resolve_reranker_model(Some("nope/not-real")).unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("unknown"));
+    }
+
+    #[cfg(feature = "provider-local")]
+    #[test]
+    fn test_default_reranker_model_const_resolves() {
+        // DEFAULT_RERANKER_MODEL must be a real fastembed repo path.
+        assert!(DEFAULT_RERANKER_MODEL
+            .parse::<fastembed::RerankerModel>()
+            .is_ok());
+    }
+
+    #[cfg(feature = "provider-local")]
+    #[test]
+    fn test_resolve_embedding_model_default_and_unknown() {
+        assert_eq!(
+            resolve_embedding_model(None).unwrap(),
+            fastembed::EmbeddingModel::BGESmallENV15Q
+        );
+        assert!(resolve_embedding_model(Some("not-a-real-embedding-model")).is_err());
     }
 
     #[test]

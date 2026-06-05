@@ -148,7 +148,8 @@ fn parse_host_port(url: &str) -> Option<String> {
 fn check_embedding_provider(config: &rag::EmbeddingProviderConfig) -> CheckResult {
     match config.provider.as_str() {
         "local" => {
-            if rag::is_embedding_model_cached() {
+            let model = config.model.as_deref();
+            if rag::is_embedding_model_cached(model) {
                 CheckResult {
                     name: "embedding".into(),
                     status: CheckStatus::Ok,
@@ -220,32 +221,55 @@ fn check_embedding_provider(config: &rag::EmbeddingProviderConfig) -> CheckResul
 }
 
 fn check_reranker(config: &rag::EmbeddingProviderConfig) -> CheckResult {
+    let model = config.reranker_model.as_deref();
+    let name = model.unwrap_or(rag::DEFAULT_RERANKER_MODEL);
     match config.reranker_provider.as_str() {
         "none" => CheckResult {
             name: "reranker".into(),
             status: CheckStatus::Ok,
             message: "disabled".into(),
         },
-        "local" => {
-            if rag::is_reranker_model_cached() {
-                CheckResult {
-                    name: "reranker".into(),
-                    status: CheckStatus::Ok,
-                    message: "local model cached".into(),
-                }
-            } else {
-                CheckResult {
-                    name: "reranker".into(),
-                    status: CheckStatus::Warn,
-                    message: "local model not downloaded, run 'cartog rag setup'".into(),
+        "local" => match rag::resolve_reranker_model(model) {
+            // Unparseable model = config error, not a missing download.
+            Err(e) => CheckResult {
+                name: "reranker".into(),
+                status: CheckStatus::Error,
+                message: format!("unknown reranker model '{name}': {e}"),
+            },
+            Ok(rm) => {
+                if rag::is_reranker_resolved_cached(&rm) {
+                    CheckResult {
+                        name: "reranker".into(),
+                        status: CheckStatus::Ok,
+                        message: format!("{name} cached{}", orphan_bge_hint(name)),
+                    }
+                } else {
+                    CheckResult {
+                        name: "reranker".into(),
+                        status: CheckStatus::Warn,
+                        message: format!("{name} not downloaded, run 'cartog rag setup'"),
+                    }
                 }
             }
-        }
+        },
         other => CheckResult {
             name: "reranker".into(),
             status: CheckStatus::Error,
             message: format!("unknown provider '{other}'"),
         },
+    }
+}
+
+/// Reclaim hint when the old bge-base weights are orphaned under the new default.
+fn orphan_bge_hint(active: &str) -> String {
+    let orphan = rag::legacy_bge_reranker_cache_dir();
+    if active == rag::DEFAULT_RERANKER_MODEL && orphan.is_dir() {
+        format!(
+            " (old bge-reranker-base ~1.1GB reclaimable: rm -rf {})",
+            orphan.display()
+        )
+    } else {
+        String::new()
     }
 }
 
@@ -765,9 +789,37 @@ mod tests {
     fn test_check_reranker_local() {
         let config = rag::EmbeddingProviderConfig::default();
         let result = check_reranker(&config);
-        // Either Ok (cached) or Warn (not cached) — never Error for "local"
+        // Either Ok (cached) or Warn (not cached) — never Error for "local".
         assert_ne!(result.status, CheckStatus::Error);
         assert_eq!(result.name, "reranker");
+        // The message names the resolved default model regardless of cache state.
+        assert!(result.message.contains(rag::DEFAULT_RERANKER_MODEL));
+    }
+
+    #[test]
+    fn test_check_reranker_local_custom_model() {
+        let config = rag::EmbeddingProviderConfig {
+            reranker_model: Some("BAAI/bge-reranker-base".into()),
+            ..Default::default()
+        };
+        let result = check_reranker(&config);
+        assert_ne!(result.status, CheckStatus::Error);
+        assert!(result.message.contains("BAAI/bge-reranker-base"));
+    }
+
+    #[test]
+    fn test_check_reranker_invalid_model_is_error_not_missing_download() {
+        // An unparseable model must surface as an Error naming the bad value, not a
+        // misleading "not downloaded, run 'cartog rag setup'" (setup would also fail).
+        let config = rag::EmbeddingProviderConfig {
+            reranker_model: Some("totally/not-a-real-reranker".into()),
+            ..Default::default()
+        };
+        let result = check_reranker(&config);
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(result.message.contains("unknown reranker model"));
+        assert!(result.message.contains("totally/not-a-real-reranker"));
+        assert!(!result.message.contains("rag setup"));
     }
 
     // ── check_embedding_provider ollama with bad URL ──

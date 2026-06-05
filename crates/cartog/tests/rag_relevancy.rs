@@ -198,7 +198,7 @@ fn rag_relevancy_benchmark() {
     ];
 
     // Try loading the cross-encoder to check availability.
-    let reranker_active = cartog::rag::reranker::CrossEncoderEngine::load().is_ok();
+    let reranker_active = cartog::rag::reranker::CrossEncoderEngine::load(None, None).is_ok();
 
     println!();
     println!(
@@ -354,7 +354,7 @@ fn java_rag_relevancy_benchmark() {
         },
     ];
 
-    let reranker_active = cartog::rag::reranker::CrossEncoderEngine::load().is_ok();
+    let reranker_active = cartog::rag::reranker::CrossEncoderEngine::load(None, None).is_ok();
 
     println!();
     println!("  Java fixture:");
