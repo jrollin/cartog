@@ -48,7 +48,7 @@ Each link goes to that crate's `README.md`, which has the detailed responsibilit
 - **[cartog-db](../crates/cartog-db/README.md)** — SQLite connection, core + RAG schema, query methods (search, refs, impact, hierarchy, callees), 6-tier edge resolution, FTS5, sqlite-vec.
 - **[cartog-languages](../crates/cartog-languages/README.md)** — `Extractor` trait + 11 code extractors (Python, TypeScript (.ts, .tsx), JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin) + Markdown extractor.
 - **[cartog-indexer](../crates/cartog-indexer/README.md)** — directory walking, layered change detection (git diff → SHA-256 → Merkle), surgical symbol-level updates. Optionally delegates to `cartog-lsp`. See [architecture/incremental-indexing.md](architecture/incremental-indexing.md).
-- **[cartog-rag](../crates/cartog-rag/README.md)** — pluggable embedding providers (local ONNX, Ollama), hybrid search (FTS5 + vector KNN → RRF merge → cross-encoder reranking), model cache.
+- **[cartog-rag](../crates/cartog-rag/README.md)** — pluggable embedding providers (local ONNX, Ollama, OpenAI-compatible), hybrid search (FTS5 + vector KNN → RRF merge → cross-encoder reranking), model cache.
 - **[cartog-lsp](../crates/cartog-lsp/README.md)** — LSP-based edge resolution (default feature). Spawns language servers, `textDocument/definition`, maps responses to cartog symbol IDs.
 - **[cartog-watch](../crates/cartog-watch/README.md)** — debounced file watcher (`notify-debouncer-mini`), incremental re-index, deferred RAG embedding.
 - **[cartog-mcp](../crates/cartog-mcp/README.md)** — MCP server over stdio (`rmcp`). 16 tool handlers, single-writer election (primary + read-only attach + promotion).
