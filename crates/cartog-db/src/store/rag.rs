@@ -184,14 +184,20 @@ impl Database {
                  LIMIT ?2"
             )
         };
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = match kind_param {
+        let ctx =
+            || format!("fts5_search_kinded (scope={scope:?}, query={query:?}, limit={limit})");
+        let mut stmt = self.conn.prepare(&sql).with_context(ctx)?;
+        let rows: Vec<String> = match kind_param {
             Some(k) => stmt
-                .query_map(params![query, limit, k], |row| row.get(0))?
-                .collect::<std::result::Result<Vec<_>, _>>()?,
+                .query_map(params![query, limit, k], |row| row.get(0))
+                .with_context(ctx)?
+                .collect::<std::result::Result<_, _>>()
+                .with_context(ctx)?,
             None => stmt
-                .query_map(params![query, limit], |row| row.get(0))?
-                .collect::<std::result::Result<Vec<_>, _>>()?,
+                .query_map(params![query, limit], |row| row.get(0))
+                .with_context(ctx)?
+                .collect::<std::result::Result<_, _>>()
+                .with_context(ctx)?,
         };
         Ok(rows)
     }

@@ -378,17 +378,12 @@ fn sort_filter_and_pack(
     candidates.sort_by(rerank_ordering);
 
     // Filter by kind before capping to `limit` so we never return fewer than
-    // `limit` qualifying results just because docs ranked above code.
+    // `limit` qualifying results just because docs ranked above code. Reuse
+    // `kind_in_scope` so this tail matches the retrieval/vector kind filter.
+    let scope = kind_filter.scope();
     let results: Vec<SearchResult> = candidates
         .into_iter()
-        .filter(|candidate| match &kind_filter {
-            KindFilter::Exact(k) => &candidate.symbol.kind == k,
-            KindFilter::CodeOnly => {
-                candidate.symbol.kind != SymbolKind::Document
-                    && candidate.symbol.kind != SymbolKind::Import
-            }
-            KindFilter::All => true,
-        })
+        .filter(|candidate| kind_in_scope(candidate.symbol.kind, scope))
         .take(limit as usize)
         .collect();
 
