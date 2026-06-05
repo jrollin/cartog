@@ -195,7 +195,7 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
           <tbody>
             <tr><td><code>CARTOG_DB</code></td><td>auto-detect</td><td>Database path (same as <code>--db</code>).</td></tr>
             <tr><td><code>CARTOG_ONNX_THREADS</code></td><td>all cores</td><td>Caps ONNX CPU threads for <code>rag index</code> + reranking. Overrides <code>[embedding.local] intra_threads</code>; <code>1</code> forces single-core.</td></tr>
-            <tr><td><code>CARTOG_WATCH_RAG</code></td><td>unset</td><td>Force watcher auto-embed on/off (<code>1</code>/<code>0</code>). Overrides <code>[embedding] auto_embed</code> and <code>--rag</code>. Unset = auto-detect from the DB.</td></tr>
+            <tr><td><code>CARTOG_WATCH_RAG</code></td><td>unset</td><td>Force watcher auto-embed; overrides <code>[embedding] auto_embed</code> and <code>--rag</code>:<br><code>1</code> = force on<br><code>0</code> = force off<br>unset = auto-detect from the DB</td></tr>
             <tr><td><code>CARTOG_SINGLE_WRITER</code></td><td><code>1</code></td><td><code>0</code> disables MCP single-writer election (every <code>serve</code> opens read-write).</td></tr>
             <tr><td><code>CARTOG_MCP_MAX_BYTES</code></td><td><code>65536</code></td><td>Max bytes per MCP tool response before truncation.</td></tr>
             <tr><td><code>CARTOG_NO_UPDATE_CHECK</code></td><td>unset</td><td>Set to skip the background self-update check.</td></tr>

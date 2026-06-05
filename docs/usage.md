@@ -236,7 +236,7 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 |----------|---------|--------|
 | `CARTOG_DB` | auto-detect | Database path (same as `--db`). |
 | `CARTOG_ONNX_THREADS` | all cores | Caps ONNX CPU threads for `rag index` + reranking. Overrides `[embedding.local] intra_threads`. `1` forces single-core. |
-| `CARTOG_WATCH_RAG` | unset | Force watcher auto-embed on/off (`1`/`0`). Overrides `[embedding] auto_embed` and `--rag`. Unset = auto-detect from the DB. |
+| `CARTOG_WATCH_RAG` | unset | Force watcher auto-embed; overrides `[embedding] auto_embed` and `--rag`:<br>`1` = force on<br>`0` = force off<br>unset = auto-detect from the DB |
 | `CARTOG_SINGLE_WRITER` | `1` | `0` disables MCP single-writer election (every `cartog serve` opens read-write). |
 | `CARTOG_MCP_MAX_BYTES` | `65536` | Max bytes per MCP tool response before truncation. |
 | `CARTOG_NO_UPDATE_CHECK` | unset | Set to skip the background self-update check. |

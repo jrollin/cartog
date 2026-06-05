@@ -594,6 +594,8 @@ path = "~/.local/share/cartog/myproject.db"
 [embedding]
 provider = "ollama"          # "local" (default), "ollama", or "openai"
 model = "nomic-embed-text"
+# auto_embed = true          # watcher auto-embed; unset = auto-detect (embed if the
+                             # repo already has embeddings). CARTOG_WATCH_RAG > this > --rag
 
 [embedding.ollama]
 base_url = "http://localhost:11434"
