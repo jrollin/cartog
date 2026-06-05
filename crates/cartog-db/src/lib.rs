@@ -2444,6 +2444,23 @@ mod tests {
     }
 
     #[test]
+    fn embedding_count_excludes_orphan_map_rows() {
+        let db = Database::open_memory().unwrap();
+        // Orphan map row (no vector yet) must not count as a usable embedding.
+        let _eid = db.get_or_create_embedding_id("a:foo:1").unwrap();
+        assert_eq!(db.embedding_count().unwrap(), 0);
+
+        // Once a vector is written it counts.
+        let eid = db.get_or_create_embedding_id("a:foo:1").unwrap();
+        let bytes: Vec<u8> = vec![0.0f32; 384]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        db.upsert_embedding(eid, &bytes).unwrap();
+        assert_eq!(db.embedding_count().unwrap(), 1);
+    }
+
+    #[test]
     fn test_symbols_needing_embeddings() {
         let db = Database::open_memory().unwrap();
         let sym1 = test_symbol("foo", SymbolKind::Function, "a.py", 1);
@@ -2505,6 +2522,57 @@ mod tests {
         // b.py data intact
         assert!(db.get_symbol_content(&sym2.id).unwrap().is_some());
         assert!(db.has_embedding(&sym2.id).unwrap());
+    }
+
+    #[test]
+    fn clear_embeddings_for_symbols_drops_only_named_ids() {
+        let db = Database::open_memory().unwrap();
+        let sym1 = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        let sym2 = test_symbol("bar", SymbolKind::Function, "a.py", 10);
+        db.insert_symbols(&[sym1.clone(), sym2.clone()]).unwrap();
+        db.upsert_symbol_content(&sym1.id, "foo", "def foo(): pass", "header")
+            .unwrap();
+        db.upsert_symbol_content(&sym2.id, "bar", "def bar(): pass", "header")
+            .unwrap();
+
+        let bytes: Vec<u8> = vec![0.0f32; 384]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        for sym in [&sym1, &sym2] {
+            let eid = db.get_or_create_embedding_id(&sym.id).unwrap();
+            db.upsert_embedding(eid, &bytes).unwrap();
+        }
+        assert_eq!(db.embedding_count().unwrap(), 2);
+
+        let tx = db.begin_indexing_tx().unwrap();
+        db.clear_embeddings_for_symbols_in_tx(std::slice::from_ref(&sym1.id))
+            .unwrap();
+        tx.commit().unwrap();
+
+        // sym1's embedding gone, sym2 intact, content untouched for both.
+        assert!(!db.has_embedding(&sym1.id).unwrap());
+        assert!(db.has_embedding(&sym2.id).unwrap());
+        assert!(db.get_symbol_content(&sym1.id).unwrap().is_some());
+        // The cleared symbol is now back in the needs-embedding set.
+        let needing = db.symbols_needing_embeddings().unwrap();
+        assert_eq!(needing, vec![sym1.id.clone()]);
+    }
+
+    #[test]
+    fn clear_embeddings_for_symbols_is_noop_for_unembedded_id() {
+        let db = Database::open_memory().unwrap();
+        let sym = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        db.insert_symbols(std::slice::from_ref(&sym)).unwrap();
+        db.upsert_symbol_content(&sym.id, "foo", "def foo(): pass", "header")
+            .unwrap();
+
+        let tx = db.begin_indexing_tx().unwrap();
+        db.clear_embeddings_for_symbols_in_tx(std::slice::from_ref(&sym.id))
+            .unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(db.embedding_count().unwrap(), 0);
     }
 
     #[test]

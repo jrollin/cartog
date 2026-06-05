@@ -346,13 +346,6 @@ impl Database {
             "UPDATE edges SET target_id = NULL, resolution_state = 0, resolution_source = NULL
              WHERE target_id = ?1",
         )?;
-        let mut del_vec = self.conn.prepare_cached(
-            "DELETE FROM symbol_vec WHERE rowid IN \
-             (SELECT id FROM symbol_embedding_map WHERE symbol_id = ?1)",
-        )?;
-        let mut del_map = self
-            .conn
-            .prepare_cached("DELETE FROM symbol_embedding_map WHERE symbol_id = ?1")?;
         let mut del_content = self
             .conn
             .prepare_cached("DELETE FROM symbol_content WHERE symbol_id = ?1")?;
@@ -362,8 +355,8 @@ impl Database {
         for id in ids {
             del_out.execute(params![id])?;
             null_in.execute(params![id])?;
-            del_vec.execute(params![id])?;
-            del_map.execute(params![id])?;
+            // Embedding vec+map delete shared with clear_embeddings_for_symbols_in_tx.
+            self.delete_embedding_rows_for_id_in_tx(id)?;
             del_content.execute(params![id])?;
             del_sym.execute(params![id])?;
         }

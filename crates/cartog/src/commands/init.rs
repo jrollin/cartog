@@ -29,6 +29,10 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # and uncomment the [embedding.openai] block below. The API key is read from an
 # env var, never stored here; leave the var unset for keyless local endpoints.
 # model = "text-embedding-3-small"
+#
+# Watcher auto-embed under `serve --watch` / `watch`. Omit for auto-detect (embed
+# only if the repo already has embeddings). Precedence: CARTOG_WATCH_RAG > this > --rag.
+# auto_embed = true
 
 # [embedding.openai]                            # only used when provider = "openai"
 # base_url    = "https://api.openai.com/v1"     # or http://localhost:11434/v1 (Ollama), etc.

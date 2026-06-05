@@ -72,8 +72,8 @@ fn ide_creates_project_mcp_json_and_cursor_dir() {
         .expect("cursor mcp.json should exist");
     assert!(cursor.contains("\"cartog\""), "cursor body: {cursor}");
     assert!(
-        !cursor.contains("--watch"),
-        "cursor args should be plain serve"
+        cursor.contains("--watch"),
+        "cursor now gets --watch by default too: {cursor}"
     );
 }
 
@@ -220,9 +220,12 @@ fn ide_writes_codex_toml_with_project_section() {
     );
     assert!(hash_suffix.chars().all(|c| c.is_ascii_hexdigit()));
 
-    // Body must contain the canonical command + args.
+    // Body must contain the canonical command + args (--watch now on for all clients).
     assert!(body.contains("command = \"cartog\""), "body: {body}");
-    assert!(body.contains("args = [\"serve\"]"), "body: {body}");
+    assert!(
+        body.contains("args = [\"serve\", \"--watch\"]"),
+        "body: {body}"
+    );
 }
 
 #[test]

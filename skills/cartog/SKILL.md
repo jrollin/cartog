@@ -47,7 +47,7 @@ Both `cartog init` and `cartog index` are safe to run via Bash during an active 
 - `cartog index .` writes to the same SQLite file the MCP server has open. SQLite WAL mode lets it queue behind any active writer, and cartog's migration writes use a busy-retry loop on `SQLITE_BUSY` — so concurrent index + serve is safe.
 - After indexing, MCP tools pick up the new symbols on the next call (no server restart needed).
 
-If MCP runs with `--watch`, the watcher will also re-index on file changes. A manual `cartog index .` is still safe; it just shares the write-queue.
+If MCP runs with `--watch`, the watcher will also re-index on file changes (and re-embed when the repo already has embeddings). A manual `cartog index .` is still safe; it just shares the write-queue.
 
 When two `cartog serve` instances run against the same DB (e.g. two Claude Code windows on the same project), single-writer election picks one as **primary** and the others attach **read-only**. Read-only secondaries refuse `cartog_index` / `cartog_rag_index` with a clear message but serve the other 14 MCP tools normally (the 2 write tools are gated; the remaining 14 include `cartog_update`, which arms a machine-level deferred update rather than a DB write, so it is served even though only 13 tools carry `readOnlyHint = true`). The secondary auto-promotes to primary within ~10s if the primary process dies.
 
@@ -382,18 +382,18 @@ Key facts an agent should know:
 
 ### Watch (auto re-index on file changes)
 ```bash
-cartog watch .                           # watch current directory
-cartog watch . --rag                     # also re-embed symbols (deferred)
+cartog watch .                           # watch CWD; auto-embeds if the repo already has embeddings
+cartog watch . --rag                     # force re-embed (even on a not-yet-embedded repo)
 cartog watch . --debounce 3 --rag-delay 30  # custom timings
 ```
 
-Watch always uses heuristic-only indexing (no LSP) for speed. Previously LSP-resolved edges are preserved in the DB.
+Under `--watch`, embeddings auto-refresh when the repo already has them (run `cartog rag index` once to opt in) — no `--rag` needed. Editing a symbol's body invalidates its old embedding so it re-embeds on the next pass. Watch always uses heuristic-only indexing (no LSP) for speed. Previously LSP-resolved edges are preserved in the DB.
 
 ### Serve (MCP server)
 ```bash
 cartog serve                    # MCP server over stdio
-cartog serve --watch            # with background file watcher
-cartog serve --watch --rag      # watcher + deferred RAG embedding
+cartog serve --watch            # watcher; auto-embeds if the repo has embeddings (all clients get --watch by default)
+cartog serve --watch --rag      # force auto-embed even on a not-yet-embedded repo
 ```
 
 When an agent calls `cartog_index` via MCP, LSP servers are started once and **kept warm** for the session. Subsequent index calls reuse warm servers (~2s instead of a cold 2-15s startup). Background watch re-indexing stays heuristic-only.

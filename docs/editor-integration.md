@@ -154,14 +154,14 @@ require("codecompanion").setup({
 })
 ```
 
-For Avante or other MCP-aware plugins, configure the MCP server the same way you would in Claude Code / Cursor:
+For Avante or other MCP-aware plugins, configure the MCP server the same way you would in Claude Code / Cursor. `--watch` auto-refreshes embeddings when the repo already has them — add `--rag` only to force embedding on a not-yet-indexed repo:
 
 ```json
 {
   "mcpServers": {
     "cartog": {
       "command": "cartog",
-      "args": ["serve", "--watch", "--rag"]
+      "args": ["serve", "--watch"]
     }
   }
 }

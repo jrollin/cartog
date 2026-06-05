@@ -119,7 +119,7 @@ locally with `make bench-criterion`.
 | DB concurrency | `Arc<Mutex<Database>>` | Single connection, not a pool. MCP serves one agent session — contention is negligible. `std::sync::Mutex` (not tokio) because lock is never held across `.await` |
 | Path security | Canonical CWD validation | MCP tool parameters come from LLM agents. Rejects paths outside CWD subtree via `canonicalize` + `starts_with`. Defense-in-depth against prompt injection |
 | Secret redaction | Default-on, best-effort | Scrubs common secret patterns from stored symbol text and skips sensitive files. See [Secret redaction](#secret-redaction) below |
-| Watch mode | Debounced re-index + deferred RAG | 5s debounce, 30s RAG delay. Embedding only fires after editing stops — avoids embedding code that changes seconds later |
+| Watch mode | Debounced re-index + deferred RAG | 5s debounce, 30s RAG delay. Auto-embeds when the repo already has embeddings (auto-detected; `--rag`/`[embedding] auto_embed`/`CARTOG_WATCH_RAG` override). Edited symbols' stale embeddings are invalidated on re-index so they re-embed. Embedding only fires after editing stops |
 | Vector search | sqlite-vec (opt-in) | Embedded in SQLite, no external infra. Models downloaded via `cartog rag setup` |
 | Model cache | `~/.cache/cartog/models` | XDG-compliant shared cache avoids downloading ~1.2 GB of models per project. Precedence: `FASTEMBED_CACHE_DIR` > `XDG_CACHE_HOME/cartog/models` > `~/.cache/cartog/models` > `./.fastembed_cache` (CWD last resort, only when neither HOME nor XDG resolves) |
 | Output format | Human default + `--json` flag (global) | Readable for humans, parseable for scripts. Both `cartog --json stats` and `cartog stats --json` work |
@@ -245,7 +245,7 @@ Returns the first non-empty result. Only FTS5 syntax errors trigger fallback —
 | `MAX_CONTENT_BYTES` | 2048 | ~512 tokens at code's char/token ratio (stored for FTS5 + reranker) |
 | `MIN_CONTENT_BYTES` | 50 | Below this → noise, not embedded |
 | `MAX_EMBED_TEXT_BYTES` | 800 | ~200 tokens for bi-encoder input (AST-aware significant lines) |
-| `EMBEDDING_FORMAT_VERSION` | 2 | Auto-triggers re-embed when embedding strategy changes |
+| `EMBEDDING_FORMAT_VERSION` | 4 | Auto-triggers re-embed when embedding strategy changes |
 | `RERANK_MAX` | 50 | Cross-encoder candidate cap; configurable via `[rag] rerank_max` |
 | `RERANK_MIN` | 8 | Skip the cross-encoder entirely if fewer than this many candidates survived RRF merge; configurable via `[rag] rerank_min`, capped at `RERANK_MAX` |
 | RRF `k` | 60.0 | Standard constant from Cormack et al. 2009 |

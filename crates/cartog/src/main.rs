@@ -303,7 +303,7 @@ fn main() -> Result<()> {
             &db_path,
             &path,
             debounce,
-            rag,
+            config::resolve_auto_embed(rag, &cartog_config),
             rag_delay,
             provider_config,
             redact,
@@ -324,6 +324,12 @@ fn main() -> Result<()> {
             no_watch,
         } => commands::ide::cmd_install(clients, scope, dry_run, no_watch, cli.json),
         Command::Serve { watch, rag } => {
+            let rag_override = config::resolve_auto_embed(rag, &cartog_config);
+            // Auto-embed only runs via the watcher; warn whenever it was requested
+            // (flag, [embedding] auto_embed, or CARTOG_WATCH_RAG) without --watch.
+            if !watch && rag_override == Some(true) {
+                tracing::warn!("auto-embed (--rag / auto_embed / CARTOG_WATCH_RAG) has no effect without --watch");
+            }
             let runtime = tokio::runtime::Runtime::new()?;
             // pid_lock_dir/slot must be both-or-neither: a sandboxed host with no
             // resolvable state dir falls back to untracked mode rather than
@@ -339,7 +345,7 @@ fn main() -> Result<()> {
             runtime.block_on(mcp::run_server(
                 &db_path,
                 watch,
-                rag,
+                rag_override,
                 provider_config,
                 redact,
                 opts,

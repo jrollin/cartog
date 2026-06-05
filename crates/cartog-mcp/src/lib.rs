@@ -3259,7 +3259,7 @@ mod tests {
             primary,
             pinned,
             watch_requested: false,
-            rag: false,
+            rag_override: Some(false),
             rag_config: rag::EmbeddingProviderConfig::default(),
             redact: indexer::RedactionConfig::disabled(),
             // Very short for tests so the loop responds quickly.

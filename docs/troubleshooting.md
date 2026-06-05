@@ -86,6 +86,15 @@ when any field differs. Just run `cartog rag index .` to re-embed (no
 `--force` needed). Older DBs that predate the fingerprint get a one-time
 backfill without wiping.
 
+### Semantic search returns the old version of a function I edited
+
+Fixed: re-indexing now invalidates the embedding of any symbol whose body
+changed, so the next embed pass (watcher timer or `cartog rag index`) refreshes
+it. Embeddings written by an **older** cartog may still be stale on symbols you
+have not touched since; the embedding-format version bump in this release triggers
+a one-time full re-embed on your next `cartog rag index`. Force it immediately
+with `cartog rag index --force`.
+
 ## MCP server
 
 ### `MCP error -32000: Connection closed` when opening a second Claude Code window

@@ -144,11 +144,12 @@ pub fn acquire_serve_lock(opts: &ServerOptions) -> anyhow::Result<ServeLockOutco
 /// Start the MCP server over stdio.
 ///
 /// When `watch` is true, a background file watcher keeps the index fresh.
-/// When `rag` is true (requires `watch`), embeddings are also auto-updated.
+/// `rag_override` controls auto-embedding (requires `watch`): `Some(true)`/
+/// `Some(false)` force on/off, `None` lets the watcher auto-detect from the DB.
 pub async fn run_server(
     db_path: &std::path::Path,
     watch: bool,
-    rag: bool,
+    rag_override: Option<bool>,
     rag_config: rag::EmbeddingProviderConfig,
     redact: indexer::RedactionConfig,
     opts: ServerOptions,
@@ -195,7 +196,7 @@ pub async fn run_server(
     let initial_watch_handle: Option<WatchHandle> = if watch && role == Role::Primary {
         let cwd = std::env::current_dir()?;
         let mut config = WatchConfig::new(cwd);
-        config.rag = rag;
+        config.rag_override = rag_override;
         config.rag_config = rag_config.clone();
         config.redact = redact;
         config.stale = initial_stale.clone();
@@ -205,7 +206,7 @@ pub async fn run_server(
         config.pid_lock_slot = watch_slot.clone();
         match watch::spawn_watch(config, &db_path_str) {
             Ok(handle) => {
-                info!(rag, "background file watcher started");
+                info!(?rag_override, "background file watcher started");
                 Some(handle)
             }
             Err(e) => {
@@ -296,7 +297,7 @@ pub async fn run_server(
                     primary,
                     pinned,
                     watch_requested: watch,
-                    rag,
+                    rag_override,
                     rag_config,
                     redact: server.redact,
                     poll_interval: DEFAULT_PROMOTER_POLL_INTERVAL,
@@ -390,7 +391,8 @@ pub(crate) struct PromoterArgs {
     /// upgraded the schema or swapped the embedding stack under us.
     pub(crate) pinned: Option<PinnedAttach>,
     pub(crate) watch_requested: bool,
-    pub(crate) rag: bool,
+    /// Auto-embed override for the post-promotion watcher; `None` = auto-detect.
+    pub(crate) rag_override: Option<bool>,
     pub(crate) rag_config: rag::EmbeddingProviderConfig,
     pub(crate) redact: indexer::RedactionConfig,
     /// Polling interval. Const in production
@@ -531,7 +533,7 @@ pub(crate) async fn promoter_task(args: PromoterArgs) {
             // chdir() calls (rare in MCP children but possible in tests
             // and embedded uses).
             let mut config = WatchConfig::new(args.cwd.clone());
-            config.rag = args.rag;
+            config.rag_override = args.rag_override;
             config.rag_config = args.rag_config.clone();
             config.redact = args.redact;
             config.stale = Some(Arc::clone(&new_stale));

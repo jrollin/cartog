@@ -30,9 +30,11 @@ pub struct WatchConfig {
     pub root: PathBuf,
     /// Debounce window for filesystem events.
     pub debounce: Duration,
-    /// Whether to auto-embed after indexing.
-    pub rag: bool,
-    /// Delay after last index before embedding (only when `rag` is true).
+    /// Auto-embed override. `Some(true)`/`Some(false)` force on/off; `None`
+    /// auto-detects (embed only if the DB already has embeddings). Resolved once
+    /// at startup against the live DB — see [`run_watch`].
+    pub rag_override: Option<bool>,
+    /// Delay after last index before embedding (only when auto-embed is on).
     pub rag_delay: Duration,
     /// RAG provider configuration (embedding + reranker).
     pub rag_config: rag::EmbeddingProviderConfig,
@@ -70,7 +72,7 @@ pub struct WatchConfig {
 
 impl WatchConfig {
     /// Build a [`WatchConfig`] rooted at `root` with these defaults:
-    /// `debounce = 5s`, `rag = false`, `rag_delay = 30s`,
+    /// `debounce = 5s`, `rag_override = None` (auto-detect), `rag_delay = 30s`,
     /// `json_events = false`, both `pid_lock_*` = `None` (untracked
     /// mode), `skip_migrations = false`. Callers wanting PID-lock
     /// tracking must set BOTH `pid_lock_dir` and `pid_lock_slot` after
@@ -82,7 +84,7 @@ impl WatchConfig {
             // `npm install` / branch switches into a single re-index, short
             // enough to feel live for normal save-on-type editing.
             debounce: Duration::from_secs(5),
-            rag: false,
+            rag_override: None,
             rag_delay: Duration::from_secs(30),
             rag_config: rag::EmbeddingProviderConfig::default(),
             redact: indexer::RedactionConfig::default(),
@@ -101,6 +103,12 @@ impl WatchConfig {
 /// `cartog::state::slot_for_db("watch", db_path)` — see
 /// [`WatchConfig::pid_lock_slot`].
 pub const WATCH_LOCK_SLOT: &str = "watch";
+
+/// Resolve whether the watcher auto-embeds: an explicit `override` wins, else
+/// auto-detect — embed only if the repo already has embeddings (opted into RAG).
+fn resolve_watch_rag(override_: Option<bool>, embedding_count: u32) -> bool {
+    override_.unwrap_or(embedding_count > 0)
+}
 
 /// A single event emitted by the watch loop when `json_events` is enabled.
 ///
@@ -352,10 +360,25 @@ fn watch_loop(
             .context("failed to open database for watcher")?
     };
 
+    // Re-resolve auto-embed on every consultation, not once at startup: an
+    // explicit override wins, else auto-detect against the LIVE embedding count.
+    // This way a repo that runs its first `rag index` AFTER the watcher started
+    // (the common MCP flow) begins auto-embedding without a restart.
+    let rag_override = config.rag_override;
+    let rag_enabled = |db: &Database| -> bool {
+        resolve_watch_rag(
+            rag_override,
+            db.embedding_count().unwrap_or_else(|e| {
+                warn!(error = %e, "failed to read embedding count; auto-embed off");
+                0
+            }),
+        )
+    };
+
     info!(
         path = %root.display(),
         debounce_ms = config.debounce.as_millis(),
-        rag = config.rag,
+        rag = rag_enabled(&db),
         rag_delay_s = config.rag_delay.as_secs(),
         "starting watch"
     );
@@ -363,7 +386,7 @@ fn watch_loop(
         emit_event(&WatchEvent::Started {
             root: &root.to_string_lossy(),
             debounce_ms: config.debounce.as_millis(),
-            rag: config.rag,
+            rag: rag_enabled(&db),
             rag_delay_s: config.rag_delay.as_secs(),
         });
     }
@@ -394,10 +417,17 @@ fn watch_loop(
                     duration_ms: initial_start.elapsed().as_millis(),
                 });
             }
-            if config.rag {
+            if rag_enabled(&db) {
                 match db.symbols_needing_embeddings() {
                     Ok(needing) => initial_pending = needing.len() as u32,
                     Err(e) => warn!(error = %e, "failed to check embedding status"),
+                }
+                // A pending format upgrade re-embeds all symbols; count it so the
+                // staleness banner reflects the queued re-embed.
+                if initial_pending == 0
+                    && rag::indexer::embedding_format_upgrade_pending(&db).unwrap_or(false)
+                {
+                    initial_pending = db.symbol_content_count().unwrap_or(1).max(1);
                 }
             }
             // Publish the post-initial-index state (no changes observed yet, so
@@ -457,9 +487,8 @@ fn watch_loop(
             }
         };
 
-    // RAG timer state: when we last indexed (to defer embedding). Seed from the
-    // initial index so its pending symbols embed on the deferred schedule.
-    let mut rag_pending = config.rag && initial_pending > 0;
+    // RAG timer seed. `initial_pending` already folds in a pending format upgrade.
+    let mut rag_pending = initial_pending > 0;
     let mut last_index_time: Option<Instant> = rag_pending.then(Instant::now);
 
     loop {
@@ -468,7 +497,7 @@ fn watch_loop(
         }
 
         // Wait for events with a timeout so we can check shutdown + RAG timer
-        let poll_timeout = if config.rag && rag_pending {
+        let poll_timeout = if rag_pending {
             Duration::from_millis(500) // Poll frequently to check RAG timer
         } else {
             Duration::from_secs(1) // Idle poll for shutdown check
@@ -526,7 +555,7 @@ fn watch_loop(
                             }
                             // Check if RAG embedding is needed
                             let mut pending_count = 0u32;
-                            if config.rag {
+                            if rag_enabled(&db) {
                                 match db.symbols_needing_embeddings() {
                                     Ok(needing) if !needing.is_empty() => {
                                         debug!(
@@ -565,8 +594,8 @@ fn watch_loop(
                 warn!(error = %error, "file watcher error");
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // Check RAG timer
-                if config.rag && rag_pending {
+                // Check RAG timer (rag_pending is only set when auto-embed is on)
+                if rag_pending {
                     if let Some(last) = last_index_time {
                         if last.elapsed() >= config.rag_delay {
                             info!("RAG delay elapsed, embedding pending symbols");
@@ -630,8 +659,8 @@ fn watch_loop(
         }
     }
 
-    // Flush pending RAG embeddings on shutdown
-    if config.rag && rag_pending {
+    // Flush pending RAG embeddings on shutdown (rag_pending implies enabled)
+    if rag_pending {
         info!("flushing pending RAG embeddings before shutdown");
         ensure_provider(&mut rag_provider);
         if let Some(ref mut provider) = rag_provider {
@@ -1017,9 +1046,21 @@ mod tests {
     fn test_config_defaults() {
         let config = WatchConfig::new(PathBuf::from("."));
         assert_eq!(config.debounce, Duration::from_secs(5));
-        assert!(!config.rag);
+        assert_eq!(config.rag_override, None);
         assert_eq!(config.rag_delay, Duration::from_secs(30));
         assert!(!config.json_events);
+    }
+
+    #[test]
+    fn auto_detect_embeds_only_when_repo_has_embeddings() {
+        assert!(resolve_watch_rag(None, 5));
+        assert!(!resolve_watch_rag(None, 0));
+    }
+
+    #[test]
+    fn explicit_override_beats_embedding_count() {
+        assert!(!resolve_watch_rag(Some(false), 100));
+        assert!(resolve_watch_rag(Some(true), 0));
     }
 
     // ── NDJSON event serialization ──
@@ -1071,11 +1112,11 @@ mod tests {
     fn test_config_custom_values() {
         let mut config = WatchConfig::new(PathBuf::from("/my/project"));
         config.debounce = Duration::from_secs(5);
-        config.rag = true;
+        config.rag_override = Some(true);
         config.rag_delay = Duration::from_secs(60);
         assert_eq!(config.root, PathBuf::from("/my/project"));
         assert_eq!(config.debounce, Duration::from_secs(5));
-        assert!(config.rag);
+        assert_eq!(config.rag_override, Some(true));
         assert_eq!(config.rag_delay, Duration::from_secs(60));
     }
 
