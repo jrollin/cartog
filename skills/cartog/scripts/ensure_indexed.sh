@@ -15,7 +15,7 @@ set -euo pipefail
 #   F4. `cartog index .` (incremental, typically <1s for unchanged trees).
 #
 # Background (forked into one subshell, logged to ~/.cache/cartog/session.log):
-#   B1. cartog rag setup — download cross-encoder reranker (~100MB, first time).
+#   B1. cartog rag setup — download cross-encoder reranker (~150MB, first time).
 #   B2. cartog rag index . — embed symbols for vector search.
 #
 # Failures during the background pipeline (or, separately, the foreground

@@ -121,7 +121,7 @@ All examples below use CLI syntax. MCP tool names and parameters:
 
 Before first use, ensure cartog is installed and indexed.
 
-If the project uses Ollama (check `.cartog.toml` for `[embedding] provider = "ollama"`), Ollama manages the **embedding** model itself — but `cartog rag setup` still downloads the cross-encoder **reranker** (~100MB, provider-agnostic). Skip `rag setup` only if you also disable the reranker; otherwise run it once.
+If the project uses Ollama (check `.cartog.toml` for `[embedding] provider = "ollama"`), Ollama manages the **embedding** model itself — but `cartog rag setup` still downloads the cross-encoder **reranker** (~150MB default, provider-agnostic). Skip `rag setup` only if you also disable the reranker; otherwise run it once.
 
 The plugin's SessionStart hook handles install + indexing automatically:
 
@@ -150,7 +150,7 @@ the background pipeline completes.
 
 **How to tell which tier you're on**: inspect the result tags in `cartog rag search` output. `[fts5+vector]` means tier 3, `[fts5]` means tier 1 or 2, `rerank=...` scores appear from tier 2 onward. See `references/query_cookbook.md` → "Interpreting results" for the full decoder.
 
-> **First run**: tier 2 downloads ~1.2GB of ONNX models (cached in `~/.cache/cartog/models/`)
+> **First run**: tier 2 downloads ~230MB of ONNX models (cached in `~/.cache/cartog/models/`)
 > in the background. Search keeps working at tier 1 in the meantime; logs go to
 > `~/.cache/cartog/session.log`. Subsequent runs are instant.
 
@@ -543,5 +543,5 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 - **No substring matching**: `"valid"` does NOT match `validate_token`. FTS5 is token-based. If `rag search` returns no results for a known symbol name, fall back to `cartog search` which supports substring matching.
 - **Graceful degradation**: `rag search` works without `rag setup` or `rag index` (FTS5-only). Quality improves with each setup tier (see Search quality tiers above).
 - **Scores are relative**: `rrf_score` and `rerank_score` values are only meaningful for ranking within a single query — don't compare scores across different queries.
-- **Re-ranking latency**: cross-encoder scores all candidates in a single batch ONNX call (up to 50 candidates). Expect ~150-500ms total overhead depending on candidate count.
+- **Re-ranking latency**: cross-encoder scores all candidates in a single batch ONNX call (up to 50 candidates). Expect ~50-300ms total overhead depending on candidate count (the default jina-turbo reranker is ~3x faster than the older bge-reranker-base).
 - **Auto re-embed**: when cartog upgrades its embedding format (e.g., AST-aware chunking), `cartog rag index` automatically detects the change and re-embeds all symbols. No `--force` needed.

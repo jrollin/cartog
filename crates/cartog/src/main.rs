@@ -346,7 +346,7 @@ fn main() -> Result<()> {
             ))
         }
         Command::Rag(rag_cmd) => match rag_cmd {
-            RagCommand::Setup => commands::cmd_rag_setup(cli.json),
+            RagCommand::Setup => commands::cmd_rag_setup(cli.json, &provider_config),
             RagCommand::Index { path, force } => {
                 commands::cmd_rag_index(&db_path, &path, force, cli.json, &provider_config, redact)
             }

@@ -19,7 +19,7 @@ Configurable via `.cartog.toml` `[embedding]` section. Supports pluggable provid
 | **local** (default) | `provider-local` | Any fastembed built-in (BGE, all-MiniLM, nomic, etc.) | ONNX Runtime via fastembed, auto-downloaded from HuggingFace |
 | **ollama** | `provider-ollama` | Any Ollama model (nomic-embed-text, mxbai-embed-large, etc.) | HTTP client, auto-detects dimension |
 
-**Reranker**: BGE-reranker-base — cross-encoder that scores (query, document) pairs jointly (~1.1GB, optional, local only).
+**Reranker**: jina-reranker-v1-turbo-en (default, ~150MB) — cross-encoder that scores (query, document) pairs jointly (optional, local only). Configurable via `[reranker] model` (any fastembed reranker repo path); unset uses the default.
 
 Local models cached in `~/.cache/cartog/models/` (respects `FASTEMBED_CACHE_DIR` and `XDG_CACHE_HOME`). Ollama models are managed by the Ollama server.
 
@@ -58,7 +58,7 @@ The Ollama provider maps transport failures to actionable errors instead of raw 
 | Export | Description |
 |--------|-------------|
 | `create_embedding_provider()` | Create a provider from config |
-| `create_reranker_provider()` | Create a reranker from config ("local" or "none") |
+| `create_reranker_provider()` | Create a reranker from config (provider "local"/"none" + a model repo path) |
 | `EmbeddingProviderConfig` | Configuration for provider selection |
 | `provider::EmbeddingProvider` | Trait for embedding backends |
 | `provider::RerankerProvider` | Trait for reranker backends |

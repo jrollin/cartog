@@ -172,7 +172,7 @@ BERT attention is **O(n²) in sequence length**. Keeping input short is the sing
 
 This drives two key decisions:
 
-1. **Small embedding model** — BGE-small-en-v1.5 quantized (default, 384 dimensions). 2-3x faster than full precision with negligible quality loss for code symbol matching. Outputs are L2-normalized, enabling L2 distance in sqlite-vec (equivalent to cosine ranking). Model and dimension are configurable via `.cartog.toml`. Trade-off: English-only model — non-English identifiers/comments get degraded embeddings.
+1. **Small embedding model** — BGE-small-en-v1.5 quantized (`Qdrant/bge-small-en-v1.5-onnx-Q`, default, 384 dimensions). 2-3x faster than full precision with negligible quality loss for code symbol matching. Outputs are L2-normalized, enabling L2 distance in sqlite-vec (equivalent to cosine ranking). Model and dimension are configurable via `.cartog.toml`. Trade-off: English-only model — non-English identifiers/comments get degraded embeddings.
 
 2. **AST-aware embedding text** — For code: header + signature + significant body lines (skipping blanks, comments, closing braces) up to ~200 tokens (~800 bytes):
    ```
@@ -218,7 +218,7 @@ Query
   │     Over-retrieval: max(limit × 3, 20) per source
   │
   └─→ Cross-encoder re-ranking (optional)
-        BGE-reranker-base, scores (query, full_content) pairs jointly
+        jina-reranker-v1-turbo-en (`jinaai/jina-reranker-v1-turbo-en`, default; configurable via `[reranker] model`), scores (query, full_content) pairs jointly
         Capped at 50 candidates to bound latency
         Graceful degradation: tri-state cache (not attempted / failed / ready)
         If model unavailable → search works with RRF-only ordering

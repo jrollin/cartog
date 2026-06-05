@@ -1113,19 +1113,23 @@ pub fn cmd_changes(
 // ── RAG Commands ──
 
 /// Download the embedding model.
-pub fn cmd_rag_setup(json: bool) -> Result<()> {
+pub fn cmd_rag_setup(json: bool, provider_config: &rag::EmbeddingProviderConfig) -> Result<()> {
+    let reranker_model = provider_config.reranker_model.as_deref();
     let spinner = if json {
         None
     } else {
         // One-time notice so the multi-hundred-MB download isn't a silent wait.
-        // Size matches docs/usage.md (embedding ~80MB + reranker ~1.1GB).
-        eprintln!("Downloading embedding + re-ranker models (~1.2GB, one-time)…");
+        eprintln!(
+            "Downloading embedding (~80MB) + re-ranker ({}) models, one-time…",
+            reranker_model.unwrap_or(rag::DEFAULT_RERANKER_MODEL)
+        );
         Spinner::start("Downloading models")
     };
     // Download bi-encoder (embeddings)
     let embed_result = rag::setup::download_model();
-    // Download cross-encoder (re-ranking)
-    let rerank_result = rag::setup::download_cross_encoder();
+    // Download cross-encoder (re-ranking) — the configured model, not always the default.
+    let rerank_result =
+        rag::setup::download_cross_encoder(reranker_model, provider_config.intra_threads);
     if let Some(s) = spinner {
         s.stop();
     }
@@ -1229,8 +1233,9 @@ pub fn cmd_rag_search(
         None
     } else {
         let name = provider_config.reranker_provider.clone();
+        let model = provider_config.reranker_model.clone();
         let threads = provider_config.intra_threads;
-        Some(move || rag::create_reranker_provider(&name, threads))
+        Some(move || rag::create_reranker_provider(&name, model.as_deref(), threads))
     };
     let search_result = rag::search::hybrid_search_tuned_lazy(
         &db,
@@ -1320,6 +1325,7 @@ pub fn cmd_context(
         } else {
             rag::create_reranker_provider(
                 &provider_config.reranker_provider,
+                provider_config.reranker_model.as_deref(),
                 provider_config.intra_threads,
             )
         };

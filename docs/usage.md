@@ -101,7 +101,7 @@ cartog --db /tmp/x.db map
 Configure the embedding provider in `.cartog.toml`:
 
 ```toml
-# Default: local ONNX model (no config needed)
+# Default: BGE-small-en-v1.5 quantized embedding + jina-turbo reranker (no config needed)
 
 # Use Ollama instead of local ONNX
 [embedding]
@@ -116,8 +116,22 @@ base_url = "http://localhost:11434"
 
 | Provider | Config | Setup | Notes |
 |----------|--------|-------|-------|
-| `local` (default) | No config needed | `cartog rag setup` to download models | ONNX Runtime via fastembed, ~1.2GB models |
+| `local` (default) | No config needed | `cartog rag setup` to download models | ONNX Runtime via fastembed, ~230MB models |
 | `ollama` | `provider = "ollama"` | Ollama server running with model pulled | No model download needed, dimension auto-detected. Compiled into every default build; **local ONNX stays the default provider** — set `provider = "ollama"` to use it. |
+
+**Default models (local provider):**
+
+| Role | Config value | HuggingFace repo (downloaded) | Dim | Size |
+|------|-------------|-------------------------------|-----|------|
+| Embedding | `BAAI/bge-small-en-v1.5` | `Qdrant/bge-small-en-v1.5-onnx-Q` (ONNX-quantized) | 384 | ~80MB |
+| Reranker | `jinaai/jina-reranker-v1-turbo-en` (default) | `jinaai/jina-reranker-v1-turbo-en` | — | ~150MB |
+
+The embedding config value is the fastembed model code you set under `[embedding]
+model`; cartog downloads the matching ONNX-quantized repo from HuggingFace into the
+shared model cache (`$FASTEMBED_CACHE_DIR`, else `$XDG_CACHE_HOME/cartog/models`, else
+`~/.cache/cartog/models`). English-only — non-English identifiers/comments get
+degraded embeddings. Override the embedding model with any fastembed built-in via
+`[embedding] model = "..."`.
 
 An unknown `provider` value (embedding: `local`, `ollama`; reranker: `local`, `none`) is rejected when `.cartog.toml` is loaded, with an error naming the bad value — a typo like `provider = "ollma"` fails fast instead of silently falling back to the default.
 
@@ -140,7 +154,27 @@ this to leave headroom on a busy machine (e.g. `intra_threads = 4`). The
 `CARTOG_ONNX_THREADS` env var overrides it (e.g. `CARTOG_ONNX_THREADS=1`); env >
 TOML > uncapped. Read at provider load, so restart `cartog serve` to change it.
 
-**Disable re-ranking** (saves ~1.1GB model download):
+**Reranker model** — the cross-encoder is configurable, mirroring `[embedding]
+model`. The value is a fastembed reranker HuggingFace repo path; unset uses the
+default (`jinaai/jina-reranker-v1-turbo-en`, ~150MB — small, fast, and higher
+BEIR NDCG@10 than the older `bge-reranker-base`):
+
+```toml
+[reranker]
+provider = "local"                              # "local" (default) | "none"
+model    = "BAAI/bge-reranker-base"             # opt back to the former default (~1.1GB)
+# model  = "jinaai/jina-reranker-v2-base-multilingual"  # multilingual (~300MB)
+```
+
+The reranker is not persisted, so switching models needs no re-index — the change
+takes effect on the next search (a new model downloads once; a previously-used one
+is reused from cache). Existing users who never pinned `model` are switched to the
+new default automatically; pin `model = "BAAI/bge-reranker-base"` to keep the old
+one (it reuses the already-downloaded weights). See
+[troubleshooting](troubleshooting.md) to reclaim the orphaned `bge-reranker-base`
+cache.
+
+**Disable re-ranking** (skips the ~150MB reranker download):
 
 ```toml
 [reranker]
@@ -202,7 +236,7 @@ Download embedding and re-ranker models from HuggingFace. Run once before using 
 cartog rag setup
 ```
 
-**First-time download**: ~1.2GB of ONNX models (embedding ~80MB + reranker ~1.1GB). May take a few minutes depending on network speed. Models are cached in `~/.cache/cartog/models/` and reused across all projects — subsequent runs are instant.
+**First-time download**: ~230MB of ONNX models (embedding ~80MB + reranker `jinaai/jina-reranker-v1-turbo-en` ~150MB). Models are cached in `~/.cache/cartog/models/` and reused across all projects — subsequent runs are instant. `rag setup` downloads the configured reranker, so pinning `[reranker] model` fetches that one instead.
 
 Note: `rag setup` downloads models for the **local** provider only. When using Ollama, models are managed by the Ollama server — run `ollama pull nomic-embed-text` instead.
 
@@ -941,7 +975,7 @@ cartog doctor
   [+] config: loaded from /home/user/project/.cartog.toml
   [+] database: 42 files, 387 symbols at /home/user/project/.cartog/db.sqlite
   [+] embedding: local model cached
-  [+] reranker: local model cached
+  [+] reranker: jinaai/jina-reranker-v1-turbo-en cached
 
 All 5 checks passed
 ```
@@ -954,7 +988,7 @@ All 5 checks passed
 | config | `.cartog.toml` found and parsed | No config file (using defaults) | — |
 | database | DB exists with indexed data | DB empty or missing | DB cannot be opened |
 | embedding | Local model cached / Ollama reachable | Local model not downloaded | Ollama unreachable / unknown provider |
-| reranker | Local model cached / disabled | Local model not downloaded | Unknown provider |
+| reranker | Model cached / disabled | Model not downloaded | Unknown provider |
 
 Exits with code 1 if any check is an error. Supports `--json` for structured output.
 
@@ -1170,7 +1204,7 @@ cartog index .          # 6. re-index after code changes
 For semantic search, add the RAG pipeline:
 
 ```text
-cartog rag setup        # one-time model download (~1.2GB, may take a few minutes)
+cartog rag setup        # one-time model download (~230MB)
 cartog rag index        # embed symbols
 cartog rag search "..."  # natural language queries
 ```

@@ -235,6 +235,9 @@ impl OllamaConfig {
 pub struct RerankerConfig {
     /// Provider type: "local" (default) or "none".
     pub provider: Option<String>,
+    /// Reranker model as a fastembed HF repo path (e.g. `BAAI/bge-reranker-base`).
+    /// None = [`cartog_rag::DEFAULT_RERANKER_MODEL`]. Mirrors `[embedding] model`.
+    pub model: Option<String>,
 }
 
 pub const DEFAULT_RERANKER_PROVIDER: &str = "local";
@@ -258,6 +261,15 @@ pub fn to_redaction_config(config: &CartogConfig) -> cartog_indexer::RedactionCo
 
 /// Convert the embedding config section into an `EmbeddingProviderConfig` for cartog-rag.
 pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProviderConfig {
+    // The reranker section is independent of the embedding section — honor it even
+    // when `[embedding]` is absent (otherwise a lone `[reranker]` block is dropped).
+    let reranker_provider = config
+        .reranker
+        .as_ref()
+        .map(|r| r.provider().to_string())
+        .unwrap_or_else(|| DEFAULT_RERANKER_PROVIDER.to_string());
+    let reranker_model = config.reranker.as_ref().and_then(|r| r.model.clone());
+
     match &config.embedding {
         Some(embed) => {
             let (query_prefix, document_prefix, intra_threads) = match &embed.local {
@@ -279,15 +291,16 @@ pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProvide
                 query_prefix,
                 document_prefix,
                 base_url: ollama.map(|o| o.base_url().to_string()),
-                reranker_provider: config
-                    .reranker
-                    .as_ref()
-                    .map(|r| r.provider().to_string())
-                    .unwrap_or_else(|| DEFAULT_RERANKER_PROVIDER.to_string()),
+                reranker_provider,
+                reranker_model,
                 intra_threads,
             }
         }
-        None => cartog_rag::EmbeddingProviderConfig::default(),
+        None => cartog_rag::EmbeddingProviderConfig {
+            reranker_provider,
+            reranker_model,
+            ..Default::default()
+        },
     }
 }
 
@@ -1146,6 +1159,45 @@ provider = "none"
 "#;
         let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.reranker.unwrap().provider(), "none");
+    }
+
+    #[test]
+    fn test_reranker_model_defaults_to_none_in_config() {
+        let cfg = RerankerConfig::default();
+        assert!(cfg.model.is_none());
+    }
+
+    #[test]
+    fn test_to_provider_config_reranker_model_from_toml() {
+        let toml_str = r#"
+[reranker]
+model = "BAAI/bge-reranker-base"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let pc = to_provider_config(&cfg);
+        assert_eq!(pc.reranker_model.as_deref(), Some("BAAI/bge-reranker-base"));
+    }
+
+    #[test]
+    fn test_to_provider_config_reranker_model_default_is_none() {
+        // Unset model maps to None; cartog-rag resolves None to DEFAULT_RERANKER_MODEL.
+        let cfg = CartogConfig::default();
+        let pc = to_provider_config(&cfg);
+        assert!(pc.reranker_model.is_none());
+    }
+
+    #[test]
+    fn test_reranker_provider_none_keeps_model_inert() {
+        // A model alongside provider="none" parses fine; the model is simply never loaded.
+        let toml_str = r#"
+[reranker]
+provider = "none"
+model = "BAAI/bge-reranker-base"
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let pc = to_provider_config(&cfg);
+        assert_eq!(pc.reranker_provider, "none");
+        assert_eq!(pc.reranker_model.as_deref(), Some("BAAI/bge-reranker-base"));
     }
 
     #[test]

@@ -24,14 +24,18 @@ pub fn download_model() -> Result<SetupResult> {
     })
 }
 
-/// Download the cross-encoder re-ranker model.
+/// Download the cross-encoder re-ranker `model`.
 ///
 /// fastembed automatically downloads the ONNX model from HuggingFace on first use.
 /// Progress and download status are logged via tracing (visible in non-TTY environments).
-pub fn download_cross_encoder() -> Result<SetupResult> {
+pub fn download_cross_encoder(
+    model: Option<&str>,
+    intra_threads: Option<usize>,
+) -> Result<SetupResult> {
     let cache_dir = model_cache_dir();
 
-    let _engine = CrossEncoderEngine::load().context("Failed to download cross-encoder model")?;
+    let _engine = CrossEncoderEngine::load(model, intra_threads)
+        .context("Failed to download cross-encoder model")?;
 
     Ok(SetupResult {
         model_dir: cache_dir.display().to_string(),

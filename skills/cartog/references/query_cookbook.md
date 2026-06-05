@@ -159,7 +159,7 @@ cartog rag index .                  # embed with Ollama
 cartog rag search "error handling"  # search works the same
 ```
 
-Ollama manages only the embedding model. The reranker (~100MB cross-encoder) is provider-agnostic and still comes from HuggingFace via `cartog rag setup`. Skip `rag setup` only if you intentionally disable the reranker.
+Ollama manages only the embedding model. The reranker (~150MB cross-encoder, default `jinaai/jina-reranker-v1-turbo-en`) is provider-agnostic and still comes from HuggingFace via `cartog rag setup`. Skip `rag setup` only if you intentionally disable the reranker.
 
 #### Troubleshooting
 
