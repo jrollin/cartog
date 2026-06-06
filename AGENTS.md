@@ -168,6 +168,19 @@ The MCP config JSON has one canonical copy in `docs/mcp-setup.md`; other docs li
 
 Edit the `.astro` source (never `site/dist/`, which is gitignored and rebuilt by the Pages workflow). New brand marks go in `site/public/assets/*.svg` as `<img>`-referenced files (24×24 viewBox, white/brand fill legible on the dark theme), not inline SVG. Run `npm run build` in `site/` to verify before committing.
 
+### Per-crate docs.rs documentation
+
+Every published crate (`cartog` + the 9 `cartog-*`) renders its `README.md` as the docs.rs landing page. The wiring, per crate:
+
+- **`src/lib.rs`**: keep the curated `//!` header, then append the README via `#![doc = ""]` + `#![doc = include_str!("../README.md")]`. Feature-bearing crates (`cartog`, `-indexer`, `-mcp`, `-rag`) also carry `#![cfg_attr(docsrs, feature(doc_cfg))]` as the first attr, and gate visible feature badges with `#[cfg_attr(docsrs, doc(cfg(feature = "...")))]` on the relevant public item.
+- **`Cargo.toml`**: `[package.metadata.docs.rs]` with `all-features = true` (renders feature-gated modules) + `rustdoc-args = ["--cfg", "docsrs"]` (activates the badges). `docsrs` is set only by docs.rs (nightly); on stable CI the `cfg_attr` is inert, so this is stable-safe and has zero effect on `cargo build`/`publish`.
+
+Consequences to respect on every change:
+
+- **READMEs are now published API docs** — keep them code-accurate (correct fn/type names, signatures, counts, public exports). Stale README = stale docs.rs.
+- **Code fences become doctests.** A bare ` ``` ` fence or a ` ```rust ` fence in a wired README is compiled by `cargo test --doc`. Tag non-Rust examples ` ```text `/` ```toml `/` ```scheme `; tag illustrative-but-non-compiling Rust ` ```rust,ignore `; use ` ```rust,no_run ` for real, type-checked snippets that shouldn't execute. Run `cargo test --doc --workspace` (default **and** `--no-default-features`) after touching any README.
+- **Intra-doc links to private items** (`[`name`]` where `name` is private/out-of-scope) warn under `cargo doc`. Drop the brackets to plain `` `code` `` when the target is internal. `cargo doc --no-deps --workspace` must stay warning-clean.
+
 ## Current State
 
 - **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, Markdown

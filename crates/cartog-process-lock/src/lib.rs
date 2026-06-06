@@ -20,6 +20,8 @@
 //! by an unrelated process" from "same process is still running". When the
 //! start time is absent (legacy single-line file from an older cartog) we
 //! fall back to liveness-only checks.
+#![doc = ""]
+#![doc = include_str!("../README.md")]
 
 use std::fs;
 use std::io;
@@ -388,13 +390,13 @@ fn scan_locks(state_dir: &Path, cap: Option<usize>) -> Vec<ActiveLock> {
 }
 
 /// Reap stale PID files in `state_dir`. Opportunistic — capped at
-/// [`REAPER_SCAN_CAP`] entries per call to bound the cost on a state
+/// `REAPER_SCAN_CAP` entries per call to bound the cost on a state
 /// dir that has accumulated many cohabiting projects. Entries beyond
 /// the cap are reaped on a subsequent run.
 ///
 /// Each inspected `*.pid` whose recorded PID is dead (or whose recorded
 /// start_time disagrees with the live PID, i.e. PID-reuse) is unlinked
-/// via [`unlink_if_unchanged`] so a concurrent writer landing fresh
+/// via `unlink_if_unchanged` so a concurrent writer landing fresh
 /// content in the TOCTOU window is preserved. Malformed files
 /// (unreadable on two consecutive reads) are removed unconditionally
 /// because there is no holder identity to protect.

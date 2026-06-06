@@ -1,7 +1,5 @@
-//! Cartog — code graph indexer for LLM coding agents.
-//!
-//! This library facade re-exports all workspace crates under the `cartog::`
-//! namespace (e.g., `cartog::db`, `cartog::types`, `cartog::indexer`).
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc = include_str!("../README.md")]
 
 pub use cartog_core as types;
 pub use cartog_db as db;
@@ -11,6 +9,7 @@ pub use cartog_rag as rag;
 pub use cartog_watch as watch;
 
 #[cfg(feature = "lsp")]
+#[cfg_attr(docsrs, doc(cfg(feature = "lsp")))]
 pub use cartog_lsp as lsp;
 
 /// PID-file locks used by long-lived commands (`serve`, `watch`) and

@@ -4,7 +4,7 @@ Core types and utilities for the cartog code graph indexer.
 
 ## Overview
 
-Foundation crate with zero internal dependencies. Defines the shared data model used by all other cartog crates: symbols, edges, and their metadata. Also provides pure utility functions like language detection.
+Foundation crate with no internal cartog dependencies. Defines the shared data model used by all other cartog crates: symbols, edges, and their metadata. Also provides pure utility functions like language detection.
 
 ## How it works
 
@@ -12,7 +12,7 @@ Foundation crate with zero internal dependencies. Defines the shared data model 
 
 Every symbol gets a deterministic ID built from its location in the code structure, not its position in the file:
 
-```
+```text
 file_path:kind:qualified_name
 ```
 
@@ -40,12 +40,13 @@ This ID is **invariant to line movements** within a file — renaming or moving 
 | `SymbolKind` | Function, Class, Method, Variable, Import, Interface, Enum, TypeAlias, Trait, Module, Document |
 | `Edge` | Relationship between symbols (source → target) |
 | `EdgeKind` | Calls, Imports, Inherits, References, Raises, Implements, TypeOf |
+| `EdgeProvenance` | Which tier/source resolved a `target_id` (heuristic tiers + LSP outcomes) |
 | `Visibility` | Public, Private, Protected |
 | `FileInfo` | Indexed file metadata (path, hash, language, symbol count) |
 | `ChangesResult` | Result of a git-changes query |
 | `symbol_id()` | Build a stable symbol ID from components |
-| `detect_language()` | Map file extension to language name |
+| `detect_language()` | Map file extension to language name (`None` for unrecognized extensions) |
 
 ## Crate dependencies
 
-None (this is the root of the dependency graph).
+No internal cartog crates (this is the root of the dependency graph). External: `serde`, `anyhow`, `schemars`.

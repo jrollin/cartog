@@ -3,6 +3,9 @@
 //! Exposes cartog's graph queries, indexing, semantic search, and deferred
 //! self-update as 16 MCP tools over stdio transport. Designed for Claude Code,
 //! Cursor, and other MCP clients.
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc = ""]
+#![doc = include_str!("../README.md")]
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

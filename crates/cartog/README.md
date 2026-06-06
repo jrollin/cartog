@@ -57,7 +57,7 @@ All log output goes to **stderr** (stdout is reserved for CLI output and MCP pro
 
 `lib.rs` re-exports all workspace crates for backward-compatible access:
 
-```rust
+```rust,ignore
 pub use cartog_db as db;
 pub use cartog_indexer as indexer;
 pub use cartog_languages as languages;
@@ -69,6 +69,36 @@ pub use cartog_process_lock as process_lock; // hidden from rustdoc
 ```
 
 This allows benches and integration tests to use `cartog::db::Database`, `cartog::indexer::index_directory`, etc.
+
+### Library usage
+
+Index a directory, then query the graph:
+
+```rust,no_run
+use cartog::db::{Database, DEFAULT_EMBEDDING_DIM};
+use cartog::indexer::{index_directory, RedactionConfig};
+
+# fn main() -> anyhow::Result<()> {
+let db = Database::open(".cartog/db.sqlite", DEFAULT_EMBEDDING_DIM)?;
+
+// Walk the tree, extract symbols + edges, store them.
+index_directory(
+    &db,
+    std::path::Path::new("."),
+    false,                      // force: reuse incremental cache
+    false,                      // lsp: heuristic edge resolution only
+    None,                       // progress callback
+    None,                       // cancellation probe
+    RedactionConfig::default(), // scrub secrets (default-on)
+)?;
+
+// Symbol search ranked by match tier + centrality.
+for sym in db.search("parse", None, None, 10)? {
+    println!("{} ({:?}) {}:{}", sym.name, sym.kind, sym.file_path, sym.start_line);
+}
+# Ok(())
+# }
+```
 
 ## Crate dependencies
 

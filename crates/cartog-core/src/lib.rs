@@ -6,6 +6,8 @@
 //!
 //! Also provides [`detect_language`] for mapping file extensions to language names
 //! without pulling in tree-sitter grammar dependencies.
+#![doc = ""]
+#![doc = include_str!("../README.md")]
 
 use std::path::Path;
 

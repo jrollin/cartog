@@ -64,8 +64,8 @@ still matches what was observed, so a fresh writer landing in the gap is preserv
 | Export | Description |
 |--------|-------------|
 | `ProcessLock` | RAII handle for a held slot; `Drop` removes the PID file |
-| `ProcessLock::acquire(state_dir, slot)` | Atomically claim a slot; `Err(Held)` if a live peer owns it |
-| `ProcessLock::acquire_overwriting(state_dir, slot)` | Kill-switch acquire that always wins (no election) |
+| `ProcessLock::acquire(state_dir, slot)` | Atomically claim a slot; returns `Result<Self, AcquireError>` (`Err(Held)` if a live peer owns it) |
+| `ProcessLock::acquire_overwriting(state_dir, slot)` | Kill-switch acquire that always wins (no election); returns `io::Result<Self>` (no `Held` outcome) |
 | `ProcessLock::path()` | Path of the on-disk PID file |
 | `AcquireError` | `Held(ActiveLock)` (live peer owns the slot) or `Io(io::Error)` |
 | `ActiveLock` | A discovered live lock: `slot`, `pid`, `start_time: Option<u64>` |

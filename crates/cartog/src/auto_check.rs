@@ -1,9 +1,9 @@
 //! Auto-check predicate and helpers for the daily background update probe.
 //!
 //! Two responsibilities:
-//! 1. The pure [`should_check`] predicate decides whether to fire the
+//! 1. The pure `should_check` predicate decides whether to fire the
 //!    background probe at all (env, TTY, command kind, interval).
-//! 2. [`run_check_once`] / [`spawn_check`] perform the actual probe:
+//! 2. `run_check_once` / `spawn_check` perform the actual probe:
 //!    fetch the latest release tag and update the on-disk state file.
 //!
 //! Both halves take their inputs as parameters so unit tests can exercise

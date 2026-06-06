@@ -18,6 +18,7 @@ Configurable via `.cartog.toml` `[embedding]` section. Supports pluggable provid
 |----------|-------------|--------|-------|
 | **local** (default) | `provider-local` | Any fastembed built-in (BGE, all-MiniLM, nomic, etc.) | ONNX Runtime via fastembed, auto-downloaded from HuggingFace |
 | **ollama** | `provider-ollama` | Any Ollama model (nomic-embed-text, mxbai-embed-large, etc.) | HTTP client, auto-detects dimension |
+| **openai** | `provider-openai` | Any OpenAI-compatible `/v1/embeddings` model (OpenAI, Mistral, Voyage, Jina, …) | HTTP client; switch vendors via `base_url`, API key from the env var named by `api_key_env` |
 
 **Reranker**: jina-reranker-v1-turbo-en (default, ~150MB) — cross-encoder that scores (query, document) pairs jointly (optional, local only). Configurable via `[reranker] model` (any fastembed reranker repo path); unset uses the default.
 
@@ -49,7 +50,7 @@ Over-retrieves `(limit * 3).max(20)` candidates from each source to improve fusi
 
 ### Provider lifecycle
 
-Providers are created per-command invocation via `create_embedding_provider(config)`. The caller passes an `EmbeddingProviderConfig` (from `.cartog.toml`) and receives a boxed `EmbeddingProvider` trait object. Reranker providers follow the same pattern with `create_reranker_provider(config)`.
+Providers are created per-command invocation via `create_embedding_provider(config)`. The caller passes an `EmbeddingProviderConfig` (from `.cartog.toml`) and receives a boxed `EmbeddingProvider` trait object. Reranker providers are created with `create_reranker_provider(reranker_provider, model, intra_threads)`, which returns `None` when re-ranking is disabled, the model is unavailable, or the `provider-local` feature is off.
 
 The Ollama provider maps transport failures to actionable errors instead of raw reqwest chains: a refused connection points at `ollama serve` and `[embedding.ollama].base_url`, and an HTTP 404 from `/api/embed` tells the user to run `ollama pull <model>`. The original error is preserved as the cause.
 
@@ -63,8 +64,8 @@ The Ollama provider maps transport failures to actionable errors instead of raw 
 | `provider::EmbeddingProvider` | Trait for embedding backends |
 | `provider::RerankerProvider` | Trait for reranker backends |
 | `search::hybrid_search()` | Run the full hybrid search pipeline |
-| `indexer::index_embeddings()` | Embed symbols and write vectors to DB. Optional `progress: Option<ProgressCallback>` fires per batch (`Preparing`, `Embedding{processed,total}`, `Storing`); pass `None` for no-op. |
-| `indexer::ProgressUpdate` / `indexer::ProgressCallback` | Phase enum + `Fn` trait-object type alias for in-flight reporting (transport-agnostic) |
+| `indexer::index_embeddings()` | Embed symbols and write vectors to DB. Optional `progress: Option<ProgressCallback>` fires per batch (`Preparing`, `Embedding{processed,total}`, `Storing`) and `cancel: Option<CancelProbe>` aborts cooperatively; pass `None` for no-op. |
+| `indexer::ProgressUpdate` / `indexer::ProgressCallback` / `indexer::CancelProbe` | Phase enum + `Fn` trait-object type aliases for in-flight reporting and cancellation (transport-agnostic) |
 | `setup::download_model()` | Download the embedding model (requires the `provider-local` feature) |
 | `EMBEDDING_DIM` | Default vector dimension (384) |
 

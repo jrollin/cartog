@@ -3,6 +3,9 @@
 //! Walks a directory tree, detects changed files (git diff, SHA-256 hash, or force),
 //! extracts symbols and edges via [`cartog_languages`], and writes results to
 //! [`cartog_db`]. Uses Merkle tree hashing for surgical symbol-level updates.
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc = ""]
+#![doc = include_str!("../README.md")]
 
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;

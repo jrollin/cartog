@@ -45,7 +45,7 @@ impl Database {
     ///   valid against whatever stack produced them; we just record the
     ///   identity going forward.
     ///
-    /// Writes use [`retry_busy`] so a concurrent writer on the same DB does
+    /// Writes use `retry_busy` so a concurrent writer on the same DB does
     /// not crash this caller with `SQLITE_BUSY`.
     pub fn reconcile_embedding_fingerprint(&self, fp: &EmbeddingFingerprint) -> Result<()> {
         let stored_provider: Option<String> = self.get_metadata(EMBED_PROVIDER_KEY)?;

@@ -7,6 +7,9 @@
 //! - **local** (default): ONNX models via fastembed (feature `provider-local`)
 //! - **ollama**: HTTP API to an Ollama server (feature `provider-ollama`)
 //! - **openai**: OpenAI-compatible `/v1/embeddings` endpoints (feature `provider-openai`)
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc = ""]
+#![doc = include_str!("../README.md")]
 
 pub mod context;
 #[cfg(feature = "provider-local")]
