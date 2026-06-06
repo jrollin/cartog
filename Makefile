@@ -134,7 +134,7 @@ eval-agents: ## Run LLM-as-judge agent evaluation (requires claude CLI)
 # --- Benchmarks ---
 
 bench: ## Run shell benchmark suite (all scenarios, all fixtures)
-	./benchmarks/run.sh
+	./benchmarks/token_savings.sh
 
 bench-criterion: ## Run all ONNX-free criterion benches (queries, per-language indexing, hybrid search)
 	cargo bench -p cartog --bench queries
@@ -147,7 +147,7 @@ bench-onnx: ## Run real-model embed/rerank benches (needs `cartog rag setup`; no
 bench-rag: ## Run RAG relevancy benchmarks (in-memory + shell scenario 13)
 	cargo test --test rag_relevancy -- --nocapture
 	cargo build --release
-	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/run.sh --scenario 13
+	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/token_savings.sh --scenario 13
 
 bench-agent: ## Run end-to-end agent-task benchmark (cartog on/off; requires claude CLI)
 	cargo build --release

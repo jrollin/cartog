@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# cartog Benchmark Suite
+# cartog Token-Savings Benchmark Suite
 #
 # Compares cartog queries vs grep/cat approaches across 13 scenarios,
 # measuring token efficiency, command count, and recall against ground truth.
+# (For edge-resolution rate per language, see resolution_rate.sh.)
 #
 # Usage:
-#   ./benchmarks/run.sh                  # Run all scenarios (01–13)
-#   ./benchmarks/run.sh --scenario 08    # Run single scenario
-#   ./benchmarks/run.sh --fixture py     # Run only Python fixtures
-#   ./benchmarks/run.sh --fixture ts     # Run only TypeScript fixtures
-#   ./benchmarks/run.sh --fixture go     # Run only Go fixtures
-#   ./benchmarks/run.sh --fixture rs     # Run only Rust fixtures
-#   ./benchmarks/run.sh --fixture rb     # Run only Ruby fixtures
-#   ./benchmarks/run.sh --fixture java   # Run only Java fixtures
-#   ./benchmarks/run.sh --fixture php    # Run only PHP fixtures
-#   ./benchmarks/run.sh --fixture dart   # Run only Dart fixtures
-#   ./benchmarks/run.sh --fixture swift  # Run only Swift fixtures
-#   ./benchmarks/run.sh --fixture kt     # Run only Kotlin fixtures
+#   ./benchmarks/token_savings.sh                  # Run all scenarios (01–13)
+#   ./benchmarks/token_savings.sh --scenario 08    # Run single scenario
+#   ./benchmarks/token_savings.sh --fixture py     # Run only Python fixtures
+#   ./benchmarks/token_savings.sh --fixture ts     # Run only TypeScript fixtures
+#   ./benchmarks/token_savings.sh --fixture go     # Run only Go fixtures
+#   ./benchmarks/token_savings.sh --fixture rs     # Run only Rust fixtures
+#   ./benchmarks/token_savings.sh --fixture rb     # Run only Ruby fixtures
+#   ./benchmarks/token_savings.sh --fixture java   # Run only Java fixtures
+#   ./benchmarks/token_savings.sh --fixture php    # Run only PHP fixtures
+#   ./benchmarks/token_savings.sh --fixture dart   # Run only Dart fixtures
+#   ./benchmarks/token_savings.sh --fixture swift  # Run only Swift fixtures
+#   ./benchmarks/token_savings.sh --fixture kt     # Run only Kotlin fixtures
 
 set -euo pipefail
 
@@ -36,8 +37,12 @@ SCENARIO_FILTER=""
 export FIXTURE_FILTER=""
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --scenario) SCENARIO_FILTER="$2"; shift 2 ;;
-        --fixture)  FIXTURE_FILTER="$2"; shift 2 ;;
+        --scenario)
+            [ $# -ge 2 ] || { echo "error: --scenario needs a value" >&2; exit 2; }
+            SCENARIO_FILTER="$2"; shift 2 ;;
+        --fixture)
+            [ $# -ge 2 ] || { echo "error: --fixture needs a value" >&2; exit 2; }
+            FIXTURE_FILTER="$2"; shift 2 ;;
         -h|--help)
             echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb|java|php|dart|swift|kt]"
             exit 0

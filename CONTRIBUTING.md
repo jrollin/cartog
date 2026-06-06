@@ -114,14 +114,14 @@ is the benchmark fixture.
    the 13 scenario entries from real `cartog --json` query output, then **hand-verify each**
    — don't invent counts, and don't let a buggy extractor's output become the expected value.
 8. Wire the fixture into the bench harness:
-   - Add the `<tag>` to the `--fixture` filter in `benchmarks/run.sh` and `benchmarks/lib/common.sh`
+   - Add the `<tag>` to the `--fixture` filter in `benchmarks/lib/common.sh` (the single source of truth both `token_savings.sh` and `resolution_rate.sh` source)
    - Add `run_scenario "webapp_<lang>" ...` lines in every script under `benchmarks/scenarios/`
 9. Validate: `make check-fixtures`. If your language ships a compiler/syntax checker, add a
    `check-<lang>` target to the `Makefile` via the `check_lang` function (native tool,
    pinned Docker fallback, hard fail), add it to both `.PHONY` and the `check-fixtures`
    prerequisites, and gitignore any build dir the checker leaves in the fixture.
-10. Run `make bench` (or `./benchmarks/run.sh --fixture <tag>`) and confirm the fixture
-    appears with non-zero recall on every scenario.
+10. Run `make bench` (or `./benchmarks/token_savings.sh --fixture <tag>`) and confirm the
+    fixture appears with non-zero recall on every scenario.
 
 ### 3. LSP wiring (optional but recommended)
 

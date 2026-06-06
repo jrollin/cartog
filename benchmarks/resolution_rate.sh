@@ -56,6 +56,16 @@ FIXTURES_DIR="$BENCH_DIR/fixtures"
 INDEXES_DIR="$BENCH_DIR/.indexes"
 RESULTS_DIR="$BENCH_DIR/results"
 
+# Capture the user's explicit CARTOG before sourcing common.sh, which defaults it
+# to the PATH `cartog`. We prefer the local build (see binary resolution below),
+# so only a user-set value should win.
+USER_CARTOG="${CARTOG:-}"
+
+# Shared fixture filter (should_skip_fixture) lives in common.sh — single source
+# of truth with token_savings.sh and the scenarios. It reads $FIXTURE_FILTER.
+source "$BENCH_DIR/lib/common.sh"
+export FIXTURE_FILTER=""
+
 # Language tags. Keep in sync with benchmarks/fixtures/webapp_*.
 # macOS ships bash 3.2 (no associative arrays), so lookups use case like the
 # rest of the suite (see benchmarks/lib/common.sh).
@@ -81,8 +91,7 @@ lsp_bin() {
   esac
 }
 
-CARTOG="${CARTOG:-}"
-FIXTURE_FILTER=""
+CARTOG="$USER_CARTOG"
 DO_BASELINE=0
 DO_SAVE=1
 USE_LSP=0
@@ -188,7 +197,8 @@ PY
 # ── Collect rows ──
 ROWS=()
 for tag in "${LANGS[@]}"; do
-  [ -n "$FIXTURE_FILTER" ] && [ "$tag" != "$FIXTURE_FILTER" ] && continue
+  # Shared filter from common.sh (matches the _<tag> suffix on the fixture name).
+  should_skip_fixture "webapp_$tag" && continue
   [ -d "$FIXTURES_DIR/webapp_$tag" ] || { echo "skip $tag (no fixture)" >&2; continue; }
   echo "indexing $tag..." >&2
   if ! row=$(measure "$tag"); then

@@ -68,8 +68,8 @@ shell suite.
 
 The fixtures live inside the cartog repo, so a bare `cartog index .` walks up and
 writes to the repo-root `.cartog`, where every fixture would clobber the next and
-recall would be measured against whichever fixture indexed last. `run.sh` and the
-scenarios pin `CARTOG_DB` to a per-fixture file under `benchmarks/.indexes/`
+recall would be measured against whichever fixture indexed last. `token_savings.sh`
+and the scenarios pin `CARTOG_DB` to a per-fixture file under `benchmarks/.indexes/`
 (gitignored) so each fixture stays isolated. Any new `cartog` invocation in a
 scenario must do the same — use `fixture_db_path "$fixture_dir"` from `lib/common.sh`.
 
@@ -93,20 +93,33 @@ These rows exist to track that — they should approach parity as the gaps close
 ## Usage
 
 ```bash
-# Run all scenarios (01-13) across all 7 languages
-./benchmarks/run.sh
+# Run all scenarios (01-13) across all 10 languages
+./benchmarks/token_savings.sh
 
 # Run single scenario
-./benchmarks/run.sh --scenario 01
+./benchmarks/token_savings.sh --scenario 01
 
 # Run only one language fixture
-./benchmarks/run.sh --fixture py
-./benchmarks/run.sh --fixture ts
-./benchmarks/run.sh --fixture go
-./benchmarks/run.sh --fixture rs
-./benchmarks/run.sh --fixture rb
-./benchmarks/run.sh --fixture java
-./benchmarks/run.sh --fixture php
+./benchmarks/token_savings.sh --fixture py
+./benchmarks/token_savings.sh --fixture ts
+./benchmarks/token_savings.sh --fixture go
+./benchmarks/token_savings.sh --fixture rs
+./benchmarks/token_savings.sh --fixture rb
+./benchmarks/token_savings.sh --fixture java
+./benchmarks/token_savings.sh --fixture php
+```
+
+## Edge-resolution rate
+
+`resolution_rate.sh` measures resolved / total edges per language (a different
+axis from token savings: how completely the resolver links call/import/type
+edges). Re-run after extractor or resolver changes.
+
+```bash
+./benchmarks/resolution_rate.sh                 # heuristic, all langs, save snapshot
+./benchmarks/resolution_rate.sh --lsp           # add LSP pass (uses installed servers)
+./benchmarks/resolution_rate.sh --fixture rs    # one language
+./benchmarks/resolution_rate.sh --baseline      # diff vs last snapshot (no overwrite)
 ```
 
 ## Criterion benchmarks (in-process latency)
@@ -210,13 +223,13 @@ Run `make check` to also include Rust project checks (fmt + clippy + test).
 
 ## Prerequisites
 
-- `cartog` binary (built automatically by `run.sh` if not in PATH)
+- `cartog` binary (built automatically by `token_savings.sh` if not in PATH)
 - `jq` for ground truth comparison and stats (optional but recommended)
 - bash 3+ (macOS/Linux compatible)
 
 ## Output
 
-`run.sh` prints a comparison table and saves results to `results/latest.jsonl`.
+`token_savings.sh` prints a comparison table and saves results to `results/latest.jsonl`.
 
 Each line is a JSON object:
 ```json
