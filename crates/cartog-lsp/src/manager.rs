@@ -147,7 +147,8 @@ impl LspManager {
         let mut client = LspClient::new(child)?;
 
         tracing::info!("LSP: waiting for {} to load project...", spec.binary);
-        self.initialize(&mut client)?;
+        // Native server: cartog's PID is the real parent, so monitoring it is correct.
+        self.initialize(&mut client, Some(std::process::id()))?;
 
         self.clients
             .insert(language.to_string(), (client, spec.language_id));
@@ -165,6 +166,9 @@ impl LspManager {
     fn start_override(&mut self, language: &str, argv: Vec<String>) -> Result<()> {
         if argv.is_empty() {
             bail!("[lsp.{language}] command is empty");
+        }
+        if argv[0].trim().is_empty() {
+            bail!("[lsp.{language}] command executable (first element) is blank");
         }
         let language_id = find_servers(language)
             .first()
@@ -189,7 +193,14 @@ impl LspManager {
 
         let mut client = LspClient::new(child)?;
         tracing::info!("LSP: waiting for {language} override server to load...");
-        self.initialize(&mut client)?;
+        // Command overrides may run the server in a container/sandbox with a
+        // separate PID namespace, where cartog's host PID does not exist — the
+        // LSP `processId` liveness check would then make the server exit at
+        // startup (observed: pyright/typescript-language-server die during
+        // `didOpen`). Send `null` to disable parent-process monitoring. The
+        // trade-off (the server won't self-exit if cartog is SIGKILLed) is
+        // covered by `LspClient`'s Drop reaping the child on every normal exit.
+        self.initialize(&mut client, None)?;
 
         self.clients
             .insert(language.to_string(), (client, language_id));
@@ -295,24 +306,15 @@ impl LspManager {
         }
     }
 
-    fn initialize(&self, client: &mut LspClient) -> Result<()> {
+    /// Run the LSP `initialize`/`initialized` handshake and wait for readiness.
+    ///
+    /// `process_id` is the parent PID the server should monitor (`Some` for a
+    /// native server cartog spawns directly); pass `None` for a sandboxed/
+    /// containerized override server, where cartog's host PID is absent from the
+    /// server's PID namespace and a stale `processId` makes it exit at startup.
+    fn initialize(&self, client: &mut LspClient, process_id: Option<u32>) -> Result<()> {
         let root_uri = path_to_uri(&self.root);
-
-        let _result = client.send_request(
-            "initialize",
-            serde_json::json!({
-                "processId": std::process::id(),
-                "rootUri": root_uri,
-                "capabilities": {
-                    "window": {
-                        "workDoneProgress": true
-                    },
-                    "textDocument": {
-                        "definition": { "dynamicRegistration": false }
-                    }
-                },
-            }),
-        )?;
+        let _result = client.send_request("initialize", initialize_params(&root_uri, process_id))?;
 
         client.send_notification("initialized", serde_json::json!({}))?;
 
@@ -477,13 +479,36 @@ fn expand_root(arg: &str, root: &str) -> String {
     arg.replace("${ROOT}", root)
 }
 
+/// Build the LSP `initialize` params. `process_id` becomes JSON `null` when
+/// `None`, which disables the server's parent-process liveness check — required
+/// for override servers in a separate PID namespace (see [`LspManager::initialize`]).
+fn initialize_params(root_uri: &str, process_id: Option<u32>) -> Value {
+    serde_json::json!({
+        "processId": process_id,
+        "rootUri": root_uri,
+        "capabilities": {
+            "window": { "workDoneProgress": true },
+            "textDocument": { "definition": { "dynamicRegistration": false } }
+        },
+    })
+}
+
 /// Project-root string for `${ROOT}` substitution. Strips the Windows verbatim
 /// `\\?\` prefix that `canonicalize` adds: external tools (Docker `-v` mounts)
-/// reject it, and it never appears in the `file://` URIs cartog exchanges.
+/// reject it, and it never appears in the `file://` URIs cartog exchanges. The
+/// verbatim-UNC form `\\?\UNC\server\share` is restored to a plain UNC path
+/// `\\server\share` rather than left as the malformed `UNC\server\share`.
 fn root_for_substitution(root: &Path) -> String {
     let s = root.to_string_lossy();
-    s.strip_prefix(r"\\?\")
-        .map_or_else(|| s.to_string(), str::to_string)
+    match s.strip_prefix(r"\\?\") {
+        // Restore plain UNC (`\\server\share`) only when there's a body after
+        // `UNC\` — guard against a degenerate `\\?\UNC\` collapsing to a bare `\\`.
+        Some(rest) => match rest.strip_prefix(r"UNC\") {
+            Some(unc) if !unc.is_empty() => format!(r"\\{unc}"),
+            _ => rest.to_string(),
+        },
+        None => s.to_string(),
+    }
 }
 
 fn path_to_uri(path: &Path) -> String {
@@ -611,6 +636,11 @@ mod tests {
             root_for_substitution(Path::new(r"\\?\C:\Users\me\proj")),
             r"C:\Users\me\proj"
         );
+        // Verbatim-UNC is restored to a plain UNC path, not left as `UNC\...`.
+        assert_eq!(
+            root_for_substitution(Path::new(r"\\?\UNC\server\share\proj")),
+            r"\\server\share\proj"
+        );
         // Unix paths (no prefix) pass through unchanged.
         assert_eq!(
             root_for_substitution(Path::new("/home/me/proj")),
@@ -626,6 +656,41 @@ mod tests {
         );
         let err = mgr.start("dart").unwrap_err();
         assert!(err.to_string().contains("command is empty"), "{err}");
+    }
+
+    #[test]
+    fn initialize_params_processid_null_for_override() {
+        // Override (sandboxed/container) server: processId must be JSON null so the
+        // server doesn't monitor cartog's host PID (absent in its PID namespace)
+        // and exit at startup — the bug that killed pyright/typescript-language-server.
+        let p = initialize_params("file:///proj", None);
+        assert!(p["processId"].is_null(), "override processId must be null");
+        // Native server: a real PID is sent so liveness monitoring works.
+        let p = initialize_params("file:///proj", Some(4242));
+        assert_eq!(p["processId"].as_u64(), Some(4242));
+    }
+
+    #[test]
+    fn initialize_params_preserves_root_and_capabilities() {
+        // Guard the extraction: rootUri and the capability hints the resolver
+        // relies on must survive intact regardless of the processId arm.
+        let p = initialize_params("file:///proj", None);
+        assert_eq!(p["rootUri"], "file:///proj");
+        assert_eq!(p["capabilities"]["window"]["workDoneProgress"], true);
+        assert_eq!(
+            p["capabilities"]["textDocument"]["definition"]["dynamicRegistration"],
+            false
+        );
+    }
+
+    #[test]
+    fn start_override_rejects_blank_executable() {
+        let mut mgr = LspManager::with_overrides(
+            Path::new("/tmp/proj"),
+            HashMap::from([("dart".to_string(), vec!["   ".to_string()])]),
+        );
+        let err = mgr.start("dart").unwrap_err();
+        assert!(err.to_string().contains("blank"), "{err}");
     }
 
     #[test]

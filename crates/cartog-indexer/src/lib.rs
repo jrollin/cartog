@@ -726,7 +726,8 @@ pub fn index_directory(
     #[cfg(feature = "lsp")]
     if lsp && !dirty_files.is_empty() {
         emit(ProgressUpdate::ResolvingLsp);
-        let stats = cartog_lsp::lsp_resolve_edges(db, &root, None, lsp_overrides)?;
+        let stats = cartog_lsp::lsp_resolve_edges(db, &root, None, lsp_overrides)
+            .with_context(|| format!("resolving LSP edges for root {}", root.display()))?;
         result.edges_lsp_resolved = stats.resolved;
         result.edges_marked_unresolvable = stats.marked_unresolvable;
         result.edges_marked_external = stats.marked_external;

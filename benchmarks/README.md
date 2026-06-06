@@ -37,14 +37,16 @@ test-and-benchmark matrix.
 | `fixtures/webapp_java/` | Java | 41 | ~1,800 |
 | `fixtures/webapp_php/` | PHP | 25 | ~1,500 |
 | `fixtures/webapp_dart/` | Dart | 9 | ~200 |
-| **Total** | | **354** | **~18,800** |
+| `fixtures/webapp_swift/` | Swift | 16 | ~500 |
+| `fixtures/webapp_kt/` | Kotlin | 17 | ~460 |
+| **Total** | | **387** | **~19,760** |
 
 All fixtures model the same domain (auth service, tokens, routes, middleware, database, cache, events, validators) with controlled, known relationships defined in `ground_truth/`.
 
-The criterion `indexing` bench exercises all 8 fixtures. The shell scenarios and
-`ground_truth/` currently cover the first 7 — `webapp_dart` has no scenario
-ground truth yet, so it is indexed by the criterion bench but not scored by the
-shell suite.
+The criterion `indexing` bench exercises all 10 fixtures. The shell scenarios and
+`ground_truth/` currently cover 9 of them — `webapp_dart` has no scenario ground
+truth yet, so it is indexed by the criterion bench but not scored by the shell
+suite.
 
 ## Scenarios
 
@@ -147,7 +149,7 @@ pinned image instead, so the LSP numbers reproduce across machines:
 Building the images and running the benchmark are two independent steps:
 
 ```bash
-make lsp-images                 # 1. build cartog-lsp-<lang>:stable for all 10 langs
+make lsp-images                 # 1. build the 10 cartog-lsp-<lang>:stable images
 make bench-resolution-docker    # 2. run --lsp --docker-lsp (errors if an image is missing)
 ```
 
@@ -165,13 +167,13 @@ works (path mirroring is mandatory). Per-image caveats (gopls deps,
 jdtls/sourcekit startup time, ruby-lsp bundle compose) are noted in each
 Dockerfile header.
 
-Most Dockerfiles self-build the server on a pinned official base. `python` and
-`typescript` instead `FROM` the upstream [lspcontainers](https://hub.docker.com/u/lspcontainers)
-images (smaller and maintained — pyright 176 MB, ts 211 MB vs ~640/380 MB
-self-built), verified to give a byte-identical resolution rate. The image name
-stays the uniform `cartog-lsp-<lang>:stable` either way, so switching a language
-between upstream-based and self-built is a one-line `FROM` change with no script
-or Makefile edits.
+All 10 containerized servers resolve **identically to host** (same `lsp`-tier
+edge count). `python` and `typescript` use the upstream `lspcontainers` images
+(pinned by digest); the other 8 self-build on a pinned official base. cartog
+sends `processId: null` to a command-override server because its host PID is
+absent from a container's PID namespace — without that, pyright and
+typescript-language-server honor the LSP parent-liveness check and exit at
+startup (they alone enforce it strictly).
 
 ## Criterion benchmarks (in-process latency)
 
@@ -205,7 +207,7 @@ cargo bench -p cartog --bench queries -- search_token   # one bench (substring m
 Lives in `cartog-indexer`, which has no `cartog-rag`/ONNX dependency, so it builds
 and runs without the native ONNX library. Per-language cost lives in the
 tree-sitter grammar + extractor, so the full-index scenario is parameterized over
-all 8 fixtures.
+all 10 fixtures.
 
 ```bash
 cargo bench -p cartog-indexer --bench indexing
@@ -214,7 +216,7 @@ cargo bench -p cartog-indexer --bench indexing -- index_full_force/rs   # one la
 
 | Benchmark | What it measures |
 |-----------|-----------------|
-| `index_full_force/<lang>` | Full index of each fixture (force=true) — `py ts go rs rb java php dart` |
+| `index_full_force/<lang>` | Full index of each fixture (force=true) — `py ts go rs rb java php dart swift kt` |
 | `index_incremental_noop` | Re-index with no changes (all files skipped via hash); Python |
 | `index_incremental_one_file` | One file's hash invalidated, triggers Merkle diff + scoped resolution; Python |
 

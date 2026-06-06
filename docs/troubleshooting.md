@@ -79,6 +79,13 @@ there first for a real error.
   expands `${ROOT}` to the host-absolute project root). On macOS, also confirm
   the project directory is shared in Docker Desktop → Settings → Resources →
   File Sharing.
+- **"LSP server died during didOpen" with a Docker override:** cartog already
+  sends `processId: null` to override servers so a container's PID namespace
+  doesn't trip the LSP parent-liveness check (older cartog sent its host PID,
+  which made pyright / typescript-language-server exit at startup). If a server
+  still dies, check `<tmp>/cartog-lsp/<language>.log` — a common cause is the
+  bind mount not being shared with Docker, or the server needing a writable
+  cache dir (gopls `/go`, jdtls `$HOME/.cache`).
 
 ## Re-indexing
 

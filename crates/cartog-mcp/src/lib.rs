@@ -955,6 +955,16 @@ impl AtomicRole {
 
 #[tool_router]
 impl CartogServer {
+    /// Construct a writable primary MCP server.
+    ///
+    /// Opens (or migrates) the DB at `db_path` read-write and reconciles the
+    /// embedding fingerprint; returns `Err` if the DB can't be opened or the
+    /// embedding model fails to load. `rag_config` selects the embedding +
+    /// reranker providers, `redact` is the secret-redaction policy applied to
+    /// indexed content, and `lsp_overrides` maps a cartog language to its
+    /// `[lsp.<lang>] command` argv for the warm `LspManager` (empty = default
+    /// PATH-resolved servers). For the read-only attach path see
+    /// [`new_read_only`](Self::new_read_only).
     pub fn new(
         db_path: &std::path::Path,
         rag_config: rag::EmbeddingProviderConfig,

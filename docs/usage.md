@@ -244,6 +244,12 @@ command = ["docker", "run", "--rm", "-i",
 - The override only applies to the keyed cartog language (`dart`, `go`,
   `python`, ...); it must be a language cartog already supports.
 - The server's stderr is logged to `${TMPDIR}/cartog-lsp/<language>.log`.
+- cartog sends `processId: null` in the LSP `initialize` for an override server
+  (a native server gets cartog's real PID). A container runs in its own PID
+  namespace where cartog's host PID does not exist, so a real `processId` would
+  trip the LSP parent-liveness check and make some servers (notably pyright and
+  typescript-language-server) exit at startup. Handled automatically — no config
+  needed. The override server is still reaped when cartog exits normally.
 
 Run `cartog index --force <path>` after adding an override; the server is
 spawned during the LSP edge-resolution pass.
@@ -251,8 +257,8 @@ spawned during the LSP edge-resolution pass.
 Pinned Docker recipes for all 10 languages live in `benchmarks/lsp-images/`
 (`<lang>.Dockerfile` → `cartog-lsp-<lang>:stable`). Build them with
 `make lsp-images`, then `resolution_rate.sh --docker-lsp` wires the override for
-each (strict: a missing image is an error, not a host fallback). See
-`benchmarks/README.md`.
+each (strict: a missing image is an error, not a host fallback). All 10 resolve
+identically to host. See `benchmarks/README.md`.
 
 **Compile-time feature flags**:
 

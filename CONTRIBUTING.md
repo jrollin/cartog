@@ -137,8 +137,11 @@ is the benchmark fixture.
     must reproduce the `ServerSpec` `binary` + `args` (cartog spawns the
     override argv verbatim and only borrows the spec's `language_id`); the
     generated `docker run` uses `-i` (never `-t`) and mirrors the host path with
-    `-v ${ROOT}:${ROOT} -w ${ROOT}`. Copy an existing recipe's header. See
-    `benchmarks/README.md` → "Reproducing the numbers".
+    `-v ${ROOT}:${ROOT} -w ${ROOT}`. Copy an existing recipe's header. Confirm
+    the containerized server resolves the same `lsp`-tier edges as host (cartog
+    sends `processId: null` to override servers so a container's PID namespace
+    doesn't trip the LSP parent-liveness check). See `benchmarks/README.md` →
+    "Reproducing the numbers".
 13. Bench-validate the LSP integration: install the server, run `cartog index` with and
     without `--no-lsp` on your fixture, and capture `edges_resolved` vs
     `edges_lsp_resolved`, plus `edges_marked_unresolvable` (true negatives:
