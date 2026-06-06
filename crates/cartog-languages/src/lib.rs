@@ -5,6 +5,8 @@
 //! queries for declarative AST pattern matching.
 //!
 //! Supported languages: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin.
+#![doc = ""]
+#![doc = include_str!("../README.md")]
 
 pub mod dart;
 pub mod go;

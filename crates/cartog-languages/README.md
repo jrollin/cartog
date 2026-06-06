@@ -10,7 +10,7 @@ Parses source code using tree-sitter grammars and extracts symbols (functions, c
 
 ### Extractor trait
 
-```rust
+```rust,ignore
 pub trait Extractor: Send {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult>;
 }

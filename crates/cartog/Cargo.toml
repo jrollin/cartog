@@ -9,6 +9,10 @@ repository.workspace = true
 keywords = ["code-analysis", "tree-sitter", "graph", "llm", "code-intelligence"]
 categories = ["development-tools", "command-line-utilities"]
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 cartog-core = { workspace = true }
 cartog-db = { workspace = true }

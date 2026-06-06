@@ -3,6 +3,8 @@
 //! Watches a directory for source file changes using debounced filesystem events,
 //! triggers incremental re-indexing, and optionally defers RAG embedding to batch
 //! changed symbols after a configurable quiet period.
+#![doc = ""]
+#![doc = include_str!("../README.md")]
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

@@ -4,6 +4,8 @@
 //! Provides graph traversal queries (callees, refs, impact, hierarchy),
 //! full-text search via FTS5, vector KNN search via sqlite-vec, and a
 //! 6-tier heuristic edge resolution algorithm.
+#![doc = ""]
+#![doc = include_str!("../README.md")]
 
 use anyhow::{Context, Result};
 use rusqlite::ffi::sqlite3_auto_extension;

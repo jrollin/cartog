@@ -3,6 +3,8 @@
 //! Resolves edges left unresolved by the heuristic resolver in [`cartog_db`],
 //! by querying real language servers (pyright, rust-analyzer, etc.) for
 //! `textDocument/definition` responses. Optional — gated behind the `lsp` feature.
+#![doc = ""]
+#![doc = include_str!("../README.md")]
 
 pub mod client;
 pub mod manager;

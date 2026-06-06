@@ -20,6 +20,8 @@
 //! by an unrelated process" from "same process is still running". When the
 //! start time is absent (legacy single-line file from an older cartog) we
 //! fall back to liveness-only checks.
+#![doc = ""]
+#![doc = include_str!("../README.md")]
 
 use std::fs;
 use std::io;
