@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-install-script sync-install-script bench bench-resolution bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-install-script sync-install-script bench bench-resolution bench-resolution-docker lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -136,10 +136,21 @@ eval-agents: ## Run LLM-as-judge agent evaluation (requires claude CLI)
 bench: ## Run shell benchmark suite (all scenarios, all fixtures)
 	./benchmarks/token_savings.sh
 
-bench-resolution: ## Run edge-resolution rate (heuristic + LSP, all languages; saves a provenance snapshot)
+bench-resolution: ## Run edge-resolution rate (heuristic + host LSP, all languages; saves a provenance snapshot)
 	cargo build --release
 	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/resolution_rate.sh
 	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/resolution_rate.sh --lsp
+
+bench-resolution-docker: ## Run edge-resolution rate with Docker LSP servers (run `make lsp-images` first; errors on a missing image, no host fallback)
+	cargo build --release
+	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/resolution_rate.sh --lsp --docker-lsp
+
+lsp-images: ## Build all per-language Docker LSP images (cartog-lsp-<lang>:stable) from benchmarks/lsp-images/
+	@for df in benchmarks/lsp-images/*.Dockerfile; do \
+		lang=$$(basename "$$df" .Dockerfile); \
+		echo "building cartog-lsp-$$lang:stable"; \
+		docker build -t "cartog-lsp-$$lang:stable" -f "$$df" benchmarks/lsp-images || exit 1; \
+	done
 
 bench-criterion: ## Run all ONNX-free criterion benches (queries, per-language indexing, hybrid search)
 	cargo bench -p cartog --bench queries

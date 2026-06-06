@@ -39,11 +39,16 @@ Measures edge-resolution rate (resolved / total edges) per language fixture.
 
 Usage:
   resolution_rate.sh                 # heuristic, all langs, save snapshot
-  resolution_rate.sh --lsp           # add LSP pass (uses installed servers)
+  resolution_rate.sh --lsp           # add LSP pass (uses host-installed servers)
+  resolution_rate.sh --lsp --docker-lsp  # LSP via Docker images, host fallback
   resolution_rate.sh --fixture rs    # one language (py ts rs go rb java php dart swift kt)
   resolution_rate.sh --baseline      # diff vs last saved snapshot (does not overwrite it)
   resolution_rate.sh --no-save       # don't write the snapshot
   CARTOG=target/debug/cartog resolution_rate.sh   # pick a binary
+
+--docker-lsp: run each language's LSP server via Docker through a generated
+`[lsp.<lang>]` override (no host fallback). The `cartog-lsp-<lang>:stable` images
+must be built first with `make lsp-images`; a missing image is an explicit error.
 
 Snapshot: benchmarks/results/resolution_rate{,_lsp}.json (gitignored).
 A --baseline or --fixture run never overwrites the full snapshot.
@@ -91,10 +96,26 @@ lsp_bin() {
   esac
 }
 
+# Fixture tag → cartog language name (the `[lsp.<lang>]` key and image suffix).
+lsp_lang() {
+  case "$1" in
+    py) echo python ;; ts) echo typescript ;; rs) echo rust ;;
+    rb) echo ruby ;; kt) echo kotlin ;;
+    *) echo "$1" ;;  # go, java, php, dart, swift are identity
+  esac
+}
+
+# Docker LSP image name for a fixture tag (built from benchmarks/lsp-images/).
+# Every language uses the uniform `cartog-lsp-<lang>:stable` tag; a Dockerfile may
+# simply `FROM` an upstream image (python/typescript wrap lspcontainers) — that
+# choice is local to each Dockerfile and invisible here.
+docker_image() { echo "cartog-lsp-$(lsp_lang "$1"):stable"; }
+
 CARTOG="$USER_CARTOG"
 DO_BASELINE=0
 DO_SAVE=1
 USE_LSP=0
+USE_DOCKER_LSP=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -102,12 +123,21 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "error: --fixture needs a value" >&2; usage >&2; exit 2; }
       FIXTURE_FILTER="$2"; shift 2 ;;
     --lsp) USE_LSP=1; shift ;;
+    --docker-lsp) USE_DOCKER_LSP=1; shift ;;
     --baseline) DO_BASELINE=1; shift ;;
     --no-save) DO_SAVE=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "error: unknown arg: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+# --docker-lsp only makes sense during an LSP pass.
+if [ "$USE_DOCKER_LSP" -eq 1 ] && [ "$USE_LSP" -eq 0 ]; then
+  echo "error: --docker-lsp requires --lsp" >&2; usage >&2; exit 2
+fi
+if [ "$USE_DOCKER_LSP" -eq 1 ] && ! command -v docker >/dev/null 2>&1; then
+  echo "error: --docker-lsp needs docker on PATH" >&2; exit 2
+fi
 
 # Validate the fixture tag against the known set so a typo (e.g. "rust") fails
 # loudly instead of silently measuring nothing.
@@ -149,6 +179,13 @@ if [ -z "$CARTOG" ]; then
     exit 1
   fi
 fi
+# Absolutize the binary: measure() runs cartog from inside the fixture dir (so it
+# discovers the override .cartog.toml), where a relative CARTOG would not resolve.
+case "$CARTOG" in
+  /*) ;;                                   # already absolute
+  */*) CARTOG="$(cd "$(dirname "$CARTOG")" && pwd)/$(basename "$CARTOG")" ;;
+  *) ;;                                    # bare name on PATH — leave as-is
+esac
 echo "binary: $CARTOG" >&2
 
 # ── Provenance ── so a snapshot can be traced back to an exact build.
@@ -164,10 +201,38 @@ err_log="$(mktemp)"
 ROWS_FILE="$(mktemp)"
 trap 'rm -f "$err_log" "$ROWS_FILE"' EXIT
 
+# Resolve the LSP source for a fixture under --lsp. Sets globals (bash 3.2 has no
+# nameref): M_HAS_SERVER (0/1), M_LSP_SOURCE ("docker:<img>"/"host:<bin>"/"none"),
+# M_CARTOG_TOML (path to a temp override config to clean up, or empty).
+#
+# --docker-lsp is strict: it uses the prebuilt `cartog-lsp-<lang>:stable` image
+# only, never falling back to a host binary (the preflight already verified the
+# image exists). Without --docker-lsp it auto-detects the host server.
+resolve_lsp_source() {
+  local tag="$1" src="$2"
+  M_HAS_SERVER=0; M_LSP_SOURCE="none"; M_CARTOG_TOML=""
+  [ "$USE_LSP" -eq 1 ] || return 0
+
+  if [ "$USE_DOCKER_LSP" -eq 1 ]; then
+    local img; img="$(docker_image "$tag")"
+    # Override config lives in the fixture dir; `.cartog*` is gitignored, so it
+    # never pollutes git, and cartog discovers it by walking up from cwd.
+    M_CARTOG_TOML="$src/.cartog.toml"
+    printf '[lsp.%s]\ncommand = ["docker", "run", "--rm", "-i", "-v", "${ROOT}:${ROOT}", "-w", "${ROOT}", "%s"]\n' \
+      "$(lsp_lang "$tag")" "$img" > "$M_CARTOG_TOML"
+    M_HAS_SERVER=1; M_LSP_SOURCE="docker:$img"
+    return 0
+  fi
+
+  if command -v "$(lsp_bin "$tag")" >/dev/null 2>&1; then
+    M_HAS_SERVER=1; M_LSP_SOURCE="host:$(lsp_bin "$tag")"
+  fi
+}
+
 # ── Measure one fixture ──
 # Emits: "<tag> <files> <symbols> <edges> <resolved> <has_server> <lsp_source>"
-# has_server is 1 only in --lsp mode when the language's LSP binary is on PATH.
-# lsp_source records which server resolved the edges ("host:<bin>" or "none").
+# has_server is 1 when --lsp found a server (Docker image or host binary).
+# lsp_source records which resolved the edges ("docker:<img>"/"host:<bin>"/"none").
 measure() {
   local tag="$1"
   local src="$FIXTURES_DIR/webapp_$tag"
@@ -175,33 +240,51 @@ measure() {
   local db="$INDEXES_DIR/webapp_$tag.sqlite"
   rm -f "$db"
 
+  resolve_lsp_source "$tag" "$src"
+  # Clean up any override config we wrote, on every return path.
+  [ -n "$M_CARTOG_TOML" ] && trap 'rm -f "$M_CARTOG_TOML"' RETURN
+
   # A plain string (not an array): bash 3.2 + set -u throws on an empty array
   # expansion, and we need the "no flags" case for LSP auto-detect.
-  local has_server=0
   local lsp_flag="--no-lsp"
-  if [ "$USE_LSP" -eq 1 ] && command -v "$(lsp_bin "$tag")" >/dev/null 2>&1; then
-    lsp_flag=""          # let cartog auto-detect the server on PATH
-    has_server=1
-  fi
+  [ "$M_HAS_SERVER" -eq 1 ] && lsp_flag=""   # let cartog use the resolved server
 
   # Capture stderr so a panic / missing-server / bad-fixture failure surfaces a
   # cause, not just "FAILED <tag>". The caller echoes $err_log on failure.
-  if ! CARTOG_DB="$db" "$CARTOG" index $lsp_flag --force "$src" >/dev/null 2>"$err_log"; then
+  # Run from inside the fixture dir so cartog discovers the override .cartog.toml.
+  if ! ( cd "$src" && CARTOG_DB="$db" "$CARTOG" index $lsp_flag --force . ) >/dev/null 2>"$err_log"; then
     return 1
   fi
   local json
   if ! json=$(CARTOG_DB="$db" "$CARTOG" stats --db "$db" --json 2>"$err_log"); then
     return 1
   fi
-  local lsp_source="none"
-  [ "$has_server" -eq 1 ] && lsp_source="host:$(lsp_bin "$tag")"
-  python3 - "$tag" "$has_server" "$lsp_source" "$json" <<'PY'
+  python3 - "$tag" "$M_HAS_SERVER" "$M_LSP_SOURCE" "$json" <<'PY'
 import json, sys
 tag, has_server, lsp_source, blob = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 d = json.loads(blob)
 print(tag, d["num_files"], d["num_symbols"], d["num_edges"], d["num_resolved"], has_server, lsp_source)
 PY
 }
+
+# ── Preflight: --docker-lsp requires every image built up front ──
+# Strict by design: a missing image is an explicit error (no host fallback), so
+# the reported numbers always reflect the containerized server. Build images with
+# `make lsp-images` (all) or a per-language `docker build` (see benchmarks/README.md).
+if [ "$USE_DOCKER_LSP" -eq 1 ]; then
+  missing=""
+  for tag in "${LANGS[@]}"; do
+    should_skip_fixture "webapp_$tag" && continue
+    [ -d "$FIXTURES_DIR/webapp_$tag" ] || continue
+    img="$(docker_image "$tag")"
+    docker image inspect "$img" >/dev/null 2>&1 || missing="$missing $img"
+  done
+  if [ -n "$missing" ]; then
+    echo "error: --docker-lsp needs these images built first (run: make lsp-images):" >&2
+    for img in $missing; do echo "  - $img" >&2; done
+    exit 1
+  fi
+fi
 
 # ── Collect rows ──
 ROWS=()

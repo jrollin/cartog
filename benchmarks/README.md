@@ -128,7 +128,8 @@ Both result files now carry provenance so a published number can be traced back
 to an exact build:
 
 - `results/resolution_rate{,_lsp}.json` — top-level `cartog_version`, `git_sha`,
-  `timestamp`, plus per-language `lsp_source` (`host:<bin>` or `none`).
+  `timestamp`, plus per-language `lsp_source` (`docker:<image>`, `host:<bin>`, or
+  `none`).
 - `results/latest.jsonl` — first line is a `{"_meta": {...}}` header with the
   same `cartog_version` / `git_sha` / `timestamp` (the summary loop skips it).
 
@@ -138,20 +139,39 @@ To reproduce:
    `target/release/cartog`; override with `CARTOG=/path/to/cartog`).
 2. Run the script. Provenance is captured automatically.
 
-**Host-independent LSP via Docker.** The `--lsp` numbers otherwise depend on
-which servers happen to be installed (Go needs a toolchain, Ruby ≥3.2, etc.).
-To pin a server, build its image and point `[lsp.<lang>]` at it — see
-`lsp-images/dart.Dockerfile` and the "LSP server overrides" section in
-[docs/usage.md](../docs/usage.md). Example for Dart:
+**Host-independent LSP via Docker.** The plain `--lsp` numbers depend on which
+servers happen to be installed (Go needs a toolchain, Ruby ≥3.2, jdtls a JDK,
+sourcekit-lsp the Swift toolchain). `--docker-lsp` runs each server from a
+pinned image instead, so the LSP numbers reproduce across machines:
+
+Building the images and running the benchmark are two independent steps:
 
 ```bash
-docker build -t cartog-lsp-dart:stable -f benchmarks/lsp-images/dart.Dockerfile benchmarks/lsp-images
-# then add the [lsp.dart] block from docs/usage.md to a .cartog.toml and run:
-CARTOG_DB=/tmp/dart.sqlite cartog index --force benchmarks/fixtures/webapp_dart
+make lsp-images                 # 1. build cartog-lsp-<lang>:stable for all 10 langs
+make bench-resolution-docker    # 2. run --lsp --docker-lsp (errors if an image is missing)
 ```
 
-Only the Dart image ships today. Docker images for the other 9 languages, a
-`--docker-lsp` script mode, and a CI job are follow-ups, not yet wired.
+`benchmarks/lsp-images/<lang>.Dockerfile` holds one pinned recipe per language
+(rust, python, typescript, go, ruby, java, php, dart, swift, kotlin). Under
+`--docker-lsp` the script generates a `[lsp.<lang>]` Docker override (`docker run
+-i -v ${ROOT}:${ROOT} -w ${ROOT} <image>`) and records `lsp_source=docker:<image>`.
+It is **strict**: a missing `cartog-lsp-<lang>:stable` image is an explicit error
+(no host fallback), so the numbers always reflect the containerized server — a
+preflight check lists any unbuilt images and tells you to run `make lsp-images`.
+Build a single image with, e.g., `docker build -t cartog-lsp-go:stable -f
+benchmarks/lsp-images/go.Dockerfile benchmarks/lsp-images`. See the "LSP server
+overrides" section in [docs/usage.md](../docs/usage.md) for how the override
+works (path mirroring is mandatory). Per-image caveats (gopls deps,
+jdtls/sourcekit startup time, ruby-lsp bundle compose) are noted in each
+Dockerfile header.
+
+Most Dockerfiles self-build the server on a pinned official base. `python` and
+`typescript` instead `FROM` the upstream [lspcontainers](https://hub.docker.com/u/lspcontainers)
+images (smaller and maintained — pyright 176 MB, ts 211 MB vs ~640/380 MB
+self-built), verified to give a byte-identical resolution rate. The image name
+stays the uniform `cartog-lsp-<lang>:stable` either way, so switching a language
+between upstream-based and self-built is a one-line `FROM` change with no script
+or Makefile edits.
 
 ## Criterion benchmarks (in-process latency)
 

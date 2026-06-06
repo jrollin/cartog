@@ -131,6 +131,14 @@ is the benchmark fixture.
     first available binary wins.
 12. Add a `test_find_servers_<lang>` assertion in the same file's test module to pin
     the priority order.
+12b. Add a pinned `benchmarks/lsp-images/<lang>.Dockerfile` (image
+    `cartog-lsp-<lang>:stable`) so `resolution_rate.sh --docker-lsp` and
+    `make lsp-images` cover the language host-independently. The `ENTRYPOINT`
+    must reproduce the `ServerSpec` `binary` + `args` (cartog spawns the
+    override argv verbatim and only borrows the spec's `language_id`); the
+    generated `docker run` uses `-i` (never `-t`) and mirrors the host path with
+    `-v ${ROOT}:${ROOT} -w ${ROOT}`. Copy an existing recipe's header. See
+    `benchmarks/README.md` → "Reproducing the numbers".
 13. Bench-validate the LSP integration: install the server, run `cartog index` with and
     without `--no-lsp` on your fixture, and capture `edges_resolved` vs
     `edges_lsp_resolved`, plus `edges_marked_unresolvable` (true negatives:
