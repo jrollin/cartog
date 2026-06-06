@@ -224,9 +224,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bitflags"
-version = "2.12.1"
+version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84d7ced0ae9557296835c32bf1b1e02b44c746701f898460fb000d7eaa84f00a"
+checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "block-buffer"
@@ -266,7 +266,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cartog"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-core"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "schemars",
@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-db"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-indexer"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-languages"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -371,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-lsp"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -385,7 +385,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-mcp"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -405,7 +405,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-process-lock"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "libc",
  "tempfile",
@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-rag"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-watch"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "anyhow",
  "cartog-core",

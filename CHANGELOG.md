@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.25.1] - 2026-06-06
+
+### Documentation
+
+- **crates**: Render READMEs on docs.rs + feature-flag badges ([`ae99a38`](https://github.com/jrollin/cartog/commit/ae99a3884e7adf15088ebe35d9bb92e09ccc1833))
+- **crates**: Sync crate READMEs with code, fix broken intra-doc links ([`d75813e`](https://github.com/jrollin/cartog/commit/d75813ee416ba87e914a92605fcb6dcd58b2a81f))
+- **crates**: Address PR review on docs.rs READMEs ([`91e2fa6`](https://github.com/jrollin/cartog/commit/91e2fa6add974e3d7bb72b9fd5f1f3e4eb6d732b))
+
 ## [0.25.0] - 2026-06-05
 
 ### Bug Fixes
