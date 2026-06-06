@@ -9,7 +9,7 @@ own: a real agent, real tasks, with/without arms, median of N runs.
 
 | Surface | What it measures | LLM in the loop? |
 |---------|------------------|------------------|
-| Shell suite (`../run.sh`) | **Per-query** output size + recall: one cartog command vs one grep | no |
+| Shell suite (`../token_savings.sh`) | **Per-query** output size + recall: one cartog command vs one grep | no |
 | Criterion benches | **In-process latency** of cartog's own CPU work (µs–ms) | no |
 | **Agent-task (this)** | **End-to-end task cost**: tokens, tool calls, USD, and time to answer a question, cartog-on vs cartog-off | yes (agent + judge) |
 

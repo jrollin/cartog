@@ -266,6 +266,7 @@ fn did_you_mean(db: &Database, name: &str) -> String {
 }
 
 /// Build or rebuild the code graph index.
+#[allow(clippy::too_many_arguments)] // thin CLI adapter over index_directory
 pub fn cmd_index(
     db_path: &Path,
     path: &str,
@@ -274,6 +275,7 @@ pub fn cmd_index(
     json: bool,
     embedding_dim: usize,
     redact: indexer::RedactionConfig,
+    lsp_overrides: &std::collections::HashMap<String, Vec<String>>,
 ) -> Result<()> {
     let root = Path::new(path);
     let db = open_db(db_path, embedding_dim)?;
@@ -283,7 +285,8 @@ pub fn cmd_index(
     let cb = spinner_callback(&spinner, indexer::ProgressUpdate::label);
     let cb_ref: Option<indexer::ProgressCallback<'_>> =
         cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
-    let result = indexer::index_directory(&db, root, force, lsp, cb_ref, None, redact);
+    let result =
+        indexer::index_directory(&db, root, force, lsp, cb_ref, None, redact, lsp_overrides);
     drop(cb);
     stop_spinner(spinner);
     let result = result?;
@@ -1175,7 +1178,16 @@ pub fn cmd_rag_index(
     let ix_cb = spinner_callback(&spinner, indexer::ProgressUpdate::label);
     let ix_cb_ref: Option<indexer::ProgressCallback<'_>> =
         ix_cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
-    let index_res = indexer::index_directory(&db, root, false, false, ix_cb_ref, None, redact);
+    let index_res = indexer::index_directory(
+        &db,
+        root,
+        false,
+        false,
+        ix_cb_ref,
+        None,
+        redact,
+        &std::collections::HashMap::new(),
+    );
     drop(ix_cb);
     stop_spinner(spinner);
     let _index_result = index_res?;
@@ -1643,6 +1655,7 @@ def main():
             None,
             None,
             indexer::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .expect("fixture indexes");
         drop(db);

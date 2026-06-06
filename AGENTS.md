@@ -35,6 +35,8 @@ make check-skill           # skill tests (ensure_indexed.sh unit tests)
 make eval-skill            # LLM-as-judge skill evaluation (requires claude CLI)
 make eval-agents           # LLM-as-judge agent evaluation (requires claude CLI)
 make bench                 # shell benchmark suite (13 scenarios x 10 languages)
+make bench-resolution      # edge-resolution rate (heuristic + host LSP, all languages; saves a provenance snapshot)
+make bench-resolution-docker # same, LSP servers via Docker images (all 10, strict — no host fallback); `make lsp-images` builds them
 make bench-criterion       # ONNX-free criterion benches (queries, per-language indexing, hybrid search)
 make bench-onnx            # real-model embed/rerank benches (needs `cartog rag setup`; not in CI)
 make bench-rag             # RAG relevancy benchmarks (in-memory + shell scenario 13)
@@ -107,14 +109,14 @@ with a one-line parse smoke test before writing the extractor.
 
 **Edge resolution + agent integration:**
 
-6. Add a `ServerSpec` (+ `test_find_servers_{lang}`) to `crates/cartog-lsp/src/servers.rs` for the language's LSP server
+6. Add a `ServerSpec` (+ `test_find_servers_{lang}`) to `crates/cartog-lsp/src/servers.rs` for the language's LSP server, and a matching pinned `benchmarks/lsp-images/{lang}.Dockerfile` (its `ENTRYPOINT` must reproduce the `ServerSpec` args; `docker run` uses `-i`, never `-t`) so `resolution_rate.sh --docker-lsp` covers it
 7. Add the language to the MCP "Languages:" instruction string in `crates/cartog-mcp/src/lib.rs`
 
 **Benchmarks (parity with the other languages):**
 
 8. Add `"{tag}"` to `FIXTURE_LANGS` in `crates/cartog-indexer/src/lib.rs` (`bench_support`)
 9. Create `benchmarks/fixtures/webapp_{lang}/` mirroring the other fixtures' domain shape; add a `check-{lang}` Makefile target (native + Docker fallback) and add it to `.PHONY` + `check-fixtures`; gitignore any build dir
-10. Author `benchmarks/ground_truth/webapp_{lang}.json` (derive expected values from real `cartog` output, then hand-verify) and wire `run_scenario "webapp_{lang}" ...` into all 13 `benchmarks/scenarios/NN_*.sh`; add the tag to `should_skip_fixture` in `benchmarks/lib/common.sh` and the `run.sh` usage text
+10. Author `benchmarks/ground_truth/webapp_{lang}.json` (derive expected values from real `cartog` output, then hand-verify) and wire `run_scenario "webapp_{lang}" ...` into all 13 `benchmarks/scenarios/NN_*.sh`; add the tag to `should_skip_fixture` in `benchmarks/lib/common.sh` and the `token_savings.sh` usage text
 
 **Docs & counts** (search the repo for the previous count and bump consistently — there are two conventions: marketing "N languages" = code+Markdown, and "N code languages"):
 
@@ -204,4 +206,5 @@ Consequences to respect on every change:
 - **Pluggable embedding providers**: local ONNX (default), Ollama, and a generic OpenAI-compatible `/v1/embeddings` provider (OpenAI, Mistral, Voyage, Jina, OVHcloud, or local `/v1` servers — switch vendors via `base_url`; API key from an env var named by `[embedding.openai] api_key_env`, never in TOML; Azure's deployment-path shape is out of scope), configured via `.cartog.toml`
 - **Secret redaction**: default-on, best-effort. Scrubs common secret patterns (AWS/GitHub/Slack/Stripe/JWT + quoted key=value assignments) from `symbol_content`, `signature`, `docstring`, and embeddings; always excludes sensitive files (`.env`, `*.pem`, `id_rsa`, ...). Toggling `[security] redact_secrets` force-reindexes. See [docs/tech.md](docs/tech.md#secret-redaction)
 - **Feature flags**: binary `cartog` default = `lsp` + `remote-s3` + `ollama-embedding` + `openai-embedding` (all on); advanced users strip via `--no-default-features`. Runtime embedding default stays local ONNX (`provider = "local"`); Ollama and OpenAI are opt-in via `.cartog.toml`. Crate `cartog-rag` — `provider-local` (default), `provider-ollama`, `provider-openai`
+- **LSP command override**: `[lsp.<lang>] command = [...]` runs a custom (e.g. Dockerized) LSP server instead of the PATH-resolved `ServerSpec`. `${ROOT}` in any argv element expands to the host-absolute project root; path mirroring (`-v ${ROOT}:${ROOT} -w ${ROOT}`) is mandatory because cartog exchanges host-path `file://` URIs. `LspManager::with_overrides`; threaded via `config::to_lsp_overrides` → `index_directory`/`run_server` (watch passes none — it never runs LSP). See [docs/usage.md](docs/usage.md). All 10 languages have a pinned `benchmarks/lsp-images/<lang>.Dockerfile`; `resolution_rate.sh --docker-lsp` runs each via its `cartog-lsp-<lang>:stable` image (strict, no host fallback) and all resolve identically to host. A command-override server gets `processId: null` (its host PID is absent from a container's PID namespace; without this, pyright/typescript-language-server honor the LSP parent-liveness check and exit at startup).
 - **Pending**: next language TBD; Java extractor improvements

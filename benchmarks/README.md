@@ -37,14 +37,16 @@ test-and-benchmark matrix.
 | `fixtures/webapp_java/` | Java | 41 | ~1,800 |
 | `fixtures/webapp_php/` | PHP | 25 | ~1,500 |
 | `fixtures/webapp_dart/` | Dart | 9 | ~200 |
-| **Total** | | **354** | **~18,800** |
+| `fixtures/webapp_swift/` | Swift | 16 | ~500 |
+| `fixtures/webapp_kt/` | Kotlin | 17 | ~460 |
+| **Total** | | **387** | **~19,760** |
 
 All fixtures model the same domain (auth service, tokens, routes, middleware, database, cache, events, validators) with controlled, known relationships defined in `ground_truth/`.
 
-The criterion `indexing` bench exercises all 8 fixtures. The shell scenarios and
-`ground_truth/` currently cover the first 7 — `webapp_dart` has no scenario
-ground truth yet, so it is indexed by the criterion bench but not scored by the
-shell suite.
+The criterion `indexing` bench exercises all 10 fixtures. The shell scenarios and
+`ground_truth/` currently cover 9 of them — `webapp_dart` has no scenario ground
+truth yet, so it is indexed by the criterion bench but not scored by the shell
+suite.
 
 ## Scenarios
 
@@ -68,8 +70,8 @@ shell suite.
 
 The fixtures live inside the cartog repo, so a bare `cartog index .` walks up and
 writes to the repo-root `.cartog`, where every fixture would clobber the next and
-recall would be measured against whichever fixture indexed last. `run.sh` and the
-scenarios pin `CARTOG_DB` to a per-fixture file under `benchmarks/.indexes/`
+recall would be measured against whichever fixture indexed last. `token_savings.sh`
+and the scenarios pin `CARTOG_DB` to a per-fixture file under `benchmarks/.indexes/`
 (gitignored) so each fixture stays isolated. Any new `cartog` invocation in a
 scenario must do the same — use `fixture_db_path "$fixture_dir"` from `lib/common.sh`.
 
@@ -93,21 +95,85 @@ These rows exist to track that — they should approach parity as the gaps close
 ## Usage
 
 ```bash
-# Run all scenarios (01-13) across all 7 languages
-./benchmarks/run.sh
+# Run all scenarios (01-13) across all 10 languages
+./benchmarks/token_savings.sh
 
 # Run single scenario
-./benchmarks/run.sh --scenario 01
+./benchmarks/token_savings.sh --scenario 01
 
 # Run only one language fixture
-./benchmarks/run.sh --fixture py
-./benchmarks/run.sh --fixture ts
-./benchmarks/run.sh --fixture go
-./benchmarks/run.sh --fixture rs
-./benchmarks/run.sh --fixture rb
-./benchmarks/run.sh --fixture java
-./benchmarks/run.sh --fixture php
+./benchmarks/token_savings.sh --fixture py
+./benchmarks/token_savings.sh --fixture ts
+./benchmarks/token_savings.sh --fixture go
+./benchmarks/token_savings.sh --fixture rs
+./benchmarks/token_savings.sh --fixture rb
+./benchmarks/token_savings.sh --fixture java
+./benchmarks/token_savings.sh --fixture php
 ```
+
+## Edge-resolution rate
+
+`resolution_rate.sh` measures resolved / total edges per language (a different
+axis from token savings: how completely the resolver links call/import/type
+edges). Re-run after extractor or resolver changes.
+
+```bash
+./benchmarks/resolution_rate.sh                 # heuristic, all langs, save snapshot
+./benchmarks/resolution_rate.sh --lsp           # add LSP pass (uses installed servers)
+./benchmarks/resolution_rate.sh --fixture rs    # one language
+./benchmarks/resolution_rate.sh --baseline      # diff vs last snapshot (no overwrite)
+```
+
+## Reproducing the numbers
+
+Both result files now carry provenance so a published number can be traced back
+to an exact build:
+
+- `results/resolution_rate{,_lsp}.json` — top-level `cartog_version`, `git_sha`,
+  `timestamp`, plus per-language `lsp_source` (`docker:<image>`, `host:<bin>`, or
+  `none`).
+- `results/latest.jsonl` — first line is a `{"_meta": {...}}` header with the
+  same `cartog_version` / `git_sha` / `timestamp` (the summary loop skips it).
+
+To reproduce:
+
+1. Build the pinned commit: `cargo build --release` (the scripts prefer
+   `target/release/cartog`; override with `CARTOG=/path/to/cartog`).
+2. Run the script. Provenance is captured automatically.
+
+**Host-independent LSP via Docker.** The plain `--lsp` numbers depend on which
+servers happen to be installed (Go needs a toolchain, Ruby ≥3.2, jdtls a JDK,
+sourcekit-lsp the Swift toolchain). `--docker-lsp` runs each server from a
+pinned image instead, so the LSP numbers reproduce across machines:
+
+Building the images and running the benchmark are two independent steps:
+
+```bash
+make lsp-images                 # 1. build the 10 cartog-lsp-<lang>:stable images
+make bench-resolution-docker    # 2. run --lsp --docker-lsp (errors if an image is missing)
+```
+
+`benchmarks/lsp-images/<lang>.Dockerfile` holds one pinned recipe per language
+(rust, python, typescript, go, ruby, java, php, dart, swift, kotlin). Under
+`--docker-lsp` the script generates a `[lsp.<lang>]` Docker override (`docker run
+-i -v ${ROOT}:${ROOT} -w ${ROOT} <image>`) and records `lsp_source=docker:<image>`.
+It is **strict**: a missing `cartog-lsp-<lang>:stable` image is an explicit error
+(no host fallback), so the numbers always reflect the containerized server — a
+preflight check lists any unbuilt images and tells you to run `make lsp-images`.
+Build a single image with, e.g., `docker build -t cartog-lsp-go:stable -f
+benchmarks/lsp-images/go.Dockerfile benchmarks/lsp-images`. See the "LSP server
+overrides" section in [docs/usage.md](../docs/usage.md) for how the override
+works (path mirroring is mandatory). Per-image caveats (gopls deps,
+jdtls/sourcekit startup time, ruby-lsp bundle compose) are noted in each
+Dockerfile header.
+
+All 10 containerized servers resolve **identically to host** (same `lsp`-tier
+edge count). `python` and `typescript` use the upstream `lspcontainers` images
+(pinned by digest); the other 8 self-build on a pinned official base. cartog
+sends `processId: null` to a command-override server because its host PID is
+absent from a container's PID namespace — without that, pyright and
+typescript-language-server honor the LSP parent-liveness check and exit at
+startup (they alone enforce it strictly).
 
 ## Criterion benchmarks (in-process latency)
 
@@ -141,7 +207,7 @@ cargo bench -p cartog --bench queries -- search_token   # one bench (substring m
 Lives in `cartog-indexer`, which has no `cartog-rag`/ONNX dependency, so it builds
 and runs without the native ONNX library. Per-language cost lives in the
 tree-sitter grammar + extractor, so the full-index scenario is parameterized over
-all 8 fixtures.
+all 10 fixtures.
 
 ```bash
 cargo bench -p cartog-indexer --bench indexing
@@ -150,7 +216,7 @@ cargo bench -p cartog-indexer --bench indexing -- index_full_force/rs   # one la
 
 | Benchmark | What it measures |
 |-----------|-----------------|
-| `index_full_force/<lang>` | Full index of each fixture (force=true) — `py ts go rs rb java php dart` |
+| `index_full_force/<lang>` | Full index of each fixture (force=true) — `py ts go rs rb java php dart swift kt` |
 | `index_incremental_noop` | Re-index with no changes (all files skipped via hash); Python |
 | `index_incremental_one_file` | One file's hash invalidated, triggers Merkle diff + scoped resolution; Python |
 
@@ -210,13 +276,13 @@ Run `make check` to also include Rust project checks (fmt + clippy + test).
 
 ## Prerequisites
 
-- `cartog` binary (built automatically by `run.sh` if not in PATH)
+- `cartog` binary (built automatically by `token_savings.sh` if not in PATH)
 - `jq` for ground truth comparison and stats (optional but recommended)
 - bash 3+ (macOS/Linux compatible)
 
 ## Output
 
-`run.sh` prints a comparison table and saves results to `results/latest.jsonl`.
+`token_savings.sh` prints a comparison table and saves results to `results/latest.jsonl`.
 
 Each line is a JSON object:
 ```json

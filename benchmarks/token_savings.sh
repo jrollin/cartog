@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# cartog Benchmark Suite
+# cartog Token-Savings Benchmark Suite
 #
 # Compares cartog queries vs grep/cat approaches across 13 scenarios,
 # measuring token efficiency, command count, and recall against ground truth.
+# (For edge-resolution rate per language, see resolution_rate.sh.)
 #
 # Usage:
-#   ./benchmarks/run.sh                  # Run all scenarios (01–13)
-#   ./benchmarks/run.sh --scenario 08    # Run single scenario
-#   ./benchmarks/run.sh --fixture py     # Run only Python fixtures
-#   ./benchmarks/run.sh --fixture ts     # Run only TypeScript fixtures
-#   ./benchmarks/run.sh --fixture go     # Run only Go fixtures
-#   ./benchmarks/run.sh --fixture rs     # Run only Rust fixtures
-#   ./benchmarks/run.sh --fixture rb     # Run only Ruby fixtures
-#   ./benchmarks/run.sh --fixture java   # Run only Java fixtures
-#   ./benchmarks/run.sh --fixture php    # Run only PHP fixtures
-#   ./benchmarks/run.sh --fixture dart   # Run only Dart fixtures
-#   ./benchmarks/run.sh --fixture swift  # Run only Swift fixtures
-#   ./benchmarks/run.sh --fixture kt     # Run only Kotlin fixtures
+#   ./benchmarks/token_savings.sh                  # Run all scenarios (01–13)
+#   ./benchmarks/token_savings.sh --scenario 08    # Run single scenario
+#   ./benchmarks/token_savings.sh --fixture py     # Run only Python fixtures
+#   ./benchmarks/token_savings.sh --fixture ts     # Run only TypeScript fixtures
+#   ./benchmarks/token_savings.sh --fixture go     # Run only Go fixtures
+#   ./benchmarks/token_savings.sh --fixture rs     # Run only Rust fixtures
+#   ./benchmarks/token_savings.sh --fixture rb     # Run only Ruby fixtures
+#   ./benchmarks/token_savings.sh --fixture java   # Run only Java fixtures
+#   ./benchmarks/token_savings.sh --fixture php    # Run only PHP fixtures
+#   ./benchmarks/token_savings.sh --fixture dart   # Run only Dart fixtures
+#   ./benchmarks/token_savings.sh --fixture swift  # Run only Swift fixtures
+#   ./benchmarks/token_savings.sh --fixture kt     # Run only Kotlin fixtures
 
 set -euo pipefail
 
@@ -36,8 +37,12 @@ SCENARIO_FILTER=""
 export FIXTURE_FILTER=""
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --scenario) SCENARIO_FILTER="$2"; shift 2 ;;
-        --fixture)  FIXTURE_FILTER="$2"; shift 2 ;;
+        --scenario)
+            [ $# -ge 2 ] || { echo "error: --scenario needs a value" >&2; exit 2; }
+            SCENARIO_FILTER="$2"; shift 2 ;;
+        --fixture)
+            [ $# -ge 2 ] || { echo "error: --fixture needs a value" >&2; exit 2; }
+            FIXTURE_FILTER="$2"; shift 2 ;;
         -h|--help)
             echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb|java|php|dart|swift|kt]"
             exit 0
@@ -94,9 +99,15 @@ echo ""
 
 # ── Run scenarios ──
 
-# Clear results
+# Clear results, then write a provenance header line so a number can be traced
+# back to an exact build. The summary loop skips this `_meta` line (see below).
 mkdir -p "$RESULTS_DIR"
 > "$RESULTS_FILE"
+_cartog_version="$($CARTOG --version 2>/dev/null | head -1)"
+_git_sha="$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+_timestamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+printf '{"_meta": {"cartog_version": "%s", "git_sha": "%s", "timestamp": "%s"}}\n' \
+    "$_cartog_version" "$_git_sha" "$_timestamp" >> "$RESULTS_FILE"
 
 echo -e "${BOLD}Running scenarios...${NC}"
 printf "  ${BOLD}%-22s | %-27s | %-27s | %-27s | %s${NC}\n" \
@@ -132,6 +143,9 @@ if [ -s "$RESULTS_FILE" ] && command -v jq &>/dev/null; then
 
     while IFS= read -r line; do
         [ -z "$line" ] && continue
+        # Skip the provenance header — it carries no scenario metrics and would
+        # otherwise inflate `count` and dilute the recall averages.
+        echo "$line" | jq -e 'has("_meta")' >/dev/null 2>&1 && continue
         nt=$(echo "$line" | jq -r '.naive_tokens // 0')
         bt=$(echo "$line" | jq -r '.best_tokens // 0')
         ct=$(echo "$line" | jq -r '.cartog_tokens // 0')

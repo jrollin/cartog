@@ -53,6 +53,7 @@ def generate_token(user, password, mfa_token):
             None,
             None,
             indexer::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .expect("plain index");
         assert!(

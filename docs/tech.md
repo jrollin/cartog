@@ -65,8 +65,11 @@ end-to-end task cost).
 
 Three distinct surfaces, all rooted in `benchmarks/fixtures/` (10 language webapps):
 
-- **Shell suite** (`benchmarks/run.sh`, 13 scenarios × fixtures) — per-query token
-  efficiency and recall versus grep/cat. Run with `make bench`.
+- **Shell suite** (`benchmarks/token_savings.sh`, 13 scenarios × fixtures) — per-query
+  token efficiency and recall versus grep/cat. Run with `make bench`.
+- **Edge-resolution rate** (`benchmarks/resolution_rate.sh`) — resolved / total edges
+  per language, heuristic-only by default or `--lsp`; `--baseline` diffs against the
+  last snapshot. Run after extractor/resolver changes.
 - **Agent-task** (`benchmarks/agent/run.sh`) — end-to-end agent token + turn cost
   with cartog on vs off, median over N runs, LLM-judged for correctness. The
   "does it actually help an agent" claim. Run with `make bench-agent`; not in CI

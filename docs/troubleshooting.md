@@ -59,7 +59,33 @@ available. To silence the check entirely, pass `--no-lsp`.
 
 Cartog waits up to 20 s for the server to load its project model (overridable
 via `CARTOG_LSP_READY_TIMEOUT_SECS`). The server's own stderr is piped to
-`<tmp>/cartog-lsp/<binary>.log` — check there first for a real error.
+`<tmp>/cartog-lsp/<binary>.log` (a PATH-resolved server) or
+`<tmp>/cartog-lsp/<language>.log` (a `[lsp.<lang>]` command override) — check
+there first for a real error.
+
+### My `[lsp.<lang>]` command override isn't being used
+
+- The override only fires during the LSP edge-resolution pass — run
+  `cartog index --force <path>` (the plain `index` skips it on a no-op run),
+  and don't pass `--no-lsp`.
+- It only applies to the keyed language, which must be one cartog supports
+  (`dart`, `go`, `python`, …). An override for an unknown language is rejected.
+- A typo in the section warns (`unknown config key`); an empty `command = []`
+  is a hard error. Run `cartog config` to confirm the override parsed.
+- Check `<tmp>/cartog-lsp/<language>.log` for the spawned server's stderr.
+- **Docker overrides:** every definition resolving as "external" means the
+  container sees the repo at a path other than the host path. The mount must
+  mirror the host path exactly — `-v ${ROOT}:${ROOT} -w ${ROOT}` (cartog
+  expands `${ROOT}` to the host-absolute project root). On macOS, also confirm
+  the project directory is shared in Docker Desktop → Settings → Resources →
+  File Sharing.
+- **"LSP server died during didOpen" with a Docker override:** cartog already
+  sends `processId: null` to override servers so a container's PID namespace
+  doesn't trip the LSP parent-liveness check (older cartog sent its host PID,
+  which made pyright / typescript-language-server exit at startup). If a server
+  still dies, check `<tmp>/cartog-lsp/<language>.log` — a common cause is the
+  bind mount not being shared with Docker, or the server needing a writable
+  cache dir (gopls `/go`, jdtls `$HOME/.cache`).
 
 ## Re-indexing
 

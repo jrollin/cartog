@@ -347,8 +347,20 @@ fn index_with_optional_lsp(
         })?;
         let cb_ref: Option<&(dyn Fn(indexer::ProgressUpdate) + Send + Sync)> =
             indexer_cb.as_ref().map(|f| f as _);
-        indexer::index_directory(&db, root, force, false, cb_ref, cancel, redact)
-            .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
+        // LSP runs via the shared `lsp_manager` below (which already carries any
+        // command overrides), so the indexer's own LSP pass stays off and its
+        // override map is empty.
+        indexer::index_directory(
+            &db,
+            root,
+            force,
+            false,
+            cb_ref,
+            cancel,
+            redact,
+            &std::collections::HashMap::new(),
+        )
+        .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
     };
 
     if result.dirty_files > 0 {
@@ -361,7 +373,14 @@ fn index_with_optional_lsp(
         let db = db.lock().map_err(|_| {
             mcp_err("internal error: database lock poisoned (server restart required)")
         })?;
-        match cartog_lsp::lsp_resolve_edges(&db, root, Some(&mut mgr)) {
+        // Overrides live on the shared `mgr` (set at construction), so the
+        // map passed here is ignored — pass empty.
+        match cartog_lsp::lsp_resolve_edges(
+            &db,
+            root,
+            Some(&mut mgr),
+            &std::collections::HashMap::new(),
+        ) {
             Ok(stats) => {
                 result.edges_lsp_resolved = stats.resolved;
                 result.edges_marked_unresolvable = stats.marked_unresolvable;
@@ -397,8 +416,17 @@ fn index_with_optional_lsp(
         .map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
     let cb_ref: Option<&(dyn Fn(indexer::ProgressUpdate) + Send + Sync)> =
         indexer_cb.as_ref().map(|f| f as _);
-    indexer::index_directory(&db, root, force, false, cb_ref, cancel, redact)
-        .map_err(|e| mcp_err(format!("indexing failed: {e}")))
+    indexer::index_directory(
+        &db,
+        root,
+        force,
+        false,
+        cb_ref,
+        cancel,
+        redact,
+        &std::collections::HashMap::new(),
+    )
+    .map_err(|e| mcp_err(format!("indexing failed: {e}")))
 }
 
 /// Static routing hints per tool — guides the agent to the next logical step.
@@ -927,10 +955,21 @@ impl AtomicRole {
 
 #[tool_router]
 impl CartogServer {
+    /// Construct a writable primary MCP server.
+    ///
+    /// Opens (or migrates) the DB at `db_path` read-write and reconciles the
+    /// embedding fingerprint; returns `Err` if the DB can't be opened or the
+    /// embedding model fails to load. `rag_config` selects the embedding +
+    /// reranker providers, `redact` is the secret-redaction policy applied to
+    /// indexed content, and `lsp_overrides` maps a cartog language to its
+    /// `[lsp.<lang>] command` argv for the warm `LspManager` (empty = default
+    /// PATH-resolved servers). For the read-only attach path see
+    /// [`new_read_only`](Self::new_read_only).
     pub fn new(
         db_path: &std::path::Path,
         rag_config: rag::EmbeddingProviderConfig,
         redact: indexer::RedactionConfig,
+        lsp_overrides: std::collections::HashMap<String, Vec<String>>,
     ) -> anyhow::Result<Self> {
         let db = Database::open(db_path, rag_config.resolved_dimension())
             .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
@@ -943,7 +982,7 @@ impl CartogServer {
             rag_config.reranker_model.as_deref(),
             rag_config.intra_threads,
         );
-        Self::from_parts(db, provider, reranker, redact, Role::Primary)
+        Self::from_parts(db, provider, reranker, redact, lsp_overrides, Role::Primary)
     }
 
     /// Construct a secondary MCP server that attached read-only because
@@ -956,6 +995,7 @@ impl CartogServer {
         db_path: &std::path::Path,
         rag_config: rag::EmbeddingProviderConfig,
         redact: indexer::RedactionConfig,
+        lsp_overrides: std::collections::HashMap<String, Vec<String>>,
     ) -> anyhow::Result<Self> {
         let db = Database::open_readonly(db_path)
             .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?;
@@ -966,7 +1006,14 @@ impl CartogServer {
             rag_config.reranker_model.as_deref(),
             rag_config.intra_threads,
         );
-        Self::from_parts(db, provider, reranker, redact, Role::ReadOnly)
+        Self::from_parts(
+            db,
+            provider,
+            reranker,
+            redact,
+            lsp_overrides,
+            Role::ReadOnly,
+        )
     }
 
     /// Single field-wiring point for all constructors: takes an already-opened
@@ -994,16 +1041,25 @@ impl CartogServer {
         provider: Box<dyn rag::provider::EmbeddingProvider>,
         reranker: Option<Box<dyn rag::provider::RerankerProvider>>,
         redact: indexer::RedactionConfig,
+        lsp_overrides: std::collections::HashMap<String, Vec<String>>,
         role: Role,
     ) -> anyhow::Result<Self> {
         let cwd = Self::cwd()?;
+        // Consumed only by the `lsp` feature's warm manager; keep the param
+        // unconditional so callers compile in minimal (`--no-default-features`)
+        // builds, mirroring `index_directory`'s always-present `lsp` arg.
+        #[cfg(not(feature = "lsp"))]
+        let _ = lsp_overrides;
         Ok(Self {
             tool_router: Self::tool_router(),
             db: Arc::new(Mutex::new(db)),
             embedding_provider: Arc::new(Mutex::new(provider)),
             reranker_provider: Arc::new(Mutex::new(reranker)),
             #[cfg(feature = "lsp")]
-            lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::new(&cwd))),
+            lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::with_overrides(
+                &cwd,
+                lsp_overrides,
+            ))),
             cwd: Arc::from(cwd),
             role: Arc::new(AtomicRole::new(role)),
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1038,7 +1094,14 @@ impl CartogServer {
             Role::ReadOnly => Database::open_readonly(db_path)
                 .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?,
         };
-        Self::from_parts(db, provider, None, redact, role)
+        Self::from_parts(
+            db,
+            provider,
+            None,
+            redact,
+            std::collections::HashMap::new(),
+            role,
+        )
     }
 
     fn cwd() -> anyhow::Result<std::path::PathBuf> {
@@ -1768,9 +1831,17 @@ impl CartogServer {
             // intentionally suppressed: the RAG tool exposes only rag-specific
             // phases (preparing/embedding/storing) so the client-facing
             // vocabulary stays stable.
-            let _ =
-                indexer::index_directory(&db, &validated, false, false, None, probe_ref, redact)
-                    .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
+            let _ = indexer::index_directory(
+                &db,
+                &validated,
+                false,
+                false,
+                None,
+                probe_ref,
+                redact,
+                &std::collections::HashMap::new(),
+            )
+            .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
 
             let mut provider = provider.lock().map_err(|_| {
                 mcp_err(
@@ -3825,6 +3896,7 @@ def main():
                 None,
                 None,
                 indexer::RedactionConfig::disabled(),
+                &std::collections::HashMap::new(),
             )
             .expect("fixture indexes");
         }
