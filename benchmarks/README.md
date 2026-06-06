@@ -122,6 +122,37 @@ edges). Re-run after extractor or resolver changes.
 ./benchmarks/resolution_rate.sh --baseline      # diff vs last snapshot (no overwrite)
 ```
 
+## Reproducing the numbers
+
+Both result files now carry provenance so a published number can be traced back
+to an exact build:
+
+- `results/resolution_rate{,_lsp}.json` — top-level `cartog_version`, `git_sha`,
+  `timestamp`, plus per-language `lsp_source` (`host:<bin>` or `none`).
+- `results/latest.jsonl` — first line is a `{"_meta": {...}}` header with the
+  same `cartog_version` / `git_sha` / `timestamp` (the summary loop skips it).
+
+To reproduce:
+
+1. Build the pinned commit: `cargo build --release` (the scripts prefer
+   `target/release/cartog`; override with `CARTOG=/path/to/cartog`).
+2. Run the script. Provenance is captured automatically.
+
+**Host-independent LSP via Docker.** The `--lsp` numbers otherwise depend on
+which servers happen to be installed (Go needs a toolchain, Ruby ≥3.2, etc.).
+To pin a server, build its image and point `[lsp.<lang>]` at it — see
+`lsp-images/dart.Dockerfile` and the "LSP server overrides" section in
+[docs/usage.md](../docs/usage.md). Example for Dart:
+
+```bash
+docker build -t cartog-lsp-dart:stable -f benchmarks/lsp-images/dart.Dockerfile benchmarks/lsp-images
+# then add the [lsp.dart] block from docs/usage.md to a .cartog.toml and run:
+CARTOG_DB=/tmp/dart.sqlite cartog index --force benchmarks/fixtures/webapp_dart
+```
+
+Only the Dart image ships today. Docker images for the other 9 languages, a
+`--docker-lsp` script mode, and a CI job are follow-ups, not yet wired.
+
 ## Criterion benchmarks (in-process latency)
 
 Rust-native criterion benchmarks measure cartog's own CPU-bound work against the

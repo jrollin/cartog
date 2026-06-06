@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-install-script sync-install-script bench bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-install-script sync-install-script bench bench-resolution bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -135,6 +135,11 @@ eval-agents: ## Run LLM-as-judge agent evaluation (requires claude CLI)
 
 bench: ## Run shell benchmark suite (all scenarios, all fixtures)
 	./benchmarks/token_savings.sh
+
+bench-resolution: ## Run edge-resolution rate (heuristic + LSP, all languages; saves a provenance snapshot)
+	cargo build --release
+	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/resolution_rate.sh
+	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/resolution_rate.sh --lsp
 
 bench-criterion: ## Run all ONNX-free criterion benches (queries, per-language indexing, hybrid search)
 	cargo bench -p cartog --bench queries

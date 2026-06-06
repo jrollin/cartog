@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,28 @@ pub struct CartogConfig {
     pub rag: Option<RagConfig>,
     pub remote: Option<RemoteConfig>,
     pub security: Option<SecurityConfig>,
+    /// Per-language LSP command overrides, keyed by cartog language name.
+    pub lsp: Option<HashMap<String, LspLangConfig>>,
+}
+
+/// Override for one language's LSP server command (`[lsp.<lang>]`).
+///
+/// Runs an arbitrary command as the language server instead of the built-in
+/// PATH lookup — e.g. a Dockerized server so cartog needs no native toolchain.
+/// `${ROOT}` in any element expands to the indexed project root (host-absolute),
+/// so a container can mount the repo at the same path cartog uses for `file://`
+/// URIs: `-v ${ROOT}:${ROOT} -w ${ROOT}`.
+///
+/// ```toml
+/// [lsp.dart]
+/// command = ["docker", "run", "--rm", "-i",
+///            "-v", "${ROOT}:${ROOT}", "-w", "${ROOT}", "cartog-lsp-dart:stable"]
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LspLangConfig {
+    /// argv to launch the server; `argv[0]` is the program, the rest are args.
+    pub command: Vec<String>,
 }
 
 /// Secret-redaction settings.
@@ -488,6 +511,7 @@ const KNOWN_CONFIG_SECTIONS: &[&str] = &[
     "rag",
     "remote",
     "security",
+    "lsp",
 ];
 
 /// Collect top-level keys that are not a recognized config section.
@@ -581,7 +605,57 @@ fn read_config(path: &Path) -> Option<CartogConfig> {
         return None;
     }
 
+    // Reject an empty `[lsp.<lang>] command` — an empty argv has no program to
+    // spawn, and the failure would otherwise surface only at LSP start.
+    if let Err(msg) = validate_lsp_overrides(&parsed) {
+        eprintln!("cartog: error in {}: {msg}", path.display());
+        return None;
+    }
+
     Some(parsed)
+}
+
+/// Reject an invalid `[lsp.<lang>]` block: an empty `command` (no executable to
+/// launch) or, when the `lsp` feature is built, an unknown language key (a typo
+/// like `[lsp.pytho]`). Catching both at parse time turns confusing runtime
+/// failures into clear config errors, mirroring [`validate_providers`].
+fn validate_lsp_overrides(config: &CartogConfig) -> Result<(), String> {
+    if let Some(lsp) = config.lsp.as_ref() {
+        for (lang, cfg) in lsp {
+            if cfg.command.is_empty() {
+                return Err(format!(
+                    "[lsp.{lang}] command is empty; provide at least the executable, \
+                     e.g. command = [\"some-lsp\", \"--stdio\"]"
+                ));
+            }
+            // Without the `lsp` feature the override is inert, so only the
+            // known-language check is feature-gated; the empty check always runs.
+            #[cfg(feature = "lsp")]
+            if !cartog_lsp::servers::has_server_spec(lang) {
+                return Err(format!(
+                    "[lsp.{lang}] is not a recognized cartog language; \
+                     overrides are keyed by language (rust, python, go, dart, ...)"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Flatten the `[lsp.<lang>]` config into the language → argv map consumed by
+/// `cartog-lsp` / `cartog-indexer` / `cartog-mcp`. Returns an empty map when no
+/// overrides are configured (the default: PATH-resolved servers).
+#[must_use]
+pub fn to_lsp_overrides(config: &CartogConfig) -> HashMap<String, Vec<String>> {
+    config
+        .lsp
+        .as_ref()
+        .map(|lsp| {
+            lsp.iter()
+                .map(|(lang, cfg)| (lang.clone(), cfg.command.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Reject an unknown embedding/reranker `provider` value. Unknown values are a
@@ -1583,5 +1657,71 @@ provider = "local"
         assert_eq!(resolve_auto_embed_with(None, None, false), None);
         // Unparseable env falls through to the next tier.
         assert_eq!(resolve_auto_embed_with(Some("maybe"), None, false), None);
+    }
+
+    // ── LSP command overrides ──
+
+    #[test]
+    fn lsp_override_parses_nested_table() {
+        let toml_str = r#"
+[lsp.dart]
+command = ["docker", "run", "--rm", "-i", "-v", "${ROOT}:${ROOT}", "cartog-lsp-dart:stable"]
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let dart = &cfg.lsp.unwrap()["dart"];
+        assert_eq!(dart.command[0], "docker");
+        assert_eq!(dart.command.last().unwrap(), "cartog-lsp-dart:stable");
+    }
+
+    #[test]
+    fn to_lsp_overrides_flattens_to_argv_map() {
+        let toml_str = r#"
+[lsp.go]
+command = ["gopls", "serve"]
+"#;
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let map = to_lsp_overrides(&cfg);
+        assert_eq!(map["go"], vec!["gopls".to_string(), "serve".to_string()]);
+    }
+
+    #[test]
+    fn to_lsp_overrides_empty_when_absent() {
+        assert!(to_lsp_overrides(&CartogConfig::default()).is_empty());
+    }
+
+    #[test]
+    fn read_config_rejects_empty_lsp_command() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join(".cartog.toml");
+        fs::write(&cfg_path, "[lsp.dart]\ncommand = []\n").unwrap();
+        assert!(read_config(&cfg_path).is_none());
+    }
+
+    #[test]
+    fn read_config_rejects_unknown_lsp_field() {
+        // deny_unknown_fields on LspLangConfig: a typo like `cmd` must fail.
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join(".cartog.toml");
+        fs::write(&cfg_path, "[lsp.dart]\ncmd = [\"x\"]\n").unwrap();
+        assert!(read_config(&cfg_path).is_none());
+    }
+
+    #[test]
+    fn read_config_accepts_valid_lsp_block() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join(".cartog.toml");
+        fs::write(&cfg_path, "[lsp.go]\ncommand = [\"gopls\", \"serve\"]\n").unwrap();
+        let cfg = read_config(&cfg_path).expect("valid lsp block parses");
+        assert!(cfg.lsp.unwrap().contains_key("go"));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn read_config_rejects_unknown_lsp_language() {
+        // A typo like `[lsp.pytho]` must fail at config load, not at first LSP use.
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join(".cartog.toml");
+        fs::write(&cfg_path, "[lsp.pytho]\ncommand = [\"x\"]\n").unwrap();
+        assert!(read_config(&cfg_path).is_none());
     }
 }

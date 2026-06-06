@@ -90,6 +90,7 @@ index_directory(
     None,                       // progress callback
     None,                       // cancellation probe
     RedactionConfig::default(), // scrub secrets (default-on)
+    &Default::default(),        // [lsp.<lang>] command overrides (none)
 )?;
 
 // Symbol search ranked by match tier + centrality.

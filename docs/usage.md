@@ -220,6 +220,34 @@ redact_secrets = false
 - Toggling `redact_secrets` triggers a one-time full re-index so already-stored
   content is scrubbed (or restored); a notice is printed.
 
+### LSP server overrides
+
+By default cartog resolves a language's LSP server from `PATH` (e.g.
+`rust-analyzer`, `gopls`). `[lsp.<lang>]` overrides that with an explicit
+command — most usefully a Dockerized server, so cartog can resolve edges on a
+host without the language's native toolchain installed:
+
+```toml
+[lsp.dart]
+command = ["docker", "run", "--rm", "-i",
+           "-v", "${ROOT}:${ROOT}", "-w", "${ROOT}", "cartog-lsp-dart:stable"]
+```
+
+- `command` is the full argv; `command[0]` is the executable (looked up on
+  `PATH` or given as an absolute path), the rest are its arguments.
+- `${ROOT}` in any element expands to the indexed project root (host-absolute).
+- **Path mirroring is required.** cartog talks to the server over stdio using
+  `file://` URIs built from the host path. A container must therefore see the
+  repo at the *same* path — hence `-v ${ROOT}:${ROOT} -w ${ROOT}`. A container
+  path that differs from the host path will make every definition resolve as
+  "external" and is unsupported.
+- The override only applies to the keyed cartog language (`dart`, `go`,
+  `python`, ...); it must be a language cartog already supports.
+- The server's stderr is logged to `${TMPDIR}/cartog-lsp/<language>.log`.
+
+Run `cartog index --force <path>` after adding an override; the server is
+spawned during the LSP edge-resolution pass.
+
 **Compile-time feature flags**:
 
 ```bash

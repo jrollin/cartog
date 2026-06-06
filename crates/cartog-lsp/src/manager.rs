@@ -23,14 +23,16 @@ fn ready_timeout_secs() -> u64 {
 
 /// Open (or create, truncating) a per-server log file in the system temp dir.
 /// Returns `Stdio::null()` if we can't open the file so LSP startup is never
-/// blocked by a logging issue.
-fn open_lsp_log(binary: &str) -> Stdio {
+/// blocked by a logging issue. `key` is the binary name for spec-driven servers
+/// and the language name for command overrides, so several `docker`-based
+/// override servers don't collide on a single `docker.log`.
+fn open_lsp_log(key: &str) -> Stdio {
     let dir = std::env::temp_dir().join("cartog-lsp");
     if std::fs::create_dir_all(&dir).is_err() {
         return Stdio::null();
     }
-    // Sanitize the binary name for filename safety.
-    let safe: String = binary
+    // Sanitize the key for filename safety.
+    let safe: String = key
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
@@ -65,13 +67,27 @@ const PROGRESS_DETECT_SECS: u64 = 5;
 pub struct LspManager {
     root: PathBuf,
     clients: HashMap<String, (LspClient, &'static str)>, // (client, language_id)
+    /// Per-language command overrides (`[lsp.<lang>] command = [...]`). `argv[0]`
+    /// is the program, the rest are args; `${ROOT}` in any element expands to
+    /// the project root. When present for a language, `start()` spawns this
+    /// instead of looking up a [`ServerSpec`](crate::servers::ServerSpec) on PATH.
+    overrides: HashMap<String, Vec<String>>,
 }
 
 impl LspManager {
     pub fn new(root: &Path) -> Self {
+        Self::with_overrides(root, HashMap::new())
+    }
+
+    /// Like [`new`](Self::new) but with per-language command overrides. Each
+    /// value is the argv to launch that language's server (`argv[0]` is the
+    /// program); `${ROOT}` in any element expands to `root`. Overrides take
+    /// precedence over the built-in [`ServerSpec`](crate::servers::ServerSpec) PATH lookup in `start()`.
+    pub fn with_overrides(root: &Path, overrides: HashMap<String, Vec<String>>) -> Self {
         Self {
             root: root.to_path_buf(),
             clients: HashMap::new(),
+            overrides,
         }
     }
 
@@ -90,6 +106,10 @@ impl LspManager {
     pub fn start(&mut self, language: &str) -> Result<()> {
         if self.clients.contains_key(language) {
             return Ok(());
+        }
+
+        if let Some(argv) = self.overrides.get(language) {
+            return self.start_override(language, argv.clone());
         }
 
         let candidates = find_servers(language);
@@ -131,6 +151,48 @@ impl LspManager {
 
         self.clients
             .insert(language.to_string(), (client, spec.language_id));
+        Ok(())
+    }
+
+    /// Start a language server from a config command override (`[lsp.<lang>]`).
+    ///
+    /// Spawns `argv` directly (after `${ROOT}` expansion) instead of resolving
+    /// a [`ServerSpec`](crate::servers::ServerSpec) on PATH, so a Dockerized server can run without the
+    /// native toolchain. The `languageId` for the `initialize` handshake is
+    /// borrowed from the language's spec (every supported language has one);
+    /// an override for an unknown cartog language is rejected — cartog still
+    /// needs a recognized language to drive `didOpen`'s `languageId`.
+    fn start_override(&mut self, language: &str, argv: Vec<String>) -> Result<()> {
+        if argv.is_empty() {
+            bail!("[lsp.{language}] command is empty");
+        }
+        let language_id = find_servers(language)
+            .first()
+            .map(|s| s.language_id)
+            .with_context(|| {
+                format!("[lsp.{language}] override requires a known cartog language")
+            })?;
+
+        let root = root_for_substitution(&self.root);
+        let expanded: Vec<String> = argv.iter().map(|a| expand_root(a, &root)).collect();
+
+        let child = Command::new(&expanded[0])
+            .args(&expanded[1..])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            // Log keyed by language, not argv[0]: several `docker`-based
+            // overrides would otherwise all write to `docker.log`.
+            .stderr(open_lsp_log(language))
+            .current_dir(&self.root)
+            .spawn()
+            .with_context(|| format!("failed to spawn override for {language}: {}", expanded[0]))?;
+
+        let mut client = LspClient::new(child)?;
+        tracing::info!("LSP: waiting for {language} override server to load...");
+        self.initialize(&mut client)?;
+
+        self.clients
+            .insert(language.to_string(), (client, language_id));
         Ok(())
     }
 
@@ -408,6 +470,22 @@ pub enum DefinitionOutcome {
     External,
 }
 
+/// Expand `${ROOT}` in a command-override argv element to the project root.
+/// `root` is host-absolute, so a Dockerized server mounting `-v ${ROOT}:${ROOT}`
+/// sees the repo at the same path cartog uses to build `file://` URIs.
+fn expand_root(arg: &str, root: &str) -> String {
+    arg.replace("${ROOT}", root)
+}
+
+/// Project-root string for `${ROOT}` substitution. Strips the Windows verbatim
+/// `\\?\` prefix that `canonicalize` adds: external tools (Docker `-v` mounts)
+/// reject it, and it never appears in the `file://` URIs cartog exchanges.
+fn root_for_substitution(root: &Path) -> String {
+    let s = root.to_string_lossy();
+    s.strip_prefix(r"\\?\")
+        .map_or_else(|| s.to_string(), str::to_string)
+}
+
 fn path_to_uri(path: &Path) -> String {
     url::Url::from_file_path(path)
         .map(|u| u.to_string())
@@ -513,6 +591,51 @@ mod tests {
     #[test]
     fn test_uri_to_path_non_file() {
         assert!(uri_to_path("https://example.com").is_none());
+    }
+
+    #[test]
+    fn expand_root_replaces_all_occurrences() {
+        assert_eq!(
+            expand_root("-v=${ROOT}:${ROOT}", "/home/me/proj"),
+            "-v=/home/me/proj:/home/me/proj"
+        );
+        assert_eq!(expand_root("--stdio", "/home/me/proj"), "--stdio");
+        assert_eq!(expand_root("${ROOT}", "/r"), "/r");
+    }
+
+    #[test]
+    fn root_for_substitution_strips_windows_verbatim_prefix() {
+        // canonicalize on Windows yields `\\?\C:\...`; Docker `-v` rejects the
+        // verbatim prefix, so it must be stripped before substitution.
+        assert_eq!(
+            root_for_substitution(Path::new(r"\\?\C:\Users\me\proj")),
+            r"C:\Users\me\proj"
+        );
+        // Unix paths (no prefix) pass through unchanged.
+        assert_eq!(
+            root_for_substitution(Path::new("/home/me/proj")),
+            "/home/me/proj"
+        );
+    }
+
+    #[test]
+    fn start_override_rejects_empty_argv() {
+        let mut mgr = LspManager::with_overrides(
+            Path::new("/tmp/proj"),
+            HashMap::from([("dart".to_string(), Vec::new())]),
+        );
+        let err = mgr.start("dart").unwrap_err();
+        assert!(err.to_string().contains("command is empty"), "{err}");
+    }
+
+    #[test]
+    fn start_override_rejects_unknown_language() {
+        let mut mgr = LspManager::with_overrides(
+            Path::new("/tmp/proj"),
+            HashMap::from([("cobol".to_string(), vec!["cobol-lsp".to_string()])]),
+        );
+        let err = mgr.start("cobol").unwrap_err();
+        assert!(err.to_string().contains("known cartog language"), "{err}");
     }
 
     fn assert_in_root(outcome: DefinitionOutcome, expected_path: &str, expected_line: u32) {

@@ -122,6 +122,13 @@ pub fn find_servers(language: &str) -> Vec<&'static ServerSpec> {
     SERVERS.iter().filter(|s| s.language == language).collect()
 }
 
+/// Whether cartog knows an LSP server for this language (has a [`ServerSpec`]).
+/// Used to validate `[lsp.<lang>]` override keys at config-load time.
+#[must_use]
+pub fn has_server_spec(language: &str) -> bool {
+    SERVERS.iter().any(|s| s.language == language)
+}
+
 /// Check if a binary is available on PATH (resolved directly, not via the
 /// Unix-only `which` — that silently disabled LSP on Windows).
 pub fn is_binary_available(binary: &str) -> bool {

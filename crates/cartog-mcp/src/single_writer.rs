@@ -152,6 +152,7 @@ pub async fn run_server(
     rag_override: Option<bool>,
     rag_config: rag::EmbeddingProviderConfig,
     redact: indexer::RedactionConfig,
+    lsp_overrides: std::collections::HashMap<String, Vec<String>>,
     opts: ServerOptions,
 ) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
@@ -232,8 +233,10 @@ pub async fn run_server(
         let db_path = db_path.to_path_buf();
         let rag_config = rag_config.clone();
         tokio::task::spawn_blocking(move || match role {
-            Role::Primary => CartogServer::new(&db_path, rag_config, redact),
-            Role::ReadOnly => CartogServer::new_read_only(&db_path, rag_config, redact),
+            Role::Primary => CartogServer::new(&db_path, rag_config, redact, lsp_overrides),
+            Role::ReadOnly => {
+                CartogServer::new_read_only(&db_path, rag_config, redact, lsp_overrides)
+            }
         })
         .await
         .map_err(|e| anyhow::anyhow!("server construction task panicked: {e}"))??

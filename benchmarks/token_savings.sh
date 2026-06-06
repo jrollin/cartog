@@ -99,9 +99,15 @@ echo ""
 
 # ── Run scenarios ──
 
-# Clear results
+# Clear results, then write a provenance header line so a number can be traced
+# back to an exact build. The summary loop skips this `_meta` line (see below).
 mkdir -p "$RESULTS_DIR"
 > "$RESULTS_FILE"
+_cartog_version="$($CARTOG --version 2>/dev/null | head -1)"
+_git_sha="$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+_timestamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+printf '{"_meta": {"cartog_version": "%s", "git_sha": "%s", "timestamp": "%s"}}\n' \
+    "$_cartog_version" "$_git_sha" "$_timestamp" >> "$RESULTS_FILE"
 
 echo -e "${BOLD}Running scenarios...${NC}"
 printf "  ${BOLD}%-22s | %-27s | %-27s | %-27s | %s${NC}\n" \
@@ -137,6 +143,9 @@ if [ -s "$RESULTS_FILE" ] && command -v jq &>/dev/null; then
 
     while IFS= read -r line; do
         [ -z "$line" ] && continue
+        # Skip the provenance header — it carries no scenario metrics and would
+        # otherwise inflate `count` and dilute the recall averages.
+        echo "$line" | jq -e 'has("_meta")' >/dev/null 2>&1 && continue
         nt=$(echo "$line" | jq -r '.naive_tokens // 0')
         bt=$(echo "$line" | jq -r '.best_tokens // 0')
         ct=$(echo "$line" | jq -r '.cartog_tokens // 0')

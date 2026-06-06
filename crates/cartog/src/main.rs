@@ -122,6 +122,7 @@ fn main() -> Result<()> {
         .as_ref()
         .map(|r| r.to_search_tuning())
         .unwrap_or_default();
+    let lsp_overrides = config::to_lsp_overrides(&cartog_config);
 
     let is_serve = matches!(cli.command, Command::Serve { .. });
     let is_watch = matches!(cli.command, Command::Watch { .. });
@@ -180,6 +181,7 @@ fn main() -> Result<()> {
             cli.json,
             embedding_dim,
             redact,
+            &lsp_overrides,
         ),
         Command::Outline { file } => {
             commands::cmd_outline(&db_path, &file, cli.json, token_budget, embedding_dim)
@@ -348,6 +350,7 @@ fn main() -> Result<()> {
                 rag_override,
                 provider_config,
                 redact,
+                lsp_overrides,
                 opts,
             ))
         }

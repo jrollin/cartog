@@ -29,6 +29,7 @@ import Base from "../layouts/Base.astro";
             <a href="#config-providers">Embedding Providers</a>
             <a href="#config-remote">Remote Storage (S3)</a>
             <a href="#config-secrets">Secret Redaction</a>
+            <a href="#config-lsp">LSP Server Overrides</a>
           </details>
           <details class="sidebar-group">
             <summary class="sidebar-label">Semantic Search</summary>
@@ -175,6 +176,7 @@ cartog index .          <span class="comment"># 6. re-index after changes</span>
             <tr><td><code>[rag]</code></td><td>tuned retrieval/rerank pools</td><td>tuning hybrid-search recall vs. cost</td></tr>
             <tr><td><code>[remote]</code></td><td>unset (no sync)</td><td>sharing an index over S3 — see <a href="#config-remote">Remote Storage</a></td></tr>
             <tr><td><code>[security]</code></td><td><code>redact_secrets = true</code></td><td>opting out of pattern redaction — see <a href="#config-secrets">Secret Redaction</a></td></tr>
+            <tr><td><code>[lsp.&lt;lang&gt;]</code></td><td>unset (server resolved from <code>PATH</code>)</td><td>running a custom/Dockerized LSP server — see <a href="#config-lsp">LSP Server Overrides</a></td></tr>
           </tbody>
         </table>
         <p>Example — override just the DB path and switch to Ollama, leaving everything else at its default:</p>
@@ -426,6 +428,24 @@ redact_secrets = false
 EOF
 
 cartog index .                    <span class="comment"># toggling redact_secrets re-indexes everything</span></pre>
+
+        <h2 id="config-lsp">LSP Server Overrides</h2>
+        <p>By default cartog resolves each language's LSP server from <code>PATH</code> (<code>rust-analyzer</code>, <code>gopls</code>, …). <code>[lsp.&lt;lang&gt;]</code> overrides that with an explicit command — most usefully a Dockerized server, so cartog can resolve edges on a host without the language's native toolchain installed.</p>
+        <ul>
+          <li><code>command</code> is the full argv; <code>command[0]</code> is the executable (on <code>PATH</code> or an absolute path), the rest are its arguments.</li>
+          <li><code>$&#123;ROOT&#125;</code> in any element expands to the indexed project root (host-absolute).</li>
+          <li><strong>Path mirroring is required.</strong> cartog exchanges <code>file://</code> URIs built from the host path, so a container must see the repo at the <em>same</em> path — hence <code>-v $&#123;ROOT&#125;:$&#123;ROOT&#125; -w $&#123;ROOT&#125;</code>. A differing container path makes every definition resolve as "external" and is unsupported.</li>
+          <li>The override applies only to the keyed cartog language, which must be one cartog already supports. The server's stderr is logged to <code>$&#123;TMPDIR&#125;/cartog-lsp/&lt;language&gt;.log</code>.</li>
+        </ul>
+
+        <h3>Example: Dockerized Dart LSP</h3>
+        <pre>cat &gt;&gt; .cartog.toml &lt;&lt;EOF
+[lsp.dart]
+command = ["docker", "run", "--rm", "-i",
+           "-v", "$&#123;ROOT&#125;:$&#123;ROOT&#125;", "-w", "$&#123;ROOT&#125;", "cartog-lsp-dart:stable"]
+EOF
+
+cartog index --force .            <span class="comment"># server spawns during the LSP resolution pass</span></pre>
 
         <!-- ── Semantic Search ───────────────────── -->
 

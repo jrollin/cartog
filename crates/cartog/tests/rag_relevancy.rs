@@ -123,6 +123,7 @@ fn setup_db() -> Database {
         None,
         None,
         cartog::indexer::RedactionConfig::disabled(),
+        &std::collections::HashMap::new(),
     )
     .expect("index fixture");
     db
@@ -302,6 +303,7 @@ fn setup_java_db() -> Database {
         None,
         None,
         cartog::indexer::RedactionConfig::disabled(),
+        &std::collections::HashMap::new(),
     )
     .expect("index Java fixture");
     db

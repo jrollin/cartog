@@ -399,7 +399,17 @@ fn watch_loop(
     // (and shows the staleness banner meanwhile) rather than only on shutdown.
     let mut initial_pending = 0u32;
     let initial_start = Instant::now();
-    match indexer::index_directory(&db, root, false, false, None, None, config.redact) {
+    // Watch never runs the LSP pass (lsp = false), so the override map is inert.
+    match indexer::index_directory(
+        &db,
+        root,
+        false,
+        false,
+        None,
+        None,
+        config.redact,
+        &std::collections::HashMap::new(),
+    ) {
         Ok(r) => {
             info!(
                 files = r.files_indexed,
@@ -533,6 +543,7 @@ fn watch_loop(
                         None,
                         None,
                         config.redact,
+                        &std::collections::HashMap::new(),
                     ) {
                         Ok(r) => {
                             if r.files_indexed > 0 || r.files_removed > 0 {

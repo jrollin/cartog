@@ -151,6 +151,12 @@ if [ -z "$CARTOG" ]; then
 fi
 echo "binary: $CARTOG" >&2
 
+# ── Provenance ── so a snapshot can be traced back to an exact build.
+CARTOG_VERSION="$("$CARTOG" --version 2>/dev/null | head -1)"
+GIT_SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+TIMESTAMP="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+export CARTOG_VERSION GIT_SHA TIMESTAMP
+
 mkdir -p "$INDEXES_DIR" "$RESULTS_DIR"
 
 # Temp files for captured stderr and the rows handed to the Python renderer.
@@ -159,8 +165,9 @@ ROWS_FILE="$(mktemp)"
 trap 'rm -f "$err_log" "$ROWS_FILE"' EXIT
 
 # ── Measure one fixture ──
-# Emits: "<tag> <files> <symbols> <edges> <resolved> <has_server>"
+# Emits: "<tag> <files> <symbols> <edges> <resolved> <has_server> <lsp_source>"
 # has_server is 1 only in --lsp mode when the language's LSP binary is on PATH.
+# lsp_source records which server resolved the edges ("host:<bin>" or "none").
 measure() {
   local tag="$1"
   local src="$FIXTURES_DIR/webapp_$tag"
@@ -186,11 +193,13 @@ measure() {
   if ! json=$(CARTOG_DB="$db" "$CARTOG" stats --db "$db" --json 2>"$err_log"); then
     return 1
   fi
-  python3 - "$tag" "$has_server" "$json" <<'PY'
+  local lsp_source="none"
+  [ "$has_server" -eq 1 ] && lsp_source="host:$(lsp_bin "$tag")"
+  python3 - "$tag" "$has_server" "$lsp_source" "$json" <<'PY'
 import json, sys
-tag, has_server, blob = sys.argv[1], sys.argv[2], sys.argv[3]
+tag, has_server, lsp_source, blob = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 d = json.loads(blob)
-print(tag, d["num_files"], d["num_symbols"], d["num_edges"], d["num_resolved"], has_server)
+print(tag, d["num_files"], d["num_symbols"], d["num_edges"], d["num_resolved"], has_server, lsp_source)
 PY
 }
 
@@ -227,14 +236,15 @@ names = dict(l.split("\t") for l in os.environ["NAMES_JSON"].splitlines() if l)
 rows = []
 for line in open(os.environ["ROWS_FILE"]):
     parts = line.split()
-    if len(parts) != 6:
+    if len(parts) != 7:
         continue
     tag = parts[0]
-    files, syms, edges, resolved, has_server = map(int, parts[1:])
+    files, syms, edges, resolved, has_server = (int(parts[i]) for i in range(1, 6))
+    lsp_source = parts[6]
     pct = (100.0 * resolved / edges) if edges else 0.0
     rows.append(dict(tag=tag, name=names.get(tag, tag), files=files,
                      symbols=syms, edges=edges, resolved=resolved, pct=pct,
-                     has_server=bool(has_server)))
+                     has_server=bool(has_server), lsp_source=lsp_source))
 
 # Sort highest resolution first.
 rows.sort(key=lambda r: r["pct"], reverse=True)
@@ -283,6 +293,9 @@ print()
 
 if os.environ["DO_SAVE"] == "1":
     out = dict(mode=("lsp" if use_lsp else "heuristic"),
+               cartog_version=os.environ.get("CARTOG_VERSION", "unknown"),
+               git_sha=os.environ.get("GIT_SHA", "unknown"),
+               timestamp=os.environ.get("TIMESTAMP", "unknown"),
                overall_pct=round(overall, 2), total_edges=tot_e,
                total_resolved=tot_r, results=rows)
     json.dump(out, open(snapshot, "w"), indent=2)

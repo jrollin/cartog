@@ -34,8 +34,10 @@ pub struct LspResolveStats {
 
 /// Resolve edges that heuristic resolution left unresolved, using LSP servers.
 ///
-/// If `shared_manager` is provided, reuses existing LSP servers (warm start).
-/// Otherwise creates a temporary manager that is dropped after resolution.
+/// If `shared_manager` is provided, reuses existing LSP servers (warm start) —
+/// it already carries any command overrides, so `overrides` is ignored in that
+/// case. Otherwise creates a temporary manager seeded with `overrides`
+/// (per-language `[lsp.<lang>] command`), dropped after resolution.
 ///
 /// Returns counts for `resolved` (state=0 → 1), `marked_unresolvable`
 /// (state=0 → 2, definitive LSP negative), and `marked_external` (state=0 → 3,
@@ -44,6 +46,7 @@ pub fn lsp_resolve_edges(
     db: &Database,
     root: &Path,
     shared_manager: Option<&mut LspManager>,
+    overrides: &HashMap<String, Vec<String>>,
 ) -> Result<LspResolveStats> {
     let unresolved = db.unresolved_edges()?;
 
@@ -72,7 +75,7 @@ pub fn lsp_resolve_edges(
             m
         }
         None => {
-            owned_manager = LspManager::new(root);
+            owned_manager = LspManager::with_overrides(root, overrides.clone());
             &mut owned_manager
         }
     };
@@ -396,7 +399,7 @@ mod tests {
         let edge_id = db.unresolved_edges().unwrap()[0].edge_id;
 
         let tmp = tempfile::tempdir().unwrap();
-        let stats = lsp_resolve_edges(&db, tmp.path(), None).unwrap();
+        let stats = lsp_resolve_edges(&db, tmp.path(), None, &HashMap::new()).unwrap();
         assert_eq!(stats.resolved, 0, "no servers must mean zero resolutions");
         assert_eq!(
             stats.marked_unresolvable, 0,

@@ -333,6 +333,11 @@ pub type CancelProbe<'a> = &'a (dyn Fn() -> bool + Send + Sync);
 /// When `progress` is `Some`, the callback fires at each coarse phase boundary
 /// (see [`ProgressUpdate`]). Pass `None` for the no-op default — behavior is
 /// otherwise identical.
+///
+/// `lsp_overrides` maps a language to its `[lsp.<lang>] command` argv; it only
+/// takes effect when `lsp` is `true` and the `lsp` feature is compiled in. Pass
+/// an empty map for the default (PATH-resolved) servers.
+#[allow(clippy::too_many_arguments)] // named, order-stable knobs; a struct would churn 51 call sites
 pub fn index_directory(
     db: &Database,
     root: &Path,
@@ -341,6 +346,7 @@ pub fn index_directory(
     progress: Option<ProgressCallback<'_>>,
     cancel: Option<CancelProbe<'_>>,
     redact: RedactionConfig,
+    lsp_overrides: &std::collections::HashMap<String, Vec<String>>,
 ) -> Result<IndexResult> {
     let emit = |u: ProgressUpdate| {
         if let Some(cb) = progress {
@@ -720,13 +726,13 @@ pub fn index_directory(
     #[cfg(feature = "lsp")]
     if lsp && !dirty_files.is_empty() {
         emit(ProgressUpdate::ResolvingLsp);
-        let stats = cartog_lsp::lsp_resolve_edges(db, &root, None)?;
+        let stats = cartog_lsp::lsp_resolve_edges(db, &root, None, lsp_overrides)?;
         result.edges_lsp_resolved = stats.resolved;
         result.edges_marked_unresolvable = stats.marked_unresolvable;
         result.edges_marked_external = stats.marked_external;
     }
     #[cfg(not(feature = "lsp"))]
-    let _ = lsp; // suppress unused warning when feature is off
+    let _ = (lsp, lsp_overrides); // suppress unused warnings when feature is off
 
     // Store the current git commit as last indexed
     if let Some(commit) = git_head_commit(&root) {
@@ -983,6 +989,7 @@ pub mod bench_support {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .expect("full index")
     }
@@ -1006,6 +1013,7 @@ pub mod bench_support {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .expect("seed index");
         db
@@ -1025,6 +1033,7 @@ pub mod bench_support {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .expect("noop re-index")
     }
@@ -1052,6 +1061,7 @@ pub mod bench_support {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .expect("incremental re-index")
     }
@@ -1293,6 +1303,7 @@ mod tests {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -1325,6 +1336,7 @@ mod tests {
                 None,
                 None,
                 crate::RedactionConfig::disabled(),
+                &std::collections::HashMap::new(),
             )
             .unwrap();
             assert!(r1.files_indexed > 0);
@@ -1339,6 +1351,7 @@ mod tests {
                 None,
                 None,
                 crate::RedactionConfig::disabled(),
+                &std::collections::HashMap::new(),
             )
             .unwrap();
             assert_eq!(r2.files_indexed, 0);
@@ -1361,6 +1374,7 @@ mod tests {
                 None,
                 None,
                 crate::RedactionConfig::disabled(),
+                &std::collections::HashMap::new(),
             )
             .unwrap();
             assert_eq!(r3.files_indexed, r1.files_indexed);
@@ -1391,6 +1405,7 @@ mod tests {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -1402,6 +1417,7 @@ mod tests {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert_eq!(r2.dirty_files, 0);
@@ -1430,6 +1446,7 @@ mod tests {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(
@@ -1457,6 +1474,7 @@ mod tests {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -1493,6 +1511,7 @@ mod tests {
                 None,
                 None,
                 crate::RedactionConfig::disabled(),
+                &std::collections::HashMap::new(),
             )
             .unwrap()
         };
@@ -1554,6 +1573,7 @@ mod tests {
                 None,
                 None,
                 crate::RedactionConfig::disabled(),
+                &std::collections::HashMap::new(),
             )
             .unwrap()
         };
@@ -1612,6 +1632,7 @@ mod tests {
                 None,
                 None,
                 crate::RedactionConfig::disabled(),
+                &std::collections::HashMap::new(),
             )
             .unwrap()
         };
@@ -1664,6 +1685,7 @@ mod tests {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -1690,6 +1712,7 @@ mod tests {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         let post = db.unresolved_edges().unwrap();
@@ -1724,6 +1747,7 @@ mod tests {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -1750,6 +1774,7 @@ mod tests {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -1790,6 +1815,7 @@ mod tests {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -1814,6 +1840,7 @@ mod tests {
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert_eq!(r.dirty_files, 0);
@@ -2117,6 +2144,7 @@ def main():
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert_eq!(r1.files_indexed, 2);
@@ -2175,6 +2203,7 @@ def standalone():
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert_eq!(r2.files_indexed, 1, "only a.py changed");
@@ -2231,6 +2260,7 @@ def standalone():
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert_eq!(r3.files_indexed, 1);
@@ -2294,6 +2324,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -2381,6 +2412,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .expect("seed index should succeed");
 
@@ -2421,6 +2453,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         );
         assert!(
             result.is_err(),
@@ -2490,6 +2523,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             Some(&cb),
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -2515,6 +2549,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -2529,6 +2564,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             Some(&cb),
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -2559,6 +2595,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             Some(&cb),
             None,
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -2598,6 +2635,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             Some(&probe),
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .expect_err("index must abort when probe trips at first phase boundary");
         assert!(
@@ -2622,6 +2660,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             Some(&probe),
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .expect("non-cancelling probe must not affect normal indexing");
         assert!(result.files_indexed >= 2);
@@ -2645,6 +2684,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             Some(&probe),
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .expect_err("first run cancels");
 
@@ -2658,6 +2698,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             Some(&probe),
             crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .expect("re-run after cancellation must succeed");
         assert!(result.files_indexed >= 2);
@@ -2699,6 +2740,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             RedactionConfig::enabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -2719,6 +2761,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -2739,6 +2782,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             RedactionConfig::enabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -2770,6 +2814,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             RedactionConfig::enabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -2794,6 +2839,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(only_content(&db).contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
@@ -2808,6 +2854,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             RedactionConfig::enabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
         assert!(r.redaction_backfilled, "policy change must flag a backfill");
@@ -2829,6 +2876,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             RedactionConfig::enabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -2841,6 +2889,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             None,
             RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
         )
         .unwrap();
 
