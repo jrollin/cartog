@@ -28,22 +28,22 @@ When edges are first inserted, `target_id` is `NULL`. The resolution algorithm r
 1. **Same file** — exact name match in the same source file
 2. **Import path** — follow already-resolved import edges
 3. **Same directory** — match symbols in sibling files
-4. **Parent scope** — prefer symbols sharing the same parent
+4. **Parent scope** — first symbol sharing the source's parent scope (sibling, `LIMIT 1`)
 5. **Project-wide unique** — exactly one match globally
-6. **Class over constructor** — when 2 matches remain, prefer `Class` kind
+6. **Kind disambiguation** — when exactly 2 matches remain, pick the higher-priority kind (type-like `class`/`interface`/`enum`/`type_alias`/`trait` > `function` > `method`); equal priorities stay unresolved
 
-Tiers 5 and 6 are evaluated together in a single project-wide query (capped at 3 candidates): a lone match resolves via tier 5, exactly two resolve via the tier-6 class preference, and 3+ stay unresolved.
+Tiers 5 and 6 are evaluated together in a single project-wide query (capped at 3 candidates): a lone match resolves via tier 5, exactly two resolve via the tier-6 kind disambiguation, and 3+ stay unresolved.
 
 ### Search ranking
 
 Symbol search uses a composite score:
 
-```
+```text
 rank = match_tier + kind_penalty
 ```
 
 - **match_tier**: exact match (0), prefix (1), substring (2)
-- **kind_penalty**: definitions like function/class (0), variable (3), import (6)
+- **kind_penalty**: definitions `function`/`method`/`class` (0), `variable` and all other kinds (3), `import` (6)
 - **tiebreaker**: `in_degree DESC` (most-referenced symbols first)
 
 ## Public API (key exports)

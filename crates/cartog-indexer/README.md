@@ -20,7 +20,7 @@ Walks a directory tree, detects which files changed, extracts symbols and edges 
 
 Each symbol gets two hashes for fine-grained diff detection:
 
-```
+```text
 content_hash = SHA256(kind + ":" + name + ":" + signature + ":" + body_source)
 subtree_hash = SHA256(content_hash + sorted(children_subtree_hashes))
 ```
@@ -45,9 +45,12 @@ Edges that LSP classifies are persisted to `resolution_state` so future runs ski
 
 | Export | Description |
 |--------|-------------|
-| `index_directory()` | Main entry point — index a directory into the database. Optional `progress: Option<ProgressCallback>` fires at coarse phase boundaries (`Walking`, `Parsing`, `Storing`, `ResolvingLsp`); optional `cancel: Option<CancelProbe>` aborts cooperatively. Pass `None` for the no-op default. |
-| `IndexResult` | Summary: files indexed/skipped/removed, symbols added/modified/unchanged/removed, edges resolved (heuristic + `edges_lsp_resolved`, `edges_marked_unresolvable`, `edges_marked_external`), `dirty_files`, plus `files_unsupported` + `unsupported_by_ext` (files whose language isn't supported; cartog's own `.cartog.db*` / `db.sqlite*` sidecars are excluded from this tally) |
-| `ProgressUpdate` / `ProgressCallback` / `CancelProbe` | Type aliases for in-flight phase reporting and cooperative cancellation (`Fn` trait-object references, transport-agnostic) |
+| `index_directory()` | Main entry point — index a directory into the database. Takes `db`, `root`, `force`, `lsp`, `progress: Option<ProgressCallback>` (fires at coarse phase boundaries: `Walking`, `Parsing`, `Storing`, `ResolvingLsp`), `cancel: Option<CancelProbe>` (cooperative abort), and `redact: RedactionConfig` (secret scrubbing). Pass `None` for the no-op progress/cancel defaults. |
+| `IndexResult` | Summary: files indexed/skipped/removed, symbols added/modified/unchanged/removed, edges resolved (heuristic + `edges_lsp_resolved`, `edges_marked_unresolvable`, `edges_marked_external`), `dirty_files`, `files_unsupported` + `unsupported_by_ext` (files whose language isn't supported; cartog's own `.cartog.db*` / `db.sqlite*` sidecars are excluded), plus `files_redacted_skipped` (sensitive files never read/parsed) and `redaction_backfilled` (set when a first full re-index scrubs pre-redaction content) |
+| `render_index_summary()` | Render a human-readable one-block summary of an `IndexResult`; shared by `cartog index` CLI output and the `cartog_index` MCP tool |
+| `RedactionConfig` | Secret-redaction policy passed to `index_directory()` (default-on; `disabled()` for a verbatim no-op) |
+| `ProgressUpdate` | `pub enum` of in-flight phases (`Walking`, `Parsing { total }`, `Storing { total }`, `ResolvingLsp`) |
+| `ProgressCallback` / `CancelProbe` | Type aliases (`Fn` trait-object references) for phase reporting and cooperative cancellation (transport-agnostic) |
 | `is_ignored_dirname()` | Check if a directory name should be skipped (`.git`, `node_modules`, `target`, etc.) |
 | `git_recently_changed_files()` | List files changed in the last N git commits |
 

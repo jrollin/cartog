@@ -26,7 +26,7 @@ pub(crate) const PLACEHOLDER: &str = "[REDACTED_SECRET]";
 #[derive(Debug, Clone, Copy)]
 pub struct RedactionConfig {
     /// When true, secret patterns in stored symbol text are replaced with
-    /// [`PLACEHOLDER`]. The sensitive-*file* deny-list is always enforced
+    /// a redaction placeholder. The sensitive-*file* deny-list is always enforced
     /// regardless of this flag.
     pub enabled: bool,
 }

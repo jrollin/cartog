@@ -398,7 +398,7 @@ pub fn register_sqlite_vec() {
 /// Current schema version. Increment when adding migrations.
 const SCHEMA_VERSION: u32 = 6;
 
-/// Public mirror of [`SCHEMA_VERSION`] for callers outside this crate
+/// Public mirror of the private `SCHEMA_VERSION` for callers outside this crate
 /// (e.g. `cartog pull` needs it to compare against a pulled DB and refuse
 /// to load a future-versioned file). Kept in sync by construction.
 pub const CURRENT_SCHEMA_VERSION: u32 = SCHEMA_VERSION;

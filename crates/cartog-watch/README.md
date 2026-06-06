@@ -16,7 +16,7 @@ Events are filtered to **relevant paths only**: the file must have a supported e
 
 ### RAG timer
 
-When RAG embedding is enabled (`rag = true`):
+RAG auto-embed is on when the repo already has embeddings; `rag_override: Some(bool)` forces it on or off. When enabled:
 
 1. After each re-index, check if any symbols need embedding
 2. If yes, record `Instant::now()` and set `rag_pending = true`
@@ -36,7 +36,8 @@ Both modes open their own `Database` connection (SQLite WAL allows concurrent re
 
 | Export | Description |
 |--------|-------------|
-| `WatchConfig` | Configuration: `root`, `debounce`, `rag` toggle, `rag_delay`, `rag_config` (provider config for embedding + reranker, threaded from `.cartog.toml`), `json_events` (emit machine-readable event lines), `pid_lock_dir` + `pid_lock_slot` (PID-lock tracking; both must be set together or neither), `skip_migrations` |
+| `WatchConfig` | Configuration: `root`, `debounce`, `rag_override: Option<bool>` (force RAG auto-embed on/off; `None` defers to live data), `rag_delay`, `rag_config` (provider config for embedding + reranker, threaded from `.cartog.toml`), `redact: RedactionConfig` (secret scrubbing on re-index), `json_events` (emit machine-readable event lines), `pid_lock_dir` + `pid_lock_slot` (PID-lock tracking; both must be set together or neither), `skip_migrations` |
+| `StaleSnapshot` / `StaleState` | Structural-staleness state (monotonic `change_seq` counters), written by the watch thread and read by the MCP server over an `Arc<StaleState>` to drive the `⚠️` staleness banners |
 | `WatchHandle` | Handle to stop a background watcher (via `stop()` or `Drop`) |
 | `WATCH_LOCK_SLOT` | Conventional PID-lock slot name (`"watch"`) |
 | `spawn_watch(config, db_path)` | Start watching on a background thread |
