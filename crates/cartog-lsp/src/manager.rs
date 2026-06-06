@@ -75,6 +75,7 @@ pub struct LspManager {
 }
 
 impl LspManager {
+    #[must_use]
     pub fn new(root: &Path) -> Self {
         Self::with_overrides(root, HashMap::new())
     }
@@ -83,6 +84,7 @@ impl LspManager {
     /// value is the argv to launch that language's server (`argv[0]` is the
     /// program); `${ROOT}` in any element expands to `root`. Overrides take
     /// precedence over the built-in [`ServerSpec`](crate::servers::ServerSpec) PATH lookup in `start()`.
+    #[must_use]
     pub fn with_overrides(root: &Path, overrides: HashMap<String, Vec<String>>) -> Self {
         Self {
             root: root.to_path_buf(),
@@ -314,7 +316,8 @@ impl LspManager {
     /// server's PID namespace and a stale `processId` makes it exit at startup.
     fn initialize(&self, client: &mut LspClient, process_id: Option<u32>) -> Result<()> {
         let root_uri = path_to_uri(&self.root);
-        let _result = client.send_request("initialize", initialize_params(&root_uri, process_id))?;
+        let _result =
+            client.send_request("initialize", initialize_params(&root_uri, process_id))?;
 
         client.send_notification("initialized", serde_json::json!({}))?;
 
