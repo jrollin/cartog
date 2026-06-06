@@ -1,5 +1,5 @@
-#![doc = include_str!("../README.md")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![doc = include_str!("../README.md")]
 
 pub use cartog_core as types;
 pub use cartog_db as db;

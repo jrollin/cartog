@@ -36,7 +36,7 @@ Both modes open their own `Database` connection (SQLite WAL allows concurrent re
 
 | Export | Description |
 |--------|-------------|
-| `WatchConfig` | Configuration: `root`, `debounce`, `rag_override: Option<bool>` (force RAG auto-embed on/off; `None` defers to live data), `rag_delay`, `rag_config` (provider config for embedding + reranker, threaded from `.cartog.toml`), `redact: RedactionConfig` (secret scrubbing on re-index), `json_events` (emit machine-readable event lines), `pid_lock_dir` + `pid_lock_slot` (PID-lock tracking; both must be set together or neither), `skip_migrations` |
+| `WatchConfig` | Configuration: `root`, `debounce`, `rag_override: Option<bool>` (force RAG auto-embed on/off; `None` defers to live data), `rag_delay`, `rag_config: rag::EmbeddingProviderConfig` (embedding + reranker config, threaded from `.cartog.toml`), `redact: RedactionConfig` (secret scrubbing on re-index), `json_events` (emit machine-readable event lines), `pid_lock_dir` + `pid_lock_slot` (PID-lock tracking; both must be set together or neither), `skip_migrations`, `stale: Option<Arc<StaleState>>` (shared staleness state for the MCP server; `None` disables publishing) |
 | `StaleSnapshot` / `StaleState` | Structural-staleness state (monotonic `change_seq` counters), written by the watch thread and read by the MCP server over an `Arc<StaleState>` to drive the `⚠️` staleness banners |
 | `WatchHandle` | Handle to stop a background watcher (via `stop()` or `Drop`) |
 | `WATCH_LOCK_SLOT` | Conventional PID-lock slot name (`"watch"`) |
