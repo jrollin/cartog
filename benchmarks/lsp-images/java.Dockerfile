@@ -1,6 +1,6 @@
 # Dockerized Eclipse JDT language server (jdtls) for edge-resolution benchmarks.
 #
-# Build:  docker build -t cartog-lsp-java:stable -f java.Dockerfile .
+# Build (from repo root):  docker build -t cartog-lsp-java:stable -f benchmarks/lsp-images/java.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml (ServerSpec args are empty; the bare wrapper reads stdio):
 #   [lsp.java]
 #   command = ["docker", "run", "--rm", "-i",

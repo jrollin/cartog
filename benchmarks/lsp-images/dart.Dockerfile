@@ -1,7 +1,7 @@
 # Dockerized Dart LSP server for reproducible edge-resolution benchmarks.
 #
 # `dart language-server` ships with the SDK, so there is nothing to install.
-# Build:  docker build -t cartog-lsp-dart:stable -f dart.Dockerfile .
+# Build (from repo root):  docker build -t cartog-lsp-dart:stable -f benchmarks/lsp-images/dart.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml:
 #   [lsp.dart]
 #   command = ["docker", "run", "--rm", "-i",

@@ -1,6 +1,6 @@
 # Dockerized gopls for reproducible edge-resolution benchmarks.
 #
-# Build:  docker build -t cartog-lsp-go:stable -f go.Dockerfile .
+# Build (from repo root):  docker build -t cartog-lsp-go:stable -f benchmarks/lsp-images/go.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml (the ENTRYPOINT supplies `serve`; do NOT append it):
 #   [lsp.go]
 #   command = ["docker", "run", "--rm", "-i",

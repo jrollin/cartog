@@ -40,7 +40,7 @@ Measures edge-resolution rate (resolved / total edges) per language fixture.
 Usage:
   resolution_rate.sh                 # heuristic, all langs, save snapshot
   resolution_rate.sh --lsp           # add LSP pass (uses host-installed servers)
-  resolution_rate.sh --lsp --docker-lsp  # LSP via Docker images, host fallback
+  resolution_rate.sh --lsp --docker-lsp  # LSP via Docker images (build them first; no host fallback)
   resolution_rate.sh --fixture rs    # one language (py ts rs go rb java php dart swift kt)
   resolution_rate.sh --baseline      # diff vs last saved snapshot (does not overwrite it)
   resolution_rate.sh --no-save       # don't write the snapshot
@@ -217,9 +217,16 @@ resolve_lsp_source() {
     local img; img="$(docker_image "$tag")"
     # Override config lives in the fixture dir; `.cartog*` is gitignored, so it
     # never pollutes git, and cartog discovers it by walking up from cwd.
+    # Guard the write explicitly: a bare `> "$file"` redirect failure does not
+    # reliably trip `set -e`, which would let M_HAS_SERVER=1 falsely claim the
+    # override was configured when the config was never written.
     M_CARTOG_TOML="$src/.cartog.toml"
-    printf '[lsp.%s]\ncommand = ["docker", "run", "--rm", "-i", "-v", "${ROOT}:${ROOT}", "-w", "${ROOT}", "%s"]\n' \
-      "$(lsp_lang "$tag")" "$img" > "$M_CARTOG_TOML"
+    if ! printf '[lsp.%s]\ncommand = ["docker", "run", "--rm", "-i", "-v", "${ROOT}:${ROOT}", "-w", "${ROOT}", "%s"]\n' \
+      "$(lsp_lang "$tag")" "$img" > "$M_CARTOG_TOML"; then
+      echo "error: failed to write $M_CARTOG_TOML for $tag" >&2
+      M_CARTOG_TOML=""
+      return 1
+    fi
     M_HAS_SERVER=1; M_LSP_SOURCE="docker:$img"
     return 0
   fi
@@ -240,7 +247,7 @@ measure() {
   local db="$INDEXES_DIR/webapp_$tag.sqlite"
   rm -f "$db"
 
-  resolve_lsp_source "$tag" "$src"
+  resolve_lsp_source "$tag" "$src" || return 1
   # Clean up any override config we wrote, on every return path.
   [ -n "$M_CARTOG_TOML" ] && trap 'rm -f "$M_CARTOG_TOML"' RETURN
 

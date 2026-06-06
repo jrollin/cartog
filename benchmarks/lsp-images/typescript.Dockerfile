@@ -1,7 +1,7 @@
 # Dockerized typescript-language-server for reproducible edge-resolution benchmarks.
 # Serves the typescript / tsx / javascript cartog languages (one server, one image).
 #
-# Build:  docker build -t cartog-lsp-typescript:stable -f typescript.Dockerfile .
+# Build (from repo root):  docker build -t cartog-lsp-typescript:stable -f benchmarks/lsp-images/typescript.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml (the CMD supplies --stdio; do NOT append it):
 #   [lsp.typescript]
 #   command = ["docker", "run", "--rm", "-i",

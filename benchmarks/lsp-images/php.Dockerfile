@@ -1,6 +1,6 @@
 # Dockerized intelephense for reproducible edge-resolution benchmarks.
 #
-# Build:  docker build -t cartog-lsp-php:stable -f php.Dockerfile .
+# Build (from repo root):  docker build -t cartog-lsp-php:stable -f benchmarks/lsp-images/php.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml (the ENTRYPOINT supplies --stdio; do NOT append it):
 #   [lsp.php]
 #   command = ["docker", "run", "--rm", "-i",

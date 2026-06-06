@@ -1,6 +1,6 @@
 # Dockerized kotlin-language-server for reproducible edge-resolution benchmarks.
 #
-# Build:  docker build -t cartog-lsp-kotlin:stable -f kotlin.Dockerfile .
+# Build (from repo root):  docker build -t cartog-lsp-kotlin:stable -f benchmarks/lsp-images/kotlin.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml (ServerSpec args are empty; the bare launcher reads stdio):
 #   [lsp.kotlin]
 #   command = ["docker", "run", "--rm", "-i",

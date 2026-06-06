@@ -1,6 +1,6 @@
 # Dockerized pyright for reproducible edge-resolution benchmarks.
 #
-# Build:  docker build -t cartog-lsp-python:stable -f python.Dockerfile .
+# Build (from repo root):  docker build -t cartog-lsp-python:stable -f benchmarks/lsp-images/python.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml (the CMD supplies --stdio; do NOT append it):
 #   [lsp.python]
 #   command = ["docker", "run", "--rm", "-i",

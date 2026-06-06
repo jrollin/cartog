@@ -1,6 +1,6 @@
 # Dockerized rust-analyzer for reproducible edge-resolution benchmarks.
 #
-# Build:  docker build -t cartog-lsp-rust:stable -f rust.Dockerfile .
+# Build (from repo root):  docker build -t cartog-lsp-rust:stable -f benchmarks/lsp-images/rust.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml (the ENTRYPOINT supplies the LSP args; do NOT append any):
 #   [lsp.rust]
 #   command = ["docker", "run", "--rm", "-i",

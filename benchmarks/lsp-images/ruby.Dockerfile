@@ -1,6 +1,6 @@
 # Dockerized ruby-lsp for reproducible edge-resolution benchmarks.
 #
-# Build:  docker build -t cartog-lsp-ruby:stable -f ruby.Dockerfile .
+# Build (from repo root):  docker build -t cartog-lsp-ruby:stable -f benchmarks/lsp-images/ruby.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml (ServerSpec args are empty; the bare server reads stdio):
 #   [lsp.ruby]
 #   command = ["docker", "run", "--rm", "-i",

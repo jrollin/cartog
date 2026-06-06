@@ -1,6 +1,6 @@
 # Dockerized sourcekit-lsp for reproducible edge-resolution benchmarks.
 #
-# Build:  docker build -t cartog-lsp-swift:stable -f swift.Dockerfile .
+# Build (from repo root):  docker build -t cartog-lsp-swift:stable -f benchmarks/lsp-images/swift.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml (ServerSpec args are empty; the bare server reads stdio):
 #   [lsp.swift]
 #   command = ["docker", "run", "--rm", "-i",
