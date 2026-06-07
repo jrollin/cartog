@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.26.0] - 2026-06-07
+
+### Bug Fixes
+
+- **bench**: Correct Docker build context, guard override write, fix strict-mode docs ([`87bf576`](https://github.com/jrollin/cartog/commit/87bf576e46a583d8d681705c611a00b3a3b54323))
+- **lsp**: Send processId=null to override servers so they survive in containers ([`aec7da9`](https://github.com/jrollin/cartog/commit/aec7da972b1dc341ad4db367e5d05ed5c9f817a6))
+- **bench**: Repair and pin check-kt — dead image, fixture, offline reproducibility ([`fcd0210`](https://github.com/jrollin/cartog/commit/fcd0210977f2ab19050807ddec44bef01850ea82))
+- **tla**: Guard python3 and reap generated artifacts in the TLA+ harness ([`2eaf44f`](https://github.com/jrollin/cartog/commit/2eaf44ff828abcc8c6b15b9e65bfb919fb56ab7d))
+- **core,db**: Make symbol_id injective via leaf-name separator escaping ([`1f7fbe8`](https://github.com/jrollin/cartog/commit/1f7fbe8f0b4189ea2e19109b96ad70ab3dd13ecf))
+- **db**: Back up the index before the v6→7 destructive migration ([`7a3fab6`](https://github.com/jrollin/cartog/commit/7a3fab664467877e4a2052d22aa827c3d18b6ac0))
+
+### Documentation
+
+- **tla,bench**: Address PR review — fence tags, comment accuracy, harness safety ([`3c03a4d`](https://github.com/jrollin/cartog/commit/3c03a4d1c608bf2bbc51d8079a8c1147744b2baf))
+
+### Features
+
+- **lsp**: Config-driven LSP command override + reproducible benchmarks ([`8113bfa`](https://github.com/jrollin/cartog/commit/8113bfafa0d2c31c5a6c70ae82df285cec2d1eaa))
+- **bench**: Docker LSP images for all 10 languages + `--docker-lsp` mode ([`1adc207`](https://github.com/jrollin/cartog/commit/1adc207227ab2fc12f834d5df8437830bd94343f))
+
+### Miscellaneous
+
+- **lsp**: Mark LspManager::new/with_overrides #[must_use] ([`cd02e0a`](https://github.com/jrollin/cartog/commit/cd02e0ab1c135b911e6528bfe512339baa320c84))
+
+### Refactor
+
+- **bench**: Rename run.sh to token_savings.sh, share fixture filter ([`8fc5ba5`](https://github.com/jrollin/cartog/commit/8fc5ba596f235409a3b80ca98e1fb888a8828323))
+
+### Testing
+
+- **bench**: Add edge-resolution rate harness across 10 languages ([`791b020`](https://github.com/jrollin/cartog/commit/791b020f778060984b05818c2d658022004d5d57))
+- **verification**: Add TLA+ specs + Loom model for the concurrency protocols ([`56b0fb5`](https://github.com/jrollin/cartog/commit/56b0fb5f13c91783c0368932b6be5b78cde56ac7))
+- **skill**: Pin ensure_indexed test stdin to non-TTY ([`6c569ec`](https://github.com/jrollin/cartog/commit/6c569ec8c059b8d6708423cd94b44d31321bfc06))
+- **indexer**: Property-based tests for redactor and merkle diff ([`7eae6ee`](https://github.com/jrollin/cartog/commit/7eae6eedf6f458fd5de1e1b668b16c18f5783684))
+- Property-based tests for truncation, extractors, merkle hashing, watch slot ([`70a959f`](https://github.com/jrollin/cartog/commit/70a959f2ef4f7bfc09a35bcd3e791b78c5cca8e9))
+- De-flake property tests, fix overclaims, raise CI proptest cases ([`bbf5867`](https://github.com/jrollin/cartog/commit/bbf5867c69de497ebd76310368a8118e9f3d62ac))
+- **db,core**: Broaden v6→7 backup check + escaping/wipe regression coverage ([`220152d`](https://github.com/jrollin/cartog/commit/220152d810d9b277c5b7e358093006c805f493e7))
+
 ## [0.25.1] - 2026-06-06
 
 ### Documentation
