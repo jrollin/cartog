@@ -822,10 +822,26 @@ fn backup_before_destructive_migration(
         return Ok(());
     }
 
-    let symbol_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
-        .unwrap_or(0);
-    if symbol_count == 0 {
+    // Back up if ANY wiped table holds data, not just `symbols`: a partially
+    // indexed DB (e.g. edges/content written before symbols) would otherwise
+    // skip the backup and lose those rows to the wipe. A missing table errors
+    // the EXISTS probe, which `unwrap_or(false)` treats as empty.
+    let has_rows = |table: &str| -> bool {
+        conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table})"), [], |r| {
+            r.get::<_, bool>(0)
+        })
+        .unwrap_or(false)
+    };
+    let any_indexed = [
+        "symbols",
+        "edges",
+        "files",
+        "symbol_content",
+        "symbol_embedding_map",
+    ]
+    .iter()
+    .any(|t| has_rows(t));
+    if !any_indexed {
         return Ok(());
     }
 
@@ -852,6 +868,9 @@ fn backup_before_destructive_migration(
             source,
         })?;
 
+    let symbol_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+        .unwrap_or(0);
     info!(
         backup = %backup_path.display(),
         old_version = current,
@@ -5056,7 +5075,10 @@ mod tests {
     }
 
     /// Bootstrap a v6-shaped DB (all columns present, stamped at v6) with one
-    /// seeded symbol/file/edge and a `last_commit`, so the v6→7 wipe is testable.
+    /// seeded row in every table the v7 wipe clears, plus a `last_commit`, so the
+    /// wipe is observable per table. `symbol_content` uses the real shape and the
+    /// FTS5 vtable + insert/delete triggers so its row inserts (and the wipe's
+    /// delete) keep the external-content index consistent.
     fn bootstrap_v6_db(path: &std::path::Path) {
         let conn = Connection::open(path).unwrap();
         conn.execute_batch(
@@ -5072,7 +5094,22 @@ mod tests {
                 kind TEXT NOT NULL, file_path TEXT NOT NULL, line INTEGER,
                 resolution_state INTEGER NOT NULL DEFAULT 0, resolution_source TEXT);
              CREATE TABLE files (path TEXT PRIMARY KEY);
-             CREATE TABLE symbol_content (symbol_id TEXT PRIMARY KEY);
+             CREATE TABLE symbol_content (
+                symbol_id TEXT PRIMARY KEY, content TEXT NOT NULL, header TEXT NOT NULL,
+                normalized_name TEXT NOT NULL DEFAULT '');
+             CREATE VIRTUAL TABLE symbol_fts USING fts5(
+                symbol_name, normalized_name, content,
+                content=symbol_content, content_rowid=rowid);
+             CREATE TRIGGER symbol_content_ai AFTER INSERT ON symbol_content BEGIN
+                INSERT INTO symbol_fts(rowid, symbol_name, normalized_name, content)
+                VALUES (new.rowid, (SELECT name FROM symbols WHERE id = new.symbol_id),
+                        new.normalized_name, new.content);
+             END;
+             CREATE TRIGGER symbol_content_ad AFTER DELETE ON symbol_content BEGIN
+                INSERT INTO symbol_fts(symbol_fts, rowid, symbol_name, normalized_name, content)
+                VALUES ('delete', old.rowid, (SELECT name FROM symbols WHERE id = old.symbol_id),
+                        old.normalized_name, old.content);
+             END;
              CREATE TABLE symbol_embedding_map (symbol_id TEXT NOT NULL);
              CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT);
              CREATE TABLE query_log (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -5081,6 +5118,9 @@ mod tests {
              INSERT INTO files (path) VALUES ('a.py');
              INSERT INTO edges (source_id, target_name, kind, file_path, line)
                 VALUES ('a.py:import:os.path', 'os', 'imports', 'a.py', 1);
+             INSERT INTO symbol_content (symbol_id, content, header)
+                VALUES ('a.py:import:os.path', 'body', 'sig');
+             INSERT INTO symbol_embedding_map (symbol_id) VALUES ('a.py:import:os.path');
              INSERT INTO metadata (key, value) VALUES ('schema_version', '6');
              INSERT INTO metadata (key, value) VALUES ('last_commit', 'deadbeef');",
         )
@@ -5106,6 +5146,12 @@ mod tests {
         assert_eq!(count("symbols"), 0, "symbols cleared");
         assert_eq!(count("edges"), 0, "edges cleared");
         assert_eq!(count("files"), 0, "files cleared");
+        assert_eq!(count("symbol_content"), 0, "symbol_content cleared");
+        assert_eq!(
+            count("symbol_embedding_map"),
+            0,
+            "symbol_embedding_map cleared"
+        );
 
         let last_commit: Option<String> = db
             .conn

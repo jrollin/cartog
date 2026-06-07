@@ -590,6 +590,23 @@ mod tests {
     }
 
     #[test]
+    fn symbol_id_escapes_colon_in_leaf() {
+        // A `:` in the leaf would otherwise blur the kind/qname boundary.
+        let escaped = symbol_id("f", SymbolKind::Import, "a:b", None);
+        assert_eq!(escaped, "f:import:a%3Ab");
+        assert_ne!(escaped, "f:import:a:b");
+    }
+
+    #[test]
+    fn symbol_id_escapes_percent_in_leaf() {
+        // `%` is escaped first so the mapping stays injective (a literal `%2E`
+        // must not be confused with an escaped `.`).
+        let escaped = symbol_id("f", SymbolKind::Import, "a%2Eb", None);
+        assert_eq!(escaped, "f:import:a%252Eb");
+        assert_ne!(escaped, "f:import:a%2Eb");
+    }
+
+    #[test]
     fn test_detect_language() {
         assert_eq!(detect_language(Path::new("src/main.py")), Some("python"));
         assert_eq!(detect_language(Path::new("lib.pyi")), Some("python"));
