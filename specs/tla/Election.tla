@@ -63,10 +63,11 @@ NoOwner == 0               \* sentinel: serve lock unheld
        \* SAFETY 1: at most one live Primary at any time.
        AtMostOnePrimary == Cardinality(LivePrimaries) <= 1
 
-       \* The lock and the Primary role agree: whoever is Primary holds the
-       \* lock, and a held lock (by a live peer) means that peer is Primary.
-       \* (A crashed Primary may transiently still "own" lockOwner until a
-       \* promoter reaps it; we exclude the dead case.)
+       \* If a process is a live Primary then it owns the lock: for every p,
+       \* role[p] = "primary" /\ alive[p] implies lockOwner = p. (One direction
+       \* only — this does NOT assert the converse that a held lock implies its
+       \* owner is Primary. A crashed Primary may transiently still "own"
+       \* lockOwner until a promoter reaps it; the alive[p] guard excludes it.)
        LockMatchesPrimary ==
          \A p \in Procs :
            (role[p] = "primary" /\ alive[p]) => (lockOwner = p)
@@ -179,7 +180,7 @@ NoOwner == 0               \* sentinel: serve lock unheld
      }
    }
 *)
-\* BEGIN TRANSLATION (chksum(pcal) = "26888784" /\ chksum(tla) = "8f7ee1df")
+\* BEGIN TRANSLATION (chksum(pcal) = "f3129c54" /\ chksum(tla) = "8f7ee1df")
 VARIABLES lockOwner, schema, role, alive, pinned, pc
 
 (* define statement *)
@@ -187,6 +188,7 @@ LivePrimaries == { p \in Procs : role[p] = "primary" /\ alive[p] }
 
 
 AtMostOnePrimary == Cardinality(LivePrimaries) <= 1
+
 
 
 

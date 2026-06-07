@@ -4,7 +4,7 @@ cartog is a Cargo workspace with 10 published crates under `crates/`, plus `cart
 
 ## Top-level layout
 
-```
+```text
 cartog/
 ├── crates/             # 10 published members + cartog-loom-models (test-only; see Dependency Graph below)
 ├── .claude-plugin/     # Claude Code plugin manifest + hooks
@@ -23,7 +23,7 @@ cartog/
 
 ## Dependency graph
 
-```
+```text
 cartog-core          (tier 0 — no internal deps)
 cartog-process-lock  (tier 0 — no internal deps; libc/windows-sys only)
 ├── cartog-db        (tier 1)

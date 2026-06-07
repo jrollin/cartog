@@ -12,7 +12,10 @@
 # Java and runs headless on any JDK; only the Toolbox GUI is Intel-only.
 # Override JAR= to point at a standalone tla2tools.jar.
 set -uo pipefail
-cd "$(dirname "$0")"
+# Fail fast if we can't enter the spec dir: the cleanup trap below rm's
+# relative paths, so registering it after a failed cd could delete in the
+# wrong directory.
+cd "$(dirname "$0")" || { echo "FATAL: cannot cd to spec directory" >&2; exit 1; }
 
 # Reap generated artifacts on exit: broken-variant modules/cfgs, per-invariant
 # override cfgs, pcal .old backups, and the TLC states/ metadir. All gitignored,

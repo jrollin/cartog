@@ -114,6 +114,7 @@ with a one-line parse smoke test before writing the extractor.
 **Edge resolution + agent integration:**
 
 6. Add a `ServerSpec` (+ `test_find_servers_{lang}`) to `crates/cartog-lsp/src/servers.rs` for the language's LSP server, and a matching pinned `benchmarks/lsp-images/{lang}.Dockerfile` (its `ENTRYPOINT` must reproduce the `ServerSpec` args; `docker run` uses `-i`, never `-t`) so `resolution_rate.sh --docker-lsp` covers it
+   - **Compiler-only exception:** `benchmarks/lsp-images/kotlinc.Dockerfile` is NOT an LSP-server image and does NOT follow the `ServerSpec` convention — it ships the Kotlin *compiler* (`kotlinc`) for the `check-kt` fixture build, has **no `ENTRYPOINT`** (the `check-kt` make target invokes `kotlinc` explicitly), and is excluded from the `lsp-images` build glob. `check-kt`'s `docker run` does **not** pass `-i` (a one-shot compile reads source files, not stdio, so no stdin attach is needed) and, like the LSP images, never `-t`.
 7. Add the language to the MCP "Languages:" instruction string in `crates/cartog-mcp/src/lib.rs`
 
 **Benchmarks (parity with the other languages):**

@@ -30,7 +30,7 @@ broken variant must fail the specific named invariant that should catch its bug
 
 `make tla` prints one line per check (verbatim shape):
 
-```
+```text
 == PidLock (cartog-process-lock) ==
   PASS  correct protocol (Safe holds)
   PASS  clobber bug -> two holders (Invariant AtMostOneHolder violated as expected ...)
@@ -67,7 +67,7 @@ run** (only the one guard is removed), so a vacuously-passing spec can't hide.
 Illustrative trace of the clobber the broken PidLock variant produces (the
 harness asserts the *verdict*, not this trace; the steps are hand-annotated):
 
-```
+```text
 1:  proc 1 owns the lock                       file=pid1  holder=<T,F,F>
 2:  proc 1 crashes                             alive=<F,T,T>  (file=pid1 now stale)
 3-5: proc 2 reads stale(1), heads to unlink    (snapshot pid=1)
@@ -95,7 +95,7 @@ harness asserts the *verdict*, not this trace; the steps are hand-annotated):
 Illustrative trace of the third-writer drift the broken Election variant
 produces (verdict asserted by the harness; steps hand-annotated):
 
-```
+```text
 peer 2 attaches ReadOnly (pinned=0) -> primary 1 exits ->
 peer 2 passes PRE-validate (0==0) -> a THIRD writer (peer 3) wins, MIGRATES
 (schema 0->1), exits -> peer 2 finally acquires the lock (pinned=0, schema=1) ->
