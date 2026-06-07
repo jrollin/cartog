@@ -420,4 +420,74 @@ mod tests {
         let cfg = RedactionConfig::enabled();
         assert!(cfg.redact("AKIAIOSFODNN7EXAMPLE").contains(PLACEHOLDER));
     }
+
+    use proptest::prelude::*;
+
+    /// A shape-valid secret of a known vendor pattern (never a real credential).
+    fn known_secret() -> impl Strategy<Value = String> {
+        prop_oneof![
+            // AWS access key id: AKIA + 16 upper-alnum.
+            "[A-Z0-9]{16}".prop_map(|s| format!("AKIA{s}")),
+            // GitHub PAT: ghp_ + 36 alnum (>= the 20-char minimum).
+            "[A-Za-z0-9]{36}".prop_map(|s| format!("ghp_{s}")),
+            // Stripe live secret key: sk_live_ + 24 alnum.
+            "[A-Za-z0-9]{24}".prop_map(|s| format!("sk_live_{s}")),
+            // JWT: three base64url segments. The last segment ends on a word
+            // char so the regex's trailing `\b` anchors — a trailing `-`/`_`
+            // would leave the boundary unmatched and the token un-redacted.
+            (
+                "[A-Za-z0-9_-]{12}",
+                "[A-Za-z0-9_-]{12}",
+                "[A-Za-z0-9_-]{11}[A-Za-z0-9]"
+            )
+                .prop_map(|(a, b, c)| format!("eyJ{a}.{b}.{c}")),
+        ]
+    }
+
+    /// Filler that matches no secret pattern: must pass through unchanged. The
+    /// alphabet has no `-` (so it can't form a Slack `xox?-…` token), no digits
+    /// or vendor prefixes, and no `:`/`=`/quote (so no `keyword="value"` shape).
+    fn benign_filler() -> impl Strategy<Value = String> {
+        "[a-z ()+]{0,40}"
+    }
+
+    proptest! {
+        /// A known-shape secret spliced into arbitrary surrounding text never
+        /// survives verbatim in the output, and the placeholder appears.
+        #[test]
+        fn known_secret_never_survives(
+            secret in known_secret(),
+            before in any::<String>(),
+            after in any::<String>(),
+        ) {
+            // Spaces around the secret so `\b` anchors fire (adjacent word chars
+            // would extend the token past the shape).
+            let input = format!("{before} {secret} {after}");
+            let out = redact_str(&input);
+            prop_assert!(!out.contains(secret.as_str()), "secret survived: {out}");
+            prop_assert!(out.contains(PLACEHOLDER));
+        }
+
+        /// Redaction is idempotent: re-redacting already-redacted text is a no-op.
+        #[test]
+        fn redaction_is_idempotent(input in any::<String>()) {
+            let once = redact_str(&input).into_owned();
+            let twice = redact_str(&once).into_owned();
+            prop_assert_eq!(once, twice);
+        }
+
+        /// Redaction never panics on any UTF-8 input (unicode, newlines, control).
+        #[test]
+        fn redaction_never_panics(input in any::<String>()) {
+            let _ = redact_str(&input);
+        }
+
+        /// Text with no secret shape and no secret keyword is returned unchanged
+        /// (borrowed): over-redaction would silently wreck search recall.
+        #[test]
+        fn benign_text_is_not_redacted(input in benign_filler()) {
+            let out = redact_str(&input);
+            prop_assert!(matches!(out, Cow::Borrowed(_)), "over-redacted: {out}");
+        }
+    }
 }

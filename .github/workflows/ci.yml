@@ -57,6 +57,12 @@ jobs:
     # The default-feature suite is run (and gated) by the `coverage` job via
     # `cargo llvm-cov`, so it is not repeated here. This job covers only the
     # `--no-default-features` build, which `coverage` does not exercise.
+    env:
+      # Explore deeper than the local default (256) so proptest finds rare
+      # reachable failures in CI, where the shrunk case is saved to a
+      # proptest-regressions file and is reproducible — rather than surfacing
+      # randomly on an unrelated PR.
+      PROPTEST_CASES: 1024
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -91,6 +97,10 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    env:
+      # Deeper proptest exploration than the local default (256); see the `test`
+      # job. This job runs the default-feature property tests.
+      PROPTEST_CASES: 1024
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable

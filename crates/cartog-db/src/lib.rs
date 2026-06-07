@@ -396,7 +396,7 @@ pub fn register_sqlite_vec() {
 }
 
 /// Current schema version. Increment when adding migrations.
-const SCHEMA_VERSION: u32 = 6;
+const SCHEMA_VERSION: u32 = 7;
 
 /// Public mirror of the private `SCHEMA_VERSION` for callers outside this crate
 /// (e.g. `cartog pull` needs it to compare against a pulled DB and refuse
@@ -656,6 +656,21 @@ fn migrate(conn: &Connection) {
         }
     }
 
+    // Migration 6 → 7: symbol-ID leaf-name escaping for injectivity.
+    // The ID format gained separator-escaping for composite leaf names (dotted
+    // import paths, `.`/`:`-bearing markdown headings) so distinct symbols can no
+    // longer collide to one ID. Existing rows carry the old (collidable) IDs, so
+    // clear the index for a full rebuild — mirrors the v2→3 stable-ID wipe.
+    if current < 7 {
+        info!("schema v7: symbol-ID escaping — clearing index for full rebuild");
+        for table in &["symbol_content", "edges", "symbols", "files"] {
+            let _ = conn.execute(&format!("DELETE FROM {table}"), []);
+        }
+        let _ = conn.execute("DELETE FROM symbol_vec", []);
+        let _ = conn.execute("DELETE FROM symbol_embedding_map", []);
+        let _ = conn.execute("DELETE FROM metadata WHERE key = 'last_commit'", []);
+    }
+
     // Store the new schema version
     if let Err(e) = conn.execute(
         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
@@ -799,16 +814,34 @@ fn backup_before_destructive_migration(
         .prepare("SELECT content_hash FROM symbols LIMIT 0")
         .is_ok();
 
-    // Mirrors the condition in `migrate()` for the 2→3 wipe.
-    let will_wipe = current < 3 || !has_hash_cols;
+    // Mirrors the destructive conditions in `migrate()`: the 2→3 stable-id wipe
+    // (`current < 3 || !has_hash_cols`) and the 6→7 symbol-id-escaping wipe
+    // (`current < 7`). Either clears every indexed row, so back up first.
+    let will_wipe = current < 7 || !has_hash_cols;
     if !will_wipe {
         return Ok(());
     }
 
-    let symbol_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
-        .unwrap_or(0);
-    if symbol_count == 0 {
+    // Back up if ANY wiped table holds data, not just `symbols`: a partially
+    // indexed DB (e.g. edges/content written before symbols) would otherwise
+    // skip the backup and lose those rows to the wipe. A missing table errors
+    // the EXISTS probe, which `unwrap_or(false)` treats as empty.
+    let has_rows = |table: &str| -> bool {
+        conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table})"), [], |r| {
+            r.get::<_, bool>(0)
+        })
+        .unwrap_or(false)
+    };
+    let any_indexed = [
+        "symbols",
+        "edges",
+        "files",
+        "symbol_content",
+        "symbol_embedding_map",
+    ]
+    .iter()
+    .any(|t| has_rows(t));
+    if !any_indexed {
         return Ok(());
     }
 
@@ -835,6 +868,9 @@ fn backup_before_destructive_migration(
             source,
         })?;
 
+    let symbol_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+        .unwrap_or(0);
     info!(
         backup = %backup_path.display(),
         old_version = current,
@@ -3887,12 +3923,12 @@ mod tests {
     }
 
     #[test]
-    fn populated_v1_db_runs_full_ladder_to_v6() {
+    fn populated_v1_db_runs_full_ladder_to_current() {
         // Negative guard for the fresh-DB fast path: a real pre-versioning v1 DB
         // (no schema_version row, narrow v1 columns, but SEEDED with rows) must
-        // NOT be misclassified as fresh. It runs the full v1→v6 ladder including
-        // the intentional v2→3 stable-id wipe and lands at schema_version=6 with
-        // every later column present.
+        // NOT be misclassified as fresh. It runs the full v1→current ladder
+        // including the intentional v2→3 stable-id wipe and lands at the current
+        // schema version with every later column present.
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("v1.sqlite");
         {
@@ -3919,7 +3955,7 @@ mod tests {
 
         let db = Database::open(&path, DEFAULT_EMBEDDING_DIM).unwrap();
 
-        // Ladder reached v6.
+        // Ladder reached the current version.
         let version: String = db
             .conn
             .query_row(
@@ -4578,27 +4614,24 @@ mod tests {
             .unwrap();
         }
 
-        // Re-open through the production path so migrate() runs.
+        // Re-open through the production path so migrate() runs the full ladder.
         let db = Database::open(&path, DEFAULT_EMBEDDING_DIM).unwrap();
 
-        let resolved_state: i64 = db
+        // The v3→4 migration adds the resolution_state column (schema transform);
+        // verify it is present and queryable. The v7 stable-ID-escaping migration
+        // clears the seeded rows, so the per-row backfill is no longer observable
+        // after a full chain — assert the durable column + cleared-index contract.
+        let has_resolution_state = db
             .conn
-            .query_row(
-                "SELECT resolution_state FROM edges WHERE target_id IS NOT NULL",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        let unresolved_state: i64 = db
+            .prepare("SELECT resolution_state FROM edges LIMIT 0")
+            .is_ok();
+        assert!(has_resolution_state, "v3→4 added resolution_state column");
+
+        let edge_count: i64 = db
             .conn
-            .query_row(
-                "SELECT resolution_state FROM edges WHERE target_id IS NULL",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM edges", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(resolved_state, 1, "existing target_id NOT NULL → state=1");
-        assert_eq!(unresolved_state, 0, "existing target_id NULL → state=0");
+        assert_eq!(edge_count, 0, "v7 cleared the index for full rebuild");
 
         let bumped: String = db
             .conn
@@ -4991,33 +5024,28 @@ mod tests {
     }
 
     #[test]
-    fn migration_v5_to_v6_backfills_resolved_edges_to_null() {
+    fn migration_v5_to_v6_adds_resolution_source_column() {
         // A pre-v6 DB (resolution_state present, resolution_source absent) gains
-        // the column on open; pre-existing rows keep NULL provenance, and a
-        // migrated resolved edge reads back through the production path as None.
+        // the resolution_source column on open. The v7 stable-ID-escaping
+        // migration then clears the seeded rows, so assert the durable column +
+        // cleared-index contract rather than the now-wiped per-row backfill.
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("v5.sqlite");
         bootstrap_pre_v6_db(&path, 5, true);
 
         let db = Database::open(&path, DEFAULT_EMBEDDING_DIM).unwrap();
 
-        let null_count: i64 = db
+        let has_resolution_source = db
             .conn
-            .query_row(
-                "SELECT COUNT(*) FROM edges WHERE resolution_source IS NULL",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(null_count, 2, "pre-v6 rows keep NULL provenance");
+            .prepare("SELECT resolution_source FROM edges LIMIT 0")
+            .is_ok();
+        assert!(has_resolution_source, "v5→6 added resolution_source column");
 
-        // Read a migrated resolved edge back through callees() (the real decode
-        // path) to prove a NULL column deserializes to provenance == None.
-        let callees = db.callees("foo").unwrap();
-        assert!(
-            callees.iter().all(|e| e.provenance.is_none()),
-            "migrated rows decode with no provenance"
-        );
+        let edge_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(edge_count, 0, "v7 cleared the index for full rebuild");
 
         let bumped: String = db
             .conn
@@ -5044,6 +5072,123 @@ mod tests {
             .prepare("SELECT resolution_source FROM edges LIMIT 0")
             .is_ok();
         assert!(has_col, "missing resolution_source column was re-added");
+    }
+
+    /// Bootstrap a v6-shaped DB (all columns present, stamped at v6) with one
+    /// seeded row in every table the v7 wipe clears, plus a `last_commit`, so the
+    /// wipe is observable per table. `symbol_content` uses the real shape and the
+    /// FTS5 vtable + insert/delete triggers so its row inserts (and the wipe's
+    /// delete) keep the external-content index consistent.
+    fn bootstrap_v6_db(path: &std::path::Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE symbols (
+                id TEXT PRIMARY KEY, name TEXT, kind TEXT, file_path TEXT,
+                start_line INTEGER, end_line INTEGER, start_byte INTEGER, end_byte INTEGER,
+                parent_id TEXT, signature TEXT, visibility TEXT, is_async BOOLEAN,
+                docstring TEXT, in_degree INTEGER DEFAULT 0,
+                content_hash TEXT, subtree_hash TEXT);
+             CREATE TABLE edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id TEXT NOT NULL, target_name TEXT NOT NULL, target_id TEXT,
+                kind TEXT NOT NULL, file_path TEXT NOT NULL, line INTEGER,
+                resolution_state INTEGER NOT NULL DEFAULT 0, resolution_source TEXT);
+             CREATE TABLE files (path TEXT PRIMARY KEY);
+             CREATE TABLE symbol_content (
+                symbol_id TEXT PRIMARY KEY, content TEXT NOT NULL, header TEXT NOT NULL,
+                normalized_name TEXT NOT NULL DEFAULT '');
+             CREATE VIRTUAL TABLE symbol_fts USING fts5(
+                symbol_name, normalized_name, content,
+                content=symbol_content, content_rowid=rowid);
+             CREATE TRIGGER symbol_content_ai AFTER INSERT ON symbol_content BEGIN
+                INSERT INTO symbol_fts(rowid, symbol_name, normalized_name, content)
+                VALUES (new.rowid, (SELECT name FROM symbols WHERE id = new.symbol_id),
+                        new.normalized_name, new.content);
+             END;
+             CREATE TRIGGER symbol_content_ad AFTER DELETE ON symbol_content BEGIN
+                INSERT INTO symbol_fts(symbol_fts, rowid, symbol_name, normalized_name, content)
+                VALUES ('delete', old.rowid, (SELECT name FROM symbols WHERE id = old.symbol_id),
+                        old.normalized_name, old.content);
+             END;
+             CREATE TABLE symbol_embedding_map (symbol_id TEXT NOT NULL);
+             CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT);
+             CREATE TABLE query_log (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool TEXT NOT NULL, source TEXT NOT NULL, ts INTEGER NOT NULL);
+             INSERT INTO symbols (id, name, kind, file_path) VALUES ('a.py:import:os.path', 'os.path', 'import', 'a.py');
+             INSERT INTO files (path) VALUES ('a.py');
+             INSERT INTO edges (source_id, target_name, kind, file_path, line)
+                VALUES ('a.py:import:os.path', 'os', 'imports', 'a.py', 1);
+             INSERT INTO symbol_content (symbol_id, content, header)
+                VALUES ('a.py:import:os.path', 'body', 'sig');
+             INSERT INTO symbol_embedding_map (symbol_id) VALUES ('a.py:import:os.path');
+             INSERT INTO metadata (key, value) VALUES ('schema_version', '6');
+             INSERT INTO metadata (key, value) VALUES ('last_commit', 'deadbeef');",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn migration_v6_to_v7_clears_index_for_full_rebuild() {
+        // The v7 symbol-ID escaping changes the ID format, so old (collidable)
+        // rows must be wiped and last_commit cleared so the next index rebuilds
+        // every file from scratch.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("v6.sqlite");
+        bootstrap_v6_db(&path);
+
+        let db = Database::open(&path, DEFAULT_EMBEDDING_DIM).unwrap();
+
+        let count = |table: &str| -> i64 {
+            db.conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(count("symbols"), 0, "symbols cleared");
+        assert_eq!(count("edges"), 0, "edges cleared");
+        assert_eq!(count("files"), 0, "files cleared");
+        assert_eq!(count("symbol_content"), 0, "symbol_content cleared");
+        assert_eq!(
+            count("symbol_embedding_map"),
+            0,
+            "symbol_embedding_map cleared"
+        );
+
+        let last_commit: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'last_commit'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(
+            last_commit, None,
+            "last_commit cleared to force full reindex"
+        );
+
+        let bumped: String = db
+            .conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(bumped, SCHEMA_VERSION.to_string());
+
+        // The v7 wipe is destructive, so the pre-migration DB must be backed up
+        // first — same safety contract as the v2→3 wipe.
+        let backups = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("v6.sqlite.pre-v")
+            })
+            .count();
+        assert_eq!(backups, 1, "v6→7 wipe must back up the index first");
     }
 
     #[test]
