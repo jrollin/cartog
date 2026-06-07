@@ -9,6 +9,7 @@
 #![doc = ""]
 #![doc = include_str!("../README.md")]
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use serde::Serialize;
@@ -313,6 +314,27 @@ pub struct ChangesResult {
     pub symbols: Vec<Symbol>,
 }
 
+/// Percent-escape the ID separators (`%` first, then `.`/`:`) in a leaf-name
+/// segment so a name containing `.`/`:` can't be confused with a structural `.`
+/// join or a boundary `:`. Identity for any string free of `% . :` (every
+/// ordinary identifier), so common-case IDs stay byte-for-byte unchanged; only
+/// composite leaves (dotted imports, `.`/`:`-bearing markdown headings) differ.
+fn escape_segment(s: &str) -> Cow<'_, str> {
+    if !s.contains(['%', '.', ':']) {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '%' => out.push_str("%25"),
+            '.' => out.push_str("%2E"),
+            ':' => out.push_str("%3A"),
+            other => out.push(other),
+        }
+    }
+    Cow::Owned(out)
+}
+
 /// Build a stable symbol ID: `file_path:kind:qualified_name`
 ///
 /// The qualified name encodes the parent chain using `.` separators:
@@ -322,6 +344,11 @@ pub struct ChangesResult {
 ///
 /// This ID is stable across line movements within a file. `kind` is typed so a
 /// mistyped kind fails to compile rather than silently mis-forming the ID.
+///
+/// The leaf `name` is separator-escaped so distinct logical symbols never share
+/// an ID (a collision is a silent DB overwrite). `parent_name` is emitted raw:
+/// its `.` separators are structural (built by the extractors from already-bare
+/// segments), so it carries no injected separators.
 #[must_use]
 pub fn symbol_id(
     file_path: &str,
@@ -330,6 +357,7 @@ pub fn symbol_id(
     parent_name: Option<&str>,
 ) -> String {
     let kind = kind.as_str();
+    let name = escape_segment(name);
     match parent_name {
         Some(pn) => format!("{file_path}:{kind}:{pn}.{name}"),
         None => format!("{file_path}:{kind}:{name}"),
@@ -449,6 +477,86 @@ mod tests {
                 "validate",
                 Some("TokenService")
             )
+        );
+    }
+
+    use proptest::prelude::*;
+
+    /// Strategy over every [`SymbolKind`] variant.
+    fn any_kind() -> impl Strategy<Value = SymbolKind> {
+        prop_oneof![
+            Just(SymbolKind::Function),
+            Just(SymbolKind::Class),
+            Just(SymbolKind::Method),
+            Just(SymbolKind::Variable),
+            Just(SymbolKind::Import),
+            Just(SymbolKind::Interface),
+            Just(SymbolKind::Enum),
+            Just(SymbolKind::TypeAlias),
+            Just(SymbolKind::Trait),
+            Just(SymbolKind::Module),
+            Just(SymbolKind::Document),
+        ]
+    }
+
+    /// Component string: mix of ordinary identifier chars and the `:`/`.`
+    /// separators so the generator probes separator-injection collisions.
+    fn component() -> impl Strategy<Value = String> {
+        proptest::string::string_regex("[A-Za-z0-9_.:/]{0,8}").unwrap()
+    }
+
+    proptest! {
+        /// Same logical tuple always yields the same ID.
+        #[test]
+        fn symbol_id_is_deterministic(
+            file in component(),
+            kind in any_kind(),
+            name in component(),
+            parent in proptest::option::of(component()),
+        ) {
+            let a = symbol_id(&file, kind, &name, parent.as_deref());
+            let b = symbol_id(&file, kind, &name, parent.as_deref());
+            prop_assert_eq!(a, b);
+        }
+
+        /// Distinct logical tuples must yield distinct IDs (a collision is a
+        /// silent DB overwrite). Drives the realistic vector directly: method
+        /// `name` of `parent` vs a top-level symbol named `parent.name`.
+        #[test]
+        fn symbol_id_is_injective(
+            file in component(),
+            kind in any_kind(),
+            parent in "[A-Za-z0-9_]{1,6}",
+            name in "[A-Za-z0-9_]{1,6}",
+        ) {
+            let id_a = symbol_id(&file, kind, &name, Some(&parent));
+            let merged = format!("{parent}.{name}");
+            let id_b = symbol_id(&file, kind, &merged, None);
+            prop_assert_ne!(id_a, id_b);
+        }
+    }
+
+    #[test]
+    fn symbol_id_separates_dotted_leaf_from_parent_join() {
+        // Regression for the proptest-found collision (silent DB overwrite).
+        let method = symbol_id("f", SymbolKind::Method, "a", Some("0"));
+        let dotted = symbol_id("f", SymbolKind::Method, "0.a", None);
+        assert_eq!(method, "f:method:0.a");
+        assert_eq!(dotted, "f:method:0%2Ea");
+        assert_ne!(method, dotted);
+    }
+
+    #[test]
+    fn symbol_id_is_identity_for_bare_identifiers() {
+        // Ordinary names stay byte-identical (existing DBs + extractor assertions).
+        assert_eq!(
+            symbol_id(
+                "src/auth.py",
+                SymbolKind::Method,
+                "validate",
+                Some("Outer.Inner")
+            ),
+            "src/auth.py:method:Outer.Inner.validate"
         );
     }
 

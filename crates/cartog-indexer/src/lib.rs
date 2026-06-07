@@ -1321,6 +1321,59 @@ mod tests {
     }
 
     #[test]
+    fn dotted_import_leaf_is_separator_escaped_in_stored_id() {
+        // Real-output guard for the symbol-ID escaping fix: a dotted import leaf
+        // (os.path) and a parented method (os.path) must keep distinct, escaped
+        // ids in the stored index, never colliding to one primary-key row.
+        use cartog_db::Database;
+
+        // TempDir names start with '.', which the walker prunes as hidden — nest
+        // a non-dot project dir so the walk descends into it.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("proj");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("a.py"),
+            "import os.path\n\nclass os:\n    def path(self):\n        return 1\n",
+        )
+        .unwrap();
+
+        let db = Database::open_memory().unwrap();
+        index_directory(
+            &db,
+            &dir,
+            true,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        let ids: Vec<String> = db
+            .outline("a.py")
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+
+        assert!(
+            ids.contains(&"a.py:import:os%2Epath".to_string()),
+            "dotted import leaf must be escaped: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"a.py:method:os.path".to_string()),
+            "parented method keeps its raw structural id: {ids:?}"
+        );
+        // Both symbols survive — the pre-fix format would have risked one id.
+        assert_eq!(
+            ids.len(),
+            ids.iter().collect::<std::collections::HashSet<_>>().len()
+        );
+    }
+
+    #[test]
     fn test_index_directory_force() {
         use cartog_db::Database;
 

@@ -72,6 +72,7 @@ url = "2"
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 serial_test = "3"
+proptest = "1"
 
 [workspace.lints.rust]
 # cartog-process-lock has unsafe libc/Win32 calls; require explicit unsafe
