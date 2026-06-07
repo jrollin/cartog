@@ -145,3 +145,129 @@ pub(crate) fn merkle_diff(
 
     diff
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cartog_core::SymbolKind;
+    use proptest::prelude::*;
+
+    /// `id` + the two hashes are the only fields `merkle_diff` reads.
+    fn sym(id: &str, content: Option<&str>, subtree: Option<&str>) -> Symbol {
+        let mut s = Symbol::new("x", SymbolKind::Function, "f.rs", 0, 0, 0, 0, None);
+        s.id = id.to_string();
+        s.content_hash = content.map(str::to_string);
+        s.subtree_hash = subtree.map(str::to_string);
+        s
+    }
+
+    /// What happens to one symbol id between the old and new extraction.
+    #[derive(Debug, Clone)]
+    enum Fate {
+        Unchanged,
+        Modified,        // content_hash differs
+        ChildrenChanged, // content same, subtree differs
+        Removed,         // present in old only
+        Added,           // present in new only
+    }
+
+    fn fate() -> impl Strategy<Value = Fate> {
+        prop_oneof![
+            Just(Fate::Unchanged),
+            Just(Fate::Modified),
+            Just(Fate::ChildrenChanged),
+            Just(Fate::Removed),
+            Just(Fate::Added),
+        ]
+    }
+
+    /// Distinct ids, each with an independent fate.
+    fn scenario() -> impl Strategy<Value = Vec<(String, Fate)>> {
+        proptest::collection::hash_map("[a-z]{1,5}", fate(), 0..12)
+            .prop_map(|m| m.into_iter().collect())
+    }
+
+    proptest! {
+        /// Model-based: build old/new inputs from per-id fates, assert the diff
+        /// recovers exactly those fates.
+        #[test]
+        fn merkle_diff_recovers_fates(scn in scenario()) {
+            let mut old_hashes = Vec::new();
+            let mut new_symbols = Vec::new();
+
+            for (id, f) in &scn {
+                match f {
+                    Fate::Unchanged => {
+                        old_hashes.push((id.clone(), Some("c".into()), Some("s".into())));
+                        new_symbols.push(sym(id, Some("c"), Some("s")));
+                    }
+                    Fate::Modified => {
+                        old_hashes.push((id.clone(), Some("c_old".into()), Some("s_old".into())));
+                        new_symbols.push(sym(id, Some("c_new"), Some("s_new")));
+                    }
+                    Fate::ChildrenChanged => {
+                        old_hashes.push((id.clone(), Some("c".into()), Some("s_old".into())));
+                        new_symbols.push(sym(id, Some("c"), Some("s_new")));
+                    }
+                    Fate::Removed => {
+                        old_hashes.push((id.clone(), Some("c".into()), Some("s".into())));
+                    }
+                    Fate::Added => {
+                        new_symbols.push(sym(id, Some("c"), Some("s")));
+                    }
+                }
+            }
+
+            let diff = merkle_diff(&new_symbols, &old_hashes);
+
+            // Partition: buckets + unchanged account for every new symbol.
+            let bucketed = diff.added.len() + diff.modified.len() + diff.children_changed.len();
+            prop_assert_eq!(
+                bucketed + diff.unchanged,
+                new_symbols.len(),
+                "buckets + unchanged must account for every new symbol"
+            );
+
+            // Index buckets are disjoint sets of valid new-symbol indices.
+            let mut all_idx: Vec<usize> = diff.added.iter()
+                .chain(&diff.modified)
+                .chain(&diff.children_changed)
+                .copied()
+                .collect();
+            let total = all_idx.len();
+            all_idx.sort_unstable();
+            all_idx.dedup();
+            prop_assert_eq!(all_idx.len(), total, "index buckets overlap");
+            prop_assert!(all_idx.iter().all(|&i| i < new_symbols.len()), "index out of range");
+
+            // removed = exactly the old ids absent from new ids.
+            let new_ids: std::collections::HashSet<&str> =
+                new_symbols.iter().map(|s| s.id.as_str()).collect();
+            let mut expected_removed: Vec<&String> = scn.iter()
+                .filter(|(id, _)| !new_ids.contains(id.as_str()))
+                .map(|(id, _)| id)
+                .collect();
+            expected_removed.sort();
+            let mut got_removed = diff.removed.clone();
+            got_removed.sort();
+            prop_assert_eq!(&got_removed, &expected_removed.into_iter().cloned().collect::<Vec<_>>());
+
+            // Classification: each new symbol's bucket matches its fate.
+            let in_added: std::collections::HashSet<usize> = diff.added.iter().copied().collect();
+            let in_modified: std::collections::HashSet<usize> = diff.modified.iter().copied().collect();
+            let in_children: std::collections::HashSet<usize> = diff.children_changed.iter().copied().collect();
+            for (i, s) in new_symbols.iter().enumerate() {
+                let fate = &scn.iter().find(|(id, _)| id == &s.id).unwrap().1;
+                match fate {
+                    Fate::Added => prop_assert!(in_added.contains(&i)),
+                    Fate::Modified => prop_assert!(in_modified.contains(&i)),
+                    Fate::ChildrenChanged => prop_assert!(in_children.contains(&i)),
+                    Fate::Unchanged => prop_assert!(
+                        !in_added.contains(&i) && !in_modified.contains(&i) && !in_children.contains(&i)
+                    ),
+                    Fate::Removed => unreachable!("removed ids are not in new_symbols"),
+                }
+            }
+        }
+    }
+}
