@@ -183,12 +183,23 @@ mod tests {
         /// No extractor panics on arbitrary source — indexing whole repos must
         /// degrade (return Ok/Err), never abort the run. Covers unicode, control
         /// chars, and unbalanced delimiters via the regex generator.
+        ///
+        /// Extractors are built once per thread and reused across cases (the
+        /// trait takes `&mut self` for exactly this); building all 13 per case
+        /// would recompile every tree-sitter query thousands of times.
         #[test]
         fn extractors_never_panic_on_arbitrary_source(src in ".{0,400}") {
-            for lang in ALL_LANGS {
-                let mut ex = get_extractor(lang).unwrap();
-                let _ = ex.extract(&src, &format!("fuzz.{lang}"));
+            thread_local! {
+                static EXTRACTORS: std::cell::RefCell<Vec<(&'static str, Box<dyn Extractor>)>> =
+                    std::cell::RefCell::new(
+                        ALL_LANGS.iter().map(|&l| (l, get_extractor(l).unwrap())).collect()
+                    );
             }
+            EXTRACTORS.with_borrow_mut(|exs| {
+                for (lang, ex) in exs.iter_mut() {
+                    let _ = ex.extract(&src, &format!("fuzz.{lang}"));
+                }
+            });
         }
     }
 }

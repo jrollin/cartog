@@ -181,9 +181,11 @@ mod tests {
         ]
     }
 
-    /// Distinct ids, each with an independent fate.
+    /// Distinct ids, each with an independent fate. A `btree_map` keeps the
+    /// materialized order deterministic so saved regression seeds replay the
+    /// same case (a `hash_map` would iterate in per-process order).
     fn scenario() -> impl Strategy<Value = Vec<(String, Fate)>> {
-        proptest::collection::hash_map("[a-z]{1,5}", fate(), 0..12)
+        proptest::collection::btree_map("[a-z]{1,5}", fate(), 0..12)
             .prop_map(|m| m.into_iter().collect())
     }
 
@@ -256,16 +258,19 @@ mod tests {
             let in_added: std::collections::HashSet<usize> = diff.added.iter().copied().collect();
             let in_modified: std::collections::HashSet<usize> = diff.modified.iter().copied().collect();
             let in_children: std::collections::HashSet<usize> = diff.children_changed.iter().copied().collect();
+            let fate_of: std::collections::HashMap<&str, &Fate> =
+                scn.iter().map(|(id, f)| (id.as_str(), f)).collect();
             for (i, s) in new_symbols.iter().enumerate() {
-                let fate = &scn.iter().find(|(id, _)| id == &s.id).unwrap().1;
-                match fate {
-                    Fate::Added => prop_assert!(in_added.contains(&i)),
-                    Fate::Modified => prop_assert!(in_modified.contains(&i)),
-                    Fate::ChildrenChanged => prop_assert!(in_children.contains(&i)),
-                    Fate::Unchanged => prop_assert!(
+                match fate_of.get(s.id.as_str()) {
+                    Some(Fate::Added) => prop_assert!(in_added.contains(&i)),
+                    Some(Fate::Modified) => prop_assert!(in_modified.contains(&i)),
+                    Some(Fate::ChildrenChanged) => prop_assert!(in_children.contains(&i)),
+                    Some(Fate::Unchanged) => prop_assert!(
                         !in_added.contains(&i) && !in_modified.contains(&i) && !in_children.contains(&i)
                     ),
-                    Fate::Removed => unreachable!("removed ids are not in new_symbols"),
+                    Some(Fate::Removed) | None => {
+                        prop_assert!(false, "new symbol {} has no non-removed fate", s.id)
+                    }
                 }
             }
         }
@@ -308,22 +313,29 @@ mod tests {
             prop_assert_eq!(hashes(&a), hashes(&b));
         }
 
-        /// subtree_hash is independent of sibling order: the children are sorted
-        /// before hashing, so reordering them must not change the parent's hash.
+        /// subtree_hash is independent of sibling order: children are sorted
+        /// before hashing, so reversing a variable-size child set must not change
+        /// the parent's hash. Varies the child set (the thing the property is
+        /// about), not just the source text.
         #[test]
-        fn subtree_hash_ignores_sibling_order(src in ".{1,40}") {
+        fn subtree_hash_ignores_sibling_order(
+            src in ".{1,40}",
+            child_names in proptest::collection::vec("[a-z]{1,4}", 2..6),
+        ) {
             let parent = span_sym("p", "parent", None, &src);
-            let c1 = span_sym("c1", "a", Some("p"), &src);
-            let c2 = span_sym("c2", "b", Some("p"), &src);
+            let children: Vec<Symbol> = child_names.iter().enumerate()
+                .map(|(i, n)| span_sym(&format!("c{i}"), n, Some("p"), &src))
+                .collect();
 
-            let mut forward = vec![parent.clone(), c1.clone(), c2.clone()];
-            let mut reversed = vec![parent, c2, c1];
+            let mut forward = vec![parent.clone()];
+            forward.extend(children.iter().cloned());
+            let mut reversed = vec![parent];
+            reversed.extend(children.into_iter().rev());
+
             compute_merkle_hashes(&mut forward, &src);
             compute_merkle_hashes(&mut reversed, &src);
 
-            let p_fwd = &forward[0].subtree_hash;
-            let p_rev = &reversed[0].subtree_hash;
-            prop_assert_eq!(p_fwd, p_rev);
+            prop_assert_eq!(&forward[0].subtree_hash, &reversed[0].subtree_hash);
         }
     }
 }

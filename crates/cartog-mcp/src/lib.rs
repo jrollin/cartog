@@ -2946,15 +2946,32 @@ mod tests {
             proptest::prop_assert_eq!(got, format!("watch-{suffix}"));
         }
 
-        /// Any input that is neither `serve` nor `serve-<nonempty>` is rejected —
-        /// folding an off-pattern slot to the global watch slot would let distinct
-        /// embedders collide on `watch.pid`.
+        /// Total contract over arbitrary input, checked against the OUTPUT rather
+        /// than a re-implemented accept rule: the only accepted slots are `serve`
+        /// (→ `watch`) and `serve-<nonempty>` (→ `watch-<same>`); every other
+        /// input is rejected. Folding an off-pattern slot to the global watch slot
+        /// would let distinct embedders collide on `watch.pid`.
         #[test]
-        fn serve_to_watch_slot_rejects_off_pattern(s in ".{0,20}") {
-            let is_valid = s == "serve"
-                || s.strip_prefix("serve-").is_some_and(|r| !r.is_empty());
-            proptest::prop_assume!(!is_valid);
-            proptest::prop_assert!(serve_to_watch_slot(&s).is_err());
+        fn serve_to_watch_slot_contract(s in ".{0,20}") {
+            match serve_to_watch_slot(&s) {
+                Ok(out) if s == "serve" => proptest::prop_assert_eq!(out, "watch"),
+                Ok(out) => {
+                    // The only other accepted form: the suffix is carried verbatim.
+                    let suffix = s.strip_prefix("serve-");
+                    proptest::prop_assert!(
+                        suffix.is_some_and(|r| !r.is_empty()),
+                        "accepted off-pattern {s:?}"
+                    );
+                    proptest::prop_assert_eq!(out, format!("watch-{}", suffix.unwrap()));
+                }
+                Err(_) => {
+                    proptest::prop_assert_ne!(&s, "serve");
+                    proptest::prop_assert!(
+                        s.strip_prefix("serve-").map_or(true, str::is_empty),
+                        "rejected a valid serve-<nonempty> slot: {s:?}"
+                    );
+                }
+            }
         }
     }
 

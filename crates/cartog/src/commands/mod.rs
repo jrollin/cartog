@@ -1614,10 +1614,12 @@ mod tests {
             let _ = truncate_to_budget(&s, budget);
         }
 
-        /// Within budget → returned verbatim, no notice.
+        /// Within budget → returned verbatim, no notice. Budget is derived from
+        /// the string so every case exercises the in-budget branch (a fixed
+        /// budget range would reject most strings via prop_assume).
         #[test]
-        fn truncate_within_budget_is_verbatim(s in ".{0,200}", budget in 0u32..200) {
-            proptest::prop_assume!(s.len() <= (budget as usize) * 4);
+        fn truncate_within_budget_is_verbatim(s in ".{0,200}", slack in 0u32..50) {
+            let budget = (s.len() as u32).div_ceil(4) + slack;
             proptest::prop_assert_eq!(truncate_to_budget(&s, budget), s);
         }
 

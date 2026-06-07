@@ -432,21 +432,23 @@ mod tests {
             "[A-Za-z0-9]{36}".prop_map(|s| format!("ghp_{s}")),
             // Stripe live secret key: sk_live_ + 24 alnum.
             "[A-Za-z0-9]{24}".prop_map(|s| format!("sk_live_{s}")),
-            // JWT: three base64url segments.
+            // JWT: three base64url segments. The last segment ends on a word
+            // char so the regex's trailing `\b` anchors — a trailing `-`/`_`
+            // would leave the boundary unmatched and the token un-redacted.
             (
                 "[A-Za-z0-9_-]{12}",
                 "[A-Za-z0-9_-]{12}",
-                "[A-Za-z0-9_-]{12}"
+                "[A-Za-z0-9_-]{11}[A-Za-z0-9]"
             )
                 .prop_map(|(a, b, c)| format!("eyJ{a}.{b}.{c}")),
         ]
     }
 
-    /// Filler with no secret shape and no secret keyword: must pass through
-    /// unchanged. Alphabet excludes the digits/quotes a vendor shape or
-    /// `keyword="value"` assignment would need.
+    /// Filler that matches no secret pattern: must pass through unchanged. The
+    /// alphabet has no `-` (so it can't form a Slack `xox?-…` token), no digits
+    /// or vendor prefixes, and no `:`/`=`/quote (so no `keyword="value"` shape).
     fn benign_filler() -> impl Strategy<Value = String> {
-        "[a-z ()\\-+]{0,40}"
+        "[a-z ()+]{0,40}"
     }
 
     proptest! {

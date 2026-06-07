@@ -345,10 +345,14 @@ fn escape_segment(s: &str) -> Cow<'_, str> {
 /// This ID is stable across line movements within a file. `kind` is typed so a
 /// mistyped kind fails to compile rather than silently mis-forming the ID.
 ///
-/// The leaf `name` is separator-escaped so distinct logical symbols never share
-/// an ID (a collision is a silent DB overwrite). `parent_name` is emitted raw:
-/// its `.` separators are structural (built by the extractors from already-bare
-/// segments), so it carries no injected separators.
+/// The leaf `name` is separator-escaped so a leaf containing `.`/`:` cannot
+/// collide with a structural join or boundary (a collision is a silent DB
+/// overwrite). `parent_name` is emitted raw: its `.` separators are structural,
+/// and today every extractor builds it from bare-identifier segments, so it
+/// carries no injected separators. That invariant is assumed, not enforced here:
+/// a future extractor that nests children under a separator-bearing name would
+/// reopen the collision on the parent side. If that ever happens, escape each
+/// segment in `qualified()` (where the boundary is known) rather than only here.
 #[must_use]
 pub fn symbol_id(
     file_path: &str,
@@ -482,21 +486,46 @@ mod tests {
 
     use proptest::prelude::*;
 
+    /// Every [`SymbolKind`] variant. The exhaustive (wildcard-free) match in
+    /// `kind_is_listed` makes the compiler reject this list going stale when a
+    /// variant is added.
+    const ALL_KINDS: [SymbolKind; 11] = [
+        SymbolKind::Function,
+        SymbolKind::Class,
+        SymbolKind::Method,
+        SymbolKind::Variable,
+        SymbolKind::Import,
+        SymbolKind::Interface,
+        SymbolKind::Enum,
+        SymbolKind::TypeAlias,
+        SymbolKind::Trait,
+        SymbolKind::Module,
+        SymbolKind::Document,
+    ];
+
+    /// Compile-time guard: every variant must be present in [`ALL_KINDS`]. A new
+    /// variant added to the enum fails this non-wildcard match until listed.
+    #[allow(dead_code)]
+    fn kind_is_listed(k: SymbolKind) -> bool {
+        let present = |want| ALL_KINDS.contains(&want);
+        match k {
+            SymbolKind::Function => present(SymbolKind::Function),
+            SymbolKind::Class => present(SymbolKind::Class),
+            SymbolKind::Method => present(SymbolKind::Method),
+            SymbolKind::Variable => present(SymbolKind::Variable),
+            SymbolKind::Import => present(SymbolKind::Import),
+            SymbolKind::Interface => present(SymbolKind::Interface),
+            SymbolKind::Enum => present(SymbolKind::Enum),
+            SymbolKind::TypeAlias => present(SymbolKind::TypeAlias),
+            SymbolKind::Trait => present(SymbolKind::Trait),
+            SymbolKind::Module => present(SymbolKind::Module),
+            SymbolKind::Document => present(SymbolKind::Document),
+        }
+    }
+
     /// Strategy over every [`SymbolKind`] variant.
     fn any_kind() -> impl Strategy<Value = SymbolKind> {
-        prop_oneof![
-            Just(SymbolKind::Function),
-            Just(SymbolKind::Class),
-            Just(SymbolKind::Method),
-            Just(SymbolKind::Variable),
-            Just(SymbolKind::Import),
-            Just(SymbolKind::Interface),
-            Just(SymbolKind::Enum),
-            Just(SymbolKind::TypeAlias),
-            Just(SymbolKind::Trait),
-            Just(SymbolKind::Module),
-            Just(SymbolKind::Document),
-        ]
+        proptest::sample::select(ALL_KINDS.to_vec())
     }
 
     /// Component string: mix of ordinary identifier chars and the `:`/`.`

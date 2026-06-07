@@ -1323,8 +1323,11 @@ mod tests {
     #[test]
     fn dotted_import_leaf_is_separator_escaped_in_stored_id() {
         // Real-output guard for the symbol-ID escaping fix: a dotted import leaf
-        // (os.path) and a parented method (os.path) must keep distinct, escaped
-        // ids in the stored index, never colliding to one primary-key row.
+        // (os.path) is stored with its separator escaped (os%2Epath), not raw.
+        // The parented method (os.path) keeps its raw structural id; the two
+        // differ in the kind segment, so this checks escaping is applied in
+        // stored output — not a same-kind collision (that's the cartog-core
+        // injectivity unit test).
         use cartog_db::Database;
 
         // TempDir names start with '.', which the walker prunes as hidden — nest
@@ -1366,10 +1369,11 @@ mod tests {
             ids.contains(&"a.py:method:os.path".to_string()),
             "parented method keeps its raw structural id: {ids:?}"
         );
-        // Both symbols survive — the pre-fix format would have risked one id.
-        assert_eq!(
-            ids.len(),
-            ids.iter().collect::<std::collections::HashSet<_>>().len()
+        // The escaped import id is stored verbatim — the raw dotted form must not
+        // appear (that would mean escaping was skipped on the stored path).
+        assert!(
+            !ids.contains(&"a.py:import:os.path".to_string()),
+            "raw (unescaped) dotted import id must not be stored: {ids:?}"
         );
     }
 
