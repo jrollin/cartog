@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-install-script sync-install-script bench bench-resolution bench-resolution-docker lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-install-script sync-install-script tla loom bench bench-resolution bench-resolution-docker lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -111,11 +111,34 @@ check-swift: ## Validate Swift fixtures (swift build, falls back to Docker)
 		cd benchmarks/fixtures/webapp_swift && swift build,\
 		cd webapp_swift && HOME=/tmp swift build --cache-path /tmp/swiftpm --scratch-path /tmp/swiftbuild)
 
-check-kt: ## Validate Kotlin fixtures (kotlinc compile, falls back to Docker)
+# Kotlin has no maintained official compiler image (the old zenika/kotlin tag is
+# gone — it never published a 1.9 tag). The Docker fallback uses a project-pinned
+# image (benchmarks/lsp-images/kotlinc.Dockerfile) built on demand: the compiler
+# download is baked into a cached layer, so check-kt needs no network at run time
+# (parity with the other pinned check-* images, and works offline after the first
+# build). KOTLIN_VERSION feeds both the image build-arg and the image tag, so a
+# version bump rebuilds. Not the generic check_lang macro because that can only
+# `docker run` a fixed image, not build-if-missing.
+KOTLIN_VERSION ?= 1.9.24
+KOTLINC_IMAGE := cartog-kotlinc:$(KOTLIN_VERSION)
+check-kt: ## Validate Kotlin fixtures (kotlinc compile, falls back to pinned Docker image)
 	@echo "==> Checking Kotlin fixtures..."
-	$(call check_lang,kotlinc,zenika/kotlin:1.9-jdk17,\
-		cd benchmarks/fixtures/webapp_kt && kotlinc src -include-runtime -d /tmp/webapp_kt.jar,\
-		cd webapp_kt && HOME=/tmp kotlinc src -include-runtime -d /tmp/webapp_kt.jar)
+	@if [ -z "$(FORCE_DOCKER)" ] && command -v kotlinc > /dev/null 2>&1; then \
+		cd benchmarks/fixtures/webapp_kt && kotlinc src -include-runtime -d /tmp/webapp_kt.jar; \
+	elif command -v docker > /dev/null 2>&1; then \
+		docker image inspect $(KOTLINC_IMAGE) > /dev/null 2>&1 || { \
+			echo "    building $(KOTLINC_IMAGE) (one-time; cached after)"; \
+			docker build --build-arg KOTLIN_VERSION=$(KOTLIN_VERSION) \
+				-t $(KOTLINC_IMAGE) -f benchmarks/lsp-images/kotlinc.Dockerfile benchmarks/lsp-images || exit 1; \
+		}; \
+		echo "    kotlinc not found, using Docker ($(KOTLINC_IMAGE))"; \
+		docker run --rm --user $$(id -u):$$(id -g) \
+			-v "$(CURDIR)/benchmarks/fixtures:/fix" -w /fix $(KOTLINC_IMAGE) \
+			sh -c 'export HOME=/tmp; cd /fix/webapp_kt && bash /opt/kotlinc/bin/kotlinc src -include-runtime -d /tmp/webapp_kt.jar'; \
+	else \
+		echo "    ERROR: neither kotlinc nor docker available"; exit 1; \
+	fi
+	@echo "    OK"
 
 # --- Skill tests ---
 
@@ -130,6 +153,29 @@ eval-skill: ## Run LLM-as-judge skill evaluation (requires claude CLI)
 
 eval-agents: ## Run LLM-as-judge agent evaluation (requires claude CLI)
 	bash agents/tests/eval.sh
+
+# --- Formal verification ---
+#
+# TLA+ models of the two concurrent protocols (PID-file lock acquire +
+# single-writer election/promotion). Each correct spec must pass; a
+# regenerated broken variant must fail, proving the spec discriminates.
+# Needs a JDK + tla2tools.jar (ships in the TLA+ Toolbox cask). Not in
+# `make check`: the jar isn't a default CI dependency. Skips cleanly if
+# absent so a contributor without TLA+ tooling isn't blocked.
+
+tla: ## Model-check the TLA+ specs (needs tla2tools.jar; see specs/tla/README.md)
+	@echo "==> Model-checking TLA+ specs..."
+	@bash specs/tla/run.sh
+
+# Loom exhaustively explores thread interleavings + memory reorderings of the
+# in-process concurrency that TLA+ can't see (the promoter role/DB commit
+# ordering). Isolated in cartog-loom-models because `--cfg loom` makes tokio
+# drop tokio::signal, which cartog-mcp uses. Not in `make check`: a separate
+# build profile (slower, recompiles deps under the loom cfg).
+
+loom: ## Model-check in-process concurrency with Loom (cartog-loom-models)
+	@echo "==> Loom model-checking..."
+	RUSTFLAGS="--cfg loom" cargo test -p cartog-loom-models
 
 # --- Benchmarks ---
 
@@ -148,6 +194,7 @@ bench-resolution-docker: ## Run edge-resolution rate with Docker LSP servers (ru
 lsp-images: ## Build all per-language Docker LSP images (cartog-lsp-<lang>:stable) from benchmarks/lsp-images/
 	@for df in benchmarks/lsp-images/*.Dockerfile; do \
 		lang=$$(basename "$$df" .Dockerfile); \
+		[ "$$lang" = "kotlinc" ] && continue; \
 		echo "building cartog-lsp-$$lang:stable"; \
 		docker build -t "cartog-lsp-$$lang:stable" -f "$$df" benchmarks/lsp-images || exit 1; \
 	done
