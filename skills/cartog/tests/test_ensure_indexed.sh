@@ -221,7 +221,9 @@ run_ensure_indexed() {
         export HOME="$TEST_DIR/home"
         mkdir -p "$HOME"
         cd "$workdir"
-        bash "$ENSURE_SCRIPT" 2>&1
+        # </dev/null pins fd 0 non-TTY so the `[ -t 0 ]` gate is deterministic
+        # regardless of the caller's terminal (matches non-interactive hooks).
+        bash "$ENSURE_SCRIPT" 2>&1 </dev/null
     )
 }
 
