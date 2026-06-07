@@ -31,6 +31,7 @@ lsp = ["dep:cartog-lsp", "cartog-indexer/lsp"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+proptest = { workspace = true }
 # Pull cartog-rag's deterministic mock providers into tests so the MCP server
 # can be constructed without loading the real ONNX embedding model.
 cartog-rag = { workspace = true, features = ["test-util"] }

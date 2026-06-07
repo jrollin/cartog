@@ -1607,6 +1607,38 @@ mod tests {
         // Should not panic on char boundary issues
     }
 
+    proptest::proptest! {
+        /// `s[..cut]` would panic if `cut` landed mid-codepoint.
+        #[test]
+        fn truncate_never_panics(s in ".*", budget in 0u32..64) {
+            let _ = truncate_to_budget(&s, budget);
+        }
+
+        /// Within budget → returned verbatim, no notice.
+        #[test]
+        fn truncate_within_budget_is_verbatim(s in ".{0,200}", budget in 0u32..200) {
+            proptest::prop_assume!(s.len() <= (budget as usize) * 4);
+            proptest::prop_assert_eq!(truncate_to_budget(&s, budget), s);
+        }
+
+        /// When truncation fires, the kept content stays within the byte budget.
+        #[test]
+        fn truncate_respects_byte_budget(s in ".{0,500}", budget in 0u32..200) {
+            let max_bytes = (budget as usize) * 4;
+            proptest::prop_assume!(s.len() > max_bytes);
+            let notice = "\n... (truncated to fit token budget)";
+            let out = truncate_to_budget(&s, budget);
+            proptest::prop_assert!(out.ends_with(notice), "truncated output must carry the notice");
+            let content = &out[..out.len() - notice.len()];
+            proptest::prop_assert!(
+                content.len() <= max_bytes,
+                "kept {} content bytes > {} budget",
+                content.len(),
+                max_bytes
+            );
+        }
+    }
+
     // ── cmd_* command bodies over a real indexed DB ───────────────────
     //
     // Drive the read commands end-to-end against a temp DB populated from a

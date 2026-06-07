@@ -2937,6 +2937,27 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        /// `serve-<nonempty>` maps to `watch-<same suffix>`, preserving the DB
+        /// scope verbatim.
+        #[test]
+        fn serve_to_watch_slot_round_trips_suffix(suffix in "[0-9a-f]{1,16}") {
+            let got = serve_to_watch_slot(&format!("serve-{suffix}")).unwrap();
+            proptest::prop_assert_eq!(got, format!("watch-{suffix}"));
+        }
+
+        /// Any input that is neither `serve` nor `serve-<nonempty>` is rejected —
+        /// folding an off-pattern slot to the global watch slot would let distinct
+        /// embedders collide on `watch.pid`.
+        #[test]
+        fn serve_to_watch_slot_rejects_off_pattern(s in ".{0,20}") {
+            let is_valid = s == "serve"
+                || s.strip_prefix("serve-").is_some_and(|r| !r.is_empty());
+            proptest::prop_assume!(!is_valid);
+            proptest::prop_assert!(serve_to_watch_slot(&s).is_err());
+        }
+    }
+
     #[test]
     fn second_acquire_for_same_dir_reports_held() {
         // Two acquire_serve_lock calls against the same dir: the first wins,

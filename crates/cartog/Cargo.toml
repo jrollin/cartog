@@ -53,6 +53,7 @@ remote-s3 = ["dep:rust-s3"]
 [dev-dependencies]
 criterion = { workspace = true }
 serial_test = { workspace = true }
+proptest = { workspace = true }
 # Used by `tests/remote_integration.rs` to fabricate a non-cartog SQLite file
 # for the schema-version refusal negative test. Workspace already pins
 # `rusqlite` with `bundled` for the runtime DB, so no new dep is pulled in

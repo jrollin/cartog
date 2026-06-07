@@ -270,4 +270,60 @@ mod tests {
             }
         }
     }
+
+    /// A symbol spanning the whole `source`, named `name`, optionally parented.
+    fn span_sym(id: &str, name: &str, parent_id: Option<&str>, src: &str) -> Symbol {
+        let mut s = Symbol::new(
+            name,
+            SymbolKind::Function,
+            "f.rs",
+            0,
+            0,
+            0,
+            src.len() as u32,
+            None,
+        );
+        s.id = id.to_string();
+        s.parent_id = parent_id.map(str::to_string);
+        s
+    }
+
+    fn hashes(symbols: &[Symbol]) -> Vec<(Option<String>, Option<String>)> {
+        symbols
+            .iter()
+            .map(|s| (s.content_hash.clone(), s.subtree_hash.clone()))
+            .collect()
+    }
+
+    proptest! {
+        /// compute_merkle_hashes is deterministic: same symbols + source twice
+        /// yields identical content and subtree hashes.
+        #[test]
+        fn merkle_hashes_are_deterministic(src in ".{0,80}", names in proptest::collection::vec("[a-z]{1,4}", 1..6)) {
+            let mut a: Vec<Symbol> = names.iter().enumerate()
+                .map(|(i, n)| span_sym(&format!("s{i}"), n, None, &src)).collect();
+            let mut b = a.clone();
+            compute_merkle_hashes(&mut a, &src);
+            compute_merkle_hashes(&mut b, &src);
+            prop_assert_eq!(hashes(&a), hashes(&b));
+        }
+
+        /// subtree_hash is independent of sibling order: the children are sorted
+        /// before hashing, so reordering them must not change the parent's hash.
+        #[test]
+        fn subtree_hash_ignores_sibling_order(src in ".{1,40}") {
+            let parent = span_sym("p", "parent", None, &src);
+            let c1 = span_sym("c1", "a", Some("p"), &src);
+            let c2 = span_sym("c2", "b", Some("p"), &src);
+
+            let mut forward = vec![parent.clone(), c1.clone(), c2.clone()];
+            let mut reversed = vec![parent, c2, c1];
+            compute_merkle_hashes(&mut forward, &src);
+            compute_merkle_hashes(&mut reversed, &src);
+
+            let p_fwd = &forward[0].subtree_hash;
+            let p_rev = &reversed[0].subtree_hash;
+            prop_assert_eq!(p_fwd, p_rev);
+        }
+    }
 }

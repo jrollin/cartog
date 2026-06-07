@@ -301,6 +301,7 @@ dependencies = [
  "directories",
  "flate2",
  "libc",
+ "proptest",
  "reqwest",
  "rusqlite",
  "rust-s3",
@@ -370,6 +371,7 @@ version = "0.25.1"
 dependencies = [
  "anyhow",
  "cartog-core",
+ "proptest",
  "streaming-iterator",
  "tracing",
  "tree-sitter",
@@ -419,6 +421,7 @@ dependencies = [
  "cartog-process-lock",
  "cartog-rag",
  "cartog-watch",
+ "proptest",
  "rmcp",
  "serde",
  "serde_json",
