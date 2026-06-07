@@ -814,8 +814,10 @@ fn backup_before_destructive_migration(
         .prepare("SELECT content_hash FROM symbols LIMIT 0")
         .is_ok();
 
-    // Mirrors the condition in `migrate()` for the 2→3 wipe.
-    let will_wipe = current < 3 || !has_hash_cols;
+    // Mirrors the destructive conditions in `migrate()`: the 2→3 stable-id wipe
+    // (`current < 3 || !has_hash_cols`) and the 6→7 symbol-id-escaping wipe
+    // (`current < 7`). Either clears every indexed row, so back up first.
+    let will_wipe = current < 7 || !has_hash_cols;
     if !will_wipe {
         return Ok(());
     }
@@ -5128,6 +5130,19 @@ mod tests {
             )
             .unwrap();
         assert_eq!(bumped, SCHEMA_VERSION.to_string());
+
+        // The v7 wipe is destructive, so the pre-migration DB must be backed up
+        // first — same safety contract as the v2→3 wipe.
+        let backups = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("v6.sqlite.pre-v")
+            })
+            .count();
+        assert_eq!(backups, 1, "v6→7 wipe must back up the index first");
     }
 
     #[test]
