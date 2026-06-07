@@ -1,0 +1,22 @@
+[package]
+name = "cartog-loom-models"
+description = "Loom model-checking harnesses for cartog's concurrent protocols (test-only, not published)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Test-only: never goes to crates.io. The release workflow publishes an
+# explicit crate list that excludes this one; publish=false is belt-and-braces.
+publish = false
+
+# This crate is built ONLY with RUSTFLAGS="--cfg loom"; the loom dependency is
+# scoped to that cfg so a normal `cargo build --workspace` pulls nothing and
+# compiles an empty lib (src/lib.rs is fully `#![cfg(loom)]`-gated). Isolating
+# loom in its own crate keeps `--cfg loom` away from cartog-mcp's tokio::signal
+# usage, which tokio gates off under loom.
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+[lints]
+workspace = true

@@ -216,7 +216,7 @@ cat <<EOF
 cartog 0.14.3
 build:    56e4f4e53a
 features: default, lsp
-rustc:    1.77 (MSRV)
+rustc:    1.80 (MSRV)
 EOF
 MOCK
     chmod +x "$TEST_DIR/bin/cartog"
@@ -326,7 +326,7 @@ MOCK
     create_mock_cargo
     cat > "$TEST_DIR/bin/rustc" <<'MOCK'
 #!/usr/bin/env bash
-echo "rustc 1.77.0 (aedd173a2 2024-03-17)"
+echo "rustc 1.80.0 (051478957 2024-07-21)"
 MOCK
     chmod +x "$TEST_DIR/bin/rustc"
 

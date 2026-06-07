@@ -130,7 +130,7 @@ locally with `make bench-criterion`.
 | LSP | Auto-detected (default feature) | Index-time refinement for edges unresolved by heuristics. Auto-detects language servers on PATH (rust-analyzer, pyright, typescript-language-server, gopls, ruby-lsp, solargraph, jdtls, intelephense, dart, sourcekit-lsp, kotlin-language-server), sends `textDocument/definition`, shuts down after. Silently skips when no server found. Ready-timeout 20s (override via `CARTOG_LSP_READY_TIMEOUT_SECS`). Edges LSP cannot map in-graph are persisted as `resolution_state=2` (truly unresolvable: typo, dyn dispatch, macro) or `=3` (external: stdlib, deps, node_modules); both are skipped on subsequent runs until a matching symbol is added. Disable at runtime with `--no-lsp`; opt out at build time with `cargo install cartog --no-default-features` |
 | MCP response cap | 64 KB per tool result | Prevents oversized JSON from evicting agent context. Truncates at UTF-8 boundary with narrowing hint per tool. Override via `CARTOG_MCP_MAX_BYTES` |
 | RAG tuning | `[rag]` section in `.cartog.toml` | `retrieval_multiplier`, `retrieval_floor`, `rerank_max`, `rerank_min` control FTS5/vector candidate pool size and cross-encoder cost. See [usage.md](usage.md#configuration) |
-| Workspace | Cargo workspace (10 crates) | Incremental compilation, explicit dependency boundaries, independent crate reuse. See [structure.md](structure.md) for layout and dependency graph |
+| Workspace | Cargo workspace (10 published crates + `cartog-loom-models`, test-only) | Incremental compilation, explicit dependency boundaries, independent crate reuse. See [structure.md](structure.md) for layout and dependency graph |
 | Monorepo | Deferred | Index from CWD, user can `cd` into subproject |
 | Remote index sync | Opt-in S3-compatible push/pull (default-on feature, inert without config) | `remote-s3` feature ON by default — single distributable binary, no rebuild from source for teams. Inert until `[remote]` is set or `--remote` passed: no network traffic, no impact on air-gapped use. Credentials resolved from the AWS env chain only; `.cartog.toml` rejects credential-shaped keys at parse time. `rust-s3` (~5 MB) over `aws-sdk-s3` (~18 MB) for binary size. Push records git-commit provenance (`x-amz-meta-git-commit` from the index's `last_commit`); pull reports it and cross-checks header vs file, but never blocks on staleness — the read-mostly "CI builds, devs pull" flow. See [usage.md](usage.md#cartog-push---remote-s3-url) |
 
@@ -311,7 +311,9 @@ Indexes (9): symbols(name, kind, file, parent),
 
 ## Minimum Supported Rust Version
 
-1.77+ (edition 2021). Declared in `Cargo.toml` as `rust-version = "1.77"`.
+1.80+ (edition 2021). Declared in `Cargo.toml` as `rust-version = "1.80"`. (1.80
+is required for the `[lints] check-cfg` manifest key used to declare the
+`cfg(loom)` cfg for the `cartog-loom-models` model-checking crate.)
 
 ## Further Reading
 

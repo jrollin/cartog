@@ -1,16 +1,17 @@
 # cartog — Project Structure
 
-cartog is a Cargo workspace with 10 crates under `crates/`. Each crate has its own `README.md` — this page is the navigation map. For the full tree, run `tree -L 2` from the repo root.
+cartog is a Cargo workspace with 10 published crates under `crates/`, plus `cartog-loom-models` (test-only, `publish = false` — Loom model-checking harnesses, empty unless built with `--cfg loom`). Each crate has its own `README.md` — this page is the navigation map. For the full tree, run `tree -L 2` from the repo root.
 
 ## Top-level layout
 
 ```
 cartog/
-├── crates/             # 10 workspace members (see Dependency Graph below)
+├── crates/             # 10 published members + cartog-loom-models (test-only; see Dependency Graph below)
 ├── .claude-plugin/     # Claude Code plugin manifest + hooks
 ├── skills/             # Agent skills (cartog, cartog-install)
 ├── agents/             # Autonomous agent definitions (codebase-onboarding, refactoring-scout)
 ├── benchmarks/         # Benchmark runner, fixtures, ground truth, 13 scenarios
+├── specs/tla/          # TLA+ models of the concurrent protocols (`make tla`)
 ├── tests/fixtures/     # Shared fixtures referenced by crate tests
 ├── scripts/            # release.sh, install.sh (canonical) + site mirror
 ├── site/               # Astro project for GitHub Pages (landing page + docs; install.sh mirror in public/)
@@ -54,6 +55,7 @@ Each link goes to that crate's `README.md`, which has the detailed responsibilit
 - **[cartog-mcp](../crates/cartog-mcp/README.md)** — MCP server over stdio (`rmcp`). 16 tool handlers, single-writer election (primary + read-only attach + promotion).
 - **[cartog-process-lock](../crates/cartog-process-lock/README.md)** — cross-platform PID-file locks (`<state_dir>/{slot}.pid`). Two-line format with `is_same_process(pid, start_time)` to close the PID-reuse window. Used by `cartog serve`, `cartog watch`, and `cartog self update`.
 - **[cartog](../crates/cartog/README.md)** — binary crate: 26 top-level CLI commands via clap (including `cartog trace`/`context` for call paths and task-context bundles, `cartog push`/`pull` for S3 index sync, and `cartog self update/version/rollback/migrate-db`), config resolution, logging, tokio runtime for `cartog serve`, daily background update probe.
+- **[cartog-loom-models](../crates/cartog-loom-models/README.md)** — test-only (`publish = false`), empty unless built with `--cfg loom`. Loom harnesses that model-check the in-process concurrency of `cartog-mcp`'s single-writer promoter; complements the design-level TLA+ specs in `specs/tla/`. Run via `make loom`.
 
 ## Conventions
 

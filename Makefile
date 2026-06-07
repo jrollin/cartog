@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-install-script sync-install-script bench bench-resolution bench-resolution-docker lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-install-script sync-install-script tla loom bench bench-resolution bench-resolution-docker lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -130,6 +130,29 @@ eval-skill: ## Run LLM-as-judge skill evaluation (requires claude CLI)
 
 eval-agents: ## Run LLM-as-judge agent evaluation (requires claude CLI)
 	bash agents/tests/eval.sh
+
+# --- Formal verification ---
+#
+# TLA+ models of the two concurrent protocols (PID-file lock acquire +
+# single-writer election/promotion). Each correct spec must pass; a
+# regenerated broken variant must fail, proving the spec discriminates.
+# Needs a JDK + tla2tools.jar (ships in the TLA+ Toolbox cask). Not in
+# `make check`: the jar isn't a default CI dependency. Skips cleanly if
+# absent so a contributor without TLA+ tooling isn't blocked.
+
+tla: ## Model-check the TLA+ specs (needs tla2tools.jar; see specs/tla/README.md)
+	@echo "==> Model-checking TLA+ specs..."
+	@bash specs/tla/run.sh
+
+# Loom exhaustively explores thread interleavings + memory reorderings of the
+# in-process concurrency that TLA+ can't see (the promoter role/DB commit
+# ordering). Isolated in cartog-loom-models because `--cfg loom` makes tokio
+# drop tokio::signal, which cartog-mcp uses. Not in `make check`: a separate
+# build profile (slower, recompiles deps under the loom cfg).
+
+loom: ## Model-check in-process concurrency with Loom (cartog-loom-models)
+	@echo "==> Loom model-checking..."
+	RUSTFLAGS="--cfg loom" cargo test -p cartog-loom-models
 
 # --- Benchmarks ---
 

@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 version = "0.25.1"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.80"
 license = "MIT"
 repository = "https://github.com/jrollin/cartog"
 
@@ -77,6 +77,10 @@ serial_test = "3"
 # cartog-process-lock has unsafe libc/Win32 calls; require explicit unsafe
 # blocks inside unsafe fns so each call site documents its own invariant.
 unsafe_op_in_unsafe_fn = "warn"
+# `loom` is a custom cfg activated via RUSTFLAGS="--cfg loom" for the
+# cartog-loom-models crate. Declare it so the unexpected_cfgs lint stays clean
+# under `clippy --all-targets -- -D warnings` on the normal (non-loom) build.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 
 [workspace.lints.clippy]
 # Enforce the clippy default groups on every local build, not just in CI.
