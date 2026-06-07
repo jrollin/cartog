@@ -14,6 +14,11 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
+# Reap generated artifacts on exit: broken-variant modules/cfgs, per-invariant
+# override cfgs, pcal .old backups, and the TLC states/ metadir. All gitignored,
+# but this keeps the working dir tidy run-over-run.
+trap 'rm -f -- *Broken.tla *Broken.cfg .*.cfg *.old; rm -rf -- states' EXIT
+
 JAR="${JAR:-/Applications/TLA+ Toolbox.app/Contents/Eclipse/tla2tools.jar}"
 if [[ ! -f "$JAR" ]]; then
   echo "SKIP: tla2tools.jar not found at: $JAR" >&2
@@ -24,6 +29,14 @@ if [[ ! -f "$JAR" ]]; then
 fi
 if ! command -v java >/dev/null 2>&1; then
   echo "SKIP: java not found on PATH (TLA+ checks need a JDK)." >&2
+  [[ "${TLA_REQUIRE:-0}" == "1" ]] && exit 1
+  exit 0
+fi
+# python3 builds the broken-variant patches (patch_or_die heredocs). Probe it
+# here so its absence skips cleanly instead of surfacing as a misleading
+# "anchor drifted" FATAL deep in the run.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "SKIP: python3 not found on PATH (needed to derive the broken-spec variants)." >&2
   [[ "${TLA_REQUIRE:-0}" == "1" ]] && exit 1
   exit 0
 fi
