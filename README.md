@@ -9,20 +9,34 @@
 
 **Map your codebase. Navigate by graph, not grep.**
 
-**~280 tokens per query, 97% recall, 8 us to 20 ms latency, 12 languages.**
+**~280 tokens per query vs ~1,700 for grep+read · 97% recall · 8 µs–20 ms latency · 12 languages.**
 
-Single binary. Microsecond queries. 100% local by default.
+Cartog pre-computes a code graph — symbols, and the calls, imports, and inheritance between them — so you can query structure instantly instead of grepping for text. Ask "who calls this?", "what breaks if I change it?", or "find the auth logic" and get a ranked, structured answer in microseconds.
 
-Cartog pre-computes a code graph — symbols, calls, imports, inheritance — and lets you query it instantly. Use it from the CLI for day-to-day navigation, as an MCP server for AI agents, or both. No Python, no pip, no Docker. One binary, one SQLite file, zero cloud dependencies.
+Use it from the CLI for day-to-day navigation, or as an MCP server so AI agents query the graph instead of flooding their context with raw file dumps — at a fraction of the token cost. One static binary, one SQLite file. No Python, no pip, no Docker, no cloud: 100% local by default.
 
 > **[Documentation site](https://jrollin.github.io/cartog/)**
 
 ![cartog demo](docs/demo.gif)
 
+## Contents
+
+- [Quick Start](#quick-start)
+- [Why Cartog](#why-cartog)
+- [What You Get](#what-you-get)
+- [Install](#install)
+- [Commands](#commands)
+- [MCP Server Setup](#mcp-server-setup)
+- [Supported Languages](#supported-languages)
+- [Configuration](#configuration)
+- [Privacy](#privacy)
+- [Troubleshooting](#troubleshooting)
+- [Articles](#articles)
+
 ## Quick Start
 
 ```bash
-cargo install cartog          # or download a binary from GitHub Releases
+curl -fsSL https://jrollin.github.io/cartog/install.sh | sh   # or: cargo install cartog
 cd your-project
 cartog init                   # 1. scaffold .cartog.toml
 cartog index                  # 2. build the code graph
@@ -42,9 +56,9 @@ Now query:
 
 ```bash
 cartog search validate        # find symbols by name         (sub-ms)
-cartog refs validate_token    # who calls this?              (< 500 us)
+cartog refs validate_token    # who calls this?              (< 500 µs)
 cartog impact validate_token  # what breaks if I change it?  (< 20 ms)
-cartog outline src/auth.py    # file structure, no cat       (< 15 us)
+cartog outline src/auth.py    # file structure, no cat       (< 15 µs)
 ```
 
 ## Teach your agent to use cartog
@@ -62,7 +76,7 @@ Every code navigation tool makes you choose: fast but shallow (grep), or precise
 
 | | grep / cat / find | Language servers | **Cartog** |
 |---|---|---|---|
-| **Query speed** | depends on codebase size | seconds to start | **8-450 us** |
+| **Query speed** | depends on codebase size | seconds to start | **8-450 µs** |
 | **Transitive analysis** | impossible | partial | **`impact --depth 5`** |
 | **Setup** | none | per-language config | **one binary, zero config** |
 | **Languages** | all (text) | one per server | **12 languages, one tool** |
@@ -556,13 +570,13 @@ Indexing: **69 files / 4k LOC in 95ms** (incremental re-index skips unchanged fi
 
 | Query | Latency |
 |-------|---------|
-| outline | 8-14 us |
-| hierarchy | 8-9 us |
-| deps | 25 us |
-| stats | 32 us |
-| search | 81-102 us |
-| callees | 177-180 us |
-| refs | 258-471 us |
+| outline | 8-14 µs |
+| hierarchy | 8-9 µs |
+| deps | 25 µs |
+| stats | 32 µs |
+| search | 81-102 µs |
+| callees | 177-180 µs |
+| refs | 258-471 µs |
 | impact (depth 3) | 2.7-17 ms |
 
 ### Edge Resolution
@@ -651,6 +665,23 @@ Full index: [docs/README.md](docs/README.md). Highlights:
 - [Product Overview](docs/product.md) — vision, target users, benchmark caveats
 - [Technology Stack](docs/tech.md) — architecture and RAG design
 - [Project Structure](docs/structure.md) — workspace layout
+
+## Articles
+
+A series on how cartog works, from the code graph to semantic search (English · Français):
+
+1. **Tree-sitter vs grep** — building a symbol graph instead of scanning text.
+   [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-semantic-search-with-tree-sitter-vs-grep) ·
+   [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-semantic-search-with-tree-sitter-vs-grep)
+2. **Semantic search (RAG + ONNX)** — finding code by meaning, fully local.
+   [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-semantic-search-rag-onnx) ·
+   [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-semantic-search-rag-onnx)
+3. **LSP precision** — using language servers to sharpen edge resolution.
+   [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-lsp-precision) ·
+   [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-lsp-precision)
+4. **Incremental indexing** — a Merkle tree to re-index only what changed.
+   [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-incremental-merkle-tree) ·
+   [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-incremental-merkle-tree)
 
 ## Contributors
 
