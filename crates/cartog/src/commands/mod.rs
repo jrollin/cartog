@@ -1267,54 +1267,73 @@ pub fn cmd_rag_search(
     let embeddings_built = db.embedding_count().map(|n| n > 0).unwrap_or(false);
 
     output(&search_result, json, token_budget, |sr| {
-        if sr.results.is_empty() {
-            let mut out = format!("No results found for '{query}'\n");
-            if !embeddings_built {
-                out.push_str("Hint: run 'cartog rag index' to build the semantic search index.\n");
-            }
-            return out;
-        }
-        let mut out = format!(
-            "Found {} results (FTS: {}, vector: {}, merged: {})\n\n",
-            sr.results.len(),
-            sr.fts_count,
-            sr.vec_count,
-            sr.merged_count
-        );
-        for (i, r) in sr.results.iter().enumerate() {
-            let sources = r
-                .sources
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join("+");
-            let rerank_str = r
-                .rerank_score
-                .map(|s| format!(" rerank={s:.2}"))
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "{}. {} {}  {}:{}-{}  [{}] score={:.4}{rerank_str}\n",
-                i + 1,
-                r.symbol.kind,
-                r.symbol.name,
-                r.symbol.file_path,
-                r.symbol.start_line,
-                r.symbol.end_line,
-                sources,
-                r.rrf_score,
-            ));
-            if let Some(ref content) = r.content {
-                let preview: String = content
-                    .lines()
-                    .take(3)
-                    .map(|l| format!("    {l}"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                out.push_str(&format!("{preview}\n\n"));
-            }
-        }
-        out
+        render_rag_search(sr, &query, embeddings_built)
     })
+}
+
+/// Render the human-readable `rag search` output.
+///
+/// `embeddings_built` gates the index hints: `vec_count == 0` alone is not a
+/// reliable signal — kind-filtered retrieval can legitimately yield zero
+/// vector hits on a fully-built index.
+fn render_rag_search(
+    sr: &rag::search::HybridSearchResult,
+    query: &str,
+    embeddings_built: bool,
+) -> String {
+    if sr.results.is_empty() {
+        let mut out = format!("No results found for '{query}'\n");
+        if !embeddings_built {
+            out.push_str("Hint: run 'cartog rag index' to build the semantic search index.\n");
+        }
+        return out;
+    }
+    let mut out = format!(
+        "Found {} results (FTS: {}, vector: {}, merged: {})\n",
+        sr.results.len(),
+        sr.fts_count,
+        sr.vec_count,
+        sr.merged_count
+    );
+    if !embeddings_built {
+        out.push_str(
+            "Hint: keyword (FTS) matches only — run 'cartog rag index' to enable semantic search.\n",
+        );
+    }
+    out.push('\n');
+    for (i, r) in sr.results.iter().enumerate() {
+        let sources = r
+            .sources
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("+");
+        let rerank_str = r
+            .rerank_score
+            .map(|s| format!(" rerank={s:.2}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "{}. {} {}  {}:{}-{}  [{}] score={:.4}{rerank_str}\n",
+            i + 1,
+            r.symbol.kind,
+            r.symbol.name,
+            r.symbol.file_path,
+            r.symbol.start_line,
+            r.symbol.end_line,
+            sources,
+            r.rrf_score,
+        ));
+        if let Some(ref content) = r.content {
+            let preview: String = content
+                .lines()
+                .take(3)
+                .map(|l| format!("    {l}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            out.push_str(&format!("{preview}\n\n"));
+        }
+    }
+    out
 }
 
 /// Build a token-budgeted task-context bundle for a natural-language task.
@@ -1441,6 +1460,48 @@ pub use self_cmd::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fts_only_search_result() -> rag::search::HybridSearchResult {
+        rag::search::HybridSearchResult {
+            results: vec![rag::search::SearchResult {
+                symbol: cartog_core::Symbol::new(
+                    "foo",
+                    cartog_core::SymbolKind::Function,
+                    "a.py",
+                    1,
+                    10,
+                    0,
+                    100,
+                    None,
+                ),
+                content: None,
+                rrf_score: 0.016,
+                rerank_score: None,
+                sources: vec![],
+            }],
+            fts_count: 1,
+            vec_count: 0,
+            merged_count: 1,
+        }
+    }
+
+    #[test]
+    fn rag_search_render_hints_when_results_found_but_embeddings_missing() {
+        let out = render_rag_search(&fts_only_search_result(), "foo", false);
+        assert!(
+            out.contains("cartog rag index"),
+            "FTS-only results without embeddings must hint at 'cartog rag index'; got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn rag_search_render_no_hint_when_embeddings_built() {
+        let out = render_rag_search(&fts_only_search_result(), "foo", true);
+        assert!(
+            !out.contains("Hint:"),
+            "vec_count == 0 with a built index is legitimate, no hint expected; got:\n{out}"
+        );
+    }
 
     #[test]
     fn index_root_is_db_grandparent() {

@@ -112,6 +112,14 @@ when any field differs. Just run `cartog rag index .` to re-embed (no
 `--force` needed). Older DBs that predate the fingerprint get a one-time
 backfill without wiping.
 
+### `rag search` shows `vector: 0` on every query
+
+The vector index hasn't been built: until `cartog rag index` has run, hybrid
+search silently degrades to keyword (FTS) matching only. The CLI prints a hint
+when this is the case. Note that `vector: 0` on a *built* index can be
+legitimate — kind-filtered retrieval may simply have no vector hits for that
+query.
+
 ### Semantic search returns the old version of a function I edited
 
 Fixed: re-indexing now invalidates the embedding of any symbol whose body
