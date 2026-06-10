@@ -81,10 +81,6 @@ Some scenarios deliberately keep ground truth at the *objectively correct* answe
 read from source, so cartog scores below 100% where its resolution is incomplete.
 These rows exist to track that — they should approach parity as the gaps close:
 
-- **PHP class inheritance (scenario 04)**: `hierarchy BaseService` returns nothing
-  even though `AuthService`/`AuthenticationService`/`PaymentProcessor` extend it.
-  PHP's *error* tree resolves (`TokenError -> App\AppError`), so this looks
-  namespace/`use`-related rather than a total miss.
 - **Rust traits / Go interfaces (excluded from scenario 04)**: Rust uses traits and
   Go uses struct embedding, not class inheritance. cartog does not model
   trait-impl or interface-satisfaction as a hierarchy, so "who implements this

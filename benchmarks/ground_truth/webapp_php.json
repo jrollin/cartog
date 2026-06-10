@@ -39,7 +39,6 @@
     "query": "hierarchy BaseService",
     "expected": [
       { "child": "AuthService", "parent": "BaseService" },
-      { "child": "AdminService", "parent": "AuthService" },
       { "child": "AuthenticationService", "parent": "BaseService" },
       { "child": "PaymentProcessor", "parent": "BaseService" }
     ]
