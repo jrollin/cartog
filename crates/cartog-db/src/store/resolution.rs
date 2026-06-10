@@ -105,7 +105,11 @@ impl Database {
         )?;
 
         for (edge_id, target_name, edge_file, source_id) in unresolved {
-            let simple_name = target_name.rsplit('.').next().unwrap_or(target_name);
+            // `\` is PHP's namespace separator (App\Auth\BaseService).
+            let simple_name = target_name
+                .rsplit(['.', '\\'])
+                .next()
+                .unwrap_or(target_name);
 
             // 1) Same file
             let target_id: Option<String> = same_file_stmt

@@ -219,14 +219,20 @@ impl Database {
     }
 
     /// Inheritance hierarchy rooted at a class.
+    ///
+    /// Like [`Self::refs`], matches the resolved target symbol's name too:
+    /// qualified `target_name`s (PHP `App\Auth\BaseService`) never equal the
+    /// class's short name, so children would otherwise be invisible. The
+    /// parent column reports the resolved short name when available.
     pub fn hierarchy(&self, class_name: &str) -> Result<Vec<(String, String)>> {
         // Returns (child, parent) pairs
         let mut stmt = self.conn.prepare(
-            "SELECT s.name, e.target_name
+            "SELECT s.name, COALESCE(sym2.name, e.target_name)
              FROM edges e
              JOIN symbols s ON e.source_id = s.id
+             LEFT JOIN symbols sym2 ON e.target_id = sym2.id
              WHERE e.kind = 'inherits'
-               AND (s.name = ?1 OR e.target_name = ?1)",
+               AND (s.name = ?1 OR e.target_name = ?1 OR sym2.name = ?1)",
         )?;
         let rows = stmt
             .query_map(params![class_name], |row| Ok((row.get(0)?, row.get(1)?)))?

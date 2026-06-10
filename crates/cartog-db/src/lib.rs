@@ -1396,6 +1396,92 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_edges_php_fqcn_target_same_file() {
+        let db = Database::open_memory().unwrap();
+
+        // PHP emits namespace-qualified targets: `extends BaseService` inside
+        // `namespace App\Auth` becomes "App\Auth\BaseService".
+        let base = test_symbol("BaseService", SymbolKind::Class, "auth/service.php", 1);
+        let child = test_symbol("AuthService", SymbolKind::Class, "auth/service.php", 30);
+        db.insert_symbols(&[base.clone(), child.clone()]).unwrap();
+
+        db.insert_edge(&Edge::new(
+            &child.id,
+            "App\\Auth\\BaseService",
+            EdgeKind::Inherits,
+            "auth/service.php",
+            30,
+        ))
+        .unwrap();
+
+        let resolved = db.resolve_edges().unwrap();
+        assert_eq!(resolved, 1);
+
+        let refs = db.refs("App\\Auth\\BaseService", None).unwrap();
+        assert_eq!(refs[0].0.target_id.as_ref().unwrap(), &base.id);
+    }
+
+    #[test]
+    fn test_resolve_edges_php_fqcn_target_prefers_class_over_import_symbol() {
+        let db = Database::open_memory().unwrap();
+
+        let class_sym = test_symbol("AppError", SymbolKind::Class, "exceptions.php", 1);
+        let child = test_symbol("TokenError", SymbolKind::Class, "auth/tokens.php", 10);
+        // PHP `use App\AppError;` extracts an Import symbol named by FQCN.
+        let import_sym = test_symbol("App\\AppError", SymbolKind::Import, "auth/tokens.php", 1);
+        db.insert_symbols(&[class_sym.clone(), child.clone(), import_sym])
+            .unwrap();
+
+        db.insert_edge(&Edge::new(
+            &child.id,
+            "App\\AppError",
+            EdgeKind::Inherits,
+            "auth/tokens.php",
+            10,
+        ))
+        .unwrap();
+
+        db.resolve_edges().unwrap();
+
+        let refs = db.refs("App\\AppError", None).unwrap();
+        let inherits = refs
+            .iter()
+            .find(|(e, _)| e.kind == EdgeKind::Inherits)
+            .unwrap();
+        assert_eq!(inherits.0.target_id.as_ref().unwrap(), &class_sym.id);
+    }
+
+    #[test]
+    fn test_hierarchy_finds_children_of_fqcn_resolved_target() {
+        let db = Database::open_memory().unwrap();
+
+        let base = test_symbol("BaseService", SymbolKind::Class, "auth/service.php", 1);
+        let child = test_symbol(
+            "PaymentProcessor",
+            SymbolKind::Class,
+            "services/payment.php",
+            5,
+        );
+        db.insert_symbols(&[base.clone(), child.clone()]).unwrap();
+
+        db.insert_edge(&Edge::new(
+            &child.id,
+            "App\\Auth\\BaseService",
+            EdgeKind::Inherits,
+            "services/payment.php",
+            5,
+        ))
+        .unwrap();
+        db.resolve_edges().unwrap();
+
+        let pairs = db.hierarchy("BaseService").unwrap();
+        assert_eq!(
+            pairs,
+            vec![("PaymentProcessor".to_string(), "BaseService".to_string())]
+        );
+    }
+
+    #[test]
     fn test_resolve_edges_class_over_constructor() {
         let db = Database::open_memory().unwrap();
 
