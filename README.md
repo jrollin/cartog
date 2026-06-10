@@ -670,16 +670,20 @@ Full index: [docs/README.md](docs/README.md). Highlights:
 
 A series on how cartog works, from the code graph to semantic search (English · Français):
 
-1. **Tree-sitter vs grep** — building a symbol graph instead of scanning text.
+1. **Tree-sitter and code graphs: navigating code better than grep** — parsing code into a
+   SQLite symbol graph, cutting the tokens an agent burns versus grep's line-by-line scans.
    [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-semantic-search-with-tree-sitter-vs-grep) ·
    [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-semantic-search-with-tree-sitter-vs-grep)
-2. **Semantic search (RAG + ONNX)** — finding code by meaning, fully local.
+2. **Semantic code search with RAG and ONNX** — local BGE-small embeddings, FTS5 + vector KNN
+   fused with reciprocal rank fusion, then cross-encoder re-ranking, all on CPU.
    [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-semantic-search-rag-onnx) ·
    [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-semantic-search-rag-onnx)
-3. **LSP precision** — using language servers to sharpen edge resolution.
+3. **Language Server Protocol to sharpen a code graph** — tapping language servers like
+   rust-analyzer and pyright to lift edge-resolution precision from 25–37% to 44–81%.
    [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-lsp-precision) ·
    [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-lsp-precision)
-4. **Incremental indexing** — a Merkle tree to re-index only what changed.
+4. **Incremental indexing with a Merkle tree** — Merkle hashing plus multi-level file filtering
+   to re-index only changed symbols, dropping re-index time from seconds to milliseconds.
    [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-incremental-merkle-tree) ·
    [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-incremental-merkle-tree)
 

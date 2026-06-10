@@ -576,6 +576,93 @@ section + section {
   border-radius: 4px;
 }
 
+/* ── Articles section ────────────────────────────── */
+
+.article-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 40px;
+}
+
+.article-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 12px;
+  padding: 20px 24px;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+}
+
+.article-row:hover {
+  border-color: rgba(0, 229, 153, 0.4);
+  border-left-color: var(--accent);
+  box-shadow: var(--accent-glow-strong);
+  transform: translateX(4px);
+}
+
+.article-row .article-num {
+  flex-shrink: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.article-row .article-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.article-row h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+
+.article-row h3 a {
+  color: var(--text);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.article-row h3 a:hover {
+  color: var(--accent);
+}
+
+.article-row p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+
+.article-links {
+  display: flex;
+  gap: 8px;
+}
+
+.article-links a {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.article-links a:hover {
+  border-color: rgba(0, 229, 153, 0.4);
+  color: var(--accent);
+}
+
 /* ── Why section (numbered) ──────────────────────── */
 
 .why-grid {
@@ -1074,6 +1161,11 @@ td .badge {
 
   .features-grid {
     grid-template-columns: 1fr;
+  }
+
+  .article-row {
+    gap: 16px;
+    align-items: flex-start;
   }
 
   .why-grid {
