@@ -2992,6 +2992,41 @@ mod tests {
         assert_eq!(results[0].in_degree, 2);
     }
 
+    #[test]
+    fn test_compute_in_degrees_scoped_resets_target_that_lost_edge() {
+        let db = Database::open_memory().unwrap();
+
+        let foo = test_symbol("foo", SymbolKind::Function, "a.py", 1);
+        let bar = test_symbol("bar", SymbolKind::Function, "b.py", 1);
+        let baz = test_symbol("baz", SymbolKind::Function, "c.py", 1);
+        db.insert_symbol(&foo).unwrap();
+        db.insert_symbol(&bar).unwrap();
+        db.insert_symbol(&baz).unwrap();
+
+        // bar calls foo, baz calls foo
+        db.insert_edge(&Edge::new(&bar.id, "foo", EdgeKind::Calls, "b.py", 5))
+            .unwrap();
+        db.insert_edge(&Edge::new(&baz.id, "foo", EdgeKind::Calls, "c.py", 3))
+            .unwrap();
+
+        db.resolve_edges().unwrap();
+        db.compute_in_degrees().unwrap();
+        let results = db.search("foo", None, None, 10).unwrap();
+        assert_eq!(results[0].in_degree, 2);
+
+        // Re-index b.py with the call removed: the indexer clears the file's
+        // old edges before the scoped recompute, so foo (unchanged a.py) has
+        // already lost an incoming edge by the time the recompute runs.
+        db.clear_edges_for_file("b.py").unwrap();
+        let dirty = std::collections::HashSet::from(["b.py".to_string()]);
+        db.invalidate_edges_targeting(&dirty).unwrap();
+        db.resolve_edges_scoped(&dirty).unwrap();
+        db.compute_in_degrees_scoped(&dirty).unwrap();
+
+        let results = db.search("foo", None, None, 10).unwrap();
+        assert_eq!(results[0].in_degree, 1);
+    }
+
     // ── Embedding dimension migration tests ──
 
     #[test]
