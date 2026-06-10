@@ -681,6 +681,20 @@ pub fn index_directory(
     // is a file deletion — otherwise unchanged files keep dangling target_ids
     // and stale in-degrees until the next edit.
     let all_indexed = db.all_files()?;
+    // A walk that found nothing while the DB holds an index almost always
+    // means the wrong root (e.g. `cartog rag index --db <db>` run from another
+    // directory). Sweeping would silently delete the whole index — refuse.
+    if current_files.is_empty() && !all_indexed.is_empty() && !force {
+        anyhow::bail!(
+            "refusing to empty the index: no supported source files found under {} \
+             but the database holds {} indexed files. This usually means the wrong \
+             root for this database (e.g. `cartog rag index --db <db>` run from \
+             another directory). Re-run from the project root, or pass --force to \
+             really empty the index.",
+            root.display(),
+            all_indexed.len()
+        );
+    }
     for indexed_path in all_indexed {
         if !current_files.contains(&indexed_path) {
             dirty_files.insert(indexed_path.clone());
@@ -1071,6 +1085,61 @@ pub mod bench_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn index_dir(db: &cartog_db::Database, root: &Path, force: bool) -> Result<IndexResult> {
+        index_directory(
+            db,
+            root,
+            force,
+            false,
+            None,
+            None,
+            RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+        )
+    }
+
+    // TempDir roots are dot-prefixed (`.tmpXXXX`) and the walker skips hidden
+    // roots entirely — give each test a visible subdir to index.
+    fn visible_dir(tmp: &tempfile::TempDir, name: &str) -> std::path::PathBuf {
+        let dir = tmp.path().join(name);
+        std::fs::create_dir(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn index_refuses_empty_root_when_db_has_files() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let src = visible_dir(&tmp, "proj");
+        std::fs::write(src.join("a.py"), "def foo():\n    return 1\n").unwrap();
+        index_dir(&db, &src, false).unwrap();
+        assert!(!db.all_files().unwrap().is_empty());
+
+        // Pointing the same DB at a root with no supported files (the
+        // `rag index --db X` from-a-wrong-cwd footgun) must refuse instead
+        // of sweeping every indexed file away.
+        let empty = visible_dir(&tmp, "elsewhere");
+        let res = index_dir(&db, &empty, false);
+        assert!(res.is_err(), "expected refusal, got {res:?}");
+        assert!(
+            !db.all_files().unwrap().is_empty(),
+            "index must be left untouched on refusal"
+        );
+    }
+
+    #[test]
+    fn index_force_allows_emptying_the_index() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let src = visible_dir(&tmp, "proj");
+        std::fs::write(src.join("a.py"), "def foo():\n    return 1\n").unwrap();
+        index_dir(&db, &src, false).unwrap();
+
+        let empty = visible_dir(&tmp, "elsewhere");
+        index_dir(&db, &empty, true).unwrap();
+        assert!(db.all_files().unwrap().is_empty());
+    }
 
     #[test]
     fn test_file_hash_deterministic() {
