@@ -282,12 +282,19 @@ impl Database {
         self.resolve_edges_in_tx()
     }
 
-    /// Recompute in-degree centrality only for symbols in/around dirty files.
+    /// Recompute in-degree centrality after an incremental re-index.
+    ///
+    /// Scoping the reset to dirty files cannot be correct: a symbol in an
+    /// unchanged file that *lost* its incoming edge is unfindable once the
+    /// dirty file's old edges are deleted. Instead, correct every symbol
+    /// whose stored value disagrees with the actual edge count — a full
+    /// ground-truth pass that writes only the rows that changed (unlike
+    /// [`Self::compute_in_degrees`], which rewrites all rows).
     ///
     /// tx-safe: every internal statement participates in any active outer
     /// transaction — see [`Self::begin_indexing_tx`]. Does NOT open one of
     /// its own, unlike the batched `*_in_tx` helpers; outside an outer
-    /// transaction the per-file resets are not atomic with the recompute.
+    /// transaction the zeroing is not atomic with the recompute.
     pub fn compute_in_degrees_scoped(
         &self,
         dirty_files: &std::collections::HashSet<String>,
@@ -296,28 +303,15 @@ impl Database {
             return Ok(0);
         }
 
-        // Reset in-degree for symbols in dirty files
-        for file in dirty_files {
-            self.conn.execute(
-                "UPDATE symbols SET in_degree = 0 WHERE file_path = ?1",
-                params![file],
-            )?;
-        }
+        // Zero symbols that no longer have any incoming edge.
+        let zeroed = self.conn.execute(
+            "UPDATE symbols SET in_degree = 0
+             WHERE in_degree != 0
+               AND id NOT IN (SELECT target_id FROM edges WHERE target_id IS NOT NULL)",
+            [],
+        )?;
 
-        // Also reset symbols that are targets of edges from dirty files
-        // (their in-degree may have changed)
-        for file in dirty_files {
-            self.conn.execute(
-                "UPDATE symbols SET in_degree = 0
-                 WHERE id IN (
-                     SELECT DISTINCT e.target_id FROM edges e
-                     WHERE e.file_path = ?1 AND e.target_id IS NOT NULL
-                 )",
-                params![file],
-            )?;
-        }
-
-        // Recompute for all symbols with in_degree = 0 that have incoming edges
+        // Fix symbols whose stored value disagrees with the actual count.
         let updated = self.conn.execute(
             "WITH counts AS (
                 SELECT target_id, COUNT(*) AS cnt
@@ -327,11 +321,11 @@ impl Database {
             UPDATE symbols SET in_degree = (
                 SELECT cnt FROM counts WHERE counts.target_id = symbols.id
             )
-            WHERE in_degree = 0
-              AND id IN (SELECT target_id FROM counts)",
+            WHERE id IN (SELECT target_id FROM counts)
+              AND in_degree != (SELECT cnt FROM counts WHERE counts.target_id = symbols.id)",
             [],
         )?;
 
-        Ok(updated as u32)
+        Ok((zeroed + updated) as u32)
     }
 }
