@@ -22,6 +22,8 @@ pub const LONG_VERSION: &str = concat!(
 #[command(about = "Map your codebase. Navigate by graph, not grep.")]
 #[command(version)]
 #[command(long_version = LONG_VERSION)]
+#[command(propagate_version = true)]
+#[command(after_help = "Docs: https://jrollin.github.io/cartog/")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -34,8 +36,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub tokens: Option<u32>,
 
-    /// Path to the cartog database (overrides .cartog.toml and auto-detection).
-    /// Can also be set via the CARTOG_DB environment variable.
+    /// Path to the cartog database (overrides .cartog.toml and auto-detection)
     #[arg(long, global = true, value_name = "PATH", env = "CARTOG_DB")]
     pub db: Option<PathBuf>,
 }
@@ -208,9 +209,10 @@ pub enum Command {
         /// Class name
         name: String,
 
-        /// Render the hierarchy as a Mermaid `graph TD` diagram instead of
-        /// plain text. Paste the output into any Mermaid renderer (GitHub,
-        /// mermaid.live, ...). Ignored when `--json` is also set.
+        /// Render the hierarchy as a Mermaid `graph TD` diagram instead of plain text
+        ///
+        /// Paste the output into any Mermaid renderer (GitHub, mermaid.live, ...).
+        /// Ignored when `--json` is also set.
         #[arg(long)]
         mermaid: bool,
     },
@@ -220,15 +222,17 @@ pub enum Command {
         /// File path
         file: String,
 
-        /// Render the imports as a Mermaid `graph LR` diagram instead of
-        /// plain text. Ignored when `--json` is also set.
+        /// Render the imports as a Mermaid `graph LR` diagram instead of plain text
+        ///
+        /// Ignored when `--json` is also set.
         #[arg(long)]
         mermaid: bool,
     },
 
     /// Index statistics summary
     Stats {
-        /// Show per-tool query counts and estimated tokens saved vs grep+read.
+        /// Show per-tool query counts and estimated tokens saved vs grep+read
+        ///
         /// Reads the local query log; no network calls.
         #[arg(long)]
         savings: bool,
@@ -236,8 +240,8 @@ pub enum Command {
 
     /// Per-tool query counts + estimated tokens saved.
     ///
-    /// Alias for `cartog stats --savings`. Shipped as a top-level verb because
-    /// it's the retention hook — surfaces ongoing ROI in one keystroke.
+    /// Alias for `cartog stats --savings`, promoted to a top-level verb so
+    /// day-to-day savings are one keystroke away.
     Savings,
 
     /// Upload the local index to an S3-compatible remote (opt-in feature).
@@ -289,27 +293,27 @@ pub enum Command {
         #[arg(long)]
         file: Option<String>,
 
-        /// Maximum results to return (default: 30, max: 100)
+        /// Maximum results to return (capped at 100)
         #[arg(long, default_value = "30")]
         limit: u32,
     },
 
     /// Token-budget-aware codebase summary (file tree + top symbols by centrality)
     Map {
-        /// Approximate token budget for the output (default: 4000)
+        /// Approximate token budget for the output
         #[arg(long, default_value = "4000")]
         tokens: u32,
 
-        /// Render the file tree as a Mermaid `graph TD` diagram instead of
-        /// indented text. Token budget still applies. Ignored when `--json`
-        /// is also set.
+        /// Render the file tree as a Mermaid `graph TD` diagram instead of indented text
+        ///
+        /// Token budget still applies. Ignored when `--json` is also set.
         #[arg(long)]
         mermaid: bool,
     },
 
     /// Show symbols affected by recent git changes
     Changes {
-        /// Number of recent commits to consider (default: 5)
+        /// Number of recent commits to consider
         #[arg(long, default_value = "5")]
         commits: u32,
 
@@ -328,7 +332,11 @@ pub enum Command {
         #[arg(long, default_value = "5")]
         debounce: u64,
 
-        /// Enable automatic RAG embedding after index
+        /// Turn on RAG embedding when auto-detection would leave it off
+        ///
+        /// Default is automatic: on when the repo already has embeddings.
+        /// `[embedding] auto_embed` (config) and CARTOG_WATCH_RAG (env) take
+        /// precedence over this flag.
         #[arg(long)]
         rag: bool,
 
@@ -350,9 +358,8 @@ pub enum Command {
 
     /// Wire `cartog serve` into one or all MCP-compatible editors.
     ///
-    /// Supports Claude Code, Claude Desktop, Cursor, VS Code, Codex CLI, Gemini CLI,
-    /// OpenCode, Windsurf, Zed. User-scope clients whose config directory does not
-    /// exist are skipped (not installed).
+    /// See `--client` for the supported editors. User-scope clients whose
+    /// config directory does not exist are skipped (not installed).
     ///
     /// See also `cartog install <client>...` for a positional shorthand that
     /// matches the brew/npm/pip convention.
@@ -361,12 +368,16 @@ pub enum Command {
         #[arg(long, value_enum)]
         client: Option<ClientKind>,
 
-        /// Filter by scope. `project` writes only .mcp.json / .cursor/mcp.json; `user`
-        /// writes only user-scope configs; `all` writes both.
+        /// Filter by scope
+        ///
+        /// `project` writes only .mcp.json / .cursor/mcp.json; `user` writes
+        /// only user-scope configs; `all` writes both.
         #[arg(long, value_enum, default_value_t = IdeScope::All)]
         scope: IdeScope,
 
-        /// Accept all prompts (non-interactive). Implied by --dry-run, --json, --client, or a non-TTY stdin.
+        /// Accept all prompts (non-interactive)
+        ///
+        /// Implied by --dry-run, --json, --client, or a non-TTY stdin.
         #[arg(long, short = 'y')]
         yes: bool,
 
@@ -389,12 +400,15 @@ pub enum Command {
     /// Positional mode is always non-interactive (`--yes` implied). For the
     /// interactive picker, use `cartog ide` directly.
     Install {
-        /// One or more editors to wire up. Omit to install into every
-        /// detected editor non-interactively. Repeatable.
+        /// One or more editors to wire up
+        ///
+        /// Omit to install into every detected editor non-interactively.
         clients: Vec<ClientKind>,
 
-        /// Filter by scope. `project` writes only .mcp.json / .cursor/mcp.json;
-        /// `user` writes only user-scope configs; `all` writes both.
+        /// Filter by scope
+        ///
+        /// `project` writes only .mcp.json / .cursor/mcp.json; `user` writes
+        /// only user-scope configs; `all` writes both.
         #[arg(long, value_enum, default_value_t = IdeScope::All)]
         scope: IdeScope,
 
@@ -413,7 +427,12 @@ pub enum Command {
         #[arg(long)]
         watch: bool,
 
-        /// Enable automatic RAG embedding when watching
+        /// Turn on RAG embedding when auto-detection would leave it off
+        ///
+        /// Default is automatic: on when the repo already has embeddings.
+        /// `[embedding] auto_embed` (config) and CARTOG_WATCH_RAG (env) take
+        /// precedence over this flag. Only meaningful with `--watch` (warns
+        /// otherwise).
         #[arg(long)]
         rag: bool,
     },
@@ -436,9 +455,7 @@ pub enum Command {
 
     /// Emit a troff-formatted manpage for `cartog` on stdout.
     ///
-    /// Example:
-    ///   cartog manpage > cartog.1
-    ///   man ./cartog.1
+    /// Example: `cartog manpage > cartog.1 && man ./cartog.1`
     Manpage,
 }
 
@@ -477,30 +494,37 @@ pub enum RagCommand {
 pub enum SelfCommand {
     /// Upgrade cartog in place (or check, defer, or apply a deferred update)
     Update {
-        /// Report whether an update is available without modifying anything.
+        /// Report whether an update is available without modifying anything
+        ///
         /// Exit codes: 0 up to date, 1 update available, 2 network/parse error.
         #[arg(long, conflicts_with_all = ["defer", "apply_pending"])]
         check: bool,
 
-        /// Arm a deferred update: record the target version in the state file
-        /// and exit WITHOUT swapping the binary. Succeeds even while a peer
-        /// `cartog serve`/`watch` is running — the swap happens later via
-        /// `--apply-pending` once the peer has exited. This is the right call
-        /// from inside a Claude Code session, where the MCP server is the peer.
-        /// Targets the latest stable release unless `--to` pins a version.
+        /// Arm a deferred update without swapping the binary
+        ///
+        /// Records the target version in the state file and exits. Succeeds
+        /// even while a peer `cartog serve`/`watch` is running — the swap
+        /// happens later via `--apply-pending` once the peer has exited. This
+        /// is the right call from inside a Claude Code session, where the MCP
+        /// server is the peer. Targets the latest stable release unless `--to`
+        /// pins a version.
         #[arg(long, conflicts_with_all = ["check", "apply_pending"])]
         defer: bool,
 
-        /// With `--defer`, arm exactly this `MAJOR.MINOR.PATCH` version instead
-        /// of resolving the latest stable release. Used by `/cartog-install` to
-        /// arm the plugin's pinned version. Requires `--defer`.
+        /// With `--defer`, arm exactly this `MAJOR.MINOR.PATCH` version
+        ///
+        /// Overrides resolving the latest stable release. Used by
+        /// `/cartog-install` to arm the plugin's pinned version. Requires
+        /// `--defer`.
         #[arg(long, value_name = "VERSION", requires = "defer")]
         to: Option<String>,
 
-        /// Apply a previously-armed deferred update (see `--defer`). Reads the
-        /// pending target from the state file, waits briefly for any peer lock
-        /// to clear, performs the swap, and clears the pending intent. Intended
-        /// to run from the SessionEnd hook once the serve process has exited.
+        /// Apply a previously-armed deferred update (see `--defer`)
+        ///
+        /// Reads the pending target from the state file, waits briefly for any
+        /// peer lock to clear, performs the swap, and clears the pending
+        /// intent. Intended to run from the SessionEnd hook once the serve
+        /// process has exited.
         #[arg(long, conflicts_with_all = ["check", "defer"])]
         apply_pending: bool,
 
