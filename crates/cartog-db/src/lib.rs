@@ -173,6 +173,10 @@ CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_name);
 CREATE INDEX IF NOT EXISTS idx_edges_target_id ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
+-- Per-file edge delete (clear_file_data_in_tx); without it the DELETE full-scans
+-- edges per file, making --force/first-index O(files×edges). idx_edges_unresolved
+-- is partial (state=0) so it can't serve deletes of resolved edges.
+CREATE INDEX IF NOT EXISTS idx_edges_file ON edges(file_path);
 -- Tier-2 import-path lookups; kind-only index scans all imports edges per call (#109).
 CREATE INDEX IF NOT EXISTS idx_edges_kind_target ON edges(kind, target_name);
 -- idx_edges_unresolved (partial index on resolution_state=0) is created
@@ -3136,6 +3140,58 @@ mod tests {
         assert!(
             plan.contains("idx_edges_kind_target"),
             "tier-2 must drive off edges(kind, target_name); got plan:\n{plan}"
+        );
+    }
+
+    #[test]
+    fn test_per_file_edge_delete_uses_file_index() {
+        // Plan regression: clear_file_data_in_tx's DELETE FROM edges WHERE
+        // file_path=? must use an index, not full-scan. A scan makes
+        // --force/first-index O(files×edges) (the per-file-clear quadratic).
+        let db = Database::open_memory().unwrap();
+        let mut stmt = db
+            .conn
+            .prepare("EXPLAIN QUERY PLAN DELETE FROM edges WHERE file_path = ?1")
+            .unwrap();
+        let plan = stmt
+            .query_map(params!["a.py"], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(
+            plan.contains("idx_edges_file"),
+            "per-file edge delete must drive off edges(file_path); got plan:\n{plan}"
+        );
+    }
+
+    #[test]
+    fn test_compute_in_degrees_plan_has_no_correlated_subquery() {
+        // Plan regression: the in-degree UPDATE must materialize counts once and
+        // join by PK, not re-scan it per row (correlated subquery → O(symbols×edges)).
+        let db = Database::open_memory().unwrap();
+        let mut stmt = db
+            .conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 UPDATE symbols SET in_degree = counts.cnt
+                 FROM (
+                     SELECT target_id, COUNT(*) AS cnt
+                     FROM edges WHERE target_id IS NOT NULL
+                     GROUP BY target_id
+                 ) AS counts
+                 WHERE symbols.id = counts.target_id",
+            )
+            .unwrap();
+        let plan = stmt
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(
+            !plan.to_uppercase().contains("CORRELATED"),
+            "in-degree UPDATE must not use a correlated subquery; got plan:\n{plan}"
         );
     }
 

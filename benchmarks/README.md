@@ -147,14 +147,13 @@ RATIO_MAX=2.5 ./benchmarks/resolution_scale.sh   # stricter threshold
 
 Opt-in (not in `make check`): the large run is seconds-to-minutes depending on N.
 
-> **Known finding (0.26.0):** this bench currently *fails* at the default N=1000 —
-> resolution is still ~O(edges²) after #110 (which only fixed tier-2's query
-> plan). Measured curve (flat synthetic repo): 16k→0.48s, 32k→1.45s, 64k→5.17s,
-> 128k→19.8s (time ~4× per 2× edges). Reproduced on a realistic nested-package
-> shape too, so it is not a generator artifact. The remaining cost is in the
-> per-edge resolve loop / 2-pass structure, not a single mis-planned query. A red
-> run is expected until that open lead is fixed; the bench then guards against
-> *further* regression.
+> **History:** on first introduction this bench *failed* (ratio ~3.6 at N=1000),
+> surfacing two O(n²) terms #110 had not closed: `compute_in_degrees` used a
+> correlated subquery (re-scanned the counts set per row), and the per-file
+> `DELETE FROM edges WHERE file_path=?` full-scanned the edge table (no
+> `idx_edges_file`). Both were fixed (`UPDATE...FROM` + the index); the bench now
+> passes at ~1.3 and guards against further regression. Before: 32k→1.45s,
+> 64k→5.17s, 128k→19.8s. After: index of 2000 files dropped 5.17s→0.87s.
 
 ## Reproducing the numbers
 

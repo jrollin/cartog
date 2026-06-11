@@ -201,18 +201,16 @@ impl Database {
     pub fn compute_in_degrees(&self) -> Result<u32> {
         self.conn.execute("UPDATE symbols SET in_degree = 0", [])?;
 
-        // CTE computes counts once; the UPDATE applies them.
-        // Avoids a correlated subquery per symbol (O(n*m) → O(n+m)).
+        // UPDATE...FROM joins each count to its symbol by PK once. A correlated
+        // subquery here re-scans the counts set per row — O(symbols×edges).
         let updated = self.conn.execute(
-            "WITH counts AS (
-                SELECT target_id, COUNT(*) AS cnt
-                FROM edges WHERE target_id IS NOT NULL
-                GROUP BY target_id
-            )
-            UPDATE symbols SET in_degree = (
-                SELECT cnt FROM counts WHERE counts.target_id = symbols.id
-            )
-            WHERE id IN (SELECT target_id FROM counts)",
+            "UPDATE symbols SET in_degree = counts.cnt
+             FROM (
+                 SELECT target_id, COUNT(*) AS cnt
+                 FROM edges WHERE target_id IS NOT NULL
+                 GROUP BY target_id
+             ) AS counts
+             WHERE symbols.id = counts.target_id",
             [],
         )?;
 
@@ -344,17 +342,17 @@ impl Database {
         )?;
 
         // Fix symbols whose stored value disagrees with the actual count.
+        // UPDATE...FROM avoids the correlated re-scan (see compute_in_degrees);
+        // the `!=` predicate keeps the write set to only changed rows.
         let updated = self.conn.execute(
-            "WITH counts AS (
-                SELECT target_id, COUNT(*) AS cnt
-                FROM edges WHERE target_id IS NOT NULL
-                GROUP BY target_id
-            )
-            UPDATE symbols SET in_degree = (
-                SELECT cnt FROM counts WHERE counts.target_id = symbols.id
-            )
-            WHERE id IN (SELECT target_id FROM counts)
-              AND in_degree != (SELECT cnt FROM counts WHERE counts.target_id = symbols.id)",
+            "UPDATE symbols SET in_degree = counts.cnt
+             FROM (
+                 SELECT target_id, COUNT(*) AS cnt
+                 FROM edges WHERE target_id IS NOT NULL
+                 GROUP BY target_id
+             ) AS counts
+             WHERE symbols.id = counts.target_id
+               AND symbols.in_degree != counts.cnt",
             [],
         )?;
 

@@ -18,12 +18,10 @@
 # Heuristic-only (--no-lsp): deterministic, server-independent, and the path the
 # #110 quadratic lived on. Generated repos go in a temp dir (never committed).
 #
-# KNOWN FINDING (as of 0.26.0): this bench FAILS at the default N=1000 — resolution
-# is still super-linear (~O(edges^2)) even after #110, which only fixed tier-2's
-# query *plan*. The remaining cost is in the per-edge resolve loop / 2-pass
-# structure (profile: sqlite3VdbeFinishMoveto btree seeks dominate), not in any
-# single mis-planned query. A red run today is expected and reproduces the open
-# lead; once that is fixed the bench should go green and then guards regressions.
+# HISTORY: on introduction this bench FAILED (~3.6 at N=1000), surfacing two
+# O(edges^2) terms #110 had not closed — compute_in_degrees' correlated subquery
+# and the per-file edge DELETE full-scan (no idx_edges_file). Both fixed; the
+# bench now passes (~1.3) and guards against further regression.
 #
 # Usage:
 #   ./benchmarks/resolution_scale.sh                 # default N (see below)
