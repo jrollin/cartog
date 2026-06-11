@@ -466,7 +466,7 @@ comments and ordering in the rest of the file.
 | `--scope project\|user\|all` | Limit to project-scoped files, user-scoped files, or both (default `all`). |
 | `-y`, `--yes` | Skip interactive prompts. Also implied by `--dry-run`, `--client`, `--json`, or a non-TTY stdin. |
 | `--dry-run` | Print the planned changes (before/after diff per file) without writing. Implies non-interactive. |
-| `--no-watch` | Drop `--watch` from Claude Code's serve args. Other clients register plain `["serve"]` regardless. |
+| `--no-watch` | Drop `--watch` from every client's serve args (default wires `serve --watch` for all). |
 | `--json` (global) | Emit a structured `IdeReport` on stdout instead of human text. |
 
 #### Troubleshooting
@@ -806,8 +806,8 @@ On an unindexed repo all counts are `0` and the output ends with
 
 Per-tool query counts + an estimated tokens-saved figure versus a grep+read
 baseline (~1,420 tokens/query, drawn from the benchmark suite). Visible alias
-of `cartog stats --savings`; shipped as a top-level verb because it's the
-retention hook — surfaces ongoing ROI in one keystroke.
+of `cartog stats --savings`, promoted to a top-level verb so day-to-day
+savings are one keystroke away.
 
 ```bash
 cartog savings
