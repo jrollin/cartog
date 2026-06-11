@@ -283,14 +283,16 @@ pub fn render_index_summary(r: &IndexResult) -> String {
 pub enum ProgressUpdate {
     /// Phase 1 starting: walking the directory tree, collecting candidates.
     Walking,
-    /// Phase 2 starting: `total` candidates queued for parallel parse/extract.
-    Parsing { total: u32 },
-    /// Phase 3 starting: `total` parsed files about to be written in the
+    /// Phase 2 progress: `processed` of `total` candidates parsed/extracted.
+    Parsing { processed: u32, total: u32 },
+    /// Phase 3 progress: `processed` of `total` parsed files written in the
     /// indexing transaction.
-    Storing { total: u32 },
-    /// Phase 4 starting: LSP-based edge resolution. Slowest phase on large
-    /// repos and the one most likely to look "stuck", so it gets its own event.
-    ResolvingLsp,
+    Storing { processed: u32, total: u32 },
+    /// Phase 4 progress: LSP-based edge resolution, `processed` of `total`
+    /// files visited. Slowest phase on large repos and the one most likely to
+    /// look "stuck", so it ticks per file. `total == 0` is the start marker
+    /// (the real total is known only once inside the LSP layer).
+    ResolvingLsp { processed: u32, total: u32 },
 }
 
 impl ProgressUpdate {
@@ -301,9 +303,15 @@ impl ProgressUpdate {
     pub fn label(&self) -> String {
         match self {
             ProgressUpdate::Walking => "scanning files".to_string(),
-            ProgressUpdate::Parsing { total } => format!("parsing {total} files"),
-            ProgressUpdate::Storing { total } => format!("storing {total} files"),
-            ProgressUpdate::ResolvingLsp => "resolving edges with LSP".to_string(),
+            ProgressUpdate::Parsing { processed, total } => {
+                format!("parsing {processed}/{total} files")
+            }
+            ProgressUpdate::Storing { processed, total } => {
+                format!("storing {processed}/{total} files")
+            }
+            ProgressUpdate::ResolvingLsp { processed, total } => {
+                format!("resolving edges {processed}/{total} files")
+            }
         }
     }
 }
@@ -311,7 +319,8 @@ impl ProgressUpdate {
 /// Optional progress callback type accepted by [`index_directory`].
 ///
 /// Called synchronously from inside the indexer (never on an async runtime).
-/// Implementations must be cheap and non-blocking.
+/// The parse phase invokes it concurrently from rayon workers (hence the
+/// `Send + Sync` bound), so implementations must be cheap and non-blocking.
 pub type ProgressCallback<'a> = &'a (dyn Fn(ProgressUpdate) + Send + Sync);
 
 /// Optional cooperative-cancellation probe accepted by [`index_directory`].
@@ -484,20 +493,31 @@ pub fn index_directory(
 
     // ── Phase 2: parallel parse + extract (CPU-bound, rayon-worker pool) ──
     check_cancel()?;
+    let parse_total = candidates.len() as u32;
     emit(ProgressUpdate::Parsing {
-        total: candidates.len() as u32,
+        processed: 0,
+        total: parse_total,
     });
+    // Shared across rayon workers; ticks once per completed file so the spinner
+    // shows live N/total during the parse phase.
+    let parsed_count = std::sync::atomic::AtomicU32::new(0);
     let parsed: Vec<ParseOutput> = candidates
         .par_iter()
         .map(|(abs, rel, lang)| {
-            parse_one_file(
+            let out = parse_one_file(
                 abs,
                 rel,
                 lang,
                 force,
                 stored_hashes.get(rel).map(String::as_str),
                 redact,
-            )
+            );
+            let done = parsed_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            emit(ProgressUpdate::Parsing {
+                processed: done,
+                total: parse_total,
+            });
+            out
         })
         .collect();
 
@@ -530,8 +550,10 @@ pub fn index_directory(
         .count() as u32;
     check_cancel()?;
     emit(ProgressUpdate::Storing {
+        processed: 0,
         total: storing_total,
     });
+    let mut stored_count = 0u32;
     let tx = db.begin_indexing_tx()?;
     for item in parsed {
         check_cancel()?;
@@ -674,6 +696,11 @@ pub fn index_directory(
         })?;
 
         result.files_indexed += 1;
+        stored_count += 1;
+        emit(ProgressUpdate::Storing {
+            processed: stored_count,
+            total: storing_total,
+        });
     }
 
     // Remove files that no longer exist. Treat deletions as "dirty" so the
@@ -744,9 +771,19 @@ pub fn index_directory(
         if lsp_ran {
             // Watch (lsp=false) may have sealed edges at state=4; give LSP a shot.
             db.reopen_heuristic_exhausted()?;
-            emit(ProgressUpdate::ResolvingLsp);
-            let stats = cartog_lsp::lsp_resolve_edges(db, &root, None, lsp_overrides)
-                .with_context(|| format!("resolving LSP edges for root {}", root.display()))?;
+            // Start marker; the real total is known only inside the LSP layer
+            // (distinct unresolved-edge files), so the per-file callback below
+            // re-emits with the true (processed, total).
+            emit(ProgressUpdate::ResolvingLsp {
+                processed: 0,
+                total: 0,
+            });
+            let lsp_progress = |processed: u32, total: u32| {
+                emit(ProgressUpdate::ResolvingLsp { processed, total });
+            };
+            let stats =
+                cartog_lsp::lsp_resolve_edges(db, &root, None, lsp_overrides, Some(&lsp_progress))
+                    .with_context(|| format!("resolving LSP edges for root {}", root.display()))?;
             result.edges_lsp_resolved = stats.resolved;
             result.edges_marked_unresolvable = stats.marked_unresolvable;
             result.edges_marked_external = stats.marked_external;
@@ -2737,10 +2774,33 @@ We use PostgreSQL with connection pooling via pgbouncer.
 
         assert!(result.files_indexed >= 2);
         let events = events.into_inner().unwrap();
-        assert_eq!(events.len(), 3, "expected 3 phase events, got {events:?}");
         assert_eq!(events[0], ProgressUpdate::Walking);
-        assert!(matches!(events[1], ProgressUpdate::Parsing { total } if total >= 2));
-        assert!(matches!(events[2], ProgressUpdate::Storing { total } if total >= 2));
+        // Parse ticks from rayon workers, so emit order isn't the counter order
+        // (Relaxed): assert the invariant (every tick processed<=total) and that
+        // some tick reaches total — never that the *last-emitted* one does.
+        let parsing: Vec<(u32, u32)> = events
+            .iter()
+            .filter_map(|e| match e {
+                ProgressUpdate::Parsing { processed, total } => Some((*processed, *total)),
+                _ => None,
+            })
+            .collect();
+        assert!(!parsing.is_empty(), "a Parsing event");
+        assert!(parsing.iter().all(|(p, t)| p <= t));
+        let parse_total = parsing[0].1;
+        assert!(parse_total >= 2);
+        assert!(parsing.iter().any(|(p, _)| *p == parse_total));
+        // Store is sequential, so its last-emitted tick must reach total.
+        let last_storing = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                ProgressUpdate::Storing { processed, total } => Some((*processed, *total)),
+                _ => None,
+            })
+            .expect("a Storing event");
+        assert_eq!(last_storing.0, last_storing.1);
+        assert!(last_storing.1 >= 2);
     }
 
     #[test]
@@ -2816,13 +2876,13 @@ We use PostgreSQL with connection pooling via pgbouncer.
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, ProgressUpdate::Parsing { total } if *total > 0)),
+                .any(|e| matches!(e, ProgressUpdate::Parsing { total, .. } if *total > 0)),
             "must emit a Parsing event with a positive total"
         );
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, ProgressUpdate::Storing { total } if *total > 0)),
+                .any(|e| matches!(e, ProgressUpdate::Storing { total, .. } if *total > 0)),
             "must emit a Storing event with a positive total"
         );
     }

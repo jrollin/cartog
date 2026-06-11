@@ -364,15 +364,24 @@ fn index_with_optional_lsp(
     };
 
     if result.dirty_files > 0 {
-        if let Some(tx) = progress_tx.as_ref() {
-            let _ = tx.try_send(progress::Phase::Custom("resolving with LSP"));
-        }
         let mut mgr = lsp_manager.lock().map_err(|_| {
             mcp_err("internal error: LSP manager lock poisoned (server restart required)")
         })?;
         let db = db.lock().map_err(|_| {
             mcp_err("internal error: database lock poisoned (server restart required)")
         })?;
+        // Per-file LSP progress, forwarded through the same `ResolvingLsp` event
+        // the CLI uses so the wording stays single-sourced via `label()`.
+        let lsp_progress = progress_tx.as_ref().map(|tx| {
+            let tx = tx.clone();
+            move |processed: u32, total: u32| {
+                let _ = tx.try_send(progress::Phase::Indexer(
+                    indexer::ProgressUpdate::ResolvingLsp { processed, total },
+                ));
+            }
+        });
+        let lsp_cb: Option<&(dyn Fn(u32, u32) + Send + Sync)> =
+            lsp_progress.as_ref().map(|f| f as _);
         // Overrides live on the shared `mgr` (set at construction), so the
         // map passed here is ignored — pass empty.
         match cartog_lsp::lsp_resolve_edges(
@@ -380,6 +389,7 @@ fn index_with_optional_lsp(
             root,
             Some(&mut mgr),
             &std::collections::HashMap::new(),
+            lsp_cb,
         ) {
             Ok(stats) => {
                 result.edges_lsp_resolved = stats.resolved;
@@ -3301,6 +3311,65 @@ mod tests {
             "no-op reindex must not produce new external marks"
         );
         assert_eq!(r2.files_indexed, 0);
+    }
+
+    #[test]
+    #[cfg(feature = "lsp")]
+    fn index_with_optional_lsp_forwards_per_file_progress() {
+        // The MCP index path threads a progress channel through the indexer
+        // (and, when LSP runs, through lsp_resolve_edges). Assert the per-file
+        // parse/store ticks reach the channel — the deterministic half that
+        // needs no live LSP server.
+        use cartog_db::Database;
+        use cartog_lsp::manager::LspManager;
+
+        let fixtures_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/auth");
+        if !fixtures_src.exists() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let fixtures = tmp.path().join("auth");
+        std::fs::create_dir_all(&fixtures).unwrap();
+        for entry in std::fs::read_dir(&fixtures_src).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), fixtures.join(entry.file_name())).unwrap();
+        }
+
+        let db = Arc::new(Mutex::new(Database::open_memory().unwrap()));
+        let lsp_mgr = Arc::new(Mutex::new(LspManager::new(&fixtures)));
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<progress::Phase>(256);
+
+        index_with_optional_lsp(
+            &db,
+            &lsp_mgr,
+            &fixtures,
+            false,
+            Some(tx),
+            None,
+            indexer::RedactionConfig::disabled(),
+        )
+        .unwrap();
+
+        let mut events = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            events.push(p);
+        }
+        let labels: Vec<String> = events
+            .iter()
+            .map(|p| p.clone().into_message_and_total().0)
+            .collect();
+        assert!(
+            labels
+                .iter()
+                .any(|l| l.starts_with("parsing ") && l.ends_with(" files")),
+            "expected a per-file parsing tick, got {labels:?}"
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|l| l.starts_with("storing ") && l.ends_with(" files")),
+            "expected a per-file storing tick, got {labels:?}"
+        );
     }
 
     #[test]

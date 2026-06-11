@@ -32,12 +32,19 @@ pub struct LspResolveStats {
     pub marked_external: u32,
 }
 
+/// Per-file progress callback: `(processed, total)` files visited during LSP
+/// resolution. The slowest indexing phase, so callers tick a spinner from it.
+pub type ProgressCallback<'a> = &'a (dyn Fn(u32, u32) + Send + Sync);
+
 /// Resolve edges that heuristic resolution left unresolved, using LSP servers.
 ///
 /// If `shared_manager` is provided, reuses existing LSP servers (warm start) —
 /// it already carries any command overrides, so `overrides` is ignored in that
 /// case. Otherwise creates a temporary manager seeded with `overrides`
 /// (per-language `[lsp.<lang>] command`), dropped after resolution.
+///
+/// `progress`, when `Some`, fires once per file with `(processed, total)` where
+/// `total` is the distinct unresolved-edge file count across all languages.
 ///
 /// Returns counts for `resolved` (state=0 → 1), `marked_unresolvable`
 /// (state=0 → 2, definitive LSP negative), and `marked_external` (state=0 → 3,
@@ -47,6 +54,7 @@ pub fn lsp_resolve_edges(
     root: &Path,
     shared_manager: Option<&mut LspManager>,
     overrides: &HashMap<String, Vec<String>>,
+    progress: Option<ProgressCallback<'_>>,
 ) -> Result<LspResolveStats> {
     let unresolved = db.unresolved_edges()?;
 
@@ -66,6 +74,19 @@ pub fn lsp_resolve_edges(
     if by_language.is_empty() {
         return Ok(LspResolveStats::default());
     }
+
+    // Distinct unresolved-edge files across all languages — the progress total.
+    let progress_total = by_language
+        .values()
+        .flat_map(|edges| edges.iter().map(|e| e.file_path.as_str()))
+        .collect::<std::collections::HashSet<_>>()
+        .len() as u32;
+    let mut files_done = 0u32;
+    let tick = |files_done: u32| {
+        if let Some(cb) = progress {
+            cb(files_done, progress_total);
+        }
+    };
 
     // Use shared manager if provided, otherwise create a temporary one
     let mut owned_manager;
@@ -119,6 +140,8 @@ pub fn lsp_resolve_edges(
         let mut server_died = false;
 
         for (file_path, file_edges) in by_file {
+            files_done += 1;
+            tick(files_done);
             let abs_path = root.join(file_path);
             let content = match std::fs::read_to_string(&abs_path) {
                 Ok(c) => c,
@@ -399,7 +422,7 @@ mod tests {
         let edge_id = db.unresolved_edges().unwrap()[0].edge_id;
 
         let tmp = tempfile::tempdir().unwrap();
-        let stats = lsp_resolve_edges(&db, tmp.path(), None, &HashMap::new()).unwrap();
+        let stats = lsp_resolve_edges(&db, tmp.path(), None, &HashMap::new(), None).unwrap();
         assert_eq!(stats.resolved, 0, "no servers must mean zero resolutions");
         assert_eq!(
             stats.marked_unresolvable, 0,

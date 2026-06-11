@@ -1529,9 +1529,27 @@ mod tests {
         use indexer::ProgressUpdate as U;
         let cap = |u: &U| capitalize_phase(u.label());
         assert_eq!(cap(&U::Walking), "Scanning files");
-        assert_eq!(cap(&U::Parsing { total: 12 }), "Parsing 12 files");
-        assert_eq!(cap(&U::Storing { total: 5 }), "Storing 5 files");
-        assert_eq!(cap(&U::ResolvingLsp), "Resolving edges with LSP");
+        assert_eq!(
+            cap(&U::Parsing {
+                processed: 3,
+                total: 12
+            }),
+            "Parsing 3/12 files"
+        );
+        assert_eq!(
+            cap(&U::Storing {
+                processed: 5,
+                total: 5
+            }),
+            "Storing 5/5 files"
+        );
+        assert_eq!(
+            cap(&U::ResolvingLsp {
+                processed: 8,
+                total: 20
+            }),
+            "Resolving edges 8/20 files"
+        );
     }
 
     #[test]

@@ -21,12 +21,6 @@ use tokio::sync::mpsc;
 pub enum Phase {
     Indexer(cartog_indexer::ProgressUpdate),
     Rag(cartog_rag::indexer::ProgressUpdate),
-    /// Free-form phase added by the MCP layer (e.g. `Resolving` after the
-    /// LSP edge-resolution pass). Only constructed when the `lsp` feature
-    /// is enabled; `#[allow(dead_code)]` keeps `cargo check
-    /// --no-default-features` clean.
-    #[allow(dead_code)]
-    Custom(&'static str),
 }
 
 impl Phase {
@@ -41,12 +35,12 @@ impl Phase {
         // cartog-indexer / cartog-rag); only the `total` for the MCP progress
         // bar is computed here.
         match self {
-            Phase::Indexer(u @ IxU::Parsing { total }) => (u.label(), Some(total as f64)),
-            Phase::Indexer(u @ IxU::Storing { total }) => (u.label(), Some(total as f64)),
+            Phase::Indexer(u @ IxU::Parsing { total, .. }) => (u.label(), Some(total as f64)),
+            Phase::Indexer(u @ IxU::Storing { total, .. }) => (u.label(), Some(total as f64)),
+            Phase::Indexer(u @ IxU::ResolvingLsp { total, .. }) => (u.label(), Some(total as f64)),
             Phase::Indexer(u) => (u.label(), None),
             Phase::Rag(u @ RgU::Embedding { total, .. }) => (u.label(), Some(total as f64)),
             Phase::Rag(u) => (u.label(), None),
-            Phase::Custom(s) => (s.into(), None),
         }
     }
 }
@@ -167,8 +161,14 @@ mod tests {
 
         let cb = indexer_callback(fwd.tx.clone());
         cb(IxU::Walking);
-        cb(IxU::Parsing { total: 7 });
-        cb(IxU::Storing { total: 5 });
+        cb(IxU::Parsing {
+            processed: 3,
+            total: 7,
+        });
+        cb(IxU::Storing {
+            processed: 2,
+            total: 5,
+        });
 
         drop(cb);
         drop(fwd.tx);
@@ -179,8 +179,8 @@ mod tests {
         assert!(events[0].progress < events[1].progress);
         assert!(events[1].progress < events[2].progress);
         assert_eq!(events[0].message.as_deref(), Some("scanning files"));
-        assert_eq!(events[1].message.as_deref(), Some("parsing 7 files"));
-        assert_eq!(events[2].message.as_deref(), Some("storing 5 files"));
+        assert_eq!(events[1].message.as_deref(), Some("parsing 3/7 files"));
+        assert_eq!(events[2].message.as_deref(), Some("storing 2/5 files"));
         assert_eq!(events[0].total, None);
         assert_eq!(events[1].total, Some(7.0));
         assert_eq!(events[2].total, Some(5.0));
@@ -188,9 +188,13 @@ mod tests {
 
     #[test]
     fn resolving_lsp_phase_maps_to_message() {
-        let (msg, total) = Phase::Indexer(IxU::ResolvingLsp).into_message_and_total();
-        assert_eq!(msg, "resolving edges with LSP");
-        assert_eq!(total, None);
+        let (msg, total) = Phase::Indexer(IxU::ResolvingLsp {
+            processed: 4,
+            total: 9,
+        })
+        .into_message_and_total();
+        assert_eq!(msg, "resolving edges 4/9 files");
+        assert_eq!(total, Some(9.0));
     }
 
     #[tokio::test]
@@ -219,12 +223,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn custom_phase_is_forwarded() {
+    async fn lsp_phase_forwards_per_file_counter() {
         let (notifier, events) = capturing_notifier();
         let fwd = spawn_forwarder(token(), notifier);
 
         fwd.tx
-            .send(Phase::Custom("resolving with LSP"))
+            .send(Phase::Indexer(IxU::ResolvingLsp {
+                processed: 3,
+                total: 7,
+            }))
             .await
             .unwrap();
         drop(fwd.tx);
@@ -232,7 +239,11 @@ mod tests {
 
         let events = events.lock().unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].message.as_deref(), Some("resolving with LSP"));
+        assert_eq!(
+            events[0].message.as_deref(),
+            Some("resolving edges 3/7 files")
+        );
+        assert_eq!(events[0].total, Some(7.0));
     }
 
     #[tokio::test]
@@ -249,6 +260,9 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<Phase>(1);
         let cb = indexer_callback(tx);
         cb(IxU::Walking);
-        cb(IxU::Parsing { total: 1 });
+        cb(IxU::Parsing {
+            processed: 0,
+            total: 1,
+        });
     }
 }
