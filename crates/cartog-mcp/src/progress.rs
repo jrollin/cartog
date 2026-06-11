@@ -15,38 +15,84 @@ use rmcp::model::{ProgressNotificationParam, ProgressToken};
 use tokio::sync::mpsc;
 
 /// Internal, transport-neutral phase event shipped from a blocking task to
-/// the async forwarder. Each variant maps to a `ProgressNotificationParam`
-/// via [`Phase::into_message_and_total`].
+/// the async forwarder, which renders it (via `Phase::render`) and accumulates
+/// it into a `ProgressNotificationParam`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Phase {
     Indexer(cartog_indexer::ProgressUpdate),
     Rag(cartog_rag::indexer::ProgressUpdate),
-    /// Free-form phase added by the MCP layer (e.g. `Resolving` after the
-    /// LSP edge-resolution pass). Only constructed when the `lsp` feature
-    /// is enabled; `#[allow(dead_code)]` keeps `cargo check
-    /// --no-default-features` clean.
-    #[allow(dead_code)]
-    Custom(&'static str),
+}
+
+/// A phase rendered for the wire: human label plus its in-phase `(done, total)`
+/// when the phase carries a counter. The forwarder turns these per-phase counts
+/// into a globally-monotonic `progress` (the MCP spec requires `progress` to
+/// strictly increase per token), so `done`/`total` here are phase-local, not
+/// cumulative.
+struct PhaseProgress {
+    message: String,
+    /// `Some((done, total))` for counting phases (parse/store/resolve/embed);
+    /// `None` for marker phases (walking, preparing, storing-embeddings).
+    counts: Option<(u32, u32)>,
+    /// Stable discriminant of the phase so the forwarder can tell one counting
+    /// phase from the next (two phases can both start at `done == 0`).
+    kind: PhaseKind,
+}
+
+/// Identity of a phase, used by the forwarder to detect boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PhaseKind {
+    Walking,
+    Parsing,
+    Storing,
+    ResolvingLsp,
+    Preparing,
+    Embedding,
+    StoringEmbeddings,
 }
 
 impl Phase {
-    /// Render `(message, total)` for [`ProgressNotificationParam`].
-    ///
-    /// The `progress` counter itself is owned by the forwarder so it can
-    /// stay monotonic across phases (the MCP spec requires this).
-    pub fn into_message_and_total(self) -> (String, Option<f64>) {
+    /// Render the phase for the wire. Labels come from `ProgressUpdate::label()`
+    /// (single source of truth in cartog-indexer / cartog-rag); the per-phase
+    /// `(done, total)` is extracted here for the forwarder to accumulate.
+    fn render(self) -> PhaseProgress {
         use cartog_indexer::ProgressUpdate as IxU;
         use cartog_rag::indexer::ProgressUpdate as RgU;
-        // Labels come from `ProgressUpdate::label()` (single source of truth in
-        // cartog-indexer / cartog-rag); only the `total` for the MCP progress
-        // bar is computed here.
         match self {
-            Phase::Indexer(u @ IxU::Parsing { total }) => (u.label(), Some(total as f64)),
-            Phase::Indexer(u @ IxU::Storing { total }) => (u.label(), Some(total as f64)),
-            Phase::Indexer(u) => (u.label(), None),
-            Phase::Rag(u @ RgU::Embedding { total, .. }) => (u.label(), Some(total as f64)),
-            Phase::Rag(u) => (u.label(), None),
-            Phase::Custom(s) => (s.into(), None),
+            Phase::Indexer(u @ IxU::Parsing { done, total }) => PhaseProgress {
+                message: u.label(),
+                counts: Some((done, total)),
+                kind: PhaseKind::Parsing,
+            },
+            Phase::Indexer(u @ IxU::Storing { done, total }) => PhaseProgress {
+                message: u.label(),
+                counts: Some((done, total)),
+                kind: PhaseKind::Storing,
+            },
+            Phase::Indexer(u @ IxU::ResolvingLsp { done, total }) => PhaseProgress {
+                message: u.label(),
+                counts: Some((done, total)),
+                kind: PhaseKind::ResolvingLsp,
+            },
+            Phase::Indexer(u @ IxU::Walking) => PhaseProgress {
+                message: u.label(),
+                counts: None,
+                kind: PhaseKind::Walking,
+            },
+            Phase::Rag(u @ RgU::Embedding { processed, total }) => PhaseProgress {
+                message: u.label(),
+                counts: Some((processed, total)),
+                kind: PhaseKind::Embedding,
+            },
+            Phase::Rag(u @ RgU::Preparing) => PhaseProgress {
+                message: u.label(),
+                counts: None,
+                kind: PhaseKind::Preparing,
+            },
+            Phase::Rag(u @ RgU::Storing) => PhaseProgress {
+                message: u.label(),
+                counts: None,
+                kind: PhaseKind::StoringEmbeddings,
+            },
         }
     }
 }
@@ -85,21 +131,57 @@ pub struct Forwarder {
 const CHANNEL_CAPACITY: usize = 64;
 
 /// Spawn an async forwarder that consumes [`Phase`] events from `rx` and
-/// pushes them to `notifier` as `notifications/progress` with the given
-/// token.
+/// pushes them to `notifier` as `notifications/progress` with the given token.
 ///
-/// `progress` is a monotonically-increasing counter incremented once per
-/// emitted event, per the MCP spec.
+/// The MCP spec requires `progress` to strictly increase per token, but each
+/// phase reports a `done` that resets to 0 at its start. The forwarder bridges
+/// this by accumulating a `base` (the summed totals of all completed phases):
+/// within a counting phase it reports `progress = base + done` against
+/// `total = base + phase_total`, so the bar climbs coherently across phases
+/// instead of resetting or overshooting. Marker phases with no counter (walking,
+/// preparing, storing-embeddings) step `progress` by one with no `total`. A new
+/// phase is recognized when the event's [`PhaseKind`] changes; `last_progress`
+/// then clamps the value up so neither a phase boundary nor an out-of-order
+/// rayon emit (which can make `done` jitter) ever makes `progress` dip.
 pub fn spawn_forwarder(token: ProgressToken, notifier: Notifier) -> Forwarder {
     let (tx, mut rx) = mpsc::channel::<Phase>(CHANNEL_CAPACITY);
     let join = tokio::spawn(async move {
-        let mut counter: f64 = 0.0;
+        let mut base: f64 = 0.0;
+        let mut cur: Option<(PhaseKind, u32)> = None; // (kind, total) of the phase in flight
+        let mut last_progress: f64 = 0.0;
         while let Some(phase) = rx.recv().await {
-            counter += 1.0;
-            let (message, total) = phase.into_message_and_total();
+            let PhaseProgress {
+                message,
+                counts,
+                kind,
+            } = phase.render();
+            // Phase boundary: a different kind arrived. Fold the finished phase's
+            // total (a counting phase) or its single marker unit into the base.
+            if let Some((prev_kind, prev_total)) = cur {
+                if prev_kind != kind {
+                    base += if prev_total > 0 {
+                        prev_total as f64
+                    } else {
+                        1.0
+                    };
+                }
+            }
+            let total = match counts {
+                Some((done, total)) => {
+                    cur = Some((kind, total));
+                    last_progress = last_progress.max(base + done as f64);
+                    Some(base + total as f64)
+                }
+                None => {
+                    // Marker phase: occupies one unit, no determinate total.
+                    cur = Some((kind, 0));
+                    last_progress = last_progress.max(base);
+                    None
+                }
+            };
             (notifier)(ProgressNotificationParam {
                 progress_token: token.clone(),
-                progress: counter,
+                progress: last_progress,
                 total,
                 message: Some(message),
             })
@@ -167,8 +249,8 @@ mod tests {
 
         let cb = indexer_callback(fwd.tx.clone());
         cb(IxU::Walking);
-        cb(IxU::Parsing { total: 7 });
-        cb(IxU::Storing { total: 5 });
+        cb(IxU::Parsing { done: 0, total: 7 });
+        cb(IxU::Storing { done: 0, total: 5 });
 
         drop(cb);
         drop(fwd.tx);
@@ -176,21 +258,26 @@ mod tests {
 
         let events = events.lock().unwrap();
         assert_eq!(events.len(), 3);
+        // progress is globally monotonic across phases; totals are cumulative
+        // (base + phase total) so the bar climbs instead of resetting per phase.
         assert!(events[0].progress < events[1].progress);
         assert!(events[1].progress < events[2].progress);
         assert_eq!(events[0].message.as_deref(), Some("scanning files"));
         assert_eq!(events[1].message.as_deref(), Some("parsing 7 files"));
         assert_eq!(events[2].message.as_deref(), Some("storing 5 files"));
-        assert_eq!(events[0].total, None);
-        assert_eq!(events[1].total, Some(7.0));
-        assert_eq!(events[2].total, Some(5.0));
+        assert_eq!(events[0].total, None); // Walking marker
+        assert_eq!(events[1].total, Some(8.0)); // base 1 (walking) + 7
+        assert_eq!(events[2].total, Some(13.0)); // base 8 (walking+parsing) + 5
     }
 
     #[test]
-    fn resolving_lsp_phase_maps_to_message() {
-        let (msg, total) = Phase::Indexer(IxU::ResolvingLsp).into_message_and_total();
-        assert_eq!(msg, "resolving edges with LSP");
-        assert_eq!(total, None);
+    fn resolving_lsp_phase_renders_message_and_counts() {
+        let start = Phase::Indexer(IxU::ResolvingLsp { done: 0, total: 9 }).render();
+        assert_eq!(start.message, "resolving 9 edges with LSP");
+        assert_eq!(start.counts, Some((0, 9)));
+        let mid = Phase::Indexer(IxU::ResolvingLsp { done: 3, total: 9 }).render();
+        assert_eq!(mid.message, "resolving 3/9 edges with LSP");
+        assert_eq!(mid.counts, Some((3, 9)));
     }
 
     #[tokio::test]
@@ -214,25 +301,87 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert_eq!(events[0].message.as_deref(), Some("preparing"));
         assert_eq!(events[1].message.as_deref(), Some("embedding 512/1024"));
-        assert_eq!(events[1].total, Some(1024.0));
+        assert_eq!(events[1].total, Some(1025.0)); // base 1 (preparing) + 1024
         assert_eq!(events[2].message.as_deref(), Some("storing embeddings"));
+        // progress never dips across the marker→counting→marker boundaries.
+        assert!(events[0].progress <= events[1].progress);
+        assert!(events[1].progress <= events[2].progress);
     }
 
     #[tokio::test]
-    async fn custom_phase_is_forwarded() {
+    async fn progress_climbs_within_phase_and_stays_monotonic_across_phases() {
         let (notifier, events) = capturing_notifier();
         let fwd = spawn_forwarder(token(), notifier);
+        let cb = indexer_callback(fwd.tx.clone());
 
-        fwd.tx
-            .send(Phase::Custom("resolving with LSP"))
-            .await
-            .unwrap();
+        // A full parse phase that climbs, then a store phase that also climbs.
+        cb(IxU::Parsing {
+            done: 0,
+            total: 100,
+        });
+        cb(IxU::Parsing {
+            done: 64,
+            total: 100,
+        });
+        cb(IxU::Parsing {
+            done: 100,
+            total: 100,
+        });
+        cb(IxU::Storing { done: 0, total: 40 });
+        cb(IxU::Storing {
+            done: 40,
+            total: 40,
+        });
+
+        drop(cb);
         drop(fwd.tx);
         fwd.join.await.unwrap();
 
-        let events = events.lock().unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].message.as_deref(), Some("resolving with LSP"));
+        let e = events.lock().unwrap();
+        assert_eq!(e.len(), 5);
+        // Within the parse phase: 0 → 64 → 100 against total 100.
+        assert_eq!((e[0].progress, e[0].total), (0.0, Some(100.0)));
+        assert_eq!((e[1].progress, e[1].total), (64.0, Some(100.0)));
+        assert_eq!((e[2].progress, e[2].total), (100.0, Some(100.0)));
+        // Store phase folds the finished parse total (100) into the base, so it
+        // climbs 100 → 140 against cumulative total 140 — never resets to 0.
+        assert_eq!((e[3].progress, e[3].total), (100.0, Some(140.0)));
+        assert_eq!((e[4].progress, e[4].total), (140.0, Some(140.0)));
+        // Globally non-decreasing.
+        for w in e.windows(2) {
+            assert!(w[0].progress <= w[1].progress);
+        }
+    }
+
+    #[tokio::test]
+    async fn out_of_order_done_never_makes_progress_dip() {
+        let (notifier, events) = capturing_notifier();
+        let fwd = spawn_forwarder(token(), notifier);
+        let cb = indexer_callback(fwd.tx.clone());
+
+        // Rayon workers can emit out of order: a higher done arrives before a
+        // lower one. The clamp must keep progress non-decreasing.
+        cb(IxU::Parsing {
+            done: 0,
+            total: 100,
+        });
+        cb(IxU::Parsing {
+            done: 64,
+            total: 100,
+        });
+        cb(IxU::Parsing {
+            done: 32,
+            total: 100,
+        }); // late straggler, lower done
+
+        drop(cb);
+        drop(fwd.tx);
+        fwd.join.await.unwrap();
+
+        let e = events.lock().unwrap();
+        assert_eq!(e.len(), 3);
+        assert_eq!(e[1].progress, 64.0);
+        assert_eq!(e[2].progress, 64.0); // clamped up, not 32
     }
 
     #[tokio::test]
@@ -249,6 +398,6 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<Phase>(1);
         let cb = indexer_callback(tx);
         cb(IxU::Walking);
-        cb(IxU::Parsing { total: 1 });
+        cb(IxU::Parsing { done: 0, total: 1 });
     }
 }

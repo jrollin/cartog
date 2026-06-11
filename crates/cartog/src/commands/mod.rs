@@ -20,6 +20,40 @@ pub mod init;
 pub mod mermaid;
 pub mod remote;
 
+/// True while a TTY spinner is painting the bottom line of stderr. The tracing
+/// writer ([`SpinnerSafeWriter`]) reads this to clear the spinner line before
+/// emitting a log, so a `\r`-rewritten spinner and a `\n`-terminated log no
+/// longer garble each other — the spinner simply repaints on its next tick.
+static SPINNER_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// `MakeWriter` for tracing that coexists with the spinner. When a spinner is
+/// active it prefixes each record with `\r\x1b[K` (carriage return + clear to
+/// end of line) so the log overwrites the spinner line cleanly; the spinner's
+/// 100ms repaint then redraws below the log. Always writes to stderr.
+pub struct SpinnerSafeWriter;
+
+impl std::io::Write for SpinnerSafeWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut err = std::io::stderr().lock();
+        if SPINNER_ACTIVE.load(Ordering::Relaxed) {
+            err.write_all(b"\r\x1b[K")?;
+        }
+        err.write_all(buf)?;
+        // Report the caller's full buffer as written; the prefix is our own.
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stderr().lock().flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SpinnerSafeWriter {
+    type Writer = SpinnerSafeWriter;
+    fn make_writer(&'a self) -> Self::Writer {
+        SpinnerSafeWriter
+    }
+}
+
 /// Stderr progress reporter for long-running CLI commands.
 ///
 /// On a TTY it renders an animated spinner whose label tracks the current
@@ -27,10 +61,15 @@ pub mod remote;
 /// it prints a plain line on each phase change plus a periodic heartbeat, so a
 /// multi-minute first index is never silent. Use [`Spinner::set_phase`] from a
 /// progress callback to update the label/heartbeat.
+///
+/// While a TTY spinner lives it sets [`SPINNER_ACTIVE`] so [`SpinnerSafeWriter`]
+/// keeps concurrent tracing logs from colliding with the spinner line.
 struct Spinner {
     stop: Arc<AtomicBool>,
     phase: Arc<Mutex<String>>,
     handle: Option<std::thread::JoinHandle<()>>,
+    /// Set only on the TTY path, so `Drop` clears `SPINNER_ACTIVE` exactly once.
+    tty: bool,
 }
 
 impl Spinner {
@@ -46,6 +85,11 @@ impl Spinner {
         let phase = Arc::new(Mutex::new(label.to_string()));
         let stop_clone = Arc::clone(&stop);
         let phase_clone = Arc::clone(&phase);
+        // Only the TTY path paints a `\r`-rewritten line that logs can collide
+        // with; the plain heartbeat is newline-terminated and needs no guard.
+        if is_tty {
+            SPINNER_ACTIVE.store(true, Ordering::Relaxed);
+        }
         let handle = std::thread::spawn(move || {
             if is_tty {
                 Self::run_tty(&stop_clone, &phase_clone);
@@ -57,6 +101,7 @@ impl Spinner {
             stop,
             phase,
             handle: Some(handle),
+            tty: is_tty,
         })
     }
 
@@ -122,6 +167,11 @@ impl Drop for Spinner {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
             let _ = h.join();
+        }
+        // Cleared after the painter joins (it has emitted its final line clear),
+        // so later logs write plainly. `stop()` consumes self and also lands here.
+        if self.tty {
+            SPINNER_ACTIVE.store(false, Ordering::Relaxed);
         }
     }
 }
@@ -1529,9 +1579,21 @@ mod tests {
         use indexer::ProgressUpdate as U;
         let cap = |u: &U| capitalize_phase(u.label());
         assert_eq!(cap(&U::Walking), "Scanning files");
-        assert_eq!(cap(&U::Parsing { total: 12 }), "Parsing 12 files");
-        assert_eq!(cap(&U::Storing { total: 5 }), "Storing 5 files");
-        assert_eq!(cap(&U::ResolvingLsp), "Resolving edges with LSP");
+        assert_eq!(cap(&U::Parsing { done: 0, total: 12 }), "Parsing 12 files");
+        assert_eq!(
+            cap(&U::Parsing { done: 4, total: 12 }),
+            "Parsing 4/12 files"
+        );
+        assert_eq!(cap(&U::Storing { done: 0, total: 5 }), "Storing 5 files");
+        assert_eq!(cap(&U::Storing { done: 3, total: 5 }), "Storing 3/5 files");
+        assert_eq!(
+            cap(&U::ResolvingLsp { done: 0, total: 9 }),
+            "Resolving 9 edges with LSP"
+        );
+        assert_eq!(
+            cap(&U::ResolvingLsp { done: 3, total: 9 }),
+            "Resolving 3/9 edges with LSP"
+        );
     }
 
     #[test]

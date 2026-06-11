@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tracing::info;
+use tracing::{debug, info};
 
 use cartog_db::Database;
 
@@ -331,8 +331,10 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
             total: progress_total,
         });
 
+        // debug, not info: the spinner already shows this on a TTY; an info
+        // line would collide with the spinner's `\r`-rewritten progress.
         if processed % 1000 < CHUNK_SIZE {
-            info!("  {processed}/{total} symbols embedded");
+            debug!("  {processed}/{total} symbols embedded");
         }
     }
 
