@@ -93,8 +93,9 @@ def run_cartog(args: List[str], cwd: str, db_path: str, timeout: int) -> Optiona
         return None
 
 
-def index_repo(repo_dir: str, db_path: str, timeout: int) -> bool:
-    cmd = ["cartog", "index", repo_dir, "--db", db_path]
+def index_repo(repo_dir: str, db_path: str, timeout: int, no_lsp: bool = False) -> bool:
+    # LSP dominates cold-index time on giant repos; skipping it only weakens 1-hop edges.
+    cmd = ["cartog", "index", repo_dir, "--db", db_path] + (["--no-lsp"] if no_lsp else [])
     try:
         proc = subprocess.run(cmd, cwd=repo_dir, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -245,7 +246,7 @@ def merge_steps(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def build_prediction(row: dict, cache_dir: str, tokens: int, use_rag: bool,
                      idx_timeout: int, q_timeout: int, build_embeddings: bool,
-                     use_keyword: bool) -> Optional[dict]:
+                     use_keyword: bool, no_lsp: bool = False) -> Optional[dict]:
     instance_id = row.get("instance_id") or row.get("original_inst_id")
     original = row.get("original_inst_id") or instance_id
     commit = row.get("base_commit") or row.get("commit")
@@ -270,15 +271,20 @@ def build_prediction(row: dict, cache_dir: str, tokens: int, use_rag: bool,
         log("    checkout failed")
         return None
 
-    # Cache the DB by repo+commit so re-runs and repeated commits skip re-indexing.
+    # Cache the DB by repo+commit; `.ok` gates it (a killed index leaves a partial DB behind).
     slug = re.sub(r"[^A-Za-z0-9]+", "_", f"{original}_{commit[:10]}")
     db_path = os.path.join(tempfile.gettempdir(), f"cartog_cb_{slug}.db")
-    if not os.path.exists(db_path):
-        if not index_repo(repo_dir, db_path, idx_timeout):
+    done_marker = db_path + ".ok"
+    if not (os.path.exists(db_path) and os.path.exists(done_marker)):
+        for stale in (db_path, db_path + "-wal", db_path + "-shm", done_marker):
+            if os.path.exists(stale):
+                os.remove(stale)
+        if not index_repo(repo_dir, db_path, idx_timeout, no_lsp):
             return None
         if build_embeddings:
             log("    building embeddings (rag index)")
             rag_index_repo(repo_dir, db_path, idx_timeout)  # best-effort; FTS still works if it fails
+        open(done_marker, "w").close()
 
     query = keyword_query(problem) if use_keyword else problem[:2000]
     log(f"    query: {query!r}")
@@ -359,6 +365,8 @@ def main() -> int:
                    help="Build embeddings (cartog rag index) so vector search is live; requires `cartog rag setup`")
     p.add_argument("--keyword-query", action="store_true",
                    help="Extract code identifiers from the issue text instead of feeding raw prose")
+    p.add_argument("--no-lsp", action="store_true",
+                   help="Skip LSP edge resolution during indexing (giant-repo escape hatch)")
     p.add_argument("--index-timeout", type=int, default=600)
     p.add_argument("--query-timeout", type=int, default=120)
     args = p.parse_args()
@@ -374,7 +382,7 @@ def main() -> int:
             log(f"[{i}/{len(rows)}]")
             pred = build_prediction(row, args.cache, args.tokens, not args.no_rag,
                                     args.index_timeout, args.query_timeout,
-                                    args.rag_index, args.keyword_query)
+                                    args.rag_index, args.keyword_query, args.no_lsp)
             if pred:
                 f.write(json.dumps(pred, ensure_ascii=False) + "\n")
                 f.flush()
