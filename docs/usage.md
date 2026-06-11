@@ -915,15 +915,16 @@ Safety guarantees:
   cartog, naming both the pulled and supported versions.
 - **WAL/SHM cleanup** — stale `db-wal` / `db-shm` siblings are deleted
   before rename to prevent SQLite from replaying phantom WAL frames.
-- **Peer-process check** — best-effort refusal to overwrite the local DB
-  while a `cartog serve` or `cartog watch` is holding it open. cartog
-  checks for peer PID locks twice (at the start of pull and right before
-  the atomic rename), but a peer that wins the lock election in the few
-  syscalls between the second check and the rename can still be corrupted
-  by the swap (SQLite holds the file by inode; the rename divorces its
-  FD from on-disk state). The window is small but non-zero. `--force`
-  bypasses both checks. **Safest practice: stop `cartog serve` /
-  `cartog watch` on the project before pulling, and restart them after.**
+- **Peer-process exclusion** — pull holds the same PID locks that
+  `cartog serve` and `cartog watch` contend for, for the entire
+  download → verify → install sequence. A running peer makes pull refuse
+  up front; a peer (or second pull) starting mid-pull loses its lock
+  election instead of opening the file about to be swapped (SQLite holds
+  the file by inode; a rename under a live handle would corrupt its
+  view). A `cartog serve` that starts during a pull attaches read-only
+  and promotes onto the freshly pulled DB once the pull releases the
+  lock. `--force` skips the exclusion, with that corruption risk on any
+  live peer.
 
 > **Trust boundary**: the `x-amz-meta-sha256` header is self-attested by
 > whoever pushed the object — it catches corruption and accidental swaps
