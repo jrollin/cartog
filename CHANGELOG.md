@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.27.0] - 2026-06-11
+
+### Bug Fixes
+
+- **db**: Correct stale in_degree for symbols that lose an incoming edge ([`128d020`](https://github.com/jrollin/cartog/commit/128d020cd0f34bd61f8e477b122271472e93b649))
+- **cli**: Hint when rag search returns FTS-only results without embeddings ([`b368c3a`](https://github.com/jrollin/cartog/commit/b368c3af2fad865496e594299c4b135caedefced))
+- **db**: Resolve PHP namespace-qualified inherits edges and surface them in hierarchy ([`5309b86`](https://github.com/jrollin/cartog/commit/5309b86195a1ebb8d5d59213f0420603904e8fe0))
+- **indexer**: Refuse to empty a populated index when the walk finds no files ([`2400ce6`](https://github.com/jrollin/cartog/commit/2400ce6a0a1c77df3d4bbf4a52eb83e39f07db8f))
+- **cli**: Align help text with behavior, split short/long help ([`acb3448`](https://github.com/jrollin/cartog/commit/acb3448d15448ad58268d6f2b70b4c7a83df3bb5))
+- **remote**: Hold peer locks for the whole pull, closing the TOCTOU window ([`292461b`](https://github.com/jrollin/cartog/commit/292461b8038199910daf8f1583fe019432fbbb5b))
+
+### Documentation
+
+- **README**: Update intro, add TOC and link to articles ([`83fddaf`](https://github.com/jrollin/cartog/commit/83fddaf46900b3ed5b1913d1c1b18816c70208db))
+- **site**: Add Articles section linking blog series ([`11330fa`](https://github.com/jrollin/cartog/commit/11330fa6689556e23f8be4fad01ae65bfc29c29d))
+- **usage**: --force pull only skips peer locks when a peer is already live ([`2668b67`](https://github.com/jrollin/cartog/commit/2668b6730b2cc7436e46f6d2df059c131676dba1))
+- Sync command count to 27 and document empty-index guard ([`203385e`](https://github.com/jrollin/cartog/commit/203385ece1d34c43f801b36a7c34d22982b16447))
+
+### Features
+
+- **benchmarks**: Add ContextBench retrieval-eval adapter (Mode A) ([`58edd4f`](https://github.com/jrollin/cartog/commit/58edd4f4e8af272a36864b47a9d197c999b6f4d7))
+- **benchmarks**: Contextbench results, FTS ablation, adapter cache hardening ([`ff812ec`](https://github.com/jrollin/cartog/commit/ff812ec1c72948e99fd3104697de6454fcda701f))
+
+### Performance
+
+- **db**: Composite edges(kind, target_name) index for tier-2 resolution ([`a6dc536`](https://github.com/jrollin/cartog/commit/a6dc536992fc3c2cc8fd9fa3ca82a2206abb9d89))
+- **db**: Planner stats + heuristic-exhausted seal; scaling-regression bench (#110 deferrals) (#114) ([`22cfe6e`](https://github.com/jrollin/cartog/commit/22cfe6e315dca0afb53e66b03f34856372171957))
+- **db**: Eliminate two O(edges^2) terms in indexing (#115) ([`1f3544d`](https://github.com/jrollin/cartog/commit/1f3544d07b13a14388022a4ded1312c2adaac359))
+
 ## [0.26.0] - 2026-06-07
 
 ### Bug Fixes
