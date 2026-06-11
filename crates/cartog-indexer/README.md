@@ -39,7 +39,7 @@ Edges are always fully re-inserted for dirty files (no edge-level diff).
 
 When the `lsp` feature is enabled, a second pass resolves edges that the heuristic resolver in `cartog-db` left unresolved, using real language servers via `cartog-lsp`. Skipped on no-op reindexes (no file added, modified, or removed) — the unresolved set is identical to the previous run. Use `--force` to retry resolution after toggling `--no-lsp` off.
 
-Edges that LSP classifies are persisted to `resolution_state` so future runs skip them: `2` (unresolvable — typo, dyn dispatch, macro expansion) and `3` (external — stdlib, deps, node_modules). When a new symbol is added whose name matches such an edge (e.g. the user vendors a dep in-tree), the indexer auto-resets the marker so the next pass retries — see `Database::reset_unresolvable_for_names`. `--force` resets all sticky markers (see `Database::reset_all_unresolvable`).
+Edges that LSP classifies are persisted to `resolution_state` so future runs skip them: `2` (unresolvable — typo, dyn dispatch, macro expansion) and `3` (external — stdlib, deps, node_modules). A no-lsp run (`--no-lsp`, `watch`) has no LSP pass to retry the heuristic's leftovers, so the indexer seals them at `4` (heuristic-exhausted) — without this every incremental re-index re-walks the whole permanent-failure backlog. When a new symbol is added whose name matches a sealed edge (e.g. the user vendors a dep in-tree), the indexer auto-resets the marker so the next pass retries — see `Database::reset_unresolvable_for_names`. A later LSP-enabled reindex reopens state `4` first (`Database::reopen_heuristic_exhausted`) so the language server gets a shot. `--force` resets all sticky markers (see `Database::reset_all_unresolvable`).
 
 ## Public API
 

@@ -18,14 +18,16 @@ impl Database {
 
     /// Return edges still waiting for resolution (`resolution_state = 0`).
     ///
-    /// Edges marked `state = 2` (unresolvable) or `state = 3` (external) are
-    /// excluded so a dirty reindex doesn't re-query the language server for
-    /// edges it already classified. Both are sticky and re-enter the
-    /// unresolved set only via [`Self::reset_unresolvable_for_names`] when a
-    /// matching symbol is added, or [`Self::reset_all_unresolvable`] on
-    /// `--force`. ([`Self::invalidate_edges_targeting`] only touches state=1
-    /// rows because it filters on `target_id IS NOT NULL`, and state {2, 3}
-    /// rows always have `target_id NULL`.)
+    /// Edges marked `state = 2` (unresolvable), `state = 3` (external), or
+    /// `state = 4` (heuristic-exhausted) are excluded so a dirty reindex
+    /// doesn't re-query the language server for edges it already classified.
+    /// All three are sticky and re-enter the unresolved set only via
+    /// [`Self::reset_unresolvable_for_names`] when a matching symbol is added,
+    /// [`Self::reset_all_unresolvable`] on `--force`, or (state 4 only)
+    /// [`Self::reopen_heuristic_exhausted`] before an LSP-enabled reindex.
+    /// ([`Self::invalidate_edges_targeting`] only touches state=1 rows because
+    /// it filters on `target_id IS NOT NULL`, and state {2, 3, 4} rows always
+    /// have `target_id NULL`.)
     ///
     /// tx-safe: read-only single statement — see note above the section header.
     pub fn unresolved_edges(&self) -> Result<Vec<UnresolvedEdge>> {
@@ -93,7 +95,7 @@ impl Database {
 
     /// Test-only inspector: returns the raw `resolution_state` value for an edge.
     ///
-    /// 0=unresolved, 1=resolved, 2=unresolvable, 3=external.
+    /// 0=unresolved, 1=resolved, 2=unresolvable, 3=external, 4=heuristic-exhausted.
     pub fn edge_resolution_state(&self, edge_id: i64) -> Result<i64> {
         let state: i64 = self.conn.query_row(
             "SELECT resolution_state FROM edges WHERE id = ?1",
@@ -103,16 +105,36 @@ impl Database {
         Ok(state)
     }
 
-    /// Reset every edge at `resolution_state IN (2, 3)` back to `0`. Used by
+    /// Reset every edge at `resolution_state IN (2, 3, 4)` back to `0`. Used by
     /// `cartog index --force` to honor the "retry everything" contract:
     /// without this, the heuristic + LSP would still skip permanently-marked
-    /// edges (both unresolvable and external) even on a forced re-index.
+    /// edges (unresolvable, external, or heuristic-exhausted) even on a forced
+    /// re-index.
     ///
     /// tx-safe: single statement — see the LSP-section header note.
     pub fn reset_all_unresolvable(&self) -> Result<u32> {
         let n = self.conn.execute(
             "UPDATE edges SET resolution_state = 0, resolution_source = NULL
-             WHERE resolution_state IN (2, 3)",
+             WHERE resolution_state IN (2, 3, 4)",
+            [],
+        )?;
+        Ok(n as u32)
+    }
+
+    /// Reset `resolution_state` from `4` (heuristic-exhausted) → `0` so a
+    /// later LSP-enabled reindex retries them.
+    ///
+    /// State 4 is written by [`Self::mark_heuristic_exhausted_in_tx`] only in
+    /// LSP-disabled runs (`--no-lsp`, `watch`). When a subsequent `cartog
+    /// index` does run LSP, those edges have never seen the language server, so
+    /// the indexer reopens them here before the LSP pass. Distinct from
+    /// [`Self::reset_all_unresolvable`]: this leaves the genuine LSP verdicts
+    /// (state {2, 3}) sealed.
+    ///
+    /// tx-safe: single statement — see the LSP-section header note.
+    pub fn reopen_heuristic_exhausted(&self) -> Result<u32> {
+        let n = self.conn.execute(
+            "UPDATE edges SET resolution_state = 0 WHERE resolution_state = 4",
             [],
         )?;
         Ok(n as u32)
@@ -162,17 +184,17 @@ impl Database {
         Ok(())
     }
 
-    /// Reset `resolution_state` from {2, 3} → 0 for edges whose target_name is in `names`.
+    /// Reset `resolution_state` from {2, 3, 4} → 0 for edges whose target_name is in `names`.
     ///
-    /// Called from the indexer when new symbols are added: an edge that was
-    /// previously "unresolvable" (no symbol with this name existed) or
-    /// "external" (target lived outside the index — but the user just vendored
-    /// it in-tree) may now be resolvable against the freshly-added target.
-    /// Returns the number of edges reopened. No-op when `names` is empty.
+    /// Called from the indexer when new symbols are added: an edge previously
+    /// "unresolvable" (no symbol with this name), "external" (target outside
+    /// the index, now vendored in-tree), or "heuristic-exhausted" may now
+    /// resolve against the freshly-added target. Returns edges reopened; no-op
+    /// when `names` is empty.
     ///
     /// tx-safe: single statement. Names are batched to honor SQLite's default
-    /// 999-parameter limit; only rows at state 2 or 3 are touched so the write
-    /// set stays tiny even on a large rename.
+    /// 999-parameter limit; only rows at state {2, 3, 4} are touched so the
+    /// write set stays tiny even on a large rename.
     pub fn reset_unresolvable_for_names(&self, names: &[String]) -> Result<u32> {
         if names.is_empty() {
             return Ok(0);
@@ -184,7 +206,7 @@ impl Database {
             let sql = format!(
                 "UPDATE edges
                  SET resolution_state = 0, resolution_source = NULL
-                 WHERE resolution_state IN (2, 3)
+                 WHERE resolution_state IN (2, 3, 4)
                    AND target_name IN ({placeholders})"
             );
             let params: Vec<&dyn rusqlite::ToSql> =
