@@ -2,13 +2,20 @@
 
 Compares cartog graph queries vs grep/cat approaches for common code navigation tasks.
 
-## Three benchmark surfaces
+## Benchmark surfaces
+
+One row per entry point — if you're lost, start here:
 
 | Surface | Question it answers | Run with |
 |---------|---------------------|----------|
 | **Shell suite** (this file) | Is a single cartog query smaller / more complete than grep? | `make bench` |
+| **Edge resolution** | What share of edges resolve, per language? (heuristic / host LSP / strict Docker LSP) | `make bench-resolution`, `make bench-resolution-docker` |
 | **Criterion micro-benchmarks** | How fast is cartog's own CPU work (µs–ms)? | `make bench-criterion` |
+| **ONNX model benches** | How fast are the real embed/rerank models? | `make bench-onnx` |
+| **RAG relevancy** | Does hybrid search rank the relevant symbols on top? | `make bench-rag` |
 | **Agent-task** (`agent/`) | Does giving an agent cartog cut the *end-to-end* token cost of a task? | `make bench-agent` |
+| **ContextBench** (`contextbench/`) | Does cartog retrieve the *right* context for real issues (vs human gold)? | [contextbench/README.md](contextbench/README.md) |
+| **Skill / agent evals** | Do the cartog skill and agents behave as designed? (LLM-as-judge) | `make eval-skill`, `make eval-agents` |
 
 The shell suite below is **per-query** (no LLM). The
 [agent-task suite](agent/README.md) drives a real agent through whole tasks with
