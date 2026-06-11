@@ -173,6 +173,8 @@ CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_name);
 CREATE INDEX IF NOT EXISTS idx_edges_target_id ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
+-- Tier-2 import-path lookups; kind-only index scans all imports edges per call (#109).
+CREATE INDEX IF NOT EXISTS idx_edges_kind_target ON edges(kind, target_name);
 -- idx_edges_unresolved (partial index on resolution_state=0) is created
 -- post-migration in Database::open so pre-v4 DBs without the column don't
 -- blow up at SCHEMA-load time.
@@ -3076,6 +3078,35 @@ mod tests {
         // foo should still have in_degree = 2 (recomputed correctly)
         let results = db.search("foo", None, None, 10).unwrap();
         assert_eq!(results[0].in_degree, 2);
+    }
+
+    #[test]
+    fn test_tier2_import_resolution_plan_uses_kind_target_index() {
+        // Plan regression for #109; SQL mirrors tier-2 in store/resolution.rs.
+        let db = Database::open_memory().unwrap();
+        let mut stmt = db
+            .conn
+            .prepare(
+                "EXPLAIN QUERY PLAN SELECT s.id FROM symbols s
+                 INNER JOIN edges ie ON ie.kind = 'imports' AND ie.target_name = ?1
+                     AND ie.target_id IS NOT NULL
+                 INNER JOIN symbols is2 ON is2.id = ie.source_id AND is2.file_path = ?2
+                 INNER JOIN symbols resolved ON resolved.id = ie.target_id
+                 WHERE s.name = ?1 AND s.kind != 'import'
+                     AND s.file_path = resolved.file_path
+                 LIMIT 1",
+            )
+            .unwrap();
+        let plan = stmt
+            .query_map(params!["x", "y"], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(
+            plan.contains("idx_edges_kind_target"),
+            "tier-2 must drive off edges(kind, target_name); got plan:\n{plan}"
+        );
     }
 
     #[test]
