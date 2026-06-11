@@ -96,6 +96,15 @@ from scratch. Cartog first creates a `VACUUM INTO <db>.pre-v<old>-<ts>.bak`
 copy of the old database so you can roll back by pointing `--db` at the
 backup. Run `cartog index .` once to rebuild against the new schema.
 
+### `refusing to empty the index: no supported source files found`
+
+`cartog index` / `cartog rag index` aborts with this when the directory walk
+finds no indexable files but the database already holds an index. This almost
+always means the wrong root for that database, e.g. `cartog rag index --db
+/path/to/db .` run from a directory that isn't the project. Sweeping would
+silently delete the whole index, so cartog refuses. Re-run from the project
+root, or pass `--force` if you really do want to empty the index.
+
 ### `cartog watch` triggers repeated re-indexes during `git pull`
 
 The default debounce is 5 s, which should collapse most bulk operations into

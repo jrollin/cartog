@@ -4,7 +4,7 @@ Code graph indexer for LLM coding agents. Map your codebase, navigate by graph.
 
 ## Overview
 
-Binary crate and library facade. Provides the `cartog` CLI with 26 top-level commands for code graph indexing, querying, and semantic search. Also re-exports workspace crates under the `cartog::` namespace for use by benches and integration tests.
+Binary crate and library facade. Provides the `cartog` CLI with 27 top-level commands for code graph indexing, querying, and semantic search. Also re-exports workspace crates under the `cartog::` namespace for use by benches and integration tests.
 
 ## CLI commands
 
@@ -12,6 +12,7 @@ Binary crate and library facade. Provides the `cartog` CLI with 26 top-level com
 |---------|-------------|
 | `init` | Scaffold a `.cartog.toml` config |
 | `ide` | Wire `cartog serve` into MCP-compatible editors |
+| `install [EDITORS...]` | Friendlier `ide`: install MCP config into named editors (or all detected) |
 | `index [PATH]` | Build or rebuild the code graph (`--force`, `--no-lsp`) |
 | `outline FILE` | Show symbols and structure of a file |
 | `callees NAME` | Find what a symbol calls |
