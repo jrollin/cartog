@@ -266,4 +266,24 @@ impl Database {
     pub fn begin_indexing_tx(&self) -> Result<rusqlite::Transaction<'_>> {
         Ok(self.conn.unchecked_transaction()?)
     }
+
+    /// Refresh the query planner's statistics via `PRAGMA optimize`.
+    ///
+    /// SQLite picks join order and index use from `sqlite_stat1`; without it,
+    /// the planner guesses from index shape alone and can mis-plan (the tier-2
+    /// resolution misplan in #110 was one such case). `PRAGMA optimize` runs
+    /// `ANALYZE` only on tables whose row counts have drifted since the last
+    /// analyze, so it is a cheap no-op when nothing changed — unlike a bare
+    /// `ANALYZE`, which would re-scan every index on each call and reintroduce
+    /// a per-index O(repo) cost.
+    ///
+    /// Call AFTER committing the indexing transaction, not inside it: a stats
+    /// rebuild bundled into the big write tx would bloat it. No-op-safe to call
+    /// when nothing was indexed, but the indexer skips it on no-op runs anyway.
+    pub fn optimize(&self) -> Result<()> {
+        self.conn
+            .execute_batch("PRAGMA optimize;")
+            .context("PRAGMA optimize (refresh planner statistics)")?;
+        Ok(())
+    }
 }

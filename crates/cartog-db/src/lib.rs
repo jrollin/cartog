@@ -1169,6 +1169,36 @@ mod tests {
     }
 
     #[test]
+    fn test_optimize_populates_planner_stats() {
+        // PRAGMA optimize must build sqlite_stat1 once the tables are large
+        // enough to be worth analyzing — proving the planner has real stats to
+        // pick join order from (the #110 misplan was a no-stats guess).
+        let db = Database::open_memory().unwrap();
+        let syms: Vec<_> = (0..2000)
+            .map(|i| test_symbol(&format!("f{i}"), SymbolKind::Function, "a.py", i + 1))
+            .collect();
+        db.insert_symbols(&syms).unwrap();
+
+        db.optimize().unwrap();
+
+        let analyzed: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_stat1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(analyzed, 1, "PRAGMA optimize must create sqlite_stat1");
+    }
+
+    #[test]
+    fn test_optimize_is_safe_on_empty_db() {
+        let db = Database::open_memory().unwrap();
+        db.optimize().unwrap(); // no-op, must not error
+    }
+
+    #[test]
     fn is_empty_reflects_symbol_presence() {
         let db = Database::open_memory().unwrap();
         assert!(db.is_empty().unwrap(), "fresh DB should be empty");
@@ -4538,6 +4568,104 @@ mod tests {
         assert_eq!(reopened, 1);
         assert_eq!(resolution_state_of(&db, ext_foo), 0);
         assert_eq!(resolution_state_of(&db, ext_bar), 3);
+    }
+
+    // ── state=4 (heuristic-exhausted) tests ──
+
+    #[test]
+    fn test_mark_heuristic_exhausted_seals_unresolved_state_zero() {
+        // Edges the heuristic couldn't resolve (state=0, target NULL) flip to
+        // state=4 so the next re-index's resolution scan skips them.
+        let db = Database::open_memory().unwrap();
+        let unresolved = insert_test_edge(&db, "nowhere");
+        let resolved = insert_test_edge(&db, "somewhere");
+        db.update_edge_target(resolved, "some:id").unwrap();
+
+        let marked = db.mark_heuristic_exhausted_in_tx().unwrap();
+        assert_eq!(marked, 1);
+        assert_eq!(resolution_state_of(&db, unresolved), 4);
+        assert_eq!(resolution_state_of(&db, resolved), 1, "resolved untouched");
+    }
+
+    #[test]
+    fn test_resolve_edges_skips_heuristic_exhausted_state_four() {
+        // The state=0-only scan in resolve_edges_pass must not re-walk sealed
+        // state=4 edges — this is the watch-mode amplification guard (#109).
+        let db = Database::open_memory().unwrap();
+        let eid = insert_test_edge(&db, "nowhere");
+        db.mark_heuristic_exhausted_in_tx().unwrap();
+        assert_eq!(resolution_state_of(&db, eid), 4);
+
+        // A fresh resolve pass finds nothing to do and leaves the seal intact.
+        let resolved = db.resolve_edges().unwrap();
+        assert_eq!(resolved, 0);
+        assert_eq!(resolution_state_of(&db, eid), 4);
+    }
+
+    #[test]
+    fn test_unresolved_edges_excludes_state_four() {
+        // The LSP retry loop must skip state=4 too, same as {2, 3}. The blanket
+        // mark seals every open edge, so insert the still-open one afterward.
+        let db = Database::open_memory().unwrap();
+        let exhausted = insert_test_edge(&db, "exhausted");
+        db.mark_heuristic_exhausted_in_tx().unwrap();
+        let _open = insert_test_edge(&db, "still_open");
+
+        let edges = db.unresolved_edges().unwrap();
+        let names: Vec<&str> = edges.iter().map(|e| e.target_name.as_str()).collect();
+        assert!(names.contains(&"still_open"));
+        assert!(!names.contains(&"exhausted"));
+        let _ = exhausted;
+    }
+
+    #[test]
+    fn test_reopen_heuristic_exhausted_resets_only_state_four() {
+        // Before an LSP-enabled reindex, state=4 → 0, but genuine LSP verdicts
+        // (state {2, 3}) stay sealed.
+        let db = Database::open_memory().unwrap();
+        let exhausted = insert_test_edge(&db, "exhausted");
+        db.mark_heuristic_exhausted_in_tx().unwrap();
+        let burned = insert_test_edge(&db, "burned");
+        db.mark_edge_unresolvable(burned).unwrap();
+        let external = insert_test_edge(&db, "external");
+        db.mark_edge_external(external).unwrap();
+
+        let reopened = db.reopen_heuristic_exhausted().unwrap();
+        assert_eq!(reopened, 1);
+        assert_eq!(resolution_state_of(&db, exhausted), 0);
+        assert_eq!(resolution_state_of(&db, burned), 2, "LSP verdict sealed");
+        assert_eq!(resolution_state_of(&db, external), 3, "LSP verdict sealed");
+    }
+
+    #[test]
+    fn test_reset_all_unresolvable_also_resets_state_four() {
+        // --force must clear state=4 alongside {2, 3}.
+        let db = Database::open_memory().unwrap();
+        let exhausted = insert_test_edge(&db, "exhausted");
+        db.mark_heuristic_exhausted_in_tx().unwrap();
+        let burned = insert_test_edge(&db, "burned");
+        db.mark_edge_unresolvable(burned).unwrap();
+
+        let reset = db.reset_all_unresolvable().unwrap();
+        assert_eq!(reset, 2);
+        assert_eq!(resolution_state_of(&db, exhausted), 0);
+        assert_eq!(resolution_state_of(&db, burned), 0);
+    }
+
+    #[test]
+    fn test_reset_unresolvable_for_names_reopens_state_four() {
+        // A heuristic-exhausted edge reopens when a matching symbol is added.
+        let db = Database::open_memory().unwrap();
+        let foo = insert_test_edge(&db, "foo");
+        let bar = insert_test_edge(&db, "bar");
+        db.mark_heuristic_exhausted_in_tx().unwrap();
+
+        let reopened = db
+            .reset_unresolvable_for_names(&["foo".to_string()])
+            .unwrap();
+        assert_eq!(reopened, 1);
+        assert_eq!(resolution_state_of(&db, foo), 0);
+        assert_eq!(resolution_state_of(&db, bar), 4);
     }
 
     #[test]

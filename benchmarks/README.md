@@ -10,6 +10,7 @@ One row per entry point — if you're lost, start here:
 |---------|---------------------|----------|
 | **Shell suite** (this file) | Is a single cartog query smaller / more complete than grep? | `make bench` |
 | **Edge resolution** | What share of edges resolve, per language? (heuristic / host LSP / strict Docker LSP) | `make bench-resolution`, `make bench-resolution-docker` |
+| **Resolution scaling** | Does resolution stay near-linear as the repo grows? (catches quadratic regressions, cf. #110) | `make bench-resolution-scale` |
 | **Criterion micro-benchmarks** | How fast is cartog's own CPU work (µs–ms)? | `make bench-criterion` |
 | **ONNX model benches** | How fast are the real embed/rerank models? | `make bench-onnx` |
 | **RAG relevancy** | Does hybrid search rank the relevant symbols on top? | `make bench-rag` |
@@ -126,6 +127,34 @@ edges). Re-run after extractor or resolver changes.
 ./benchmarks/resolution_rate.sh --fixture rs    # one language
 ./benchmarks/resolution_rate.sh --baseline      # diff vs last snapshot (no overwrite)
 ```
+
+## Resolution scaling (quadratic-regression guard)
+
+The rate fixtures are ~50 files each, so a *time-complexity* regression hides in
+them — the tier-2 quadratic fixed in #110 only diverged at transformers scale.
+`resolution_scale.sh` is the time-axis complement: it generates a synthetic
+Python repo with heavy cross-file imports (so most edges resolve via tier-2, the
+#110 hot path) at sizes N and 2N, times `cartog index --no-lsp --force` for each,
+and asserts `time(2N)/time(N)` stays under a near-linear threshold. Linear
+resolution doubles (~2x); quadratic quadruples (~4x). Self-calibrating — no
+committed baseline, so it is machine-independent. Exit 1 on regression.
+
+```bash
+make bench-resolution-scale                      # default N=1000
+N=2000 ./benchmarks/resolution_scale.sh          # larger N → clearer signal, slower
+RATIO_MAX=2.5 ./benchmarks/resolution_scale.sh   # stricter threshold
+```
+
+Opt-in (not in `make check`): the large run is seconds-to-minutes depending on N.
+
+> **Known finding (0.26.0):** this bench currently *fails* at the default N=1000 —
+> resolution is still ~O(edges²) after #110 (which only fixed tier-2's query
+> plan). Measured curve (flat synthetic repo): 16k→0.48s, 32k→1.45s, 64k→5.17s,
+> 128k→19.8s (time ~4× per 2× edges). Reproduced on a realistic nested-package
+> shape too, so it is not a generator artifact. The remaining cost is in the
+> per-edge resolve loop / 2-pass structure, not a single mis-planned query. A red
+> run is expected until that open lead is fixed; the bench then guards against
+> *further* regression.
 
 ## Reproducing the numbers
 

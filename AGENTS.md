@@ -37,6 +37,7 @@ make eval-agents           # LLM-as-judge agent evaluation (requires claude CLI)
 make bench                 # shell benchmark suite (13 scenarios x 10 languages)
 make bench-resolution      # edge-resolution rate (heuristic + host LSP, all languages; saves a provenance snapshot)
 make bench-resolution-docker # same, LSP servers via Docker images (all 10, strict — no host fallback); `make lsp-images` builds them
+make bench-resolution-scale # synthetic N-vs-2N repo, asserts index time stays near-linear (quadratic-regression guard, cf. #110)
 make bench-criterion       # ONNX-free criterion benches (queries, per-language indexing, hybrid search)
 make bench-onnx            # real-model embed/rerank benches (needs `cartog rag setup`; not in CI)
 make bench-rag             # RAG relevancy benchmarks (in-memory + shell scenario 13)

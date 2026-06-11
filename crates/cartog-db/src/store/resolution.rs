@@ -286,6 +286,34 @@ impl Database {
         self.resolve_edges_in_tx()
     }
 
+    /// Mark every still-unresolved edge as `resolution_state = 4`
+    /// (heuristic-exhausted, no LSP pass ran).
+    ///
+    /// Call ONLY at the end of an index run that did not (and will not) run the
+    /// LSP pass — i.e. `--no-lsp`, `cartog watch`, or a feature-`lsp`-off build.
+    /// In those runs the 6-tier heuristic is the only resolver, so a leftover
+    /// state=0 edge is permanently unresolvable until the symbol graph changes.
+    /// Without this marker every incremental re-index re-walks the whole
+    /// state=0 backlog (the watch-mode amplification from #109): the
+    /// `resolution_state = 0` scan in `resolve_edges_pass` grows with the
+    /// permanent-failure set, not just the dirty edges.
+    ///
+    /// State 4 is sticky like {2, 3} and re-enters the unresolved set the same
+    /// way: [`Self::reset_unresolvable_for_names`] when a matching symbol is
+    /// added, [`Self::reset_all_unresolvable`] on `--force`, or
+    /// [`Self::reopen_heuristic_exhausted`] before a later LSP-enabled reindex.
+    /// Returns the number of edges marked.
+    ///
+    /// tx-safe: single statement — see [`Self::begin_indexing_tx`].
+    pub fn mark_heuristic_exhausted_in_tx(&self) -> Result<u32> {
+        let n = self.conn.execute(
+            "UPDATE edges SET resolution_state = 4
+             WHERE target_id IS NULL AND resolution_state = 0",
+            [],
+        )?;
+        Ok(n as u32)
+    }
+
     /// Recompute in-degree centrality after an incremental re-index.
     ///
     /// Scoping the reset to dirty files cannot be correct: a symbol in an

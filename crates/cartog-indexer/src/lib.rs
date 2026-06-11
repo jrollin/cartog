@@ -737,17 +737,33 @@ pub fn index_directory(
     //
     // Skipped on no-op runs: unresolved set is identical to last run, so
     // re-querying the LSP repeats work. Use `--force` to retry.
+    let lsp_ran;
     #[cfg(feature = "lsp")]
-    if lsp && !dirty_files.is_empty() {
-        emit(ProgressUpdate::ResolvingLsp);
-        let stats = cartog_lsp::lsp_resolve_edges(db, &root, None, lsp_overrides)
-            .with_context(|| format!("resolving LSP edges for root {}", root.display()))?;
-        result.edges_lsp_resolved = stats.resolved;
-        result.edges_marked_unresolvable = stats.marked_unresolvable;
-        result.edges_marked_external = stats.marked_external;
+    {
+        lsp_ran = lsp && !dirty_files.is_empty();
+        if lsp_ran {
+            // Watch (lsp=false) may have sealed edges at state=4; give LSP a shot.
+            db.reopen_heuristic_exhausted()?;
+            emit(ProgressUpdate::ResolvingLsp);
+            let stats = cartog_lsp::lsp_resolve_edges(db, &root, None, lsp_overrides)
+                .with_context(|| format!("resolving LSP edges for root {}", root.display()))?;
+            result.edges_lsp_resolved = stats.resolved;
+            result.edges_marked_unresolvable = stats.marked_unresolvable;
+            result.edges_marked_external = stats.marked_external;
+        }
     }
     #[cfg(not(feature = "lsp"))]
-    let _ = (lsp, lsp_overrides); // suppress unused warnings when feature is off
+    {
+        lsp_ran = false;
+        let _ = (lsp, lsp_overrides); // suppress unused warnings when feature is off
+    }
+
+    // No LSP pass ran, so the heuristic was the only resolver: seal remaining
+    // state=0 edges at state=4 to keep the next re-index's resolution scan from
+    // re-walking the permanent-failure backlog (#109 watch amplification).
+    if !lsp_ran && !dirty_files.is_empty() {
+        db.mark_heuristic_exhausted_in_tx()?;
+    }
 
     // Store the current git commit as last indexed
     if let Some(commit) = git_head_commit(&root) {
@@ -759,7 +775,16 @@ pub fn index_directory(
     db.set_metadata("redact_secrets", &redact.enabled.to_string())?;
 
     result.dirty_files = dirty_files.len() as u32;
+    let did_work = !dirty_files.is_empty();
     tx.commit()?;
+
+    // Refresh planner stats after the write commits (not inside the tx). Skipped
+    // on no-op runs — nothing changed, so the stats can't have drifted. Guards
+    // the planner against misplans like the tier-2 quadratic in #110.
+    if did_work {
+        db.optimize()?;
+    }
+
     Ok(result)
 }
 
@@ -1552,6 +1577,45 @@ mod tests {
     }
 
     #[test]
+    fn no_lsp_index_seals_unresolved_edges_at_state_four() {
+        // Watch / --no-lsp runs (lsp=false) have no LSP pass to retry the
+        // heuristic's leftovers, so a state=0 edge would be re-walked on every
+        // re-index (#109 amplification). The indexer must seal it at state=4.
+        use cartog_db::Database;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("a.py"), "def caller():\n    nowhere('x')\n").unwrap();
+
+        let db = Database::open_memory().unwrap();
+        index_directory(
+            &db,
+            &root,
+            false,
+            false, // lsp off — the only resolver is the heuristic
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        // The unresolvable `nowhere` call is sealed, so it no longer surfaces
+        // to the unresolved set the next pass would scan.
+        let names: Vec<String> = db
+            .unresolved_edges()
+            .unwrap()
+            .into_iter()
+            .map(|e| e.target_name)
+            .collect();
+        assert!(
+            !names.contains(&"nowhere".to_string()),
+            "no-lsp index must seal the unresolvable edge at state=4, got {names:?}"
+        );
+    }
+
+    #[test]
     fn test_added_symbol_reopens_unresolvable_edges() {
         // Name-keyed reset: a new symbol whose name matches a state=2 edge
         // returns the edge to state=0 (or state=1 if the heuristic resolves it).
@@ -1582,6 +1646,9 @@ mod tests {
             r1
         );
 
+        // The no-lsp index seals leftovers at state=4; reopen so the rest of
+        // the test exercises the state=0 → marker lifecycle as before.
+        db.reopen_heuristic_exhausted().unwrap();
         let before = db.unresolved_edges().unwrap();
         let find_user = before
             .iter()
@@ -1816,6 +1883,9 @@ mod tests {
         )
         .unwrap();
 
+        // The no-lsp index seals leftovers at state=4; reopen so we can mark
+        // them {2, 3} and test that --force clears those sticky markers.
+        db.reopen_heuristic_exhausted().unwrap();
         let pre = db.unresolved_edges().unwrap();
         let find_x_id = pre
             .iter()
@@ -1842,14 +1912,19 @@ mod tests {
             &std::collections::HashMap::new(),
         )
         .unwrap();
+        // --force clears the sticky LSP markers (reset_all_unresolvable), then
+        // this no-lsp run re-seals the still-unresolvable edges at state=4 — a
+        // fresh heuristic-exhaustion verdict, not the inherited {2, 3} markers.
+        // Reopen state=4 to confirm both edges came back to the resolvable set.
+        db.reopen_heuristic_exhausted().unwrap();
         let post = db.unresolved_edges().unwrap();
         assert!(
             post.iter().any(|e| e.target_name == "find_x"),
-            "after --force, find_x must be back in unresolved_edges (state=0)"
+            "after --force, find_x must not stay at an inherited {{2, 3}} marker"
         );
         assert!(
             post.iter().any(|e| e.target_name == "find_ext"),
-            "after --force, find_ext must be back in unresolved_edges (state=0)"
+            "after --force, find_ext must not stay at an inherited {{2, 3}} marker"
         );
     }
 
@@ -1878,6 +1953,9 @@ mod tests {
         )
         .unwrap();
 
+        // The no-lsp index seals leftovers at state=4; reopen so we can mark
+        // the edge external and test the vendored-in-tree reopen path.
+        db.reopen_heuristic_exhausted().unwrap();
         let unresolved = db.unresolved_edges().unwrap();
         let edge_id = unresolved
             .iter()
@@ -1946,6 +2024,9 @@ mod tests {
         )
         .unwrap();
 
+        // The no-lsp index seals leftovers at state=4; reopen so we can mark
+        // them {2, 3} and test that a no-op reindex preserves those markers.
+        db.reopen_heuristic_exhausted().unwrap();
         let unresolved = db.unresolved_edges().unwrap();
         let burned = unresolved
             .iter()
