@@ -118,7 +118,7 @@ mod imp {
     use cartog_db::{
         checkpoint_wal, read_metadata_at, read_schema_version_at, CURRENT_SCHEMA_VERSION,
     };
-    use cartog_process_lock::find_active_locks;
+    use cartog_process_lock::{find_active_locks, AcquireError, ProcessLock};
     use s3::bucket::Bucket;
     use s3::creds::Credentials;
     use s3::region::Region;
@@ -280,7 +280,7 @@ mod imp {
     }
 
     /// Resolve the per-DB state dir + slots that `cartog serve` / `cartog watch`
-    /// would acquire. Used to refuse a push or pull while a peer is using the DB.
+    /// would acquire. Used to refuse a push while a peer is using the DB.
     fn peers_for_db(db_path: &Path) -> Vec<String> {
         let dir = match crate::state::default_state_dir() {
             Some(d) => d,
@@ -413,6 +413,50 @@ mod imp {
         Ok(())
     }
 
+    /// Hold the serve+watch slots for the whole pull so no peer opens the DB mid-install (#68).
+    /// `Ok(None)` = proceed unguarded (`--force` past a live peer, or unlockable state dir).
+    pub(super) fn acquire_pull_locks(
+        state_dir: &Path,
+        db_path: &Path,
+        force: bool,
+    ) -> Result<Option<Vec<ProcessLock>>> {
+        let slots = [
+            crate::state::slot_for_db("serve", db_path),
+            crate::state::slot_for_db("watch", db_path),
+        ];
+        let mut locks = Vec::with_capacity(slots.len());
+        for slot in &slots {
+            match ProcessLock::acquire(state_dir, slot) {
+                Ok(lock) => locks.push(lock),
+                Err(AcquireError::Held(held)) => {
+                    if force {
+                        eprintln!(
+                            "warning: pulling with --force while a peer is live ({} (pid {})); \
+                             its open DB handle may be corrupted by the swap",
+                            held.slot, held.pid
+                        );
+                        return Ok(None);
+                    }
+                    bail!(
+                        "cannot pull: peer cartog process is using this DB ({} (pid {})). \
+                         Stop it or pass --force to overwrite anyway.",
+                        held.slot,
+                        held.pid
+                    );
+                }
+                Err(AcquireError::Io(e)) => {
+                    // Peers can't lock an unlockable dir either; degrade to best effort.
+                    eprintln!(
+                        "warning: cannot lock {} ({e}); pulling without peer exclusion",
+                        state_dir.display()
+                    );
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(Some(locks))
+    }
+
     pub(super) fn pull_index(
         db_path: &Path,
         remote_cfg: Option<&RemoteConfig>,
@@ -424,15 +468,12 @@ mod imp {
         let url = resolve_remote_url(remote_cfg, cli_override)?;
         let (bucket_name, key) = parse_s3_url(&url)?;
 
-        // 1) Refuse to overwrite a live DB unless --force.
-        let peers = peers_for_db(db_path);
-        if !peers.is_empty() && !force {
-            bail!(
-                "cannot pull: peer cartog process is using this DB ({}). \
-                 Stop it or pass --force to overwrite anyway.",
-                peers.join(", ")
-            );
-        }
+        // 1) Hold the peer slots for the whole pull (#68); a peer starting mid-download
+        //    now loses its election instead of opening the file we're about to swap.
+        let _peer_locks = match crate::state::default_state_dir() {
+            Some(dir) => acquire_pull_locks(&dir, db_path, force)?,
+            None => None,
+        };
 
         // 2) Ensure the parent dir exists for the .partial file.
         if let Some(parent) = db_path.parent() {
@@ -601,31 +642,7 @@ mod imp {
         // Report the file's own row only — never the unvalidated S3 header.
         let report_commit = file_commit;
 
-        // 7) Re-check for peers right before the rename window. The
-        //    download above can take many seconds; a `cartog serve` /
-        //    `cartog watch` that started during that window now holds an
-        //    open SQLite handle to the file we're about to swap. This
-        //    re-check closes most of that window but NOT all of it: a
-        //    peer that wins the PID-lock election in the few syscalls
-        //    between this check and the rename at the end of step 9 can
-        //    still race us. The genuine fix is an exclusive file lock
-        //    held for the duration of the pull, deferred to a follow-up.
-        //    `--force` continues to bypass, matching the step-1 check.
-        let peers_now = peers_for_db(db_path);
-        if !peers_now.is_empty() && !force {
-            // Honest about what we know vs what we hope: the partial file
-            // is dropped (RAII guard still armed at this point), the
-            // existing local DB at `db_path` is untouched, and WAL/SHM
-            // siblings have not been unlinked yet.
-            bail!(
-                "cannot pull: a peer cartog process started while downloading \
-                 ({}). Local DB and its WAL siblings are untouched; the partial \
-                 download will be discarded.",
-                peers_now.join(", ")
-            );
-        }
-
-        // 8) Remove stale WAL/SHM siblings — leaving them would cause SQLite
+        // 7) Remove stale WAL/SHM siblings — leaving them would cause SQLite
         //    to replay phantom frames into the freshly-pulled DB.
         for ext in ["-wal", "-shm"] {
             let mut sibling = db_path.as_os_str().to_owned();
@@ -637,13 +654,13 @@ mod imp {
             }
         }
 
-        // 9) Install the verified file at `db_path`. Prefer an atomic rename
+        // 8) Install the verified file at `db_path`. Prefer an atomic rename
         //    (no torn DB on a mid-step crash). If `.partial` and `db_path`
         //    landed on different filesystems — e.g. the project dir is a bind
         //    mount or `db_path` is symlinked across a tmpfs boundary — rename
         //    fails with EXDEV (`CrossesDevices`). Fall back to copy + remove.
         //    The copy is not atomic, but at this point the bytes are fully
-        //    verified and any live peer was already refused (steps 1 + 7), so
+        //    verified and the peer locks taken in step 1 are still held, so
         //    a non-atomic write is acceptable for this rare cross-FS case.
         //
         //    The guard stays armed until install succeeds: if both the rename
@@ -1055,6 +1072,74 @@ mod tests {
         assert!(
             err.to_string().contains("no AWS region resolvable"),
             "actionable error names the missing region: {err}"
+        );
+    }
+
+    #[test]
+    fn pull_locks_exclude_peers_for_their_lifetime() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("proj.db");
+        let serve_slot = crate::state::slot_for_db("serve", &db);
+        let watch_slot = crate::state::slot_for_db("watch", &db);
+
+        let locks = imp::acquire_pull_locks(dir.path(), &db, false)
+            .unwrap()
+            .expect("free slots must be acquired");
+        // The previously-racy window (#68): a peer election mid-pull must lose.
+        assert!(matches!(
+            cartog_process_lock::ProcessLock::acquire(dir.path(), &serve_slot),
+            Err(cartog_process_lock::AcquireError::Held(_))
+        ));
+        assert!(matches!(
+            cartog_process_lock::ProcessLock::acquire(dir.path(), &watch_slot),
+            Err(cartog_process_lock::AcquireError::Held(_))
+        ));
+
+        drop(locks);
+        assert!(
+            cartog_process_lock::ProcessLock::acquire(dir.path(), &serve_slot).is_ok(),
+            "slots free again after the pull releases"
+        );
+    }
+
+    #[test]
+    fn pull_locks_refusal_names_holder_and_releases_partial_acquisitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("proj.db");
+        let serve_slot = crate::state::slot_for_db("serve", &db);
+        let watch_slot = crate::state::slot_for_db("watch", &db);
+        let _peer = cartog_process_lock::ProcessLock::acquire(dir.path(), &watch_slot).unwrap();
+
+        let err = imp::acquire_pull_locks(dir.path(), &db, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains(&watch_slot), "names the held slot: {msg}");
+        assert!(msg.contains("--force"), "points at the override: {msg}");
+        assert!(
+            cartog_process_lock::ProcessLock::acquire(dir.path(), &serve_slot).is_ok(),
+            "the transiently-acquired serve slot is released on refusal"
+        );
+    }
+
+    #[test]
+    fn pull_locks_force_proceeds_unguarded_when_peer_is_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("proj.db");
+        let serve_slot = crate::state::slot_for_db("serve", &db);
+        let _peer = cartog_process_lock::ProcessLock::acquire(dir.path(), &serve_slot).unwrap();
+
+        let locks = imp::acquire_pull_locks(dir.path(), &db, true).unwrap();
+        assert!(locks.is_none(), "--force pulls without holding locks");
+    }
+
+    #[test]
+    fn pull_locks_force_still_locks_free_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("proj.db");
+
+        let locks = imp::acquire_pull_locks(dir.path(), &db, true).unwrap();
+        assert!(
+            locks.is_some(),
+            "--force takes the locks when nobody holds them"
         );
     }
 }
