@@ -923,8 +923,9 @@ Safety guarantees:
   the file by inode; a rename under a live handle would corrupt its
   view). A `cartog serve` that starts during a pull attaches read-only
   and promotes onto the freshly pulled DB once the pull releases the
-  lock. `--force` skips the exclusion, with that corruption risk on any
-  live peer.
+  lock. `--force` still takes the locks when no peer is live; only when
+  a peer already holds a slot (or the lock dir is unusable) does it
+  proceed unguarded, accepting that corruption risk for the live peer.
 
 > **Trust boundary**: the `x-amz-meta-sha256` header is self-attested by
 > whoever pushed the object — it catches corruption and accidental swaps
