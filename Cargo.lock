@@ -281,7 +281,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "cartog"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-core"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "proptest",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-db"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-indexer"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-languages"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -395,14 +395,14 @@ dependencies = [
 
 [[package]]
 name = "cartog-loom-models"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "loom",
 ]
 
 [[package]]
 name = "cartog-lsp"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-mcp"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -437,7 +437,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-process-lock"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "libc",
  "tempfile",
@@ -446,7 +446,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-rag"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-watch"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -495,9 +495,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.63"
+version = "1.2.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "556e016178bb5662a08681bbe0f00f8e17631781a4dfc8c45e466e4b185ec27f"
+checksum = "dad887fd958be91b5098c0248def011f4523ab786cd411be668777e55063501f"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -958,7 +958,6 @@ version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
- "powerfmt",
  "serde_core",
 ]
 
@@ -1196,9 +1195,9 @@ checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fastembed"
-version = "5.16.0"
+version = "5.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "add59222e7bc3787285f993744b244cd454d78571845623606bdc45b22b23a4e"
+checksum = "c6a4d483ea0f1a37e39387a8d2e6f8da60c66d635384b05215dc2faadd0a72b1"
 dependencies = [
  "anyhow",
  "hf-hub",
@@ -2112,9 +2111,9 @@ checksum = "ae960838283323069879657ca3de837e9f7bbb4c7bf6ea7f1b290d5e9476d2e0"
 
 [[package]]
 name = "memchr"
-version = "2.8.1"
+version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
+checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "minimal-lexical"
@@ -3382,9 +3381,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.15.1"
+version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "socket2"
@@ -3600,12 +3599,11 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.47"
+version = "0.3.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
+checksum = "fc1aa89044e7786ffb2ec017acb22cb7de5b0be46d0f21aea2b224b8561e5db2"
 dependencies = [
  "deranged",
- "itoa",
  "num-conv",
  "powerfmt",
  "serde_core",
@@ -3615,15 +3613,15 @@ dependencies = [
 
 [[package]]
 name = "time-core"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
+checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
 
 [[package]]
 name = "time-macros"
-version = "0.2.27"
+version = "0.2.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
+checksum = "9d3bfe86347f0cc659f586f01e26303ccd32418f26f30c7b0309b3ca3a07d695"
 dependencies = [
  "num-conv",
  "time-core",

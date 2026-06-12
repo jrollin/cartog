@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.28.0] - 2026-06-12
+
+### Bug Fixes
+
+- **lsp**: Deflake request_batch disconnect test ([`ffa544a`](https://github.com/jrollin/cartog/commit/ffa544ad07e7034ce6303d6771bb0e2c304f7b57))
+- **sfc**: Address PR review — drop dangling edges, harden images, sync docs ([`b76dba2`](https://github.com/jrollin/cartog/commit/b76dba2f94505346164ab6904a0d80c3327138a3))
+
+### Documentation
+
+- Position cartog vs embedding-search tools (symbols, not chunks) (#123) ([`6de9cac`](https://github.com/jrollin/cartog/commit/6de9cac90475a6f91378b00445ad51f5cca407ec))
+- Document SFC support + add React/Vue/Svelte/Astro frameworks axis ([`57acacb`](https://github.com/jrollin/cartog/commit/57acacbe263724d1a70f2de76afc8c8e25940868))
+
+### Features
+
+- **progress**: Live file/edge counters for indexing phases (#117) ([`18ccdeb`](https://github.com/jrollin/cartog/commit/18ccdebff615ca32ea2c14b8cb936a24123fd4cd))
+- Make indexing cancellable with Ctrl-C (index + rag index) (#120) ([`aada12f`](https://github.com/jrollin/cartog/commit/aada12fc1b53670ccb5f48901824f7f1eb1bd0cb))
+- **output**: Add --compact JSON mode + MCP compact-by-default (#122) ([`74a2754`](https://github.com/jrollin/cartog/commit/74a2754a23a04a4451138bc99cc5ead326f6e274))
+- **languages**: Index Vue/Svelte/Astro SFCs + React JSX-usage edges ([`9797312`](https://github.com/jrollin/cartog/commit/97973126a03a5fb846fb3c1a153bd0cb1c3d7bc9))
+- **lsp**: Add Vue/Svelte/Astro language-server specs + Docker images ([`3bdc529`](https://github.com/jrollin/cartog/commit/3bdc5292b1b2cad9ae82a4029715554b57b2f6c4))
+
+### Performance
+
+- **lsp**: Pipeline definition requests in bounded windows (#118) ([`67b7129`](https://github.com/jrollin/cartog/commit/67b7129b02d7787c021133230aa770ad45de341d))
+- **cli+mcp**: Warm LSP — fix MCP reopen regression, no-op catch-up, CLI peer-defer (#121) ([`d5d63be`](https://github.com/jrollin/cartog/commit/d5d63be02736ef502172d3b1ca0038147e41dd09))
+
+### Testing
+
+- **bench**: Add Vue/Svelte/Astro fixtures + ground truth + scenario wiring ([`38ebbd2`](https://github.com/jrollin/cartog/commit/38ebbd24493deff418fca90ad616c25cc69feb76))
+
 ## [0.27.1] - 2026-06-11
 
 ## [0.27.0] - 2026-06-11
