@@ -74,13 +74,14 @@ export FIXTURE_FILTER=""
 # Language tags. Keep in sync with benchmarks/fixtures/webapp_*.
 # macOS ships bash 3.2 (no associative arrays), so lookups use case like the
 # rest of the suite (see benchmarks/lib/common.sh).
-LANGS=(py ts rs go rb java php dart swift kt)
+LANGS=(py ts rs go rb java php dart swift kt vue svelte astro)
 
 lang_name() {
   case "$1" in
     py) echo Python ;; ts) echo TypeScript/JS ;; rs) echo Rust ;;
     go) echo Go ;; rb) echo Ruby ;; java) echo Java ;; php) echo PHP ;;
     dart) echo Dart ;; swift) echo Swift ;; kt) echo Kotlin ;;
+    vue) echo Vue ;; svelte) echo Svelte ;; astro) echo Astro ;;
     *) echo "$1" ;;
   esac
 }
@@ -92,6 +93,8 @@ lsp_bin() {
     rs) echo rust-analyzer ;; go) echo gopls ;; rb) echo ruby-lsp ;;
     java) echo jdtls ;; php) echo intelephense ;; dart) echo dart ;;
     swift) echo sourcekit-lsp ;; kt) echo kotlin-language-server ;;
+    vue) echo vue-language-server ;; svelte) echo svelteserver ;;
+    astro) echo astro-ls ;;
     *) echo __none__ ;;
   esac
 }

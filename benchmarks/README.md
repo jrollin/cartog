@@ -51,10 +51,13 @@ test-and-benchmark matrix.
 
 All fixtures model the same domain (auth service, tokens, routes, middleware, database, cache, events, validators) with controlled, known relationships defined in `ground_truth/`.
 
-The criterion `indexing` bench exercises all 10 fixtures. The shell scenarios and
-`ground_truth/` currently cover 9 of them — `webapp_dart` has no scenario ground
-truth yet, so it is indexed by the criterion bench but not scored by the shell
-suite.
+The criterion `indexing` bench exercises all 13 fixtures (10 code-language webapps
++ the `webapp_{vue,svelte,astro}` SFC apps). The full 13-scenario shell suite and
+`ground_truth/` cover the 10 code-language fixtures (minus `webapp_dart`, which has
+no scenario ground truth yet). The three SFC fixtures are component apps, not the
+shared backend graph, so their `ground_truth/` covers only the scenarios that fit
+an SFC app (outline, callees, deps, search) — derived from real `cartog --json`
+output and hand-verified.
 
 ## Scenarios
 
@@ -99,7 +102,7 @@ These rows exist to track that — they should approach parity as the gaps close
 ## Usage
 
 ```bash
-# Run all scenarios (01-13) across all 10 languages
+# Run all scenarios (01-13) across the code-language fixtures
 ./benchmarks/token_savings.sh
 
 # Run single scenario
@@ -238,7 +241,7 @@ cargo bench -p cartog --bench queries -- search_token   # one bench (substring m
 Lives in `cartog-indexer`, which has no `cartog-rag`/ONNX dependency, so it builds
 and runs without the native ONNX library. Per-language cost lives in the
 tree-sitter grammar + extractor, so the full-index scenario is parameterized over
-all 10 fixtures.
+all 13 fixtures.
 
 ```bash
 cargo bench -p cartog-indexer --bench indexing

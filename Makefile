@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-install-script sync-install-script tla loom bench bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-vue check-svelte check-astro check-install-script sync-install-script tla loom bench bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -139,6 +139,29 @@ check-kt: ## Validate Kotlin fixtures (kotlinc compile, falls back to pinned Doc
 		echo "    ERROR: neither kotlinc nor docker available"; exit 1; \
 	fi
 	@echo "    OK"
+
+# SFC fixtures (Vue/Svelte/Astro) type-check with the framework's own checker via
+# npx. These pull a full framework toolchain on first run, so they're NOT wired
+# into the `check-fixtures` gate (which must stay fast + offline-friendly); run
+# them explicitly when touching an SFC fixture. cartog's own SFC parse/extract is
+# covered by the unit tests in crates/cartog-languages/src/sfc.rs.
+check-vue: ## Type-check Vue fixtures (vue-tsc via npx, falls back to Docker)
+	@echo "==> Checking Vue fixtures..."
+	$(call check_lang,npx,node:22-slim,\
+		cd benchmarks/fixtures/webapp_vue && npx --yes --package vue --package typescript@5 --package vue-tsc -- vue-tsc --noEmit -p tsconfig.json,\
+		cd webapp_vue && HOME=/tmp npm_config_cache=/tmp/npm npx --yes --package vue --package typescript@5 --package vue-tsc -- vue-tsc --noEmit -p tsconfig.json)
+
+check-svelte: ## Type-check Svelte fixtures (svelte-check via npx, falls back to Docker)
+	@echo "==> Checking Svelte fixtures..."
+	$(call check_lang,npx,node:22-slim,\
+		cd benchmarks/fixtures/webapp_svelte && npx --yes --package svelte --package typescript@5 --package svelte-check -- svelte-check --no-tsconfig,\
+		cd webapp_svelte && HOME=/tmp npm_config_cache=/tmp/npm npx --yes --package svelte --package typescript@5 --package svelte-check -- svelte-check --no-tsconfig)
+
+check-astro: ## Type-check Astro fixtures (astro check via npx, falls back to Docker)
+	@echo "==> Checking Astro fixtures..."
+	$(call check_lang,npx,node:22-slim,\
+		cd benchmarks/fixtures/webapp_astro && npx --yes --package astro --package typescript@5 --package @astrojs/check -- astro check,\
+		cd webapp_astro && HOME=/tmp npm_config_cache=/tmp/npm npx --yes --package astro --package typescript@5 --package @astrojs/check -- astro check)
 
 # --- Skill tests ---
 

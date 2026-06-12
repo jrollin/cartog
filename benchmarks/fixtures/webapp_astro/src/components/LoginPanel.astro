@@ -1,0 +1,16 @@
+---
+import { AuthService } from "../lib/auth";
+
+const auth = new AuthService();
+const demoToken = issueDemoToken();
+
+function issueDemoToken(): string {
+  return auth.login("demo");
+}
+---
+
+<form method="post">
+  <input name="name" />
+  <button type="submit">Log in</button>
+  <input type="hidden" name="demo" value={demoToken} />
+</form>
