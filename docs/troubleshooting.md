@@ -24,6 +24,11 @@ cartog`. Otherwise, confirm a language server is on `PATH` (e.g.
 `intelephense`, `dart`, `sourcekit-lsp`, `kotlin-language-server`) and that you
 haven't passed `--no-lsp` at runtime.
 
+A running `cartog serve` on the same database also makes `cartog index` defer
+its LSP pass to that peer's warm servers (a `note:` on stderr names the peer
+PID). Resolution then happens on the server's next `cartog_index` call — run
+`cartog index . --force` if you need a local LSP pass right now.
+
 For PHP, cartog probes `intelephense` first and falls back to `phpactor`.
 
 For Dart, cartog invokes `dart language-server --protocol=lsp` from the Dart
