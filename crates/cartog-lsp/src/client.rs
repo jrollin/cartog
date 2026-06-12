@@ -525,4 +525,78 @@ mod tests {
             "batch took {elapsed:?}; deadline should be shared, not per-id"
         );
     }
+
+    /// Spawn a fake server that writes `frames` then EXITS (closing stdout),
+    /// so the reader sees EOF and the channel disconnects.
+    #[cfg(unix)]
+    fn fake_server_then_exit(frames: &str) -> LspClient {
+        use std::process::{Command, Stdio};
+        let script = format!("printf '%s' '{frames}'");
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn fake server");
+        LspClient::new(child).expect("client over fake server")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn request_batch_fails_remaining_slots_fast_on_disconnect() {
+        // Server answers id 1 then exits, so ids 2 and 3 disconnect rather than
+        // wait out the deadline. With a long timeout, a fast return proves the
+        // Disconnected arm short-circuits every outstanding slot.
+        let r1 = framed(r#"{"jsonrpc":"2.0","id":1,"result":{"v":1}}"#);
+        let mut client = fake_server_then_exit(&r1);
+        client.set_timeout(Duration::from_secs(30)); // would dominate if we waited
+
+        let started = Instant::now();
+        let replies = client
+            .request_batch(&[
+                ("m", serde_json::json!({})),
+                ("m", serde_json::json!({})),
+                ("m", serde_json::json!({})),
+            ])
+            .expect("batch sends");
+        let elapsed = started.elapsed();
+
+        assert_eq!(replies.len(), 3);
+        assert_eq!(replies[0].as_ref().unwrap()["v"], 1);
+        assert!(replies[1].is_err() && replies[2].is_err());
+        assert!(
+            replies[1]
+                .as_ref()
+                .unwrap_err()
+                .to_string()
+                .contains("disconnect"),
+            "got: {:?}",
+            replies[1]
+        );
+        // Disconnect must short-circuit, not burn the 30s deadline.
+        assert!(elapsed < Duration::from_secs(5), "took {elapsed:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn request_batch_drains_notifications_and_server_requests() {
+        // A notification and a server-initiated request are interleaved with the
+        // real replies. Both must be handled (auto-responded / discarded) without
+        // disturbing reply matching, so the batch still completes.
+        let note = framed(r#"{"jsonrpc":"2.0","method":"$/progress","params":{}}"#);
+        let srv_req = framed(
+            r#"{"jsonrpc":"2.0","id":999,"method":"window/workDoneProgress/create","params":{}}"#,
+        );
+        let r1 = framed(r#"{"jsonrpc":"2.0","id":1,"result":{"v":1}}"#);
+        let r2 = framed(r#"{"jsonrpc":"2.0","id":2,"result":{"v":2}}"#);
+        let mut client = fake_server(&format!("{note}{srv_req}{r1}{r2}"));
+
+        let replies = client
+            .request_batch(&[("m", serde_json::json!({})), ("m", serde_json::json!({}))])
+            .expect("batch sends");
+        assert_eq!(replies.len(), 2);
+        assert_eq!(replies[0].as_ref().unwrap()["v"], 1);
+        assert_eq!(replies[1].as_ref().unwrap()["v"], 2);
+    }
 }
