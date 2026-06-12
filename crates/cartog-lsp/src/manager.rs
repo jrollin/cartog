@@ -13,6 +13,11 @@ use super::servers::{find_servers, is_binary_available};
 /// Override with `CARTOG_LSP_READY_TIMEOUT_SECS`.
 const DEFAULT_READY_TIMEOUT_SECS: u64 = 20;
 
+/// How many `textDocument/definition` requests `definitions_batch` keeps in
+/// flight at once. Caps in-flight memory and stdin backpressure while still
+/// overlapping round-trips; large files resolve in windows of this size.
+const DEFINITION_BATCH_WINDOW: usize = 64;
+
 /// Read the ready-timeout from env, falling back to the default.
 fn ready_timeout_secs() -> u64 {
     std::env::var("CARTOG_LSP_READY_TIMEOUT_SECS")
@@ -209,37 +214,56 @@ impl LspManager {
         Ok(())
     }
 
-    /// Send textDocument/definition and return the target outcome.
+    /// Resolve many `textDocument/definition` positions in one file. Requests
+    /// are pipelined in windows of `DEFINITION_BATCH_WINDOW` (sent together,
+    /// then collected) so round-trips overlap without an unbounded number of
+    /// in-flight requests flooding the server's stdin or this client's memory.
+    /// Returns one result per input position, in order; a per-position `Err`
+    /// (timeout, LSP error) is isolated to that position. Positions are
+    /// `(line, character)`, LSP 0-based.
     ///
-    /// `Ok(None)` means the server gave no parseable answer (truly unresolvable —
-    /// typo, dyn dispatch, macro, or a non-`file://` URI like jdtls's `jdt://`).
-    /// `Ok(Some(InRoot(..)))` means the target lives inside the indexed root.
-    /// `Ok(Some(External))` means the target lives outside the root (stdlib,
-    /// deps, node_modules) — caller should mark `state=3`. See
-    /// [`DefinitionOutcome::External`].
-    pub fn definition(
+    /// Each successful outcome: `Ok(None)` = no parseable answer (truly
+    /// unresolvable — typo, dyn dispatch, macro, or a non-`file://` URI like
+    /// jdtls's `jdt://`); `Ok(Some(InRoot(..)))` = target inside the indexed
+    /// root; `Ok(Some(External))` = target outside the root (stdlib, deps,
+    /// node_modules), caller should mark `state=3`.
+    pub fn definitions_batch(
         &mut self,
         language: &str,
         file_path: &str,
-        line: u32,
-        character: u32,
-    ) -> Result<Option<DefinitionOutcome>> {
+        positions: &[(u32, u32)],
+    ) -> Result<Vec<Result<Option<DefinitionOutcome>>>> {
+        // Clone root so the per-window parse can borrow it while `client` holds
+        // a `&mut` of `self.clients`.
+        let root = self.root.clone();
+        let uri = path_to_uri(&root.join(file_path));
         let (client, _) = self
             .clients
             .get_mut(language)
             .with_context(|| format!("no running LSP client for {language}"))?;
 
-        let uri = path_to_uri(&self.root.join(file_path));
-
-        let result = client.send_request(
-            "textDocument/definition",
-            serde_json::json!({
-                "textDocument": { "uri": uri },
-                "position": { "line": line, "character": character },
-            }),
-        )?;
-
-        parse_definition_response(&result, &self.root)
+        let mut out = Vec::with_capacity(positions.len());
+        for window in positions.chunks(DEFINITION_BATCH_WINDOW) {
+            let params: Vec<(&str, Value)> = window
+                .iter()
+                .map(|&(line, character)| {
+                    (
+                        "textDocument/definition",
+                        serde_json::json!({
+                            "textDocument": { "uri": uri },
+                            "position": { "line": line, "character": character },
+                        }),
+                    )
+                })
+                .collect();
+            // A write failure aborts the whole call (the pipe is broken); the
+            // caller treats that as a likely server death.
+            let replies = client.request_batch(&params)?;
+            for reply in replies {
+                out.push(reply.and_then(|result| parse_definition_response(&result, &root)));
+            }
+        }
+        Ok(out)
     }
 
     /// Notify the server that a file is open (required before definition requests).
