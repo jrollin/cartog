@@ -143,15 +143,41 @@ pub fn lsp_resolve_edges(
 
             let lines: Vec<&str> = content.lines().collect();
 
-            for edge in file_edges {
-                let col = match find_column_in_line(&lines, edge.line, &edge.target_name) {
-                    Some(c) => c,
-                    None => continue,
-                };
+            // Pair each edge whose target column we can locate with its LSP
+            // position in ONE vec, so the edge↔position↔outcome correspondence
+            // can't drift, then resolve the batch (round-trips overlap).
+            let batch: Vec<(&UnresolvedEdge, (u32, u32))> = file_edges
+                .iter()
+                .filter_map(|&edge| {
+                    find_column_in_line(&lines, edge.line, &edge.target_name)
+                        .map(|col| (edge, (edge.line.saturating_sub(1), col))) // 1-based → 0-based
+                })
+                .collect();
+            let positions: Vec<(u32, u32)> = batch.iter().map(|&(_, pos)| pos).collect();
 
-                let lsp_line = edge.line.saturating_sub(1); // cartog 1-based → LSP 0-based
+            let outcomes = match manager.definitions_batch(language, file_path, &positions) {
+                Ok(o) => o,
+                Err(e) => {
+                    // The send pipe broke mid-batch (server gone). Treat like a
+                    // death: never mark, stop this language.
+                    tracing::debug!("definition batch failed for {file_path}: {e:#}");
+                    if !manager.is_alive(language) {
+                        tracing::warn!(
+                            "{language} LSP server died — remaining {language} edges resolved \
+                             via heuristics only. Rerun with --no-lsp to skip LSP entirely."
+                        );
+                        server_died = true;
+                    }
+                    let _ = manager.close_file(language, file_path);
+                    if server_died {
+                        break;
+                    }
+                    continue;
+                }
+            };
 
-                match manager.definition(language, file_path, lsp_line, col) {
+            for ((edge, _pos), outcome) in batch.iter().zip(outcomes) {
+                match outcome {
                     Ok(Some(DefinitionOutcome::InRoot(loc))) => {
                         match db.find_symbol_at_location(&loc.file_path, loc.line) {
                             Ok(Some(symbol_id)) => {
