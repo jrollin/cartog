@@ -320,6 +320,68 @@ fn mcp_err(msg: impl std::fmt::Display) -> McpError {
     McpError::internal_error(msg.to_string(), None)
 }
 
+/// Outcome of one warm LSP resolution pass (see [`warm_lsp_pass`]).
+#[cfg(feature = "lsp")]
+struct WarmPassOutcome {
+    /// State-4 (heuristic-exhausted) edges reopened to state 0 before the pass.
+    reopened: u32,
+    /// Edges re-sealed at state 4 because no language server started.
+    resealed: u32,
+    /// Resolution counts from `lsp_resolve_edges`.
+    stats: cartog_lsp::LspResolveStats,
+}
+
+/// One warm LSP pass: reopen state-4 seals (else the pass queries nothing —
+/// the #114 regression), resolve, re-seal if no server started (#109).
+/// LSP-server failures degrade to a warning; DB failures and cancel are errors.
+#[cfg(feature = "lsp")]
+fn warm_lsp_pass(
+    db: &Database,
+    mgr: &mut cartog_lsp::manager::LspManager,
+    root: &Path,
+    progress: Option<cartog_lsp::LspProgress<'_>>,
+    cancel: Option<indexer::CancelProbe<'_>>,
+) -> Result<WarmPassOutcome, McpError> {
+    let reopened = db
+        .reopen_heuristic_exhausted()
+        .map_err(|e| mcp_err(format!("reopening heuristic-exhausted edges failed: {e:#}")))?;
+    // Overrides live on the shared `mgr` (set at construction), so the map
+    // passed here is ignored — pass empty.
+    let stats = match cartog_lsp::lsp_resolve_edges(
+        db,
+        root,
+        Some(mgr),
+        &std::collections::HashMap::new(),
+        progress,
+        cancel,
+    ) {
+        Ok(stats) => stats,
+        // A cancel must surface as an error (the MCP cancellation contract),
+        // not be swallowed as a warning like a genuine LSP-server failure.
+        Err(e) if cartog_indexer::is_cancelled(&e) => {
+            return Err(mcp_err("indexing cancelled"));
+        }
+        Err(e) => {
+            tracing::warn!("LSP resolution failed: {e:#}");
+            cartog_lsp::LspResolveStats::default()
+        }
+    };
+    let resealed = if !stats.any_server_started && reopened > 0 {
+        db.mark_heuristic_exhausted_in_tx().map_err(|e| {
+            mcp_err(format!(
+                "re-sealing heuristic-exhausted edges failed: {e:#}"
+            ))
+        })?
+    } else {
+        0
+    };
+    Ok(WarmPassOutcome {
+        reopened,
+        resealed,
+        stats,
+    })
+}
+
 /// Run `index_directory` followed by an optional LSP resolution pass.
 ///
 /// Exposed as a free function (rather than inlined in the `cartog_index`
@@ -327,7 +389,9 @@ fn mcp_err(msg: impl std::fmt::Display) -> McpError {
 /// constructing a full `CartogServer` (which loads ONNX models).
 ///
 /// LSP pass is skipped on no-op runs (`dirty_files == 0`) — see
-/// `cartog-indexer` for the gate rationale.
+/// `cartog-indexer` for the gate rationale. On dirty runs the pass goes
+/// through [`warm_lsp_pass`], which reopens the state-4 seals left by the
+/// internal `lsp=false` index run.
 #[cfg(feature = "lsp")]
 fn index_with_optional_lsp(
     db: &Arc<Mutex<Database>>,
@@ -383,32 +447,19 @@ fn index_with_optional_lsp(
         let lsp_progress_ref: Option<cartog_lsp::LspProgress<'_>> = lsp_progress
             .as_ref()
             .map(|f| f as &(dyn Fn(u32, u32) + Send + Sync));
-        // Overrides live on the shared `mgr` (set at construction), so the
-        // map passed here is ignored — pass empty.
-        match cartog_lsp::lsp_resolve_edges(
-            &db,
-            root,
-            Some(&mut mgr),
-            &std::collections::HashMap::new(),
-            lsp_progress_ref,
-            cancel,
-        ) {
-            Ok(stats) => {
-                result.edges_lsp_resolved = stats.resolved;
-                result.edges_marked_unresolvable = stats.marked_unresolvable;
-                result.edges_marked_external = stats.marked_external;
-                if stats.resolved > 0 {
-                    let _ = db.compute_in_degrees();
-                }
-            }
-            // A cancel must surface as an error (the MCP cancellation contract),
-            // not be swallowed as a warning like a genuine LSP-server failure.
-            Err(e) if cartog_indexer::is_cancelled(&e) => {
-                return Err(mcp_err("indexing cancelled"));
-            }
-            Err(e) => {
-                tracing::warn!("LSP resolution failed: {e:#}");
-            }
+        let outcome = warm_lsp_pass(&db, &mut mgr, root, lsp_progress_ref, cancel)?;
+        if outcome.reopened > 0 {
+            tracing::debug!(
+                reopened = outcome.reopened,
+                resealed = outcome.resealed,
+                "reopened heuristic-exhausted edges for the warm LSP pass"
+            );
+        }
+        result.edges_lsp_resolved = outcome.stats.resolved;
+        result.edges_marked_unresolvable = outcome.stats.marked_unresolvable;
+        result.edges_marked_external = outcome.stats.marked_external;
+        if outcome.stats.resolved > 0 {
+            let _ = db.compute_in_degrees();
         }
     }
 
@@ -3318,6 +3369,55 @@ mod tests {
             "no-op reindex must not produce new external marks"
         );
         assert_eq!(r2.files_indexed, 0);
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn warm_lsp_pass_reopens_and_reseals_without_servers() {
+        // Regression for the #114 seal: `index_directory(lsp=false)` seals
+        // unresolved edges at state=4 and the warm pass queries only state=0 —
+        // without the reopen it silently resolved nothing.
+        use cartog_db::Database;
+        use cartog_lsp::manager::LspManager;
+
+        let tmp = tempfile::tempdir().unwrap();
+        // Tempdirs are dot-prefixed on macOS; is_ignored() rejects a dotted walk root.
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.py"), "def caller():\n    nowhere('x')\n").unwrap();
+
+        let db = Database::open_memory().unwrap();
+        indexer::index_directory(
+            &db,
+            &root,
+            false,
+            false,
+            None,
+            None,
+            indexer::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        let sealed = db.count_edges_in_state(4).unwrap();
+        assert!(sealed >= 1, "no-lsp index must seal the unresolvable edge");
+
+        // Override python's server with a binary that cannot exist, so the
+        // start fails deterministically regardless of the host PATH.
+        let overrides = std::collections::HashMap::from([(
+            "python".to_string(),
+            vec!["cartog-test-no-such-binary".to_string()],
+        )]);
+        let mut mgr = LspManager::with_overrides(&root, overrides);
+
+        let outcome = warm_lsp_pass(&db, &mut mgr, &root, None, None).unwrap();
+        assert_eq!(
+            outcome.reopened, sealed,
+            "seals must reopen before the pass"
+        );
+        assert!(!outcome.stats.any_server_started);
+        assert_eq!(outcome.resealed, sealed, "serverless pass must re-seal");
+        assert_eq!(db.count_edges_in_state(4).unwrap(), sealed);
+        assert_eq!(db.count_edges_in_state(0).unwrap(), 0);
     }
 
     #[test]
