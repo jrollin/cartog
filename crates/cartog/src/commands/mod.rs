@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::cli::{EdgeKindFilter, SymbolKindFilter};
 use crate::config::CartogConfig;
-use cartog_core::{EdgeKind, SymbolKind};
+use cartog_core::{Compact, EdgeKind, SymbolKind};
 use cartog_db::{Database, MAX_SEARCH_LIMIT};
 use cartog_indexer as indexer;
 use cartog_rag as rag;
@@ -445,15 +445,19 @@ pub fn cmd_outline(
     db_path: &Path,
     file: &str,
     json: bool,
+    compact: bool,
     token_budget: Option<u32>,
     embedding_dim: usize,
 ) -> Result<()> {
     let db = open_db(db_path, embedding_dim)?;
-    let symbols = db.outline(file)?;
+    let mut symbols = db.outline(file)?;
     // Don't count empty results — an empty-index call or a typo'd file path
     // didn't actually save the user any tokens vs grep + read.
     if !symbols.is_empty() {
         db.log_query("outline", "cli");
+    }
+    if compact {
+        symbols.compact_in_place();
     }
     let file = file.to_string();
     output(&symbols, json, token_budget, |syms| {
@@ -571,12 +575,14 @@ pub fn cmd_impact(
 }
 
 /// Find a call path between two symbols, with each hop's body inline.
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_trace(
     db_path: &Path,
     from: &str,
     to: &str,
     depth: u32,
     json: bool,
+    compact: bool,
     token_budget: Option<u32>,
     embedding_dim: usize,
 ) -> Result<()> {
@@ -616,7 +622,12 @@ pub fn cmd_trace(
         .iter()
         .flatten()
         .map(|h| HydratedHop {
-            body: hop_body(&db, &index_root, &h.source_id),
+            // Compact drops the inline body (the heaviest part of a trace).
+            body: if compact {
+                None
+            } else {
+                hop_body(&db, &index_root, &h.source_id)
+            },
             source_name: h.source_name.clone(),
             target_name: h.target_name.clone(),
             kind: h.kind,
@@ -716,6 +727,7 @@ pub fn cmd_refs(
     name: &str,
     kind: Option<EdgeKindFilter>,
     json: bool,
+    compact: bool,
     token_budget: Option<u32>,
     embedding_dim: usize,
 ) -> Result<()> {
@@ -735,7 +747,14 @@ pub fn cmd_refs(
 
     let items: Vec<RefEntry> = results
         .into_iter()
-        .map(|(edge, sym)| RefEntry { edge, source: sym })
+        .map(|(edge, mut sym)| {
+            if compact {
+                if let Some(s) = sym.as_mut() {
+                    s.compact_in_place();
+                }
+            }
+            RefEntry { edge, source: sym }
+        })
         .collect();
 
     output(&items, json, token_budget, |items| {
@@ -885,6 +904,7 @@ pub fn cmd_search(
     file: Option<&str>,
     limit: u32,
     json: bool,
+    compact: bool,
     token_budget: Option<u32>,
     embedding_dim: usize,
 ) -> Result<()> {
@@ -894,9 +914,12 @@ pub fn cmd_search(
         Some(k) => Some(cartog_core::SymbolKind::from(k)),
     };
     let limit = limit.min(MAX_SEARCH_LIMIT);
-    let symbols = db.search(query, kind_filter, file, limit)?;
+    let mut symbols = db.search(query, kind_filter, file, limit)?;
     if !symbols.is_empty() {
         db.log_query("search", "cli");
+    }
+    if compact {
+        symbols.compact_in_place();
     }
     let query = query.to_string();
 
@@ -1003,6 +1026,7 @@ pub fn cmd_map(
     db_path: &Path,
     tokens: u32,
     json: bool,
+    compact: bool,
     mermaid: bool,
     embedding_dim: usize,
 ) -> Result<()> {
@@ -1083,7 +1107,10 @@ pub fn cmd_map(
 
     if json {
         // For JSON, return structured data without budget constraints
-        let symbols = db.top_symbols(200)?;
+        let mut symbols = db.top_symbols(200)?;
+        if compact {
+            symbols.compact_in_place();
+        }
 
         #[derive(Serialize)]
         struct MapResult {
@@ -1163,6 +1190,7 @@ pub fn cmd_changes(
     commits: u32,
     kind: Option<SymbolKindFilter>,
     json: bool,
+    compact: bool,
     token_budget: Option<u32>,
     embedding_dim: usize,
 ) -> Result<()> {
@@ -1187,7 +1215,10 @@ pub fn cmd_changes(
         Some(SymbolKindFilter::All) | None => None,
         Some(k) => Some(cartog_core::SymbolKind::from(k)),
     };
-    let symbols = db.symbols_for_files(&changed_files, kind_filter)?;
+    let mut symbols = db.symbols_for_files(&changed_files, kind_filter)?;
+    if compact {
+        symbols.compact_in_place();
+    }
 
     let result = cartog_core::ChangesResult {
         changed_files,
@@ -1366,6 +1397,7 @@ pub fn cmd_rag_search(
     kind: Option<SymbolKindFilter>,
     limit: u32,
     json: bool,
+    compact: bool,
     token_budget: Option<u32>,
     provider_config: &rag::EmbeddingProviderConfig,
     tuning: &rag::search::SearchTuning,
@@ -1398,7 +1430,7 @@ pub fn cmd_rag_search(
         let threads = provider_config.intra_threads;
         Some(move || rag::create_reranker_provider(&name, model.as_deref(), threads))
     };
-    let search_result = rag::search::hybrid_search_tuned_lazy(
+    let mut search_result = rag::search::hybrid_search_tuned_lazy(
         &db,
         query,
         limit,
@@ -1407,6 +1439,9 @@ pub fn cmd_rag_search(
         reranker_factory,
         tuning,
     )?;
+    if compact {
+        search_result.compact_in_place();
+    }
     db.log_query("rag_search", "cli");
     let query = query.to_string();
     // Gate the "build the index" hint on whether embeddings actually exist, not
@@ -1491,6 +1526,7 @@ pub fn cmd_context(
     task: &str,
     tokens: u32,
     json: bool,
+    compact: bool,
     provider_config: &rag::EmbeddingProviderConfig,
     tuning: &rag::search::SearchTuning,
 ) -> Result<()> {
@@ -1499,7 +1535,7 @@ pub fn cmd_context(
 
     // Build the bundle in its own scope so the provider/reranker borrows end
     // before the `output` closure (which re-borrows `&db`) runs.
-    let ctx = {
+    let mut ctx = {
         let mut reranker = if provider_config.reranker_provider == "none" {
             None
         } else {
@@ -1531,6 +1567,11 @@ pub fn cmd_context(
     };
     if !ctx.entries.is_empty() {
         db.log_query("context", "cli");
+    }
+    // Compact trims the per-entry symbol noise but keeps the budgeted bodies —
+    // a context bundle's whole value is its inline bodies.
+    if compact {
+        ctx.compact_in_place();
     }
     let task = task.to_string();
 
@@ -1932,7 +1973,7 @@ def main():
     fn cmd_outline_runs_a_query_for_a_populated_file() {
         let (_tmp, db) = indexed_db();
         let before = queries_logged(&db);
-        cmd_outline(&db, "lib.py", false, None, 384).expect("outline ok");
+        cmd_outline(&db, "lib.py", false, false, None, 384).expect("outline ok");
         assert_eq!(
             queries_logged(&db),
             before + 1,
@@ -1943,22 +1984,32 @@ def main():
     #[test]
     fn cmd_outline_json_branch_does_not_error() {
         let (_tmp, db) = indexed_db();
-        cmd_outline(&db, "lib.py", true, None, 384).expect("outline --json ok");
+        cmd_outline(&db, "lib.py", true, false, None, 384).expect("outline --json ok");
+        cmd_outline(&db, "lib.py", true, true, None, 384).expect("outline --json --compact ok");
     }
 
     #[test]
     fn cmd_outline_unknown_file_does_not_error() {
         let (_tmp, db) = indexed_db();
-        cmd_outline(&db, "missing.py", false, None, 384).expect("outline of unknown file is ok");
+        cmd_outline(&db, "missing.py", false, false, None, 384)
+            .expect("outline of unknown file is ok");
     }
 
     #[test]
     fn cmd_refs_runs_a_query_per_invocation_with_and_without_kind_filter() {
         let (_tmp, db) = indexed_db();
         let before = queries_logged(&db);
-        cmd_refs(&db, "helper", None, false, None, 384).expect("refs ok");
-        cmd_refs(&db, "helper", Some(EdgeKindFilter::Calls), false, None, 384)
-            .expect("refs --kind calls ok");
+        cmd_refs(&db, "helper", None, false, false, None, 384).expect("refs ok");
+        cmd_refs(
+            &db,
+            "helper",
+            Some(EdgeKindFilter::Calls),
+            false,
+            false,
+            None,
+            384,
+        )
+        .expect("refs --kind calls ok");
         assert_eq!(
             queries_logged(&db),
             before + 2,
@@ -1970,7 +2021,8 @@ def main():
     fn cmd_refs_near_miss_name_takes_the_did_you_mean_branch_without_error() {
         let (_tmp, db) = indexed_db();
         // Empty result triggers the did_you_mean / empty_index_hint branch.
-        cmd_refs(&db, "helpe", None, false, None, 384).expect("refs of near-miss name is ok");
+        cmd_refs(&db, "helpe", None, false, false, None, 384)
+            .expect("refs of near-miss name is ok");
     }
 
     #[test]
@@ -2000,9 +2052,9 @@ def main():
     fn cmd_trace_logs_a_query_only_when_a_path_is_found() {
         let (_tmp, db) = indexed_db();
         let before = queries_logged(&db);
-        cmd_trace(&db, "speak", "helper", 8, false, None, 384).expect("trace ok");
+        cmd_trace(&db, "speak", "helper", 8, false, false, None, 384).expect("trace ok");
         let after_hit = queries_logged(&db);
-        cmd_trace(&db, "speak", "no_such_symbol", 8, false, None, 384)
+        cmd_trace(&db, "speak", "no_such_symbol", 8, false, false, None, 384)
             .expect("no-path trace is ok");
         let after_miss = queries_logged(&db);
 
@@ -2016,7 +2068,14 @@ def main():
     #[test]
     fn cmd_trace_json_branch_does_not_error() {
         let (_tmp, db) = indexed_db();
-        cmd_trace(&db, "speak", "helper", 8, true, None, 384).expect("trace --json ok");
+        cmd_trace(&db, "speak", "helper", 8, true, false, None, 384).expect("trace --json ok");
+    }
+
+    #[test]
+    fn cmd_trace_json_compact_branch_does_not_error() {
+        let (_tmp, db) = indexed_db();
+        cmd_trace(&db, "speak", "helper", 8, true, true, None, 384)
+            .expect("trace --json --compact ok");
     }
 
     // No CLI test for `cmd_context`: it builds a real embedding provider
@@ -2043,7 +2102,7 @@ def main():
     fn cmd_search_runs_a_query_for_each_filter_and_budget_branch() {
         let (_tmp, db) = indexed_db();
         let before = queries_logged(&db);
-        cmd_search(&db, "Anim", None, None, 30, false, None, 384).expect("search ok");
+        cmd_search(&db, "Anim", None, None, 30, false, false, None, 384).expect("search ok");
         cmd_search(
             &db,
             "speak",
@@ -2051,12 +2110,14 @@ def main():
             Some("lib.py"),
             30,
             false,
+            false,
             None,
             384,
         )
         .expect("search with kind + file filter ok");
         // Token-budget branch.
-        cmd_search(&db, "e", None, None, 30, false, Some(50), 384).expect("search --tokens ok");
+        cmd_search(&db, "e", None, None, 30, false, false, Some(50), 384)
+            .expect("search --tokens ok");
         assert_eq!(
             queries_logged(&db),
             before + 3,
@@ -2067,8 +2128,15 @@ def main():
     #[test]
     fn cmd_search_empty_result_does_not_error() {
         let (_tmp, db) = indexed_db();
-        cmd_search(&db, "zzz_no_match", None, None, 30, false, None, 384)
+        cmd_search(&db, "zzz_no_match", None, None, 30, false, false, None, 384)
             .expect("empty search is ok");
+    }
+
+    #[test]
+    fn cmd_search_json_compact_branch_does_not_error() {
+        let (_tmp, db) = indexed_db();
+        cmd_search(&db, "Anim", None, None, 30, true, true, None, 384)
+            .expect("search --json --compact ok");
     }
 
     #[test]
@@ -2082,9 +2150,10 @@ def main():
     #[test]
     fn cmd_map_plain_json_and_mermaid_branches_do_not_error() {
         let (_tmp, db) = indexed_db();
-        cmd_map(&db, 1000, false, false, 384).expect("map ok");
-        cmd_map(&db, 1000, true, false, 384).expect("map --json ok");
-        cmd_map(&db, 1000, false, true, 384).expect("map --mermaid ok");
+        cmd_map(&db, 1000, false, false, false, 384).expect("map ok");
+        cmd_map(&db, 1000, true, false, false, 384).expect("map --json ok");
+        cmd_map(&db, 1000, true, true, false, 384).expect("map --json --compact ok");
+        cmd_map(&db, 1000, false, false, true, 384).expect("map --mermaid ok");
     }
 
     // ── lsp_defer_peer gate ──

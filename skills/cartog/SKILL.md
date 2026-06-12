@@ -475,6 +475,13 @@ cartog --json outline src/auth/tokens.py
 cartog --json rag search "authentication"
 ```
 
+Add `--compact` to strip heavy fields from `--json` and save tokens: symbol bodies
+(`content`), docstrings, and cache hashes are dropped; ids, names, kinds, locations,
+signatures, and scores are kept (`context` keeps its budgeted bodies). No-op without `--json`.
+```bash
+cartog --json --compact rag search "authentication"   # ~60% smaller, still locatable
+```
+
 Edge results (`refs`, `callees`, `impact`, `deps`, `trace`) carry a `provenance` field naming which tier resolved the edge: a heuristic tier (`same_file`, `import_path`, `same_dir`, `parent_scope`, `unique_global`, `kind_disambig`) or an LSP outcome (`lsp`, `lsp_external`, `lsp_unresolvable`). Treat `lsp`/`same_file`/`import_path` as high-confidence; `unique_global`/`kind_disambig` as best-effort guesses. Omitted for unresolved edges and indexes built before provenance tracking.
 
 ## Refactoring Workflow

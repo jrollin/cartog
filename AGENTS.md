@@ -201,7 +201,7 @@ Consequences to respect on every change:
 - **CI/CD**: fmt, clippy, test, coverage, release to crates.io + GitHub Releases
 - **Centrality**: in-degree ranking — search results prefer highly-referenced symbols
 - **Codebase map**: `cartog map --tokens N` produces budget-aware file tree + top symbols
-- **Token budget**: `--tokens N` global flag for context-window-aware output truncation
+- **Token budget**: `--tokens N` global flag for context-window-aware output truncation (human output only). `--compact` global flag strips heavy fields (bodies, docstrings, cache hashes) from `--json` to save agent tokens (keeps ids/names/kinds/locations/signatures/scores; no-op without `--json`). MCP is **compact by default** (symbol noise trimmed; `cartog_rag_search`/`cartog_trace` bodies bounded to a snippet; `cartog_context` keeps budgeted bodies) — set `CARTOG_MCP_COMPACT=0` to restore full bodies
 - **Recent changes**: `cartog changes` shows symbols affected by recent git commits
 - **Call-path trace**: `cartog trace <from> <to>` / `cartog_trace` returns the shortest `calls` path between two symbols with each hop's body inline (forward BFS, static call edges only)
 - **Task-context bundle**: `cartog context <task>` / `cartog_context` fuses hybrid search seeds + 1-hop neighbors + seed-file centrality into a token-budgeted bundle

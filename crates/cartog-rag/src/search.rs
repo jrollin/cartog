@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde::Serialize;
 
-use cartog_core::{Symbol, SymbolKind};
+use cartog_core::{Compact, Symbol, SymbolKind};
 use cartog_db::Database;
 
 /// Filter for symbol kinds in search results.
@@ -81,6 +81,67 @@ pub struct HybridSearchResult {
     pub fts_count: u32,
     pub vec_count: u32,
     pub merged_count: u32,
+}
+
+/// Maximum bytes for a compact-mode body preview snippet (MCP `rag_search`
+/// default). Keeps a code preview while bounding token cost; the tool advertises
+/// "snippet excerpts", so this makes the output match the description.
+pub const SNIPPET_MAX_BYTES: usize = 500;
+
+/// Truncate `content` to a [`SNIPPET_MAX_BYTES`] preview at a UTF-8 boundary,
+/// appending an ellipsis marker when cut. Unlike [`super::indexer::compact_embedding_text`],
+/// this preserves the raw code (including comments) — it is a human/agent preview,
+/// not embedding text.
+#[must_use]
+pub fn snippet(content: &str) -> String {
+    if content.len() <= SNIPPET_MAX_BYTES {
+        return content.to_string();
+    }
+    let marker = "\n…";
+    let target = SNIPPET_MAX_BYTES.saturating_sub(marker.len());
+    let cut = (target.saturating_sub(3)..=target)
+        .rev()
+        .find(|&i| content.is_char_boundary(i))
+        .unwrap_or(0);
+    let mut out = content[..cut].to_string();
+    out.push_str(marker);
+    out
+}
+
+impl cartog_core::Compact for SearchResult {
+    /// Drops the full body `content` and trims the inner symbol. Use [`SearchResult::snippet_in_place`]
+    /// to keep a bounded preview instead of dropping the body entirely.
+    fn compact_in_place(&mut self) {
+        self.content = None;
+        self.symbol.compact_in_place();
+    }
+}
+
+impl SearchResult {
+    /// Compact variant that keeps a bounded body preview (snippet) instead of
+    /// dropping `content` entirely. Trims the inner symbol like [`SearchResult::compact_in_place`].
+    pub fn snippet_in_place(&mut self) {
+        if let Some(body) = self.content.take() {
+            self.content = Some(snippet(&body));
+        }
+        self.symbol.compact_in_place();
+    }
+}
+
+impl cartog_core::Compact for HybridSearchResult {
+    fn compact_in_place(&mut self) {
+        self.results.compact_in_place();
+    }
+}
+
+impl HybridSearchResult {
+    /// Compact variant that keeps bounded body previews for each result
+    /// (MCP `rag_search` default).
+    pub fn snippet_in_place(&mut self) {
+        for r in &mut self.results {
+            r.snippet_in_place();
+        }
+    }
 }
 
 /// Reciprocal Rank Fusion: merge multiple ranked lists into a single ranking.
@@ -1463,6 +1524,44 @@ mod tests {
             rerank_score: rerank,
             sources: vec![Source::Fts5],
         }
+    }
+
+    #[test]
+    fn compact_drops_content_and_trims_symbol() {
+        let mut r = make_result("f", 0.5, Some(1.0), Some("fn f() { body }"));
+        r.symbol.docstring = Some("doc".into());
+        r.symbol.content_hash = Some("h".into());
+
+        r.compact_in_place();
+
+        assert_eq!(r.content, None);
+        assert_eq!(r.symbol.docstring, None);
+        assert_eq!(r.symbol.content_hash, None);
+        // Scores and locations are preserved.
+        assert_eq!(r.rrf_score, 0.5);
+        assert_eq!(r.symbol.name, "f");
+    }
+
+    #[test]
+    fn snippet_keeps_short_body_and_truncates_long_body() {
+        let short = "fn f() {}";
+        assert_eq!(snippet(short), short);
+
+        let long = "x".repeat(SNIPPET_MAX_BYTES * 2);
+        let s = snippet(&long);
+        assert!(s.len() <= SNIPPET_MAX_BYTES);
+        assert!(s.ends_with('…'));
+    }
+
+    #[test]
+    fn snippet_in_place_keeps_bounded_preview() {
+        let body = "fn f() {\n".to_string() + &"    let x = 1;\n".repeat(100);
+        let mut r = make_result("f", 0.5, Some(1.0), Some(&body));
+
+        r.snippet_in_place();
+
+        let content = r.content.expect("snippet keeps a preview");
+        assert!(content.len() <= SNIPPET_MAX_BYTES);
     }
 
     #[test]

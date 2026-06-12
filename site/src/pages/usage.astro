@@ -200,6 +200,7 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
             <tr><td><code>CARTOG_WATCH_RAG</code></td><td>unset</td><td>Force watcher auto-embed; overrides <code>[embedding] auto_embed</code> and <code>--rag</code>:<br><code>1</code> = force on<br><code>0</code> = force off<br>unset = auto-detect from the DB</td></tr>
             <tr><td><code>CARTOG_SINGLE_WRITER</code></td><td><code>1</code></td><td><code>0</code> disables MCP single-writer election (every <code>serve</code> opens read-write).</td></tr>
             <tr><td><code>CARTOG_MCP_MAX_BYTES</code></td><td><code>65536</code></td><td>Max bytes per MCP tool response before truncation.</td></tr>
+            <tr><td><code>CARTOG_MCP_COMPACT</code></td><td><code>1</code> (on)</td><td>MCP tools strip heavy fields by default (cache hashes + docstrings; <code>cartog_rag_search</code>/<code>cartog_trace</code> bodies bounded to a ~500-byte snippet; <code>cartog_context</code> keeps budgeted bodies). Set <code>0</code> to return full bodies.</td></tr>
             <tr><td><code>CARTOG_NO_UPDATE_CHECK</code></td><td>unset</td><td>Set to skip the background self-update check.</td></tr>
             <tr><td><code>CARTOG_UPDATE_CHECK</code></td><td>unset</td><td>Force an update check regardless of cadence.</td></tr>
             <tr><td><code>CARTOG_INSTALL_DIR</code></td><td><code>~/.local/bin</code></td><td>Install location used by <code>install.sh</code>.</td></tr>
@@ -1161,6 +1162,11 @@ cartog --json stats</pre>
         <pre>cartog --tokens 500 search validate
 cartog --tokens 200 outline src/db.rs</pre>
         <p>Uses <code>len / 4</code> byte-to-token approximation. Ignored when <code>--json</code> is used.</p>
+
+        <h2 id="compact-json">Compact JSON</h2>
+        <p>Add <code>--compact</code> to strip heavy fields from <code>--json</code> and save agent tokens (~60% smaller). Symbol bodies, docstrings, and cache hashes are dropped; ids, names, kinds, locations, signatures, and scores are kept. No-op without <code>--json</code>; <code>cartog context</code> keeps its budgeted bodies.</p>
+        <pre>cartog --json --compact rag search "authentication"</pre>
+        <p style="font-size: 13px; color: var(--text-tertiary);">MCP tools are compact by default — <code>cartog_rag_search</code>/<code>cartog_trace</code> bodies are bounded to a ~500-byte snippet and <code>cartog_context</code> keeps full budgeted bodies. Set <code>CARTOG_MCP_COMPACT=0</code> to restore full bodies on every tool.</p>
 
         <h2 id="languages">Supported Languages</h2>
         <table>

@@ -23,7 +23,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use cartog_core::EdgeKind;
+use cartog_core::{Compact, EdgeKind};
 use cartog_db::{Database, PinnedAttach, MAX_SEARCH_LIMIT};
 use cartog_indexer as indexer;
 use cartog_rag as rag;
@@ -608,6 +608,23 @@ fn mcp_max_bytes() -> usize {
         .and_then(|v| v.parse().ok())
         .filter(|&n: &usize| n > 256) // sanity: don't let a typo trim everything
         .unwrap_or(DEFAULT_MCP_MAX_BYTES)
+}
+
+/// Whether MCP tools strip heavy fields from their JSON output.
+///
+/// Agents are the only MCP consumer and the server already assumes token
+/// pressure (the [`mcp_max_bytes`] cap). Compact is therefore the default:
+/// drop docstrings and cache hashes from symbols, and bound `rag_search` bodies
+/// to a snippet. Set `CARTOG_MCP_COMPACT=0` (or `false`/`no`/`off`) to restore
+/// full bodies.
+fn mcp_compact() -> bool {
+    match std::env::var("CARTOG_MCP_COMPACT") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
 }
 
 /// Suggest a narrower tool when we've truncated a large response.
@@ -1404,9 +1421,12 @@ impl CartogServer {
             let db = db.lock().map_err(|_| {
                 mcp_err("internal error: database lock poisoned (server restart required)")
             })?;
-            let symbols = db
+            let mut symbols = db
                 .outline(&file)
                 .map_err(|e| mcp_err(format!("outline query failed: {e}")))?;
+            if mcp_compact() {
+                symbols.compact_in_place();
+            }
 
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
@@ -1457,9 +1477,17 @@ impl CartogServer {
                 .refs(&name, kind_filter)
                 .map_err(|e| mcp_err(format!("refs query failed: {e}")))?;
 
+            let compact = mcp_compact();
             let entries: Vec<RefEntry> = results
                 .into_iter()
-                .map(|(edge, sym)| RefEntry { edge, source: sym })
+                .map(|(edge, mut sym)| {
+                    if compact {
+                        if let Some(s) = sym.as_mut() {
+                            s.compact_in_place();
+                        }
+                    }
+                    RefEntry { edge, source: sym }
+                })
                 .collect();
 
             let json = serde_json::to_string_pretty(&entries)
@@ -1579,11 +1607,20 @@ impl CartogServer {
                 .trace(&from, &to, depth)
                 .map_err(|e| mcp_err(format!("trace query failed: {e}")))?;
 
+            let compact = mcp_compact();
             let hops: Vec<TraceHop> = path
                 .iter()
                 .flatten()
                 .map(|h| TraceHop {
-                    body: trace_hop_body(&db, &cwd, &h.source_id),
+                    // Compact bounds each hop body to a snippet (preview), keeping
+                    // the path readable without shipping full function bodies.
+                    body: trace_hop_body(&db, &cwd, &h.source_id).map(|b| {
+                        if compact {
+                            rag::search::snippet(&b)
+                        } else {
+                            b
+                        }
+                    }),
                     source_name: h.source_name.clone(),
                     target_name: h.target_name.clone(),
                     kind: h.kind.to_string(),
@@ -1738,9 +1775,12 @@ impl CartogServer {
             let file_filter = validated_file.as_deref();
             debug!(query = %query, kind = ?kind_filter, limit, "search");
             let db = db.lock().map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
-            let symbols = db
+            let mut symbols = db
                 .search(&query, kind_filter, file_filter, limit)
                 .map_err(|e| mcp_err(format!("search failed: {e}")))?;
+            if mcp_compact() {
+                symbols.compact_in_place();
+            }
 
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
@@ -1872,9 +1912,12 @@ impl CartogServer {
             let files = db
                 .all_files()
                 .map_err(|e| mcp_err(format!("files query failed: {e}")))?;
-            let top_symbols = db
+            let mut top_symbols = db
                 .top_symbols(limit)
                 .map_err(|e| mcp_err(format!("top_symbols query failed: {e}")))?;
+            if mcp_compact() {
+                top_symbols.compact_in_place();
+            }
 
             let result = MapResult { files, top_symbols };
 
@@ -1927,9 +1970,12 @@ impl CartogServer {
                 .map_err(|e| mcp_err(format!("git changes failed: {e}")))?;
 
             let db = db.lock().map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
-            let symbols = db
+            let mut symbols = db
                 .symbols_for_files(&changed_files, kind_filter)
                 .map_err(|e| mcp_err(format!("symbols query failed: {e}")))?;
+            if mcp_compact() {
+                symbols.compact_in_place();
+            }
 
             let result = cartog_core::ChangesResult {
                 changed_files,
@@ -2088,7 +2134,7 @@ impl CartogServer {
             let mut reranker = reranker
                 .lock()
                 .map_err(|_| mcp_err("internal error: reranker lock poisoned (server restart required)"))?;
-            let result = match reranker.as_mut() {
+            let mut result = match reranker.as_mut() {
                 Some(r) => rag::search::hybrid_search(
                     &db, &query, limit, kind_filter, provider.as_mut(), Some(r.as_mut()),
                 ),
@@ -2096,6 +2142,11 @@ impl CartogServer {
                     &db, &query, limit, kind_filter, provider.as_mut(), None,
                 ),
             }.map_err(|e| mcp_err(format!("semantic search failed: {e}")))?;
+            // Compact-by-default: bound each body to a snippet (the tool advertises
+            // "snippet excerpts"). CARTOG_MCP_COMPACT=0 restores full bodies.
+            if mcp_compact() {
+                result.snippet_in_place();
+            }
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
@@ -2167,6 +2218,12 @@ impl CartogServer {
                 ),
             }
             .map_err(|e| mcp_err(format!("context build failed: {e}")))?;
+            // Compact trims per-entry symbol noise but KEEPS the budgeted bodies —
+            // this tool's whole value is its inline bodies.
+            let mut result = result;
+            if mcp_compact() {
+                result.compact_in_place();
+            }
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
@@ -2227,6 +2284,37 @@ mod tests {
             stdout: stdout.as_bytes().to_vec(),
             stderr: stderr.as_bytes().to_vec(),
         }
+    }
+
+    #[test]
+    fn mcp_compact_defaults_on_and_parses_opt_out() {
+        let _g = test_validate_call_counter::SERIAL.blocking_lock();
+        let prev = std::env::var_os("CARTOG_MCP_COMPACT");
+
+        std::env::remove_var("CARTOG_MCP_COMPACT");
+        assert!(mcp_compact(), "compact is the default when unset");
+
+        for off in ["0", "false", "no", "off", "OFF", " false "] {
+            std::env::set_var("CARTOG_MCP_COMPACT", off);
+            assert!(!mcp_compact(), "{off:?} must disable compact");
+        }
+        for on in ["1", "true", "yes", "anything"] {
+            std::env::set_var("CARTOG_MCP_COMPACT", on);
+            assert!(mcp_compact(), "{on:?} must keep compact on");
+        }
+
+        match prev {
+            Some(v) => std::env::set_var("CARTOG_MCP_COMPACT", v),
+            None => std::env::remove_var("CARTOG_MCP_COMPACT"),
+        }
+    }
+
+    #[test]
+    fn rag_snippet_bounds_body_length() {
+        // The MCP rag_search default snips bodies via rag::search::snippet.
+        let long = "y".repeat(rag::search::SNIPPET_MAX_BYTES * 3);
+        let s = rag::search::snippet(&long);
+        assert!(s.len() <= rag::search::SNIPPET_MAX_BYTES);
     }
 
     // ── discover_plugin_pin tests (cartog_update arms the pin) ──
