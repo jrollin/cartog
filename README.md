@@ -9,9 +9,11 @@
 
 **Map your codebase. Navigate by graph, not grep.**
 
-**~280 tokens per query vs ~1,700 for grep+read · 97% recall · 8 µs–20 ms latency · 12 languages.**
+**Semantic search that returns named symbols, not text chunks — ranked, reranked, and budget-aware.**
 
-Cartog pre-computes a code graph — symbols, and the calls, imports, and inheritance between them — so you can query structure instantly instead of grepping for text. Ask "who calls this?", "what breaks if I change it?", or "find the auth logic" and get a ranked, structured answer in microseconds.
+**~280 tokens per query vs ~1,700 for grep+read · 97% recall · 8 µs–20 ms structural-query latency · 12 languages.**
+
+Cartog pre-computes a code graph — symbols, and the calls, imports, and inheritance between them — so you can query structure instantly instead of grepping for text. Ask "who calls this?", "what breaks if I change it?", or "find the auth logic" and get a ranked, structured answer: an exact function with its signature and span, not a file-and-line guess you have to open and read.
 
 Use it from the CLI for day-to-day navigation, or as an MCP server so AI agents query the graph instead of flooding their context with raw file dumps — at a fraction of the token cost. One static binary, one SQLite file. No Python, no pip, no Docker, no cloud: 100% local by default.
 
@@ -135,7 +137,7 @@ cartog serve                     # 16 tools over stdio
 cartog serve --watch --rag       # with live re-indexing + semantic search
 ```
 
-Works with Claude Code, Cursor, Windsurf, Zed, OpenCode — any MCP client.
+Works with Claude Code, Cursor, Windsurf, Zed, OpenCode — any MCP client. Tool output is **compact by default** (locations + signatures + snippet previews, not full bodies) so it stays within an agent's context budget; set `CARTOG_MCP_COMPACT=0` to restore full bodies. On the CLI, `cartog --json --compact …` does the same — ~60% smaller payloads that still carry symbols, signatures, and scores.
 
 ### LSP precision, built in
 
@@ -236,6 +238,8 @@ npx skills add jrollin/cartog
 **A language server?** LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 12 languages with one binary and answers in microseconds. When you need LSP precision, cartog can use it as an optional layer.
 
 **Python-based graph tools?** They solve a similar problem but require a Python runtime, pip dependencies, and virtual environments. Cartog is a single static binary — download and run. It also queries 10-100x faster thanks to compiled Rust + SQLite.
+
+**An embedding-search tool (chunk + vector)?** Tools that chunk files and embed them find code by concept, but return **file-and-line windows** — you still open and read to learn *what* matched. Cartog returns the **named symbol** (function/class/method) with its kind, signature, and exact span, then sharpens ranking with a **cross-encoder re-ranker** and **centrality** that chunk-only tools lack. It also embeds **in-process** (local ONNX, zero external server — no Ollama daemon to keep running) and ships LSP-precise call/import edges, so the same query that finds code can also trace it. Add `--compact` and the JSON stays symbol-level while dropping ~60% of the bytes.
 
 ## MCP Server Setup
 

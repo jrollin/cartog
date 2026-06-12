@@ -21,8 +21,8 @@ import { withBase } from "../lib/url";
       </h1>
 
       <p class="subtitle">
-        Single Rust binary, answer in microseconds, 12 languages. <br/>
-        True local semantic search, 100% local. MCP server built in.
+        Semantic search that returns named symbols, not text chunks — ranked, reranked, budget-aware. <br/>
+        Single Rust binary, 12 languages, 100% local. MCP server built in.
       </p>
 
       <!-- Stats bar: anchor the value claim before showing the demo -->
@@ -395,8 +395,13 @@ import { withBase } from "../lib/url";
         </div>
         <div class="why-card" data-reveal style="--reveal-delay: 0.16s;">
           <div class="why-number">03</div>
+          <h3>An embedding-search tool</h3>
+          <p>Chunk-and-vector tools find code by concept but return <strong>file-and-line windows</strong> — you still open and read to learn what matched, and ranking is vector-similarity only. Cartog returns the <strong>named symbol</strong> (kind, signature, exact span), then sharpens it with a <strong>cross-encoder re-ranker</strong> and <strong>centrality</strong> they lack — and embeds <strong>in-process</strong> (local ONNX), so there's no Ollama daemon to keep running just to index.</p>
+        </div>
+        <div class="why-card" data-reveal style="--reveal-delay: 0.24s;">
+          <div class="why-number">04</div>
           <h3>Other code-graph indexers</h3>
-          <p>Most ship a runtime to install (Python, Node) and stop at keyword search. Cartog is a single static Rust binary with three things they lack: <strong>true embedding-based semantic search</strong> (vector KNN + cross-encoder re-ranking, not keyword matching), <strong>pluggable embedding providers</strong> (local ONNX, Ollama, or any OpenAI-compatible endpoint), and <strong>S3 index sync</strong> (<code>cartog push</code> / <code>pull</code>) to share a pre-built graph across a team or CI. All 100% local by default.</p>
+          <p>Most ship a runtime to install (Python, Node) and stop at keyword search. Cartog is a single static Rust binary with three things they lack: <strong>true embedding-based semantic search</strong> (vector KNN + cross-encoder re-ranking), <strong>pluggable embedding providers</strong> (local ONNX, Ollama, or any OpenAI-compatible endpoint), and <strong>S3 index sync</strong> (<code>cartog push</code> / <code>pull</code>) to share a pre-built graph across a team or CI. All 100% local by default.</p>
         </div>
       </div>
     </div>
