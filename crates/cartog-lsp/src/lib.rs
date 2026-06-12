@@ -92,7 +92,7 @@ pub fn lsp_resolve_edges(
     };
     let check_cancel = || -> Result<()> {
         if cancel.is_some_and(|c| c()) {
-            anyhow::bail!("cancelled");
+            anyhow::bail!(cartog_core::CANCELLED_MSG);
         }
         Ok(())
     };
@@ -207,7 +207,7 @@ pub fn lsp_resolve_edges(
                 Ok(o) => o,
                 // Cancelled, not a server failure: propagate before the death
                 // path can mislog or the loop can commit buffered marks.
-                Err(e) if e.root_cause().to_string() == "cancelled" => {
+                Err(e) if cartog_core::is_cancelled(&e) => {
                     let _ = manager.close_file(language, file_path);
                     return Err(e);
                 }

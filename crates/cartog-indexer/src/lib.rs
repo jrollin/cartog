@@ -329,10 +329,12 @@ pub type ProgressCallback<'a> = &'a (dyn Fn(ProgressUpdate) + Send + Sync);
 ///
 /// Returns `true` when the caller wants the indexer to stop. Polled at phase
 /// boundaries and once per file in the storing loop, so worst-case latency is
-/// one file's write. When the probe trips, `index_directory` returns
-/// `Err` whose root cause string is `"cancelled"` — the MCP layer matches on
-/// this to surface a cancelled response. Behavior with `None` is unchanged.
+/// one file's write. When the probe trips, `index_directory` returns an `Err`
+/// carrying [`cartog_core::CANCELLED_MSG`] as its root cause — callers detect it
+/// with [`cartog_core::is_cancelled`]. Behavior with `None` is unchanged.
 pub type CancelProbe<'a> = &'a (dyn Fn() -> bool + Send + Sync);
+
+pub use cartog_core::{is_cancelled, CANCELLED_MSG};
 
 /// Index a directory, updating the database incrementally.
 ///
@@ -366,7 +368,7 @@ pub fn index_directory(
     };
     let check_cancel = || -> Result<()> {
         if cancel.is_some_and(|c| c()) {
-            anyhow::bail!("cancelled");
+            anyhow::bail!(cartog_core::CANCELLED_MSG);
         }
         Ok(())
     };

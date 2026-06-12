@@ -21,6 +21,16 @@ pub use provenance::EdgeProvenance;
 /// the indexer and LSP resolver so every phase throttles at the same cadence.
 pub const PROGRESS_STRIDE: u32 = 64;
 
+/// Root-cause message every cancellation bails with. Cross-crate contract:
+/// producers `bail!(CANCELLED_MSG)`, consumers [`is_cancelled`].
+pub const CANCELLED_MSG: &str = "cancelled";
+
+/// True when `err` is (or wraps) a [`CANCELLED_MSG`] cancellation.
+#[must_use]
+pub fn is_cancelled(err: &anyhow::Error) -> bool {
+    err.root_cause().to_string() == CANCELLED_MSG
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct Symbol {
     pub id: String,
@@ -397,6 +407,21 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_cancelled_matches_bare_and_context_wrapped() {
+        use anyhow::Context;
+        let bare = anyhow::anyhow!(CANCELLED_MSG);
+        assert!(is_cancelled(&bare));
+        // A .context()-wrapped cancel still matches via the cause chain — the
+        // contract relies on this (the indexer wraps the LSP cancel).
+        let wrapped = Err::<(), _>(bare)
+            .context("resolving LSP edges for root /x")
+            .unwrap_err();
+        assert!(is_cancelled(&wrapped));
+        // A non-cancel error must not match.
+        assert!(!is_cancelled(&anyhow::anyhow!("disk full")));
+    }
 
     #[test]
     fn stable_id_top_level() {

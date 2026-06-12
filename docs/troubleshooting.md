@@ -54,11 +54,14 @@ re-run with `RUST_LOG=info cartog index .` and open an issue with the output.
 ### How do I stop an index in progress?
 
 Press **Ctrl-C**. Both `cartog index` and `cartog rag index` cancel
-cooperatively. `cartog index` stops at the next file/window boundary (including
-mid-LSP), rolls the in-progress pass back (the index is left unchanged), and
-prints `Indexing cancelled; the index was left unchanged.` `cartog rag index`
-stops at the next batch boundary; embedding batches already flushed persist, so
-re-running resumes where it left off. Either way, re-run to finish.
+cooperatively. `cartog index` stops at the next file/edge-window boundary
+(including mid-LSP), rolls the whole pass back (the index is left unchanged),
+and prints `Indexing cancelled; the index was left unchanged.` — because it is
+one transaction, a re-run redoes the pass from scratch. `cartog rag index`
+stops at the next embedding-batch boundary; flushed batches persist, so a plain
+re-run resumes where it left off (a `--force` run cleared up front, so it
+rebuilds). One caveat for both: a Ctrl-C during language-server startup is only
+noticed once startup finishes (up to `CARTOG_LSP_READY_TIMEOUT_SECS`, ~20s).
 
 ### "no LSP server found on PATH" during `cartog index`
 

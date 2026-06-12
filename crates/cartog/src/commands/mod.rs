@@ -176,6 +176,17 @@ impl Drop for Spinner {
     }
 }
 
+/// Install a Ctrl-C handler that flips an `AtomicBool`, returning a probe that
+/// reads it. One-shot: `set_handler` can only succeed once per process, so call
+/// this from a single command invocation. Best-effort — a failed install (a
+/// handler already exists) leaves the probe stuck `false`, i.e. non-cancellable.
+fn install_cancel_probe() -> impl Fn() -> bool + Send + Sync + 'static {
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&interrupted);
+    let _ = ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst));
+    move || interrupted.load(Ordering::SeqCst)
+}
+
 /// Capitalize the first character of a phase label for CLI display. Phase
 /// wording itself is owned by `ProgressUpdate::label()` in the indexer/rag
 /// crates; the spinner only adjusts presentation.
@@ -330,12 +341,9 @@ pub fn cmd_index(
     let root = Path::new(path);
     let db = open_db(db_path, embedding_dim)?;
 
-    // Ctrl-C flag → cancel probe, so the indexer (esp. the slow LSP phase)
-    // stops cooperatively instead of being hard-killed mid-write.
-    let interrupted = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&interrupted);
-    let _ = ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst));
-    let cancel = move || interrupted.load(Ordering::SeqCst);
+    // Ctrl-C → cancel probe, so the indexer (esp. the slow LSP phase) stops
+    // cooperatively instead of being hard-killed mid-write.
+    let cancel = install_cancel_probe();
 
     // Stderr-only; `Spinner::start` self-gates (TTY or CARTOG_PROGRESS), so --json stdout stays clean.
     let spinner = Spinner::start("Indexing").map(Arc::new);
@@ -358,7 +366,7 @@ pub fn cmd_index(
     let result = match result {
         Ok(r) => r,
         // Ctrl-C: the pass rolled back (single tx), so the index is unchanged.
-        Err(e) if e.root_cause().to_string() == "cancelled" => {
+        Err(e) if indexer::is_cancelled(&e) => {
             if !json {
                 eprintln!("Indexing cancelled; the index was left unchanged.");
             }
@@ -1244,17 +1252,13 @@ pub fn cmd_rag_index(
     redact: indexer::RedactionConfig,
 ) -> Result<()> {
     let root = Path::new(path);
+    // Install the handler first so Ctrl-C also covers the (potentially long,
+    // first-run) embedding-model download inside create_embedding_provider.
+    let cancel = install_cancel_probe();
     let mut provider = rag::create_embedding_provider(provider_config)?;
     let db = open_db(db_path, provider.dimension())?;
     db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
         .context("failed to reconcile embedding fingerprint")?;
-
-    // Ctrl-C flag → cancel probe, so the (often long) embedding pass stops
-    // cooperatively instead of being hard-killed.
-    let interrupted = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&interrupted);
-    let _ = ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst));
-    let cancel = move || interrupted.load(Ordering::SeqCst);
 
     // Progress on stderr; `Spinner::start` self-gates (TTY or CARTOG_PROGRESS).
     let spinner = Spinner::start("Indexing code graph").map(Arc::new);
@@ -1274,15 +1278,16 @@ pub fn cmd_rag_index(
     );
     drop(ix_cb);
     stop_spinner(spinner);
-    if let Err(e) = &index_res {
-        if e.root_cause().to_string() == "cancelled" {
+    match index_res {
+        Ok(_) => {}
+        Err(e) if indexer::is_cancelled(&e) => {
             if !json {
                 eprintln!("Indexing cancelled; the index was left unchanged.");
             }
             return Ok(());
         }
+        Err(e) => return Err(e),
     }
-    let _index_result = index_res?;
 
     let spinner = Spinner::start("Embedding symbols").map(Arc::new);
     let rag_cb = spinner_callback(&spinner, rag::indexer::ProgressUpdate::label);
@@ -1293,16 +1298,18 @@ pub fn cmd_rag_index(
         rag::indexer::index_embeddings(&db, provider.as_mut(), force, rag_cb_ref, Some(rag_cancel));
     drop(rag_cb);
     stop_spinner(spinner);
-    if let Err(e) = &embed_res {
-        if e.root_cause().to_string() == "cancelled" {
-            // Embeddings flushed before the cancel persist; a re-run resumes.
+    let result = match embed_res {
+        Ok(r) => r,
+        // Flushed batches persist on an incremental run; a --force/upgrade run
+        // cleared up front, so re-run to rebuild. Either way, re-run to finish.
+        Err(e) if indexer::is_cancelled(&e) => {
             if !json {
-                eprintln!("Embedding cancelled; partial progress was saved — re-run to finish.");
+                eprintln!("Embedding cancelled; re-run to finish.");
             }
             return Ok(());
         }
-    }
-    let result = embed_res?;
+        Err(e) => return Err(e),
+    };
 
     output(&result, json, None, |r| {
         format!(

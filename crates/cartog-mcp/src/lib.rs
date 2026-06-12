@@ -401,6 +401,11 @@ fn index_with_optional_lsp(
                     let _ = db.compute_in_degrees();
                 }
             }
+            // A cancel must surface as an error (the MCP cancellation contract),
+            // not be swallowed as a warning like a genuine LSP-server failure.
+            Err(e) if cartog_indexer::is_cancelled(&e) => {
+                return Err(mcp_err("indexing cancelled"));
+            }
             Err(e) => {
                 tracing::warn!("LSP resolution failed: {e:#}");
             }

@@ -248,7 +248,7 @@ impl LspManager {
         let mut out = Vec::with_capacity(positions.len());
         for window in positions.chunks(DEFINITION_BATCH_WINDOW) {
             if cancel.is_some_and(|c| c()) {
-                bail!("cancelled");
+                bail!(cartog_core::CANCELLED_MSG);
             }
             let params: Vec<(&str, Value)> = window
                 .iter()
