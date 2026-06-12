@@ -526,12 +526,15 @@ mod tests {
         );
     }
 
-    /// Spawn a fake server that writes `frames` then EXITS (closing stdout),
-    /// so the reader sees EOF and the channel disconnects.
+    /// Spawn a fake server that writes `frames`, then CLOSES STDOUT but stays
+    /// alive (`exec sleep ... 1>&-`). The reader thread sees EOF → the channel
+    /// disconnects, while stdin stays open so the client's sends still succeed.
+    /// (Exiting the process outright would race the client's writes against a
+    /// closed stdin and surface a broken pipe instead of a clean disconnect.)
     #[cfg(unix)]
-    fn fake_server_then_exit(frames: &str) -> LspClient {
+    fn fake_server_eof_stdout(frames: &str) -> LspClient {
         use std::process::{Command, Stdio};
-        let script = format!("printf '%s' '{frames}'");
+        let script = format!("printf '%s' '{frames}'; exec sleep 600 1>&-");
         let child = Command::new("sh")
             .arg("-c")
             .arg(script)
@@ -549,7 +552,7 @@ mod tests {
         // wait out the deadline. With a long timeout, a fast return proves the
         // Disconnected arm short-circuits every outstanding slot.
         let r1 = framed(r#"{"jsonrpc":"2.0","id":1,"result":{"v":1}}"#);
-        let mut client = fake_server_then_exit(&r1);
+        let mut client = fake_server_eof_stdout(&r1);
         client.set_timeout(Duration::from_secs(30)); // would dominate if we waited
 
         let started = Instant::now();
