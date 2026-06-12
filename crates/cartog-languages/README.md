@@ -38,6 +38,10 @@ Named captures (`@callee`, `@exception_type`, etc.) identify the matched nodes f
 
 **Code**: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin.
 
+**Frontend SFCs**: Vue (`.vue`), Svelte (`.svelte`), Astro (`.astro`) — the `<script>` / frontmatter block is sliced out, parsed by the JS/TS extractor, and its byte/line offsets are remapped back to the full file.
+
+**Frameworks**: JSX component usage (`<Counter/>`) emits a `Calls` edge in `.jsx`/`.tsx` (React) and inside SFC scripts — component composition becomes part of the call graph.
+
 **Documents**: Markdown (`.md`) — chunked by heading for semantic search. Each heading section becomes a `Document` symbol. Large sections are sub-chunked at paragraph boundaries (~1500 bytes). Files without headings use fixed-size paragraph chunking.
 
 A crate-internal `js_shared` module holds extraction logic shared between the JavaScript and TypeScript/TSX extractors (not part of the public API).
@@ -51,6 +55,7 @@ A crate-internal `js_shared` module holds extraction logic shared between the Ja
 | `get_extractor()` | Factory: language name → `Box<dyn Extractor>` |
 | `detect_language()` | Re-export from `cartog-core` |
 | `python`, `go`, `java`, `javascript`, `typescript`, `ruby`, `php`, `dart`, `swift`, `kotlin`, `rust_lang` | Per-language extractor modules (note Rust's module is `rust_lang`) |
+| `sfc` | Vue/Svelte/Astro single-file-component extractors (`VueExtractor`, `SvelteExtractor`, `AstroExtractor`) |
 | `markdown` | Markdown document extractor (heading-based chunking) |
 
 ## Crate dependencies

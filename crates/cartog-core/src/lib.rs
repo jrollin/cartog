@@ -427,6 +427,9 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
         "dart" => Some("dart"),
         "swift" => Some("swift"),
         "kt" | "kts" => Some("kotlin"),
+        "vue" => Some("vue"),
+        "svelte" => Some("svelte"),
+        "astro" => Some("astro"),
         "md" => Some("markdown"),
         _ => None,
     }
@@ -711,5 +714,8 @@ mod tests {
             detect_language(Path::new("build.gradle.kts")),
             Some("kotlin")
         );
+        assert_eq!(detect_language(Path::new("App.vue")), Some("vue"));
+        assert_eq!(detect_language(Path::new("App.svelte")), Some("svelte"));
+        assert_eq!(detect_language(Path::new("index.astro")), Some("astro"));
     }
 }
