@@ -200,6 +200,10 @@ pub struct IndexResult {
     /// stored secrets. Surfaced so callers can warn the user.
     #[serde(skip_serializing_if = "is_false")]
     pub redaction_backfilled: bool,
+    /// True when the CLI skipped its local LSP pass in favor of a live
+    /// `cartog serve` peer (set by `cmd_index` only, never on the MCP path).
+    #[serde(skip_serializing_if = "is_false")]
+    pub lsp_deferred_to_peer: bool,
 }
 
 fn is_false(v: &bool) -> bool {
