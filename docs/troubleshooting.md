@@ -44,9 +44,24 @@ handles `textDocument/definition` used by cartog.
 ### `cartog index .` appears to hang
 
 Indexing a 50k-LOC repo cold takes a few seconds, sometimes longer if
-tree-sitter is compiling on the first invocation. The CLI shows a spinner on
-stderr when attached to a TTY. If you still see nothing after 60s, re-run
-with `RUST_LOG=info cartog index .` and open an issue with the output.
+tree-sitter is compiling on the first invocation. On a TTY the spinner shows a
+live counter per phase (`parsing M/N files`, `storing M/N files`,
+`resolving M/N edges with LSP`); a *climbing* counter means progress, a *frozen*
+one is the real "stuck" signal. The LSP phase is usually the slowest (the
+language server loads its project model first). If a counter is genuinely stuck,
+re-run with `RUST_LOG=info cartog index .` and open an issue with the output.
+
+### How do I stop an index in progress?
+
+Press **Ctrl-C**. Both `cartog index` and `cartog rag index` cancel
+cooperatively. `cartog index` stops at the next file/edge-window boundary
+(including mid-LSP), rolls the whole pass back (the index is left unchanged),
+and prints `Indexing cancelled; the index was left unchanged.` — because it is
+one transaction, a re-run redoes the pass from scratch. `cartog rag index`
+stops at the next embedding-batch boundary; flushed batches persist, so a plain
+re-run resumes where it left off (a `--force` run cleared up front, so it
+rebuilds). One caveat for both: a Ctrl-C during language-server startup is only
+noticed once startup finishes (up to `CARTOG_LSP_READY_TIMEOUT_SECS`, ~20s).
 
 ### "no LSP server found on PATH" during `cartog index`
 

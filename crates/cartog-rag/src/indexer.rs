@@ -244,7 +244,7 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
     };
     let check_cancel = || -> Result<()> {
         if cancel.is_some_and(|c| c()) {
-            anyhow::bail!("cancelled");
+            anyhow::bail!(cartog_core::CANCELLED_MSG);
         }
         Ok(())
     };
@@ -262,6 +262,9 @@ pub fn index_embeddings<P: EmbeddingProvider + ?Sized>(
     }
 
     if force {
+        // Check before the destructive clear: an early cancel must not wipe the
+        // existing embeddings and leave none behind.
+        check_cancel()?;
         info!("Force mode: clearing all existing embeddings");
         db.clear_all_embeddings()?;
     }

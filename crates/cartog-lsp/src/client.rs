@@ -97,7 +97,7 @@ impl LspClient {
 
     /// Shorten the per-batch timeout (tests only) so stall paths don't wait 10s.
     #[cfg(test)]
-    fn set_timeout(&mut self, timeout: Duration) {
+    pub(crate) fn set_timeout(&mut self, timeout: Duration) {
         self.timeout = timeout;
     }
 

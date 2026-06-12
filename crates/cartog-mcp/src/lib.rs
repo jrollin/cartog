@@ -391,6 +391,7 @@ fn index_with_optional_lsp(
             Some(&mut mgr),
             &std::collections::HashMap::new(),
             lsp_progress_ref,
+            cancel,
         ) {
             Ok(stats) => {
                 result.edges_lsp_resolved = stats.resolved;
@@ -399,6 +400,11 @@ fn index_with_optional_lsp(
                 if stats.resolved > 0 {
                     let _ = db.compute_in_degrees();
                 }
+            }
+            // A cancel must surface as an error (the MCP cancellation contract),
+            // not be swallowed as a warning like a genuine LSP-server failure.
+            Err(e) if cartog_indexer::is_cancelled(&e) => {
+                return Err(mcp_err("indexing cancelled"));
             }
             Err(e) => {
                 tracing::warn!("LSP resolution failed: {e:#}");
