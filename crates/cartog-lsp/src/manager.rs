@@ -631,6 +631,65 @@ fn parse_definition_response(result: &Value, root: &Path) -> Result<Option<Defin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    /// Insert a pre-built client so tests can drive `definitions_batch` without
+    /// a real language server on PATH.
+    impl LspManager {
+        fn insert_client_for_test(&mut self, language: &str, client: LspClient) {
+            self.clients
+                .insert(language.to_string(), (client, "python"));
+        }
+
+        fn set_definition_timeout_for_test(&mut self, language: &str, timeout: Duration) {
+            if let Some((client, _)) = self.clients.get_mut(language) {
+                client.set_timeout(timeout);
+            }
+        }
+    }
+
+    /// Fake server that stays alive but never replies, so each window's requests
+    /// time out (returning per-slot `Err`s) without the process exiting — the
+    /// `definitions_batch` cancel check between windows is what we exercise.
+    #[cfg(unix)]
+    fn silent_fake_server() -> LspClient {
+        use std::process::{Command, Stdio};
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("exec sleep 600")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn fake server");
+        LspClient::new(child).expect("client over fake server")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn definitions_batch_cancels_between_windows() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut mgr = LspManager::new(tmp.path());
+        mgr.insert_client_for_test("python", silent_fake_server());
+        // Short per-window timeout so window 0's unanswered requests resolve
+        // fast (as timeout Errs) and the test doesn't wait the 10s default.
+        mgr.set_definition_timeout_for_test("python", Duration::from_millis(300));
+
+        // Two windows' worth of positions.
+        let positions: Vec<(u32, u32)> = (0..DEFINITION_BATCH_WINDOW as u32 + 8)
+            .map(|i| (i, 0))
+            .collect();
+
+        // Probe trips only after the first window's check passed.
+        let calls = AtomicU32::new(0);
+        let cancel = || calls.fetch_add(1, Ordering::SeqCst) >= 1;
+
+        let err = mgr
+            .definitions_batch("python", "a.py", &positions, Some(&cancel))
+            .expect_err("cancel between windows must abort the batch");
+        assert!(err.to_string().contains("cancelled"), "got: {err}");
+    }
 
     #[test]
     fn test_path_to_uri() {
