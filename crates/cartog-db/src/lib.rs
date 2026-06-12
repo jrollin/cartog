@@ -4644,6 +4644,28 @@ mod tests {
     }
 
     #[test]
+    fn test_count_edges_in_state_buckets_by_state() {
+        let db = Database::open_memory().unwrap();
+        let resolved = insert_test_edge(&db, "somewhere");
+        db.update_edge_target(resolved, "some:id").unwrap();
+        let burned = insert_test_edge(&db, "burned");
+        db.mark_edge_unresolvable(burned).unwrap();
+
+        assert_eq!(db.count_edges_in_state(0).unwrap(), 0);
+        assert_eq!(db.count_edges_in_state(1).unwrap(), 1);
+        assert_eq!(db.count_edges_in_state(2).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_has_heuristic_exhausted_tracks_state_four() {
+        let db = Database::open_memory().unwrap();
+        let _edge = insert_test_edge(&db, "nowhere");
+        assert!(!db.has_heuristic_exhausted().unwrap(), "state 0 not sealed");
+        db.mark_heuristic_exhausted_in_tx().unwrap();
+        assert!(db.has_heuristic_exhausted().unwrap());
+    }
+
+    #[test]
     fn test_resolve_edges_skips_heuristic_exhausted_state_four() {
         // The state=0-only scan in resolve_edges_pass must not re-walk sealed
         // state=4 edges — this is the watch-mode amplification guard (#109).

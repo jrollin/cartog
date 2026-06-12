@@ -209,6 +209,22 @@ fn resolve_db_path_for_slot(db_path: &Path) -> PathBuf {
     normalized
 }
 
+/// Find a live `cartog serve` peer holding this DB's serve lock.
+///
+/// Matches ONLY the DB-scoped serve slot, never the watch slot: a standalone
+/// `cartog watch` runs `lsp=false` and can never resolve LSP edges, so
+/// deferring to it would defer to nobody (`serve --watch` holds the serve
+/// slot anyway). `find_active_locks` already verifies liveness and PID reuse.
+pub fn detect_live_serve_peer(
+    state_dir: &Path,
+    db_path: &Path,
+) -> Option<cartog_process_lock::ActiveLock> {
+    let serve_slot = slot_for_db("serve", db_path);
+    cartog_process_lock::find_active_locks(state_dir)
+        .into_iter()
+        .find(|lock| lock.slot == serve_slot)
+}
+
 impl State {
     /// Load state from `path`. A missing file or malformed TOML yields
     /// `State::default()` — this is a best-effort cache, not an authoritative
@@ -746,5 +762,68 @@ mod tests {
             before, after,
             "slot must be stable across parent-dir + DB-file creation"
         );
+    }
+
+    // ── detect_live_serve_peer ──
+
+    /// Hold a live lock for `slot` (this process's own PID) in `dir`.
+    fn hold_lock(dir: &Path, slot: &str) -> cartog_process_lock::ProcessLock {
+        cartog_process_lock::ProcessLock::acquire(dir, slot).expect("acquire test lock")
+    }
+
+    #[test]
+    fn detect_live_serve_peer_finds_live_serve_lock() {
+        let state_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("cartog.db");
+        let _lock = hold_lock(state_dir.path(), &slot_for_db("serve", &db_path));
+
+        let peer = detect_live_serve_peer(state_dir.path(), &db_path)
+            .expect("live serve lock must be detected");
+        assert_eq!(peer.pid, std::process::id());
+        assert_eq!(peer.slot, slot_for_db("serve", &db_path));
+    }
+
+    #[test]
+    fn detect_live_serve_peer_ignores_dead_pid() {
+        let state_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("cartog.db");
+        let slot = slot_for_db("serve", &db_path);
+        // 4_194_304 is Linux's pid_max — guaranteed dead on every platform.
+        std::fs::write(state_dir.path().join(format!("{slot}.pid")), "4194304\n").unwrap();
+
+        assert!(detect_live_serve_peer(state_dir.path(), &db_path).is_none());
+    }
+
+    #[test]
+    fn detect_live_serve_peer_ignores_other_db_slot() {
+        let state_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        let ours = db_dir.path().join("cartog.db");
+        let theirs = db_dir.path().join("other.db");
+        let _lock = hold_lock(state_dir.path(), &slot_for_db("serve", &theirs));
+
+        assert!(detect_live_serve_peer(state_dir.path(), &ours).is_none());
+    }
+
+    #[test]
+    fn detect_live_serve_peer_ignores_watch_slot() {
+        // Serve-only by design: a standalone watcher never resolves LSP edges.
+        let state_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("cartog.db");
+        let _lock = hold_lock(state_dir.path(), &slot_for_db("watch", &db_path));
+
+        assert!(detect_live_serve_peer(state_dir.path(), &db_path).is_none());
+    }
+
+    #[test]
+    fn detect_live_serve_peer_missing_state_dir_returns_none() {
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("cartog.db");
+        let missing = db_dir.path().join("no-such-state-dir");
+
+        assert!(detect_live_serve_peer(&missing, &db_path).is_none());
     }
 }

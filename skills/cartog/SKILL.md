@@ -218,9 +218,9 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 6. **Only fall back to grep/read** when cartog doesn't have what you need (e.g., reading actual implementation logic, string literals, config values).
 
-7. **After making code changes**, run `cartog index .` to update the graph (LSP auto-detected for accurate edges); add `--no-lsp` only when you need a faster heuristic-only pass. If MCP is running with `--watch`, the re-index already happened automatically — skip this step. Only run a manual index in CLI-only sessions, or to force LSP edges in a watched session.
+7. **After making code changes**, run `cartog index .` to update the graph (LSP auto-detected for accurate edges); add `--no-lsp` only when you need a faster heuristic-only pass. If MCP is running with `--watch`, a *heuristic* re-index already happened automatically — when you need LSP-accurate edges, call the `cartog_index` MCP tool (its warm servers also catch up the heuristic backlog). In CLI-only sessions run the manual index yourself; while a `cartog serve` peer is running, `cartog index .` defers its LSP pass to the peer's warm servers (use `cartog index . --force` to run LSP locally anyway).
 
-8. **If `refs`/`callees`/`impact` look incomplete** (fewer results than you expect), re-index *with* LSP — run `cartog index .` without `--no-lsp` — to resolve more edges, then re-run the query.
+8. **If `refs`/`callees`/`impact` look incomplete** (fewer results than you expect), re-index *with* LSP to resolve more edges, then re-run the query. In an MCP session call the `cartog_index` tool — its warm servers also catch up any deferred backlog. In CLI-only sessions run `cartog index .` without `--no-lsp` (add `--force` if a `cartog serve` peer is running, since a plain index defers LSP to it).
 
 ## Do / Don't
 
@@ -248,7 +248,7 @@ cartog index src/                 # Index specific directory
 cartog index . --force            # Re-index all files (ignore cache)
 ```
 
-By default, `cartog index .` auto-detects language servers on PATH and uses them to resolve additional edges. LSP results are **persisted in the database** — subsequent queries benefit without re-running LSP. Use `--no-lsp` for fast day-to-day indexing. LSP can be omitted entirely at build time with `--no-default-features`.
+By default, `cartog index .` auto-detects language servers on PATH and uses them to resolve additional edges. LSP results are **persisted in the database** — subsequent queries benefit without re-running LSP. Use `--no-lsp` for fast day-to-day indexing. LSP can be omitted entirely at build time with `--no-default-features`. When a `cartog serve` for the same database is running, a plain `cartog index .` skips its own LSP pass (no cold start) and defers resolution to the serve peer; `--force` always runs LSP locally.
 
 ### Search (find symbols by partial name)
 ```bash

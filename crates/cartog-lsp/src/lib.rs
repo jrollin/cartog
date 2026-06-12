@@ -41,6 +41,9 @@ pub struct LspResolveStats {
     /// Edges flipped from `resolution_state = 0` to `3` (LSP located the
     /// target outside the indexed root: stdlib, deps, node_modules).
     pub marked_external: u32,
+    /// Whether at least one language server started this pass. `false` lets
+    /// callers re-seal reopened edges instead of leaving a state-0 backlog.
+    pub any_server_started: bool,
 }
 
 /// Resolve edges that heuristic resolution left unresolved, using LSP servers.
@@ -369,6 +372,7 @@ pub fn lsp_resolve_edges(
         resolved,
         marked_unresolvable,
         marked_external,
+        any_server_started,
     })
 }
 
