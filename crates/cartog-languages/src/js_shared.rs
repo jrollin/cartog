@@ -27,6 +27,9 @@ pub struct JsQueries {
     /// Type identifiers in annotations (TypeScript only; JS has no `type_identifier` node)
     type_ref_query: Option<CachedQuery>,
     type_ref_idx: u32,
+    /// JSX component usage: `<Counter/>`, `<Foo.Bar/>` (JSX/TSX grammars only)
+    jsx_query: Option<CachedQuery>,
+    jsx_name_idx: u32,
 }
 
 impl JsQueries {
@@ -63,6 +66,19 @@ impl JsQueries {
                 None => (None, 0),
             };
 
+        // `jsx_*` nodes exist only in JSX/TSX grammars (and plain JS), not in TS.
+        let (jsx_query, jsx_name_idx) = match CachedQuery::try_new(
+            language,
+            r#"[(jsx_opening_element name: [(identifier) (member_expression)] @jsx_name)
+               (jsx_self_closing_element name: [(identifier) (member_expression)] @jsx_name)]"#,
+        ) {
+            Some(q) => {
+                let idx = q.capture_index("jsx_name");
+                (Some(q), idx)
+            }
+            None => (None, 0),
+        };
+
         Self {
             call_query,
             call_callee_idx,
@@ -72,6 +88,8 @@ impl JsQueries {
             throw_exc_idx,
             type_ref_query,
             type_ref_idx,
+            jsx_query,
+            jsx_name_idx,
         }
     }
 }
@@ -811,6 +829,31 @@ fn walk_for_calls_and_throws_q(
             }
         }
     }
+
+    // Collect JSX component-usage edges. Rendering `<Counter/>` is the React
+    // call-graph equivalent of calling a function, so it's a `Calls` edge.
+    if let Some(jsx_query) = &queries.jsx_query {
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&jsx_query.query, node, source.as_bytes());
+        while let Some(m) = matches.next() {
+            for capture in m.captures {
+                if capture.index == queries.jsx_name_idx
+                    && !is_inside_nested_scope(capture.node, node, JS_SCOPE_KINDS)
+                {
+                    let name = node_text(capture.node, source);
+                    if is_jsx_component(name) {
+                        edges.push(Edge::new(
+                            ctx,
+                            name,
+                            EdgeKind::Calls,
+                            file_path,
+                            capture.node.start_position().row as u32 + 1,
+                        ));
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn walk_body_for_nested(
@@ -892,6 +935,15 @@ fn collect_type_refs_q(
 }
 
 // ── Helpers ──
+
+/// React convention: a JSX tag is a component (worth a `Calls` edge) when its
+/// first segment starts uppercase — `Counter`, `Foo.Bar`. Lowercase tags are
+/// intrinsic HTML, including dotted host/namespaced ones (`svg.path`), so the
+/// uppercase rule applies to the leading segment of a member expression too.
+fn is_jsx_component(name: &str) -> bool {
+    let head = name.split('.').next().unwrap_or(name);
+    head.chars().next().is_some_and(|c| c.is_uppercase())
+}
 
 fn is_function_like(kind: &str) -> bool {
     matches!(kind, "arrow_function" | "function_expression" | "function")

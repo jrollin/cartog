@@ -21,7 +21,8 @@ LSP is enabled by default. If you installed with `--no-default-features`, the
 `cartog-lsp` dependency was omitted — reinstall with plain `cargo install
 cartog`. Otherwise, confirm a language server is on `PATH` (e.g.
 `rust-analyzer`, `pyright`, `typescript-language-server`, `gopls`,
-`intelephense`, `dart`, `sourcekit-lsp`, `kotlin-language-server`) and that you
+`intelephense`, `dart`, `sourcekit-lsp`, `kotlin-language-server`,
+`vue-language-server`, `svelteserver`, `astro-ls`) and that you
 haven't passed `--no-lsp` at runtime.
 
 A running `cartog serve` on the same database also makes `cartog index` defer
@@ -40,6 +41,12 @@ and Xcode.
 For Kotlin, cartog invokes `kotlin-language-server`; install it from
 <https://github.com/fwcd/kotlin-language-server> (it does not ship on a common
 PATH by default).
+
+For Vue/Svelte/Astro single-file components, cartog invokes the framework's own
+LSP server — `vue-language-server` (`npm i -g @vue/language-server`),
+`svelteserver` (`npm i -g svelte-language-server`), or `astro-ls`
+(`npm i -g @astrojs/language-server`). Edges from the `<script>`/frontmatter
+block resolve through these against the real SFC file.
 
 Intelephense is closed-source with an optional premium tier; the free tier
 handles `textDocument/definition` used by cartog.

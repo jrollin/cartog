@@ -4,7 +4,7 @@
 //! Each language implements the [`Extractor`] trait with compiled S-expression
 //! queries for declarative AST pattern matching.
 //!
-//! Supported languages: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin.
+//! Supported languages: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, Vue, Svelte, Astro, Markdown.
 #![doc = ""]
 #![doc = include_str!("../README.md")]
 
@@ -20,6 +20,7 @@ pub mod python;
 pub(crate) mod queries;
 pub mod ruby;
 pub mod rust_lang;
+pub mod sfc;
 pub mod swift;
 pub mod typescript;
 
@@ -136,6 +137,9 @@ pub fn get_extractor(language: &str) -> Option<Box<dyn Extractor>> {
         "dart" => Some(Box::new(dart::DartExtractor::new())),
         "swift" => Some(Box::new(swift::SwiftExtractor::new())),
         "kotlin" => Some(Box::new(kotlin::KotlinExtractor::new())),
+        "vue" => Some(Box::new(sfc::VueExtractor::new())),
+        "svelte" => Some(Box::new(sfc::SvelteExtractor::new())),
+        "astro" => Some(Box::new(sfc::AstroExtractor::new())),
         "markdown" => Some(Box::new(markdown::MarkdownExtractor::new())),
         _ => None,
     }
@@ -159,11 +163,14 @@ mod tests {
         assert!(get_extractor("dart").is_some());
         assert!(get_extractor("swift").is_some());
         assert!(get_extractor("kotlin").is_some());
+        assert!(get_extractor("vue").is_some());
+        assert!(get_extractor("svelte").is_some());
+        assert!(get_extractor("astro").is_some());
         assert!(get_extractor("markdown").is_some());
         assert!(get_extractor("unknown").is_none());
     }
 
-    const ALL_LANGS: [&str; 13] = [
+    const ALL_LANGS: [&str; 16] = [
         "python",
         "typescript",
         "tsx",
@@ -176,6 +183,9 @@ mod tests {
         "dart",
         "swift",
         "kotlin",
+        "vue",
+        "svelte",
+        "astro",
         "markdown",
     ];
 

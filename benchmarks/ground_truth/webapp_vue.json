@@ -1,0 +1,25 @@
+{
+  "_note": "SFC fixture (Vue). Component apps don't carry the shared 13-scenario backend graph, so only scenarios 02 (file structure) and 08 (symbol search) are wired (see benchmarks/scenarios/02_*.sh and 08_*.sh). Values derived from real `cartog --json` output and hand-verified.",
+  "02_file_structure": {
+    "description": "What's in src/components/LoginForm.vue?",
+    "query": "outline src/components/LoginForm.vue",
+    "expected": [
+      { "name": "ref", "kind": "import" },
+      { "name": "AuthService", "kind": "import" },
+      { "name": "name", "kind": "variable" },
+      { "name": "auth", "kind": "variable" },
+      { "name": "emit", "kind": "variable" },
+      { "name": "onSubmit", "kind": "function" }
+    ]
+  },
+  "08_symbol_search": {
+    "description": "Find all token-related symbols",
+    "query": "search token",
+    "expected": [
+      { "name": "TokenError" },
+      { "name": "generateToken" },
+      { "name": "validateToken" },
+      { "name": "TokenClaims" }
+    ]
+  }
+}

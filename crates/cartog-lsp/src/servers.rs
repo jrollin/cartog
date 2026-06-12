@@ -115,6 +115,27 @@ pub const SERVERS: &[ServerSpec] = &[
         install_hint:
             "install from https://github.com/fwcd/kotlin-language-server (or via your package manager)",
     },
+    ServerSpec {
+        language: "vue",
+        binary: "vue-language-server",
+        args: &["--stdio"],
+        language_id: "vue",
+        install_hint: "npm i -g @vue/language-server",
+    },
+    ServerSpec {
+        language: "svelte",
+        binary: "svelteserver",
+        args: &["--stdio"],
+        language_id: "svelte",
+        install_hint: "npm i -g svelte-language-server",
+    },
+    ServerSpec {
+        language: "astro",
+        binary: "astro-ls",
+        args: &["--stdio"],
+        language_id: "astro",
+        install_hint: "npm i -g @astrojs/language-server",
+    },
 ];
 
 /// Find all server specs for a cartog language name, in priority order.
@@ -216,6 +237,30 @@ mod tests {
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].binary, "kotlin-language-server");
         assert_eq!(specs[0].language_id, "kotlin");
+    }
+
+    #[test]
+    fn test_find_servers_vue() {
+        let specs = find_servers("vue");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].binary, "vue-language-server");
+        assert_eq!(specs[0].language_id, "vue");
+    }
+
+    #[test]
+    fn test_find_servers_svelte() {
+        let specs = find_servers("svelte");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].binary, "svelteserver");
+        assert_eq!(specs[0].language_id, "svelte");
+    }
+
+    #[test]
+    fn test_find_servers_astro() {
+        let specs = find_servers("astro");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].binary, "astro-ls");
+        assert_eq!(specs[0].language_id, "astro");
     }
 
     #[test]

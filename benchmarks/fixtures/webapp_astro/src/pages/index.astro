@@ -1,0 +1,21 @@
+---
+import LoginPanel from "../components/LoginPanel.astro";
+import UserBadge from "../components/UserBadge.astro";
+import { AuthService } from "../lib/auth";
+
+const auth = new AuthService();
+const token = bootstrapSession();
+
+function bootstrapSession(): string {
+  return auth.login("guest");
+}
+---
+
+<html>
+  <body>
+    <main>
+      <LoginPanel />
+      <UserBadge token={token} />
+    </main>
+  </body>
+</html>

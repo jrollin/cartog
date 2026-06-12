@@ -254,10 +254,10 @@ command = ["docker", "run", "--rm", "-i",
 Run `cartog index --force <path>` after adding an override; the server is
 spawned during the LSP edge-resolution pass.
 
-Pinned Docker recipes for all 10 languages live in `benchmarks/lsp-images/`
+Pinned Docker recipes for all 13 LSP languages live in `benchmarks/lsp-images/`
 (`<lang>.Dockerfile` → `cartog-lsp-<lang>:stable`). Build them with
 `make lsp-images`, then `resolution_rate.sh --docker-lsp` wires the override for
-each (strict: a missing image is an error, not a host fallback). All 10 resolve
+each (strict: a missing image is an error, not a host fallback). All 13 resolve
 identically to host. See `benchmarks/README.md`.
 
 **Compile-time feature flags**:

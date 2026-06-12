@@ -1,6 +1,6 @@
 # Supported Languages
 
-## Currently Supported (12 languages)
+## Currently Supported (15 languages + 4 frameworks)
 
 ### Python (.py, .pyi)
 - Functions, classes, methods
@@ -22,6 +22,7 @@
 - Function calls, `new` expressions, throw statements
 - Inheritance (extends), interface extends, implements
 - Type annotation references (parameter types, return types, generic types)
+- JSX component usage (`<Counter/>`, `<Foo.Bar/>`) → `Calls` edge (React); lowercase HTML and lowercase dotted host tags (`<svg.path/>`) skipped. Captured inside function/method bodies; calls and JSX in a module-scope variable initializer (e.g. `const x = <Counter/>;`) are not attributed to an enclosing scope (same as a top-level `const x = foo();`).
 - Async functions
 - JSDoc comments
 - Class fields with visibility (public/private/protected TS modifiers, #private, _convention)
@@ -31,6 +32,7 @@
 - Imports (ES modules)
 - Function calls, `new` expressions, throw statements
 - Inheritance (extends)
+- JSX component usage (`<Counter/>`, `<Foo.Bar/>`) → `Calls` edge (React); lowercase HTML elements skipped
 - Async functions
 - JSDoc comments
 - Class fields with visibility (#private, _convention)
@@ -139,6 +141,24 @@
 - KDoc comments (`/** */` blocks)
 - Visibility: `private` → private; `internal`/`protected`/`public` (default) → public
 - Annotations (`@Deprecated`, `@Override`) are not emitted as type references
+
+### Vue (.vue)
+- Symbols + edges from every `<script>` / `<script setup>` block (one file may have several)
+- `lang="ts"` / `lang="typescript"` → TypeScript extractor; otherwise JavaScript
+- Same symbols/edges as the delegated JS/TS extractor (functions, classes, methods, variables, imports; calls, imports, inherits, type refs)
+- Byte/line offsets remapped back to the full `.vue` file
+- Template markup and `<style>` blocks are not indexed
+
+### Svelte (.svelte)
+- Symbols + edges from the `<script>` block(s), including `<script context="module">`
+- `lang="ts"` → TypeScript extractor; otherwise JavaScript
+- Same symbols/edges as the delegated JS/TS extractor
+- Markup and `<style>` blocks are not indexed
+
+### Astro (.astro)
+- Symbols + edges from the `---` frontmatter (always TypeScript) plus any client-side `<script>` blocks
+- Same symbols/edges as the delegated JS/TS extractor
+- HTML/template markup is not indexed
 
 ### Markdown (.md)
 - Document sections chunked by heading (`#`, `##`, `###`, etc.)

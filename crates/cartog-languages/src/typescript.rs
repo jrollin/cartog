@@ -460,4 +460,70 @@ import { validate as validateUser } from '../validators/user';
             targets
         );
     }
+
+    fn extract_tsx(source: &str) -> ExtractionResult {
+        let mut ext = TsxExtractor::new();
+        ext.extract(source, "App.tsx").unwrap()
+    }
+
+    /// Collect `Calls`-edge target names emitted from `from`'s scope.
+    fn calls_from<'a>(result: &'a ExtractionResult, from: &str) -> Vec<&'a str> {
+        let sym = result
+            .symbols
+            .iter()
+            .find(|s| s.name == from)
+            .unwrap_or_else(|| panic!("symbol {from} not found"));
+        result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Calls && e.source_id == sym.id)
+            .map(|e| e.target_name.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn jsx_component_usage_emits_calls_edge() {
+        let result = extract_tsx("function App() { return <Counter initial={0} />; }\n");
+        assert!(
+            calls_from(&result, "App").contains(&"Counter"),
+            "App should have a Calls edge to Counter"
+        );
+    }
+
+    #[test]
+    fn jsx_lowercase_intrinsic_is_skipped() {
+        let result = extract_tsx("function App() { return <div className=\"x\" />; }\n");
+        assert!(
+            !calls_from(&result, "App").contains(&"div"),
+            "intrinsic HTML element <div> must not emit a component edge"
+        );
+    }
+
+    #[test]
+    fn jsx_member_expression_component_uses_dotted_name() {
+        let result = extract_tsx("function App() { return <Foo.Bar />; }\n");
+        assert!(
+            calls_from(&result, "App").contains(&"Foo.Bar"),
+            "member-expression component should keep its dotted name"
+        );
+    }
+
+    #[test]
+    fn jsx_lowercase_dotted_host_tag_is_skipped() {
+        // Regression: `name.contains('.')` alone treated lowercase namespaced
+        // tags like <svg.path/> as components, emitting unresolvable edges.
+        let result = extract_tsx("function App() { return <svg.path d=\"M0 0\" />; }\n");
+        assert!(
+            !calls_from(&result, "App").contains(&"svg.path"),
+            "lowercase namespaced host tag must not emit a component edge"
+        );
+    }
+
+    #[test]
+    fn jsx_self_closing_and_opening_both_captured() {
+        let self_closing = extract_tsx("function A() { return <Counter />; }\n");
+        let opening = extract_tsx("function A() { return <Counter>hi</Counter>; }\n");
+        assert!(calls_from(&self_closing, "A").contains(&"Counter"));
+        assert!(calls_from(&opening, "A").contains(&"Counter"));
+    }
 }
