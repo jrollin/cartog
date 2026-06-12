@@ -497,6 +497,75 @@ fn index_with_optional_lsp(
     .map_err(|e| mcp_err(format!("indexing failed: {e}")))
 }
 
+/// Warm-LSP catch-up for no-op reindexes: a sealed (state-4) backlog — left by
+/// a peer-deferred CLI index or by watcher reindexes — resolves here instead of
+/// waiting for the next dirty index. Latches `lsp_unavailable` after a
+/// serverless pass so LSP-less environments don't retry every call.
+#[cfg(feature = "lsp")]
+fn catch_up_lsp(
+    db: &Arc<Mutex<Database>>,
+    lsp_manager: &Arc<Mutex<cartog_lsp::manager::LspManager>>,
+    lsp_unavailable: &std::sync::atomic::AtomicBool,
+    root: &Path,
+    progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
+    cancel: Option<indexer::CancelProbe<'_>>,
+    mut result: indexer::IndexResult,
+) -> Result<indexer::IndexResult, McpError> {
+    use std::sync::atomic::Ordering;
+    // Dirty runs already did a (global) warm pass in index_with_optional_lsp.
+    if result.dirty_files > 0 || lsp_unavailable.load(Ordering::Acquire) {
+        return Ok(result);
+    }
+    // Lock ordering: lsp_manager → db (see CartogServer doc).
+    let mut mgr = lsp_manager.lock().map_err(|_| {
+        mcp_err("internal error: LSP manager lock poisoned (server restart required)")
+    })?;
+    let db = db
+        .lock()
+        .map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
+    let sealed = db
+        .has_heuristic_exhausted()
+        .map_err(|e| mcp_err(format!("querying the sealed-edge backlog failed: {e:#}")))?;
+    if !sealed {
+        return Ok(result);
+    }
+    let lsp_progress = progress_tx.as_ref().map(|tx| {
+        let tx = tx.clone();
+        move |done: u32, total: u32| {
+            let _ = tx.try_send(progress::Phase::Indexer(
+                cartog_indexer::ProgressUpdate::ResolvingLsp { done, total },
+            ));
+        }
+    });
+    let lsp_progress_ref: Option<cartog_lsp::LspProgress<'_>> = lsp_progress
+        .as_ref()
+        .map(|f| f as &(dyn Fn(u32, u32) + Send + Sync));
+    let outcome = warm_lsp_pass(&db, &mut mgr, root, lsp_progress_ref, cancel)?;
+    if !outcome.stats.any_server_started {
+        lsp_unavailable.store(true, Ordering::Release);
+    }
+    result.edges_lsp_resolved += outcome.stats.resolved;
+    result.edges_marked_unresolvable += outcome.stats.marked_unresolvable;
+    result.edges_marked_external += outcome.stats.marked_external;
+    if outcome.stats.resolved > 0 {
+        let _ = db.compute_in_degrees();
+    }
+    Ok(result)
+}
+
+#[cfg(not(feature = "lsp"))]
+fn catch_up_lsp(
+    _db: &Arc<Mutex<Database>>,
+    _lsp_manager: &(),
+    _lsp_unavailable: &(),
+    _root: &Path,
+    _progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
+    _cancel: Option<indexer::CancelProbe<'_>>,
+    result: indexer::IndexResult,
+) -> Result<indexer::IndexResult, McpError> {
+    Ok(result)
+}
+
 /// Static routing hints per tool — guides the agent to the next logical step.
 fn suggestions_for(tool: &str) -> Option<&'static str> {
     match tool {
@@ -955,6 +1024,10 @@ pub struct CartogServer {
     /// Persistent LSP manager for warm server reuse across index calls.
     #[cfg(feature = "lsp")]
     lsp_manager: Arc<Mutex<cartog_lsp::manager::LspManager>>,
+    /// Latched true after a warm-LSP catch-up where no server started, so an
+    /// LSP-less environment doesn't retry the catch-up on every index call.
+    #[cfg(feature = "lsp")]
+    lsp_unavailable: Arc<std::sync::atomic::AtomicBool>,
     /// Single-writer election role. `Primary` holds the `serve` PID lock
     /// and owns the RW DB connection. `ReadOnly` attached via
     /// [`Database::open_readonly`] because another cartog process owns
@@ -1128,6 +1201,8 @@ impl CartogServer {
                 &cwd,
                 lsp_overrides,
             ))),
+            #[cfg(feature = "lsp")]
+            lsp_unavailable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cwd: Arc::from(cwd),
             role: Arc::new(AtomicRole::new(role)),
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1238,6 +1313,10 @@ impl CartogServer {
         let lsp_manager = Arc::clone(&self.lsp_manager);
         #[cfg(not(feature = "lsp"))]
         let lsp_manager: () = ();
+        #[cfg(feature = "lsp")]
+        let lsp_unavailable = Arc::clone(&self.lsp_unavailable);
+        #[cfg(not(feature = "lsp"))]
+        let lsp_unavailable: () = ();
 
         let (progress_tx, forwarder) = match ctx.meta.get_progress_token() {
             Some(token) => {
@@ -1259,9 +1338,18 @@ impl CartogServer {
                 &lsp_manager,
                 &validated,
                 force,
-                progress_tx,
+                progress_tx.clone(),
                 probe_ref,
                 redact,
+            )?;
+            let result = catch_up_lsp(
+                &db,
+                &lsp_manager,
+                &lsp_unavailable,
+                &validated,
+                progress_tx,
+                probe_ref,
+                result,
             )?;
 
             let json = serde_json::to_string_pretty(&result)
@@ -3371,22 +3459,21 @@ mod tests {
         assert_eq!(r2.files_indexed, 0);
     }
 
+    /// Tempdir project with one guaranteed-unresolvable Python call, indexed
+    /// with `lsp=false` so its edge is sealed at state=4.
     #[cfg(feature = "lsp")]
-    #[test]
-    fn warm_lsp_pass_reopens_and_reseals_without_servers() {
-        // Regression for the #114 seal: `index_directory(lsp=false)` seals
-        // unresolved edges at state=4 and the warm pass queries only state=0 —
-        // without the reopen it silently resolved nothing.
-        use cartog_db::Database;
-        use cartog_lsp::manager::LspManager;
-
+    fn sealed_py_fixture() -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        Arc<Mutex<cartog_db::Database>>,
+    ) {
         let tmp = tempfile::tempdir().unwrap();
         // Tempdirs are dot-prefixed on macOS; is_ignored() rejects a dotted walk root.
         let root = tmp.path().canonicalize().unwrap().join("project");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("a.py"), "def caller():\n    nowhere('x')\n").unwrap();
 
-        let db = Database::open_memory().unwrap();
+        let db = cartog_db::Database::open_memory().unwrap();
         indexer::index_directory(
             &db,
             &root,
@@ -3398,18 +3485,37 @@ mod tests {
             &std::collections::HashMap::new(),
         )
         .unwrap();
-        let sealed = db.count_edges_in_state(4).unwrap();
-        assert!(sealed >= 1, "no-lsp index must seal the unresolvable edge");
+        assert!(
+            db.has_heuristic_exhausted().unwrap(),
+            "no-lsp index must seal the unresolvable edge"
+        );
+        (tmp, root, Arc::new(Mutex::new(db)))
+    }
 
-        // Override python's server with a binary that cannot exist, so the
-        // start fails deterministically regardless of the host PATH.
+    /// Manager whose python server is a binary that cannot exist, so the start
+    /// fails deterministically regardless of the host PATH.
+    #[cfg(feature = "lsp")]
+    fn no_server_manager(root: &Path) -> cartog_lsp::manager::LspManager {
         let overrides = std::collections::HashMap::from([(
             "python".to_string(),
             vec!["cartog-test-no-such-binary".to_string()],
         )]);
-        let mut mgr = LspManager::with_overrides(&root, overrides);
+        cartog_lsp::manager::LspManager::with_overrides(root, overrides)
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn warm_lsp_pass_reopens_and_reseals_without_servers() {
+        // Regression for the #114 seal: `index_directory(lsp=false)` seals
+        // unresolved edges at state=4 and the warm pass queries only state=0 —
+        // without the reopen it silently resolved nothing.
+        let (_tmp, root, db) = sealed_py_fixture();
+        let db = db.lock().unwrap();
+        let sealed = db.count_edges_in_state(4).unwrap();
+        let mut mgr = no_server_manager(&root);
 
         let outcome = warm_lsp_pass(&db, &mut mgr, &root, None, None).unwrap();
+
         assert_eq!(
             outcome.reopened, sealed,
             "seals must reopen before the pass"
@@ -3418,6 +3524,86 @@ mod tests {
         assert_eq!(outcome.resealed, sealed, "serverless pass must re-seal");
         assert_eq!(db.count_edges_in_state(4).unwrap(), sealed);
         assert_eq!(db.count_edges_in_state(0).unwrap(), 0);
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn catch_up_runs_warm_pass_on_noop_index_with_sealed_backlog() {
+        let (_tmp, root, db) = sealed_py_fixture();
+        let latch = std::sync::atomic::AtomicBool::new(false);
+        let mgr = Arc::new(Mutex::new(no_server_manager(&root)));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+
+        let noop = indexer::IndexResult::default();
+        let out = catch_up_lsp(&db, &mgr, &latch, &root, Some(tx), None, noop).unwrap();
+
+        assert!(rx.try_recv().is_ok(), "catch-up must run the LSP phase");
+        assert!(
+            latch.load(std::sync::atomic::Ordering::Acquire),
+            "serverless pass must latch lsp_unavailable"
+        );
+        assert!(
+            db.lock().unwrap().has_heuristic_exhausted().unwrap(),
+            "backlog must be re-sealed after a serverless pass"
+        );
+        assert_eq!(out.edges_lsp_resolved, 0);
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn catch_up_skips_when_latched() {
+        let (_tmp, root, db) = sealed_py_fixture();
+        let latch = std::sync::atomic::AtomicBool::new(true);
+        let mgr = Arc::new(Mutex::new(no_server_manager(&root)));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+
+        let noop = indexer::IndexResult::default();
+        catch_up_lsp(&db, &mgr, &latch, &root, Some(tx), None, noop).unwrap();
+
+        assert!(
+            rx.try_recv().is_err(),
+            "latched server must not retry the catch-up"
+        );
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn catch_up_skips_dirty_runs() {
+        // Dirty runs already did a global warm pass in index_with_optional_lsp.
+        let (_tmp, root, db) = sealed_py_fixture();
+        let latch = std::sync::atomic::AtomicBool::new(false);
+        let mgr = Arc::new(Mutex::new(no_server_manager(&root)));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+
+        let dirty = indexer::IndexResult {
+            dirty_files: 1,
+            ..Default::default()
+        };
+        catch_up_lsp(&db, &mgr, &latch, &root, Some(tx), None, dirty).unwrap();
+
+        assert!(rx.try_recv().is_err(), "dirty run must skip the catch-up");
+        assert!(!latch.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn catch_up_noop_without_sealed_backlog() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let db = Arc::new(Mutex::new(cartog_db::Database::open_memory().unwrap()));
+        let latch = std::sync::atomic::AtomicBool::new(false);
+        let mgr = Arc::new(Mutex::new(no_server_manager(&root)));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+
+        let noop = indexer::IndexResult::default();
+        catch_up_lsp(&db, &mgr, &latch, &root, Some(tx), None, noop).unwrap();
+
+        assert!(rx.try_recv().is_err(), "nothing sealed → no LSP phase");
+        assert!(
+            !latch.load(std::sync::atomic::Ordering::Acquire),
+            "latch must not be set when the pass never ran"
+        );
     }
 
     #[test]

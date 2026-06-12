@@ -105,6 +105,19 @@ impl Database {
         Ok(state)
     }
 
+    /// Whether any edge sits at `resolution_state = 4` (heuristic-exhausted).
+    /// Gates the MCP warm-LSP catch-up on no-op reindexes.
+    ///
+    /// tx-safe: read-only single statement — see the LSP-section header note.
+    pub fn has_heuristic_exhausted(&self) -> Result<bool> {
+        let exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM edges WHERE resolution_state = 4)",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(exists)
+    }
+
     /// Test-only inspector: count edges at a given raw `resolution_state`
     /// (see [`Self::edge_resolution_state`] for the state legend).
     ///

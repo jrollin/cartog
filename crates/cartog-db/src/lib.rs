@@ -4657,6 +4657,15 @@ mod tests {
     }
 
     #[test]
+    fn test_has_heuristic_exhausted_tracks_state_four() {
+        let db = Database::open_memory().unwrap();
+        let _edge = insert_test_edge(&db, "nowhere");
+        assert!(!db.has_heuristic_exhausted().unwrap(), "state 0 not sealed");
+        db.mark_heuristic_exhausted_in_tx().unwrap();
+        assert!(db.has_heuristic_exhausted().unwrap());
+    }
+
+    #[test]
     fn test_resolve_edges_skips_heuristic_exhausted_state_four() {
         // The state=0-only scan in resolve_edges_pass must not re-walk sealed
         // state=4 edges — this is the watch-mode amplification guard (#109).
