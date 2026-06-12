@@ -329,6 +329,7 @@ dependencies = [
  "proptest",
  "schemars",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

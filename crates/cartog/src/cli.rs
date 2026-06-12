@@ -36,6 +36,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub tokens: Option<u32>,
 
+    /// Drop heavy fields (bodies, docstrings, cache hashes) from --json output to
+    /// save agent tokens. No-op without --json.
+    #[arg(long, global = true)]
+    pub compact: bool,
+
     /// Path to the cartog database (overrides .cartog.toml and auto-detection)
     #[arg(long, global = true, value_name = "PATH", env = "CARTOG_DB")]
     pub db: Option<PathBuf>,

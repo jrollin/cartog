@@ -47,7 +47,9 @@ pub struct Symbol {
     pub is_async: bool,
     pub docstring: Option<String>,
     pub in_degree: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subtree_hash: Option<String>,
 }
 
@@ -127,6 +129,32 @@ impl Symbol {
     pub fn with_docstring(mut self, docstring: Option<String>) -> Self {
         self.docstring = docstring;
         self
+    }
+}
+
+/// Strip heavy, low-value fields from a value before JSON serialization to save
+/// agent tokens. Compact output keeps the navigable shape (ids, names, kinds,
+/// locations, scores) and drops bodies, docstrings, and cache hashes.
+pub trait Compact {
+    /// Drop heavy fields in place. Idempotent.
+    fn compact_in_place(&mut self);
+}
+
+impl Compact for Symbol {
+    /// Drops `docstring` and the cache hashes; keeps `signature` (a small,
+    /// high-value shape hint when the body is gone).
+    fn compact_in_place(&mut self) {
+        self.docstring = None;
+        self.content_hash = None;
+        self.subtree_hash = None;
+    }
+}
+
+impl<T: Compact> Compact for Vec<T> {
+    fn compact_in_place(&mut self) {
+        for item in self.iter_mut() {
+            item.compact_in_place();
+        }
     }
 }
 
@@ -407,6 +435,32 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_clears_drop_set_keeps_signature() {
+        let mut sym = Symbol::new("f", SymbolKind::Function, "a.rs", 1, 2, 0, 10, None)
+            .with_signature(Some("fn f() -> u32".into()))
+            .with_docstring(Some("does a thing".into()));
+        sym.content_hash = Some("abc".into());
+        sym.subtree_hash = Some("def".into());
+
+        sym.compact_in_place();
+
+        assert_eq!(sym.signature.as_deref(), Some("fn f() -> u32"));
+        assert_eq!(sym.name, "f");
+        assert_eq!(sym.docstring, None);
+        assert_eq!(sym.content_hash, None);
+        assert_eq!(sym.subtree_hash, None);
+    }
+
+    #[test]
+    fn hash_fields_skip_serializing_when_none() {
+        let sym = Symbol::new("f", SymbolKind::Function, "a.rs", 1, 2, 0, 10, None);
+        let v = serde_json::to_value(&sym).unwrap();
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("content_hash"));
+        assert!(!obj.contains_key("subtree_hash"));
+    }
 
     #[test]
     fn is_cancelled_matches_bare_and_context_wrapped() {

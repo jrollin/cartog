@@ -164,6 +164,9 @@ fn main() -> Result<()> {
     // Token budget only applies to human-readable output
     let token_budget = if cli.json { None } else { cli.tokens };
 
+    // Field-stripping only applies to JSON output (a no-op for human text).
+    let compact = cli.json && cli.compact;
+
     // Classify before the match consumes cli.command.
     let command_kind = classify_command(&cli.command);
 
@@ -182,9 +185,14 @@ fn main() -> Result<()> {
             redact,
             &lsp_overrides,
         ),
-        Command::Outline { file } => {
-            commands::cmd_outline(&db_path, &file, cli.json, token_budget, embedding_dim)
-        }
+        Command::Outline { file } => commands::cmd_outline(
+            &db_path,
+            &file,
+            cli.json,
+            compact,
+            token_budget,
+            embedding_dim,
+        ),
         Command::Callees { name } => {
             commands::cmd_callees(&db_path, &name, cli.json, token_budget, embedding_dim)
         }
@@ -201,6 +209,7 @@ fn main() -> Result<()> {
             &task,
             tokens,
             cli.json,
+            compact,
             &provider_config,
             &search_tuning,
         ),
@@ -210,12 +219,19 @@ fn main() -> Result<()> {
             &to,
             depth,
             cli.json,
+            compact,
             token_budget,
             embedding_dim,
         ),
-        Command::Refs { name, kind } => {
-            commands::cmd_refs(&db_path, &name, kind, cli.json, token_budget, embedding_dim)
-        }
+        Command::Refs { name, kind } => commands::cmd_refs(
+            &db_path,
+            &name,
+            kind,
+            cli.json,
+            compact,
+            token_budget,
+            embedding_dim,
+        ),
         Command::Hierarchy { name, mermaid } => commands::cmd_hierarchy(
             &db_path,
             &name,
@@ -281,17 +297,19 @@ fn main() -> Result<()> {
             file.as_deref(),
             limit,
             cli.json,
+            compact,
             token_budget,
             embedding_dim,
         ),
         Command::Map { tokens, mermaid } => {
-            commands::cmd_map(&db_path, tokens, cli.json, mermaid, embedding_dim)
+            commands::cmd_map(&db_path, tokens, cli.json, compact, mermaid, embedding_dim)
         }
         Command::Changes { commits, kind } => commands::cmd_changes(
             &db_path,
             commits,
             kind,
             cli.json,
+            compact,
             token_budget,
             embedding_dim,
         ),
@@ -364,6 +382,7 @@ fn main() -> Result<()> {
                 kind,
                 limit,
                 cli.json,
+                compact,
                 token_budget,
                 &provider_config,
                 &search_tuning,

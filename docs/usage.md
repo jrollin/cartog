@@ -279,6 +279,7 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 | `CARTOG_WATCH_RAG` | unset | Force watcher auto-embed; overrides `[embedding] auto_embed` and `--rag`:<br>`1` = force on<br>`0` = force off<br>unset = auto-detect from the DB |
 | `CARTOG_SINGLE_WRITER` | `1` | `0` disables MCP single-writer election (every `cartog serve` opens read-write). |
 | `CARTOG_MCP_MAX_BYTES` | `65536` | Max bytes per MCP tool response before truncation. |
+| `CARTOG_MCP_COMPACT` | `1` (on) | MCP tools strip heavy fields by default (symbol cache hashes + docstrings; `cartog_rag_search`/`cartog_trace` bodies bounded to a ~500-byte snippet; `cartog_context` keeps budgeted bodies). Set `0`/`false`/`no`/`off` to return full bodies. |
 | `CARTOG_NO_UPDATE_CHECK` | unset | Set to skip the background self-update check. |
 | `CARTOG_UPDATE_CHECK` | unset | Force an update check regardless of cadence. |
 | `CARTOG_INSTALL_DIR` | `~/.local/bin` | Install location used by `install.sh`. |
@@ -1306,6 +1307,18 @@ cartog --json stats
 ```
 
 Returns arrays of objects with fields like `name`, `kind`, `file_path`, `start_line`, `end_line`, `signature`, etc. Empty results return `[]`.
+
+### Compact JSON (`--compact`)
+
+`--compact` strips heavy, low-value fields from `--json` output to save agent tokens, while keeping every field needed to locate and rank a result. It is a no-op without `--json`.
+
+```bash
+cartog --json --compact rag search "authentication"   # ~60% smaller payload
+```
+
+Dropped in compact mode: symbol bodies (`content` in `rag search`/`trace`), `docstring`, and the `content_hash`/`subtree_hash` cache fields. Kept: `id`, `name`, `kind`, `file_path`, line/byte spans, `signature`, scores, `sources`, and edge `provenance`. `cartog context` is the exception — it keeps its inline bodies (already budgeted by `--tokens`), trimming only the per-entry symbol noise. The output stays valid JSON of the same shape (omitting optional fields), so it validates against the same schema as full output.
+
+MCP tools are **compact by default** (agents are the consumer and the response cap already implies token pressure); set `CARTOG_MCP_COMPACT=0` to restore full bodies. There, `cartog_rag_search` and `cartog_trace` bound bodies to a ~500-byte snippet rather than dropping them, matching their "snippet excerpt" contract.
 
 **Errors**: if the index doesn't exist yet, query commands print an error message and exit with a non-zero status. Run `cartog index .` first. If a symbol or file isn't found, the result is an empty array (not an error).
 

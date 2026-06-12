@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use serde::Serialize;
 
-use cartog_core::Symbol;
+use cartog_core::{Compact, Symbol};
 use cartog_db::Database;
 
 use crate::provider::{EmbeddingProvider, RerankerProvider};
@@ -45,6 +45,21 @@ pub struct TaskContext {
     /// Approximate tokens occupied by the attached bodies (`bytes / 4`, min 1
     /// per non-empty body).
     pub approx_tokens: u32,
+}
+
+impl Compact for ContextEntry {
+    /// Trims the inner symbol only. Unlike [`crate::search::SearchResult`], the
+    /// body `content` is **kept** — a task-context bundle's whole value is its
+    /// budgeted bodies, and the budget already caps them.
+    fn compact_in_place(&mut self) {
+        self.symbol.compact_in_place();
+    }
+}
+
+impl Compact for TaskContext {
+    fn compact_in_place(&mut self) {
+        self.entries.compact_in_place();
+    }
 }
 
 /// Tunables for [`build_task_context`].
@@ -243,6 +258,27 @@ mod tests {
     use super::*;
     use crate::provider::test_utils::MockEmbeddingProvider;
     use cartog_core::{Edge, EdgeKind, Symbol, SymbolKind};
+
+    #[test]
+    fn compact_context_keeps_body_but_trims_symbol() {
+        let mut sym = Symbol::new("f", SymbolKind::Function, "a.py", 1, 2, 0, 10, None);
+        sym.docstring = Some("doc".into());
+        sym.content_hash = Some("h".into());
+        let mut entry = ContextEntry {
+            symbol: sym,
+            reason: ContextReason::Seed,
+            score: 1.0,
+            content: Some("def f(): ...".into()),
+        };
+
+        entry.compact_in_place();
+
+        // Body is kept (context's whole value is budgeted bodies)...
+        assert_eq!(entry.content.as_deref(), Some("def f(): ..."));
+        // ...but the inner symbol's noise is trimmed.
+        assert_eq!(entry.symbol.docstring, None);
+        assert_eq!(entry.symbol.content_hash, None);
+    }
 
     fn insert(db: &Database, name: &str, kind: SymbolKind, file: &str, content: &str) -> Symbol {
         let sym = Symbol::new(name, kind, file, 1, 11, 0, content.len() as u32, None);
