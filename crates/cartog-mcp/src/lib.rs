@@ -391,6 +391,7 @@ fn index_with_optional_lsp(
             Some(&mut mgr),
             &std::collections::HashMap::new(),
             lsp_progress_ref,
+            cancel,
         ) {
             Ok(stats) => {
                 result.edges_lsp_resolved = stats.resolved;

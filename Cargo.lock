@@ -297,6 +297,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "criterion",
+ "ctrlc",
  "dialoguer",
  "directories",
  "flate2",

@@ -227,11 +227,14 @@ impl LspManager {
     /// jdtls's `jdt://`); `Ok(Some(InRoot(..)))` = target inside the indexed
     /// root; `Ok(Some(External))` = target outside the root (stdlib, deps,
     /// node_modules), caller should mark `state=3`.
+    /// `cancel`, when `Some` and it returns `true`, aborts between windows with
+    /// an `Err` whose cause is `"cancelled"` (worst-case latency: one window).
     pub fn definitions_batch(
         &mut self,
         language: &str,
         file_path: &str,
         positions: &[(u32, u32)],
+        cancel: Option<crate::LspCancel<'_>>,
     ) -> Result<Vec<Result<Option<DefinitionOutcome>>>> {
         // Clone root so the per-window parse can borrow it while `client` holds
         // a `&mut` of `self.clients`.
@@ -244,6 +247,9 @@ impl LspManager {
 
         let mut out = Vec::with_capacity(positions.len());
         for window in positions.chunks(DEFINITION_BATCH_WINDOW) {
+            if cancel.is_some_and(|c| c()) {
+                bail!("cancelled");
+            }
             let params: Vec<(&str, Value)> = window
                 .iter()
                 .map(|&(line, character)| {

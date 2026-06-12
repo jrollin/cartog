@@ -330,16 +330,42 @@ pub fn cmd_index(
     let root = Path::new(path);
     let db = open_db(db_path, embedding_dim)?;
 
+    // Ctrl-C flag → cancel probe, so the indexer (esp. the slow LSP phase)
+    // stops cooperatively instead of being hard-killed mid-write.
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&interrupted);
+    let _ = ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst));
+    let cancel = move || interrupted.load(Ordering::SeqCst);
+
     // Stderr-only; `Spinner::start` self-gates (TTY or CARTOG_PROGRESS), so --json stdout stays clean.
     let spinner = Spinner::start("Indexing").map(Arc::new);
     let cb = spinner_callback(&spinner, indexer::ProgressUpdate::label);
     let cb_ref: Option<indexer::ProgressCallback<'_>> =
         cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
-    let result =
-        indexer::index_directory(&db, root, force, lsp, cb_ref, None, redact, lsp_overrides);
+    let cancel_ref: indexer::CancelProbe<'_> = &cancel;
+    let result = indexer::index_directory(
+        &db,
+        root,
+        force,
+        lsp,
+        cb_ref,
+        Some(cancel_ref),
+        redact,
+        lsp_overrides,
+    );
     drop(cb);
     stop_spinner(spinner);
-    let result = result?;
+    let result = match result {
+        Ok(r) => r,
+        // Ctrl-C: the pass rolled back (single tx), so the index is unchanged.
+        Err(e) if e.root_cause().to_string() == "cancelled" => {
+            if !json {
+                eprintln!("Indexing cancelled; the index was left unchanged.");
+            }
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
 
     if !json && result.redaction_backfilled {
         eprintln!(

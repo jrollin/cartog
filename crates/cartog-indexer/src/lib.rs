@@ -789,9 +789,18 @@ pub fn index_directory(
             let lsp_progress = |done: u32, total: u32| {
                 emit(ProgressUpdate::ResolvingLsp { done, total });
             };
-            let stats =
-                cartog_lsp::lsp_resolve_edges(db, &root, None, lsp_overrides, Some(&lsp_progress))
-                    .with_context(|| format!("resolving LSP edges for root {}", root.display()))?;
+            // Thread the caller's cancel probe so Ctrl-C interrupts the LSP
+            // phase (the dominant cost) between files/windows, not just the
+            // store loop.
+            let stats = cartog_lsp::lsp_resolve_edges(
+                db,
+                &root,
+                None,
+                lsp_overrides,
+                Some(&lsp_progress),
+                cancel,
+            )
+            .with_context(|| format!("resolving LSP edges for root {}", root.display()))?;
             result.edges_lsp_resolved = stats.resolved;
             result.edges_marked_unresolvable = stats.marked_unresolvable;
             result.edges_marked_external = stats.marked_external;
