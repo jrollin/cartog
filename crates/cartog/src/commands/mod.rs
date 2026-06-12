@@ -1249,32 +1249,59 @@ pub fn cmd_rag_index(
     db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
         .context("failed to reconcile embedding fingerprint")?;
 
+    // Ctrl-C flag → cancel probe, so the (often long) embedding pass stops
+    // cooperatively instead of being hard-killed.
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&interrupted);
+    let _ = ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst));
+    let cancel = move || interrupted.load(Ordering::SeqCst);
+
     // Progress on stderr; `Spinner::start` self-gates (TTY or CARTOG_PROGRESS).
     let spinner = Spinner::start("Indexing code graph").map(Arc::new);
     let ix_cb = spinner_callback(&spinner, indexer::ProgressUpdate::label);
     let ix_cb_ref: Option<indexer::ProgressCallback<'_>> =
         ix_cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
+    let ix_cancel: indexer::CancelProbe<'_> = &cancel;
     let index_res = indexer::index_directory(
         &db,
         root,
         false,
         false,
         ix_cb_ref,
-        None,
+        Some(ix_cancel),
         redact,
         &std::collections::HashMap::new(),
     );
     drop(ix_cb);
     stop_spinner(spinner);
+    if let Err(e) = &index_res {
+        if e.root_cause().to_string() == "cancelled" {
+            if !json {
+                eprintln!("Indexing cancelled; the index was left unchanged.");
+            }
+            return Ok(());
+        }
+    }
     let _index_result = index_res?;
 
     let spinner = Spinner::start("Embedding symbols").map(Arc::new);
     let rag_cb = spinner_callback(&spinner, rag::indexer::ProgressUpdate::label);
     let rag_cb_ref: Option<rag::indexer::ProgressCallback<'_>> =
         rag_cb.as_ref().map(|f| f as &(dyn Fn(_) + Send + Sync));
-    let embed_res = rag::indexer::index_embeddings(&db, provider.as_mut(), force, rag_cb_ref, None);
+    let rag_cancel: rag::indexer::CancelProbe<'_> = &cancel;
+    let embed_res =
+        rag::indexer::index_embeddings(&db, provider.as_mut(), force, rag_cb_ref, Some(rag_cancel));
     drop(rag_cb);
     stop_spinner(spinner);
+    if let Err(e) = &embed_res {
+        if e.root_cause().to_string() == "cancelled" {
+            // Embeddings flushed before the cancel persist; a re-run resumes.
+            if !json {
+                eprintln!("Embedding cancelled; partial progress was saved — re-run to finish.");
+            }
+            return Ok(());
+        }
+    }
     let result = embed_res?;
 
     output(&result, json, None, |r| {
