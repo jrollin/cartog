@@ -4,6 +4,8 @@
 
 **Tagline:** Map your codebase. Navigate by graph, not grep.
 
+**Positioning line:** Semantic search that returns named symbols, not text chunks — ranked, reranked, and budget-aware.
+
 ## What it does
 
 cartog is a code graph indexer that gives LLM coding agents instant structural understanding of a codebase. It replaces repeated grep/cat with targeted graph queries: **83% fewer tokens per query, 97% recall**.
@@ -36,6 +38,8 @@ Measured across 13 scenarios, 10 languages. Best gains on call chain tracing (88
 **vs language servers (LSP):** no startup time, no per-language server, no config. Single binary covers 12 languages (11 code languages + Markdown). Trade-off: ~90% name resolution accuracy vs LSP's full semantic analysis. LSP can be enabled as an optional precision layer.
 
 **vs Serena MCP / codanna / Aider repo-map:** single binary, no LSP requirement, pre-computed graph (not per-query), full query interface over SQLite.
+
+**vs embedding-search tools (chunk + vector):** tools that chunk files and embed them find code by concept but return file-and-line *chunks* — the agent still opens and reads to learn what matched, and ranking is vector-similarity only. cartog returns the **named symbol** (kind, signature, span), then adds a **cross-encoder re-ranker** and **in-degree centrality** that chunk-only ranking lacks, and **LSP-precise edges** so the same index that finds code also traces it. Embeddings run **in-process** (local ONNX) — no external Ollama/OpenAI server is required to index at all (it stays a clean opt-in). The symbol-level pipeline + AST-aware compaction also keep indexing fast: in internal benchmarking, holding the embedding backend constant, cartog's pipeline indexed materially faster than a chunk-based approach, and faster still on its default in-process ONNX.
 
 ## Distribution
 
