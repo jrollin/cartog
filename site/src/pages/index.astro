@@ -5,7 +5,7 @@ import { withBase } from "../lib/url";
 
 <Base
   title="Cartog — Code Graph Navigator & Semantic Search for AI Coding Agents"
-  description="Cartog is a local code graph indexer for LLM coding agents: pre-computed symbols, calls, imports and impact analysis queried in microseconds. Single Rust binary, 100% local, 12 languages, MCP server built in."
+  description="Cartog is a local code graph indexer for LLM coding agents: pre-computed symbols, calls, imports and impact analysis queried in microseconds. Single Rust binary, 100% local, 15 languages plus React/Vue/Svelte/Astro, MCP server built in."
   ogType="website"
   ogUrl="https://jrollin.github.io/cartog/"
   footerVariant="home"
@@ -22,7 +22,7 @@ import { withBase } from "../lib/url";
 
       <p class="subtitle">
         Semantic search that returns named symbols, not text chunks — ranked, reranked, budget-aware. <br/>
-        Single Rust binary, 12 languages, 100% local. MCP server built in.
+        Single Rust binary, 15 languages, 100% local. MCP server built in.
       </p>
 
       <!-- Stats bar: anchor the value claim before showing the demo -->
@@ -132,7 +132,7 @@ import { withBase } from "../lib/url";
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.08s;">
           <h3><span class="feature-icon">📚</span> <code>cartog index</code></h3>
-          <p>tree-sitter parses 12 languages into a local SQLite file. Incremental on re-runs; only changed files re-parse. Pair with <code>cartog watch</code> for auto-refresh.</p>
+          <p>tree-sitter parses 15 languages into a local SQLite file. Incremental on re-runs; only changed files re-parse. Pair with <code>cartog watch</code> for auto-refresh.</p>
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.16s;">
           <h3><span class="feature-icon">🛠️</span> <code>cartog ide</code> <span style="font-size: 11px; color: var(--text-tertiary); font-weight: 500;">(optional)</span></h3>
@@ -233,7 +233,7 @@ import { withBase } from "../lib/url";
   <section class="languages-section">
     <div class="container">
       <div class="section-label">Languages</div>
-      <h2 class="section-heading">12 languages supported <span style="font-size: 14px; font-weight: 500; color: var(--text-tertiary);">— more coming</span></h2>
+      <h2 class="section-heading">15 languages supported <span style="font-size: 14px; font-weight: 500; color: var(--text-tertiary);">— more coming</span></h2>
       <div class="lang-grid-fixed">
         <span class="lang-tag">
           <img src={withBase("assets/python.svg")} width="20" height="20" alt="">
@@ -280,8 +280,41 @@ import { withBase } from "../lib/url";
           Kotlin
         </span>
         <span class="lang-tag">
+          <img src={withBase("assets/vue.svg")} width="20" height="20" alt="">
+          Vue
+        </span>
+        <span class="lang-tag">
+          <img src={withBase("assets/svelte.svg")} width="20" height="20" alt="">
+          Svelte
+        </span>
+        <span class="lang-tag">
+          <img src={withBase("assets/astro.svg")} width="20" height="20" alt="">
+          Astro
+        </span>
+        <span class="lang-tag">
           <img src={withBase("assets/markdown.svg")} width="20" height="20" alt="">
           Markdown
+        </span>
+      </div>
+      <div class="section-label" style="margin-top: 48px;">Frameworks</div>
+      <h2 class="section-heading">Component-aware <span style="font-size: 14px; font-weight: 500; color: var(--text-tertiary);">— JSX & SFC render edges</span></h2>
+      <p style="color: var(--text-secondary); max-width: 640px; margin: -8px 0 24px;">Rendering <code>&lt;Counter /&gt;</code> becomes a <code>calls</code> edge, so component composition is part of the call graph — <code>impact</code>, <code>trace</code>, and <code>refs</code> see it.</p>
+      <div class="lang-grid-fixed">
+        <span class="lang-tag">
+          <img src={withBase("assets/react.svg")} width="20" height="20" alt="">
+          React
+        </span>
+        <span class="lang-tag">
+          <img src={withBase("assets/vue.svg")} width="20" height="20" alt="">
+          Vue
+        </span>
+        <span class="lang-tag">
+          <img src={withBase("assets/svelte.svg")} width="20" height="20" alt="">
+          Svelte
+        </span>
+        <span class="lang-tag">
+          <img src={withBase("assets/astro.svg")} width="20" height="20" alt="">
+          Astro
         </span>
       </div>
     </div>
@@ -352,7 +385,7 @@ import { withBase } from "../lib/url";
               <td>Language coverage</td>
               <td>any</td>
               <td>1 per server</td>
-              <td>12 languages</td>
+              <td>15 languages</td>
             </tr>
             <tr>
               <td>Semantic search</td>
@@ -391,7 +424,7 @@ import { withBase } from "../lib/url";
         <div class="why-card" data-reveal style="--reveal-delay: 0.08s;">
           <div class="why-number">02</div>
           <h3>A language server</h3>
-          <p>LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 12 languages with one binary and answers in microseconds. When you need LSP precision, cartog uses it as an optional layer.</p>
+          <p>LSPs give perfect precision but require per-language setup, take seconds to start, and only cover one language at a time. Cartog covers 15 languages with one binary and answers in microseconds. When you need LSP precision, cartog uses it as an optional layer.</p>
         </div>
         <div class="why-card" data-reveal style="--reveal-delay: 0.16s;">
           <div class="why-number">03</div>

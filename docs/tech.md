@@ -9,7 +9,7 @@
 | Crate | Purpose | Notes |
 |-------|---------|-------|
 | `tree-sitter` 0.26 | Incremental parsing, CST traversal | Pinned — grammar crates lag by one minor |
-| `tree-sitter-{lang}` 0.2–0.25 | Per-language grammars (Python, TS/JS, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, Markdown) | Each ~1-2 MB of generated C |
+| `tree-sitter-{lang}` 0.2–1.0 | Per-language grammars (Python, TS/JS, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, Vue, Svelte, Astro, Markdown) | Each ~1-2 MB of generated C |
 | `rusqlite` (bundled) | SQLite storage, zero external deps | `bundled` compiles SQLite from C source — no system `libsqlite3-dev` required. Critical for cross-compilation to 4 release targets |
 | `clap` (derive) | CLI argument parsing | `ValueEnum` derive for type-safe `--kind` filters with shell completion |
 | `serde` + `serde_json` | JSON serialization for `--json` output | `to_string_pretty` for readability in both terminal and agent contexts |
@@ -63,7 +63,7 @@ end-to-end task cost).
 
 ## Benchmarks
 
-Three distinct surfaces, all rooted in `benchmarks/fixtures/` (10 language webapps):
+Three distinct surfaces, all rooted in `benchmarks/fixtures/` (10 code-language webapps + 3 SFC apps: vue/svelte/astro):
 
 - **Shell suite** (`benchmarks/token_savings.sh`, 13 scenarios × fixtures) — per-query
   token efficiency and recall versus grep/cat. Run with `make bench`.
@@ -86,7 +86,7 @@ simply never names the fourth (criterion's regex filter cannot express exclusion
 | Target | Crate | Scope | Runtime ONNX | CI |
 |--------|-------|-------|--------------|-----|
 | `queries` | `cartog` | 8 query ops (search/refs/impact/outline/callees/hierarchy/deps/stats), Python + Java | no | ✅ |
-| `indexing` | `cartog-indexer` | `index_full_force/<lang>` over all 10 fixtures + 2 incremental scenarios | no (crate has no `cartog-rag` dep) | ✅ |
+| `indexing` | `cartog-indexer` | `index_full_force/<lang>` over all 13 fixtures + 2 incremental scenarios | no (crate has no `cartog-rag` dep) | ✅ |
 | `rag_search` | `cartog` | `hybrid_search` (FTS5 + vector KNN + RRF) via a deterministic stub provider | no (stub vectors) | ✅ |
 | `rag_onnx` | `cartog` | real fastembed embed + cross-encoder rerank | **yes** | ❌ opt-in (`make bench-onnx`) |
 
@@ -95,7 +95,7 @@ so the compiler cannot constant-fold literal inputs or eliminate unused results 
 without it the µs-scale query benches would risk measuring nothing. Query latency
 is language-agnostic (same SQL regardless of source language), so it is benched on
 Python + Java only; per-language cost lives in the tree-sitter grammar/extractor,
-so `index_full_force` is parameterized across all 10 fixtures. The shared scenario
+so `index_full_force` is parameterized across all 13 fixtures. The shared scenario
 bodies live in `cartog_indexer::bench_support` so `queries` and `indexing` cannot
 drift. On PRs the CI `bench` job establishes a same-runner baseline at the merge
 base and reports a `--baseline` delta (controlling for runner variance); it is

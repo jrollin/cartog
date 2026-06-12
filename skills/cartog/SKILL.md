@@ -13,7 +13,7 @@ description: >-
   or needs to navigate code, locate definitions, search code by concept or behavior,
   trace dependencies, assess blast radius of changes, explore how a feature is implemented,
   support refactoring (rename, extract, move, delete), or explore an unfamiliar codebase.
-  Supports Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, and Markdown documents.
+  Supports Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, Vue, Svelte, Astro, and Markdown documents, plus React/JSX and Vue/Svelte/Astro component-usage edges.
 ---
 
 # cartog — Code Graph Navigation Skill
@@ -532,6 +532,8 @@ For the full 3-phase workflow (heuristic → LSP upgrade → verify), see `refer
 
 - Heuristic resolution is name-based (~25% of edges resolved). With LSP enabled, ~42-81% resolved depending on language. Remaining unresolved edges are mostly calls to external libraries.
 - Code languages: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin.
+- Frontend SFCs: Vue (`.vue`), Svelte (`.svelte`), Astro (`.astro`) — symbols/edges from the `<script>`/frontmatter block; template markup is not indexed.
+- Frameworks: React/JSX and SFC component usage (`<Counter/>`) becomes a `Calls` edge (uppercase/dotted tags only; lowercase HTML elements are skipped).
 - Documents: Markdown (`.md`) — indexed by heading sections for semantic search.
 - Does not index string literals, comments (except docstrings), or config values.
 - Method resolution is name-based without LSP — `foo.bar()` resolves `bar`, not `Foo.bar` specifically. LSP resolves to the exact type when a language server is available.

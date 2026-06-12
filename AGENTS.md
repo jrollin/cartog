@@ -36,7 +36,7 @@ make eval-skill            # LLM-as-judge skill evaluation (requires claude CLI)
 make eval-agents           # LLM-as-judge agent evaluation (requires claude CLI)
 make bench                 # shell benchmark suite (13 scenarios x 10 languages)
 make bench-resolution      # edge-resolution rate (heuristic + host LSP, all languages; saves a provenance snapshot)
-make bench-resolution-docker # same, LSP servers via Docker images (all 10, strict — no host fallback); `make lsp-images` builds them
+make bench-resolution-docker # same, LSP servers via Docker images (all 13, strict — no host fallback); `make lsp-images` builds them
 make bench-resolution-scale # synthetic N-vs-2N repo, asserts index time stays near-linear (quadratic-regression guard, cf. #110)
 make bench-criterion       # ONNX-free criterion benches (queries, per-language indexing, hybrid search)
 make bench-onnx            # real-model embed/rerank benches (needs `cartog rag setup`; not in CI)
@@ -78,7 +78,7 @@ See [docs/structure.md](docs/structure.md) for full directory tree and module re
 crates/cartog/         (binary — CLI dispatch, config, self-update)
 ├── cartog-core        (Symbol, Edge, SymbolKind, detect_language)
 ├── cartog-db          (SQLite: core + RAG schema, edge resolution)
-├── cartog-languages   (tree-sitter extractors, 12 languages)
+├── cartog-languages   (tree-sitter extractors, 15 languages + SFC/JSX)
 ├── cartog-indexer     (walk + extract + store, Merkle hashing)
 ├── cartog-rag         (embeddings, hybrid search, reranker)
 ├── cartog-lsp         (LSP-based edge resolution — default feature)
@@ -100,9 +100,12 @@ Returns `Vec<Symbol>` + `Vec<Edge>`. After all files are extracted, `db.resolve_
 
 ## Adding a New Language
 
-Grammar crates must export `LANGUAGE: LanguageFn` (depend on `tree-sitter-language`),
-not a legacy `language()` fn, to link against the pinned `tree-sitter` core — verify
-with a one-line parse smoke test before writing the extractor.
+Grammar crates should export `LANGUAGE: LanguageFn` (depend on `tree-sitter-language`)
+to link against the pinned `tree-sitter` core. A legacy `language()` fn also works
+*iff* the crate pins the same core (e.g. `tree-sitter-vue-updated` returns a `Language`
+from core 0.26 directly — call `language()`, don't wrap in `Language::new`); an old
+core yields a different `tree_sitter::Language` type that won't typecheck. Verify with
+a one-line parse smoke test against the workspace core before writing the extractor.
 
 **Core extractor:**
 
@@ -191,7 +194,8 @@ Consequences to respect on every change:
 
 ## Current State
 
-- **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, Markdown
+- **Languages**: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, Vue, Svelte, Astro, Markdown
+- **Frameworks**: React, Vue, Svelte, Astro. SFCs (`.vue/.svelte/.astro`) slice the `<script>`/frontmatter block, delegate to the JS/TS extractor, and remap byte/line offsets back to the full file (`crates/cartog-languages/src/sfc.rs`). JSX component usage (`<Counter/>`) emits a `Calls` edge in `.jsx/.tsx` and inside SFC scripts (`is_jsx_component` filter in `js_shared.rs` — uppercase/dotted tag = component, lowercase = intrinsic, skipped)
 - **CLI**: 27 top-level commands (`init`, `ide`, `install`, `index`, `search`, `outline`, `refs`, `callees`, `impact`, `trace`, `context`, `hierarchy`, `deps`, `stats`, `savings`, `map`, `changes`, `config`, `doctor`, `watch`, `serve`, `push`, `pull`, `completions`, `manpage`, plus `rag` with 3 subcommands and `self` with 4 subcommands; `self update` has `--check`/`--defer`[`--to <version>`]/`--apply-pending` modes) + MCP server (16 tools)
 - **Indexing**: incremental (git-based + SHA-256 + Merkle-tree symbol diffing), `--force` re-index. Stable symbol IDs (`file:kind:qualified_name`) survive line movements. Scoped edge resolution for changed files only. Live progress: climbing per-phase counters (`parsing M/N`, `storing M/N`, `resolving M/N edges with LSP`) on the CLI spinner and via MCP `notifications/progress`. LSP `definition` requests are pipelined in windows of 64 (~33% faster index on large repos). `cartog index` is Ctrl-C cancellable (cooperative probe through the LSP phase; the whole pass rolls back, so a re-run redoes it). `cartog rag index` is likewise Ctrl-C cancellable (flushed embedding batches persist, so a plain re-run resumes); MCP `cartog_index`/`cartog_rag_index` honor `notifications/cancelled`. When a live `cartog serve` holds the same DB's lock, `cartog index` defers its LSP pass to that peer's warm servers (serve slot only — never watch-only peers; never on a first index; `--force` runs locally; stderr `note:` + `lsp_deferred_to_peer` in `--json`). The MCP `cartog_index` reopens state-4 (heuristic-exhausted) seals before its warm pass — re-sealing if no server starts — and catch-up-resolves a sealed backlog even on no-op (0 dirty files) calls, latching off per session when no LSP server is available
 - **Search**: symbol search (`cartog search`), hybrid FTS5+vector RAG search with RRF merge and cross-encoder re-ranking
@@ -212,5 +216,6 @@ Consequences to respect on every change:
 - **Pluggable embedding providers**: local ONNX (default), Ollama, and a generic OpenAI-compatible `/v1/embeddings` provider (OpenAI, Mistral, Voyage, Jina, OVHcloud, or local `/v1` servers — switch vendors via `base_url`; API key from an env var named by `[embedding.openai] api_key_env`, never in TOML; Azure's deployment-path shape is out of scope), configured via `.cartog.toml`
 - **Secret redaction**: default-on, best-effort. Scrubs common secret patterns (AWS/GitHub/Slack/Stripe/JWT + quoted key=value assignments) from `symbol_content`, `signature`, `docstring`, and embeddings; always excludes sensitive files (`.env`, `*.pem`, `id_rsa`, ...). Toggling `[security] redact_secrets` force-reindexes. See [docs/tech.md](docs/tech.md#secret-redaction)
 - **Feature flags**: binary `cartog` default = `lsp` + `remote-s3` + `ollama-embedding` + `openai-embedding` (all on); advanced users strip via `--no-default-features`. Runtime embedding default stays local ONNX (`provider = "local"`); Ollama and OpenAI are opt-in via `.cartog.toml`. Crate `cartog-rag` — `provider-local` (default), `provider-ollama`, `provider-openai`
-- **LSP command override**: `[lsp.<lang>] command = [...]` runs a custom (e.g. Dockerized) LSP server instead of the PATH-resolved `ServerSpec`. `${ROOT}` in any argv element expands to the host-absolute project root; path mirroring (`-v ${ROOT}:${ROOT} -w ${ROOT}`) is mandatory because cartog exchanges host-path `file://` URIs. `LspManager::with_overrides`; threaded via `config::to_lsp_overrides` → `index_directory`/`run_server` (watch passes none — it never runs LSP). See [docs/usage.md](docs/usage.md). All 10 languages have a pinned `benchmarks/lsp-images/<lang>.Dockerfile`; `resolution_rate.sh --docker-lsp` runs each via its `cartog-lsp-<lang>:stable` image (strict, no host fallback) and all resolve identically to host. A command-override server gets `processId: null` (its host PID is absent from a container's PID namespace; without this, pyright/typescript-language-server honor the LSP parent-liveness check and exit at startup).
+- **LSP command override**: `[lsp.<lang>] command = [...]` runs a custom (e.g. Dockerized) LSP server instead of the PATH-resolved `ServerSpec`. `${ROOT}` in any argv element expands to the host-absolute project root; path mirroring (`-v ${ROOT}:${ROOT} -w ${ROOT}`) is mandatory because cartog exchanges host-path `file://` URIs. `LspManager::with_overrides`; threaded via `config::to_lsp_overrides` → `index_directory`/`run_server` (watch passes none — it never runs LSP). See [docs/usage.md](docs/usage.md). All 13 LSP languages have a pinned `benchmarks/lsp-images/<lang>.Dockerfile`; `resolution_rate.sh --docker-lsp` runs each via its `cartog-lsp-<lang>:stable` image (strict, no host fallback) and all resolve identically to host. A command-override server gets `processId: null` (its host PID is absent from a container's PID namespace; without this, pyright/typescript-language-server honor the LSP parent-liveness check and exit at startup).
+- **Frontend SFCs + JSX** (`crates/cartog-languages/src/sfc.rs`): Vue/Svelte/Astro extractors parse the envelope grammar (`tree-sitter-vue-updated`/`-svelte-ng`/`-astro-next`), locate each `<script>`/frontmatter region (Vue/Astro may have several), slice its content, delegate to the JS or TS extractor (`lang="ts"` → TS, else JS), then remap byte/line offsets back so the indexer's full-file Merkle re-slice stays exact. JSX component usage emits `Calls` edges via a `jsx_query` in `js_shared.rs` (covers `.jsx/.tsx` and SFC scripts). LSP edge resolution uses dedicated SFC servers (`vue-language-server`/`svelteserver`/`astro-ls`) — the resolver groups edges by `detect_language` and queries the real `.vue/.svelte/.astro` file at the remapped full-file positions, so SFC servers resolve them natively
 - **Pending**: next language TBD; Java extractor improvements
