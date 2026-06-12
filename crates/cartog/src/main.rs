@@ -140,13 +140,12 @@ fn main() -> Result<()> {
         "warn"
     };
 
-    // Initialize tracing to stderr for all commands.
-    // - CLI mode: only warnings (e.g., unparseable files) show by default
-    // - Serve / RAG index / Watch mode (TTY): info-level for progress
-    // - Serve / RAG index / Watch mode (piped, e.g. MCP child): warn-only
-    // Stdout stays clean for CLI output and MCP protocol.
+    // Initialize tracing to stderr via `SpinnerSafeWriter`, which clears the
+    // spinner line before each record so info logs and a live spinner coexist
+    // without garbling each other (no more level-based suppression). Stdout
+    // stays clean for CLI output and MCP protocol.
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
+        .with_writer(commands::SpinnerSafeWriter)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level)),

@@ -15,10 +15,14 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use cartog_core::detect_language;
+use cartog_core::{detect_language, PROGRESS_STRIDE};
 use cartog_db::{Database, UnresolvedEdge};
 
 use manager::{DefinitionOutcome, LspManager};
+
+/// Per-edge progress callback for [`lsp_resolve_edges`]: `(done, total)`.
+/// Called synchronously from the resolution loop; keep it cheap.
+pub type LspProgress<'a> = &'a (dyn Fn(u32, u32) + Send + Sync);
 
 /// Summary of an LSP resolution pass.
 #[derive(Debug, Default, Clone, Copy)]
@@ -42,17 +46,36 @@ pub struct LspResolveStats {
 /// Returns counts for `resolved` (state=0 → 1), `marked_unresolvable`
 /// (state=0 → 2, definitive LSP negative), and `marked_external` (state=0 → 3,
 /// LSP located the target outside the indexed root).
+///
+/// `progress`, when `Some`, fires `(done, total)` as edges are processed.
+/// `done` can end below `total` when a language server fails to start or when
+/// an edge's target column can't be located (those edges are never queried).
 pub fn lsp_resolve_edges(
     db: &Database,
     root: &Path,
     shared_manager: Option<&mut LspManager>,
     overrides: &HashMap<String, Vec<String>>,
+    progress: Option<LspProgress<'_>>,
 ) -> Result<LspResolveStats> {
     let unresolved = db.unresolved_edges()?;
 
     if unresolved.is_empty() {
         return Ok(LspResolveStats::default());
     }
+
+    // Total candidate edges before grouping; drives the (done, total) callback.
+    let total = unresolved.len() as u32;
+    let mut processed = 0u32;
+    // Dedup so the post-loop final tick never repeats the last in-loop value
+    // (last edge on a stride boundary, or no server started so it stays 0).
+    let last_emitted = std::cell::Cell::new(u32::MAX);
+    let emit = |processed: u32| {
+        if let Some(cb) = progress {
+            if last_emitted.replace(processed) != processed {
+                cb(processed, total);
+            }
+        }
+    };
 
     // Group by language (derived from file extension)
     let mut by_language: HashMap<String, Vec<UnresolvedEdge>> = HashMap::new();
@@ -84,6 +107,8 @@ pub fn lsp_resolve_edges(
     let mut marked_unresolvable = 0u32;
     let mut marked_external = 0u32;
     let mut any_server_started = false;
+
+    emit(0); // phase-start tick, so the total shows before the first stride
 
     for (language, edges) in &by_language {
         match manager.start(language) {
@@ -177,6 +202,10 @@ pub fn lsp_resolve_edges(
             };
 
             for ((edge, _pos), outcome) in batch.iter().zip(outcomes) {
+                processed += 1;
+                if processed % PROGRESS_STRIDE == 0 {
+                    emit(processed);
+                }
                 match outcome {
                     Ok(Some(DefinitionOutcome::InRoot(loc))) => {
                         match db.find_symbol_at_location(&loc.file_path, loc.line) {
@@ -292,6 +321,8 @@ pub fn lsp_resolve_edges(
             );
         }
     }
+
+    emit(processed); // final tick (deduped): lands on total when every edge ran
 
     if !any_server_started {
         tracing::debug!("LSP: no servers found on PATH, skipping");
@@ -425,7 +456,13 @@ mod tests {
         let edge_id = db.unresolved_edges().unwrap()[0].edge_id;
 
         let tmp = tempfile::tempdir().unwrap();
-        let stats = lsp_resolve_edges(&db, tmp.path(), None, &HashMap::new()).unwrap();
+        let ticks: std::sync::Mutex<Vec<(u32, u32)>> = std::sync::Mutex::new(Vec::new());
+        let cb = |done, total| ticks.lock().unwrap().push((done, total));
+        let stats = lsp_resolve_edges(&db, tmp.path(), None, &HashMap::new(), Some(&cb)).unwrap();
+        // No server ran, so no edges were processed. The phase-start emit(0) and
+        // the post-loop final emit(0) carry the same value; the dedup collapses
+        // them to a single (0, 1) tick rather than a duplicate pair.
+        assert_eq!(ticks.into_inner().unwrap(), vec![(0, 1)]);
         assert_eq!(stats.resolved, 0, "no servers must mean zero resolutions");
         assert_eq!(
             stats.marked_unresolvable, 0,

@@ -364,15 +364,25 @@ fn index_with_optional_lsp(
     };
 
     if result.dirty_files > 0 {
-        if let Some(tx) = progress_tx.as_ref() {
-            let _ = tx.try_send(progress::Phase::Custom("resolving with LSP"));
-        }
         let mut mgr = lsp_manager.lock().map_err(|_| {
             mcp_err("internal error: LSP manager lock poisoned (server restart required)")
         })?;
         let db = db.lock().map_err(|_| {
             mcp_err("internal error: database lock poisoned (server restart required)")
         })?;
+        // Map (done, total) into a counting ResolvingLsp phase; reuses the
+        // indexer label so the wording stays single-sourced.
+        let lsp_progress = progress_tx.as_ref().map(|tx| {
+            let tx = tx.clone();
+            move |done: u32, total: u32| {
+                let _ = tx.try_send(progress::Phase::Indexer(
+                    cartog_indexer::ProgressUpdate::ResolvingLsp { done, total },
+                ));
+            }
+        });
+        let lsp_progress_ref: Option<cartog_lsp::LspProgress<'_>> = lsp_progress
+            .as_ref()
+            .map(|f| f as &(dyn Fn(u32, u32) + Send + Sync));
         // Overrides live on the shared `mgr` (set at construction), so the
         // map passed here is ignored — pass empty.
         match cartog_lsp::lsp_resolve_edges(
@@ -380,6 +390,7 @@ fn index_with_optional_lsp(
             root,
             Some(&mut mgr),
             &std::collections::HashMap::new(),
+            lsp_progress_ref,
         ) {
             Ok(stats) => {
                 result.edges_lsp_resolved = stats.resolved;

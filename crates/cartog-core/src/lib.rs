@@ -17,6 +17,10 @@ use serde::Serialize;
 mod provenance;
 pub use provenance::EdgeProvenance;
 
+/// Emit one progress event per this many work units (files, edges). Shared by
+/// the indexer and LSP resolver so every phase throttles at the same cadence.
+pub const PROGRESS_STRIDE: u32 = 64;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct Symbol {
     pub id: String,

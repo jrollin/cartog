@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use tracing::warn;
 use walkdir::WalkDir;
 
-use cartog_core::{FileInfo, Symbol};
+use cartog_core::{FileInfo, Symbol, PROGRESS_STRIDE};
 use cartog_db::Database;
 use cartog_languages::{detect_language, get_extractor, Extractor};
 
@@ -283,14 +283,16 @@ pub fn render_index_summary(r: &IndexResult) -> String {
 pub enum ProgressUpdate {
     /// Phase 1 starting: walking the directory tree, collecting candidates.
     Walking,
-    /// Phase 2 starting: `total` candidates queued for parallel parse/extract.
-    Parsing { total: u32 },
-    /// Phase 3 starting: `total` parsed files about to be written in the
-    /// indexing transaction.
-    Storing { total: u32 },
-    /// Phase 4 starting: LSP-based edge resolution. Slowest phase on large
-    /// repos and the one most likely to look "stuck", so it gets its own event.
-    ResolvingLsp,
+    /// Phase 2 in progress: `done` of `total` candidates parsed/extracted.
+    /// `done == 0` marks the phase start; subsequent events climb toward `total`.
+    Parsing { done: u32, total: u32 },
+    /// Phase 3 in progress: `done` of `total` parsed files written in the
+    /// indexing transaction. `done == 0` marks the phase start.
+    Storing { done: u32, total: u32 },
+    /// Phase 4 in progress: LSP-based edge resolution, `done` of `total`
+    /// unresolved edges queried. Slowest phase on large repos and the one most
+    /// likely to look "stuck". `done == 0` marks the phase start.
+    ResolvingLsp { done: u32, total: u32 },
 }
 
 impl ProgressUpdate {
@@ -301,9 +303,18 @@ impl ProgressUpdate {
     pub fn label(&self) -> String {
         match self {
             ProgressUpdate::Walking => "scanning files".to_string(),
-            ProgressUpdate::Parsing { total } => format!("parsing {total} files"),
-            ProgressUpdate::Storing { total } => format!("storing {total} files"),
-            ProgressUpdate::ResolvingLsp => "resolving edges with LSP".to_string(),
+            // At phase start (done == 0) keep the terse "parsing N files"; once
+            // files complete, show the climbing "parsing M/N files" counter.
+            ProgressUpdate::Parsing { done: 0, total } => format!("parsing {total} files"),
+            ProgressUpdate::Parsing { done, total } => format!("parsing {done}/{total} files"),
+            ProgressUpdate::Storing { done: 0, total } => format!("storing {total} files"),
+            ProgressUpdate::Storing { done, total } => format!("storing {done}/{total} files"),
+            ProgressUpdate::ResolvingLsp { done: 0, total } => {
+                format!("resolving {total} edges with LSP")
+            }
+            ProgressUpdate::ResolvingLsp { done, total } => {
+                format!("resolving {done}/{total} edges with LSP")
+            }
         }
     }
 }
@@ -484,20 +495,40 @@ pub fn index_directory(
 
     // ── Phase 2: parallel parse + extract (CPU-bound, rayon-worker pool) ──
     check_cancel()?;
+    let parse_total = candidates.len() as u32;
     emit(ProgressUpdate::Parsing {
-        total: candidates.len() as u32,
+        done: 0,
+        total: parse_total,
     });
+    // Rayon workers finish out of order. `parsed_count` assigns each a unique n;
+    // `reported_high` is a running max so a late straggler never emits a `done`
+    // below one already shown (the spinner would otherwise flicker backward).
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let parsed_count = AtomicU32::new(0);
+    let reported_high = AtomicU32::new(0);
     let parsed: Vec<ParseOutput> = candidates
         .par_iter()
         .map(|(abs, rel, lang)| {
-            parse_one_file(
+            let out = parse_one_file(
                 abs,
                 rel,
                 lang,
                 force,
                 stored_hashes.get(rel).map(String::as_str),
                 redact,
-            )
+            );
+            let n = parsed_count.fetch_add(1, Ordering::Relaxed) + 1;
+            if n % PROGRESS_STRIDE == 0 || n == parse_total {
+                // fetch_max returns the prior high; only emit if we raised it,
+                // so emitted `done` is non-decreasing despite out-of-order calls.
+                if reported_high.fetch_max(n, Ordering::Relaxed) < n {
+                    emit(ProgressUpdate::Parsing {
+                        done: n,
+                        total: parse_total,
+                    });
+                }
+            }
+            out
         })
         .collect();
 
@@ -530,6 +561,7 @@ pub fn index_directory(
         .count() as u32;
     check_cancel()?;
     emit(ProgressUpdate::Storing {
+        done: 0,
         total: storing_total,
     });
     let tx = db.begin_indexing_tx()?;
@@ -674,6 +706,12 @@ pub fn index_directory(
         })?;
 
         result.files_indexed += 1;
+        if result.files_indexed % PROGRESS_STRIDE == 0 || result.files_indexed == storing_total {
+            emit(ProgressUpdate::Storing {
+                done: result.files_indexed,
+                total: storing_total,
+            });
+        }
     }
 
     // Remove files that no longer exist. Treat deletions as "dirty" so the
@@ -744,9 +782,16 @@ pub fn index_directory(
         if lsp_ran {
             // Watch (lsp=false) may have sealed edges at state=4; give LSP a shot.
             db.reopen_heuristic_exhausted()?;
-            emit(ProgressUpdate::ResolvingLsp);
-            let stats = cartog_lsp::lsp_resolve_edges(db, &root, None, lsp_overrides)
-                .with_context(|| format!("resolving LSP edges for root {}", root.display()))?;
+            // No phase event is forced here: lsp_resolve_edges fires the first
+            // ResolvingLsp tick only when there are edges to resolve. A run with
+            // zero unresolved edges intentionally shows no "resolving" phase
+            // rather than a misleading "resolving 0 edges" marker.
+            let lsp_progress = |done: u32, total: u32| {
+                emit(ProgressUpdate::ResolvingLsp { done, total });
+            };
+            let stats =
+                cartog_lsp::lsp_resolve_edges(db, &root, None, lsp_overrides, Some(&lsp_progress))
+                    .with_context(|| format!("resolving LSP edges for root {}", root.display()))?;
             result.edges_lsp_resolved = stats.resolved;
             result.edges_marked_unresolvable = stats.marked_unresolvable;
             result.edges_marked_external = stats.marked_external;
@@ -2737,10 +2782,26 @@ We use PostgreSQL with connection pooling via pgbouncer.
 
         assert!(result.files_indexed >= 2);
         let events = events.into_inner().unwrap();
-        assert_eq!(events.len(), 3, "expected 3 phase events, got {events:?}");
         assert_eq!(events[0], ProgressUpdate::Walking);
-        assert!(matches!(events[1], ProgressUpdate::Parsing { total } if total >= 2));
-        assert!(matches!(events[2], ProgressUpdate::Storing { total } if total >= 2));
+        // Each phase opens with done == 0 and later reports done == total.
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ProgressUpdate::Parsing { done: 0, total } if *total >= 2)));
+        assert!(events.iter().any(
+            |e| matches!(e, ProgressUpdate::Parsing { done, total } if done == total && *total >= 2)
+        ));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ProgressUpdate::Storing { done: 0, total } if *total >= 2)));
+        assert!(events.iter().any(
+            |e| matches!(e, ProgressUpdate::Storing { done, total } if done == total && *total >= 2)
+        ));
+        // Phase order: last Walking < first Parsing < first Storing.
+        let pos = |pred: fn(&ProgressUpdate) -> bool| events.iter().position(pred).unwrap();
+        let walking = pos(|e| matches!(e, ProgressUpdate::Walking));
+        let parsing = pos(|e| matches!(e, ProgressUpdate::Parsing { .. }));
+        let storing = pos(|e| matches!(e, ProgressUpdate::Storing { .. }));
+        assert!(walking < parsing && parsing < storing);
     }
 
     #[test]
@@ -2816,14 +2877,77 @@ We use PostgreSQL with connection pooling via pgbouncer.
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, ProgressUpdate::Parsing { total } if *total > 0)),
+                .any(|e| matches!(e, ProgressUpdate::Parsing { total, .. } if *total > 0)),
             "must emit a Parsing event with a positive total"
         );
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, ProgressUpdate::Storing { total } if *total > 0)),
+                .any(|e| matches!(e, ProgressUpdate::Storing { total, .. } if *total > 0)),
             "must emit a Storing event with a positive total"
+        );
+    }
+
+    #[test]
+    fn progress_counter_climbs_mid_phase_for_large_repo() {
+        use cartog_db::Database;
+        use std::sync::Mutex;
+
+        // More than PROGRESS_STRIDE files so the in-loop stride emit fires at
+        // least one intermediate `done` (0 < done < total) — the path the small
+        // 2-file fixtures never exercise.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir(&root).unwrap();
+        let n = PROGRESS_STRIDE * 3 + 5; // 197 files
+        for i in 0..n {
+            std::fs::write(
+                root.join(format!("m{i}.py")),
+                format!("def f{i}():\n    return {i}\n"),
+            )
+            .unwrap();
+        }
+
+        let db = Database::open_memory().unwrap();
+        let events: Mutex<Vec<ProgressUpdate>> = Mutex::new(Vec::new());
+        let cb = |u: ProgressUpdate| events.lock().unwrap().push(u);
+        index_directory(
+            &db,
+            &root,
+            true,
+            false,
+            Some(&cb),
+            None,
+            crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        let events = events.into_inner().unwrap();
+        // A climbing parse event with done strictly between 0 and total.
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ProgressUpdate::Parsing { done, total } if *done > 0 && *done < *total
+            )),
+            "expected a mid-climb Parsing event, got {events:?}"
+        );
+        // Same for storing.
+        assert!(events.iter().any(|e| matches!(
+            e,
+            ProgressUpdate::Storing { done, total } if *done > 0 && *done < *total
+        )));
+        // Emitted parse `done` values never decrease (out-of-order rayon clamp).
+        let parse_dones: Vec<u32> = events
+            .iter()
+            .filter_map(|e| match e {
+                ProgressUpdate::Parsing { done, .. } => Some(*done),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            parse_dones.windows(2).all(|w| w[0] <= w[1]),
+            "parse done must be non-decreasing, got {parse_dones:?}"
         );
     }
 
