@@ -218,7 +218,7 @@ cartog pre-computes a code graph (symbols + edges) with tree-sitter and stores i
 
 6. **Only fall back to grep/read** when cartog doesn't have what you need (e.g., reading actual implementation logic, string literals, config values).
 
-7. **After making code changes**, run `cartog index .` to update the graph (LSP auto-detected for accurate edges); add `--no-lsp` only when you need a faster heuristic-only pass. If MCP is running with `--watch`, the re-index already happened automatically — skip this step. Only run a manual index in CLI-only sessions: while a `cartog serve` peer is running, `cartog index .` defers its LSP pass to the peer's warm servers (use `cartog index . --force` to run LSP locally anyway).
+7. **After making code changes**, run `cartog index .` to update the graph (LSP auto-detected for accurate edges); add `--no-lsp` only when you need a faster heuristic-only pass. If MCP is running with `--watch`, a *heuristic* re-index already happened automatically — when you need LSP-accurate edges, call the `cartog_index` MCP tool (its warm servers also catch up the heuristic backlog). In CLI-only sessions run the manual index yourself; while a `cartog serve` peer is running, `cartog index .` defers its LSP pass to the peer's warm servers (use `cartog index . --force` to run LSP locally anyway).
 
 8. **If `refs`/`callees`/`impact` look incomplete** (fewer results than you expect), re-index *with* LSP to resolve more edges, then re-run the query. In an MCP session call the `cartog_index` tool — its warm servers also catch up any deferred backlog. In CLI-only sessions run `cartog index .` without `--no-lsp` (add `--force` if a `cartog serve` peer is running, since a plain index defers LSP to it).
 

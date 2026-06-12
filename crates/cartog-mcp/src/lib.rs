@@ -322,6 +322,7 @@ fn mcp_err(msg: impl std::fmt::Display) -> McpError {
 
 /// Outcome of one warm LSP resolution pass (see [`warm_lsp_pass`]).
 #[cfg(feature = "lsp")]
+#[derive(Debug)]
 struct WarmPassOutcome {
     /// State-4 (heuristic-exhausted) edges reopened to state 0 before the pass.
     reopened: u32,
@@ -359,6 +360,14 @@ fn warm_lsp_pass(
         // A cancel must surface as an error (the MCP cancellation contract),
         // not be swallowed as a warning like a genuine LSP-server failure.
         Err(e) if cartog_indexer::is_cancelled(&e) => {
+            // No surrounding tx here (unlike the indexer path): restore the
+            // pre-pass seal so the backlog stays visible to the no-op
+            // catch-up. Best effort — the cancel must still surface.
+            if reopened > 0 {
+                if let Err(seal_err) = db.mark_heuristic_exhausted_in_tx() {
+                    tracing::warn!("re-sealing after a cancelled LSP pass failed: {seal_err:#}");
+                }
+            }
             return Err(mcp_err("indexing cancelled"));
         }
         Err(e) => {
@@ -3523,6 +3532,31 @@ mod tests {
         assert!(!outcome.stats.any_server_started);
         assert_eq!(outcome.resealed, sealed, "serverless pass must re-seal");
         assert_eq!(db.count_edges_in_state(4).unwrap(), sealed);
+        assert_eq!(db.count_edges_in_state(0).unwrap(), 0);
+    }
+
+    #[cfg(feature = "lsp")]
+    #[test]
+    fn warm_lsp_pass_reseals_on_cancel() {
+        // A cancelled pass has no surrounding tx on the MCP path: the reopen
+        // must be undone or the no-op catch-up loses sight of the backlog.
+        let (_tmp, root, db) = sealed_py_fixture();
+        let db = db.lock().unwrap();
+        let sealed = db.count_edges_in_state(4).unwrap();
+        let mut mgr = no_server_manager(&root);
+
+        let tripped: indexer::CancelProbe<'_> = &|| true;
+        let err = warm_lsp_pass(&db, &mut mgr, &root, None, Some(tripped)).unwrap_err();
+
+        assert!(
+            format!("{err:?}").contains("cancelled"),
+            "cancel must surface as an error, got: {err:?}"
+        );
+        assert_eq!(
+            db.count_edges_in_state(4).unwrap(),
+            sealed,
+            "pre-pass seal must be restored on cancel"
+        );
         assert_eq!(db.count_edges_in_state(0).unwrap(), 0);
     }
 
