@@ -1191,6 +1191,7 @@ cartog --tokens 200 outline src/db.rs</pre>
             <tr><td>Markdown</td><td>.md</td><td>document sections (chunked by heading)</td><td>—</td></tr>
           </tbody>
         </table>
+        <p>Vue, Svelte, and Astro index only the <code>&lt;script&gt;</code> block (Astro: the <code>---</code> frontmatter too). Template markup and component tags in the template are not extracted; the symbols and edges above — including JSX usage — refer to code inside those script/frontmatter sections.</p>
 
         <h2 id="performance">Performance</h2>
         <p>Indexing: <strong>69 files / 4k LOC in 95ms</strong> (Python fixture, release build).</p>

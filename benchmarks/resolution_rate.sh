@@ -41,7 +41,7 @@ Usage:
   resolution_rate.sh                 # heuristic, all langs, save snapshot
   resolution_rate.sh --lsp           # add LSP pass (uses host-installed servers)
   resolution_rate.sh --lsp --docker-lsp  # LSP via Docker images (build them first; no host fallback)
-  resolution_rate.sh --fixture rs    # one language (py ts rs go rb java php dart swift kt)
+  resolution_rate.sh --fixture rs    # one language (py ts rs go rb java php dart swift kt vue svelte astro)
   resolution_rate.sh --baseline      # diff vs last saved snapshot (does not overwrite it)
   resolution_rate.sh --no-save       # don't write the snapshot
   CARTOG=target/debug/cartog resolution_rate.sh   # pick a binary

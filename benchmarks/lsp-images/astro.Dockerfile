@@ -16,4 +16,7 @@
 # then replace the tag below with node:22-bookworm-slim@sha256:<digest>.
 FROM node:22-bookworm-slim
 RUN npm i -g @astrojs/language-server@2 typescript
+# Drop root for the server process (the npm install above needs root; the
+# pre-created `node` user ships with the base image).
+USER node
 ENTRYPOINT ["astro-ls", "--stdio"]

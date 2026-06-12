@@ -235,6 +235,11 @@ impl SfcExtractor {
                 }
                 in_range
             });
+            // Drop edges whose source symbol was discarded above, so no outgoing
+            // edge dangles to a symbol that never made it into the graph.
+            let kept: std::collections::HashSet<&str> =
+                sub.symbols.iter().map(|s| s.id.as_str()).collect();
+            sub.edges.retain(|e| kept.contains(e.source_id.as_str()));
 
             out.symbols.append(&mut sub.symbols);
             out.edges.append(&mut sub.edges);
