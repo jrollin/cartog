@@ -60,9 +60,10 @@ pub fn parse_s3_url(url: &str) -> Result<(String, String)> {
 }
 
 /// Stream a file through SHA-256 in fixed-size chunks. Used on push (over the
-/// DB) and on pull (over the freshly downloaded `.partial` file) to verify
-/// the round-trip without loading the whole file into memory — the index can
-/// be hundreds of MB on large repos.
+/// DB) to compute the `x-amz-meta-sha256` header without loading the whole
+/// file into memory — the index can be hundreds of MB on large repos. Pull no
+/// longer calls this: it hashes the download stream in a single pass via
+/// `HashingAsyncWriter` (#69).
 #[cfg(feature = "remote-s3")]
 pub fn sha256_file(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
@@ -122,8 +123,12 @@ mod imp {
     use s3::bucket::Bucket;
     use s3::creds::Credentials;
     use s3::region::Region;
+    use sha2::{Digest, Sha256};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+    use std::pin::Pin;
+    use std::task::{Context as TaskContext, Poll};
+    use tokio::io::AsyncWrite;
 
     /// Actionable suffix for an S3 HTTP error status. 401/403 almost always
     /// mean credentials or bucket policy, not a cartog bug — say so.
@@ -178,6 +183,64 @@ mod imp {
             if self.armed && self.path.exists() {
                 let _ = std::fs::remove_file(&self.path);
             }
+        }
+    }
+
+    /// Tee [`AsyncWrite`] that SHA-256-hashes bytes on their way to `inner`.
+    ///
+    /// Lets pull compute the digest in a single pass over the download stream,
+    /// avoiding a second full read of `.partial` (#69). It hashes only the `n`
+    /// bytes `inner` *acknowledges* per `poll_write`, never the whole input
+    /// buffer — so the finalized hash is provably over the exact byte sequence
+    /// written through it, even under partial writes.
+    struct HashingAsyncWriter<W> {
+        inner: W,
+        hasher: Sha256,
+    }
+
+    impl<W> HashingAsyncWriter<W> {
+        fn new(inner: W) -> Self {
+            Self {
+                inner,
+                hasher: Sha256::new(),
+            }
+        }
+
+        /// Consume the writer and return the lowercase-hex SHA-256 of every byte
+        /// written through it.
+        #[must_use]
+        fn finalize_hex(self) -> String {
+            hex_encode(&self.hasher.finalize())
+        }
+    }
+
+    impl<W: AsyncWrite + Unpin> AsyncWrite for HashingAsyncWriter<W> {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut TaskContext<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            match Pin::new(&mut self.inner).poll_write(cx, buf) {
+                Poll::Ready(Ok(n)) => {
+                    self.hasher.update(&buf[..n]);
+                    Poll::Ready(Ok(n))
+                }
+                other => other,
+            }
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            cx: &mut TaskContext<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(
+            mut self: Pin<&mut Self>,
+            cx: &mut TaskContext<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.inner).poll_shutdown(cx)
         }
     }
 
@@ -341,7 +404,12 @@ mod imp {
         checkpoint_wal(db_path)
             .with_context(|| format!("checkpoint WAL on {}", db_path.display()))?;
 
-        // 3) Hash + schema lookup.
+        // 3) Hash + schema lookup. Push reads the file twice (hash here, then
+        //    stream the body below): S3 wants `x-amz-meta-sha256` in the request
+        //    headers, sent before the body, but a streamed hash is only known
+        //    after it. Trailing checksums (`x-amz-trailer`/`aws-chunked`) would
+        //    fix it, but rust-s3 0.37 has no public API for them. The first read
+        //    is the local file (fast), so we keep the two-read approach (#69).
         let sha = sha256_file(db_path)?;
         let schema = read_schema_version_at(db_path)
             .with_context(|| format!("read schema_version from {}", db_path.display()))?;
@@ -499,19 +567,22 @@ mod imp {
             .build()
             .context("build tokio runtime")?;
 
-        let (expected_sha, schema_meta, commit_meta): (
+        let (actual_sha, expected_sha, schema_meta, commit_meta): (
+            String,
             Option<String>,
             Option<u32>,
             Option<String>,
         ) = rt.block_on(async {
             let bucket = build_bucket(&bucket_name, remote_cfg, no_sign_request)?;
 
-            // 3) Stream-download to .partial.
-            let mut out = tokio::fs::File::create(&partial)
+            // 3) Stream-download to .partial, hashing the bytes as they flow so
+            //    we don't re-read the file to verify the checksum (#69).
+            let out = tokio::fs::File::create(&partial)
                 .await
                 .with_context(|| format!("create {}", partial.display()))?;
+            let mut tee = HashingAsyncWriter::new(out);
             let status = bucket
-                .get_object_to_writer(&key, &mut out)
+                .get_object_to_writer(&key, &mut tee)
                 .await
                 .context("S3 download failed")?;
             if !(200..300).contains(&status) {
@@ -520,6 +591,14 @@ mod imp {
                     http_status_hint(status)
                 );
             }
+            // Shut down the writer so its final buffered bytes reach the OS
+            // before we hand `.partial` to the schema/rename steps below. The
+            // digest itself is over the bytes written through the tee (in
+            // memory), not a re-read of the file.
+            tokio::io::AsyncWriteExt::shutdown(&mut tee)
+                .await
+                .with_context(|| format!("flush {}", partial.display()))?;
+            let actual_sha = tee.finalize_hex();
 
             // 4) HEAD to read metadata (sha256 + schema_version).
             let (head, code) = bucket
@@ -548,11 +627,11 @@ mod imp {
                     )
                 })?),
             };
-            Ok::<_, anyhow::Error>((sha, schema, commit))
+            Ok::<_, anyhow::Error>((actual_sha, sha, schema, commit))
         })?;
 
-        // 5) Verify SHA-256 against object metadata.
-        let actual_sha = sha256_file(&partial)?;
+        // 5) Verify SHA-256 against object metadata. `actual_sha` was computed
+        //    in a single pass over the download stream above (#69) — no re-read.
         match expected_sha.as_deref() {
             Some(want) if want == actual_sha => { /* OK */ }
             Some(want) => {
@@ -777,6 +856,113 @@ mod imp {
             assert_eq!(commit_suffix(Some("12é34")), ", commit=1234");
             // Nothing hex-like → no suffix (safe default).
             assert_eq!(commit_suffix(Some("zzz!!!")), "");
+        }
+
+        // The acceptance-criteria invariant for #69: the streamed hash must equal
+        // the SHA-256 of the exact bytes that landed on disk. We pin it against
+        // `sha256_file`, the function pull used to call for the second read.
+        #[tokio::test]
+        async fn hashing_writer_hash_equals_sha256_of_written_bytes() {
+            use tokio::io::AsyncWriteExt;
+            let payload = b"the quick brown fox\njumps over the lazy dog\n";
+
+            let mut tee = HashingAsyncWriter::new(Vec::new());
+            tee.write_all(payload).await.unwrap();
+            tee.shutdown().await.unwrap();
+            let streamed = tee.finalize_hex();
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("payload.bin");
+            std::fs::write(&path, payload).unwrap();
+            let on_disk = sha256_file(&path).unwrap();
+
+            assert_eq!(streamed, on_disk);
+        }
+
+        #[tokio::test]
+        async fn hashing_writer_handles_multi_chunk_writes() {
+            use tokio::io::AsyncWriteExt;
+            let chunks: [&[u8]; 3] = [b"first-", b"second-", b"third"];
+
+            let mut tee = HashingAsyncWriter::new(Vec::new());
+            for chunk in chunks {
+                tee.write_all(chunk).await.unwrap();
+            }
+            tee.shutdown().await.unwrap();
+            let streamed = tee.finalize_hex();
+
+            // Several writes hash the same as one write of the concatenation
+            // (the tee accumulates across calls). Short-write handling is
+            // covered separately by the OneBytePerWrite test below.
+            let mut whole = HashingAsyncWriter::new(Vec::new());
+            whole.write_all(b"first-second-third").await.unwrap();
+            whole.shutdown().await.unwrap();
+            assert_eq!(streamed, whole.finalize_hex());
+        }
+
+        #[tokio::test]
+        async fn hashing_writer_inner_receives_all_bytes() {
+            use tokio::io::AsyncWriteExt;
+            let payload = b"tee duplicates, it does not divert";
+
+            let mut tee = HashingAsyncWriter::new(Vec::new());
+            tee.write_all(payload).await.unwrap();
+            tee.shutdown().await.unwrap();
+
+            assert_eq!(tee.inner.as_slice(), payload);
+        }
+
+        /// An `AsyncWrite` that accepts at most one byte per `poll_write`,
+        /// forcing the short-write path a real `tokio::fs::File` exhibits under
+        /// backpressure. `write_all` re-submits the remaining tail.
+        struct OneBytePerWrite(Vec<u8>);
+
+        impl AsyncWrite for OneBytePerWrite {
+            fn poll_write(
+                mut self: Pin<&mut Self>,
+                _cx: &mut TaskContext<'_>,
+                buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                if buf.is_empty() {
+                    return Poll::Ready(Ok(0));
+                }
+                self.0.push(buf[0]);
+                Poll::Ready(Ok(1))
+            }
+            fn poll_flush(
+                self: Pin<&mut Self>,
+                _cx: &mut TaskContext<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                _cx: &mut TaskContext<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        // Guards the `&buf[..n]` invariant: under short writes the tee must hash
+        // only the acknowledged byte each call, so the total equals the
+        // full-buffer hash. Hashing the whole `buf` (a plausible regression)
+        // would over-count every retried tail and diverge here.
+        #[tokio::test]
+        async fn hashing_writer_hashes_only_acknowledged_bytes_under_short_writes() {
+            use tokio::io::AsyncWriteExt;
+            let payload = b"short-write stress: every poll_write takes one byte";
+
+            let mut tee = HashingAsyncWriter::new(OneBytePerWrite(Vec::new()));
+            tee.write_all(payload).await.unwrap();
+            tee.shutdown().await.unwrap();
+            assert_eq!(tee.inner.0.as_slice(), payload, "inner got every byte");
+            let short = tee.finalize_hex();
+
+            let mut whole = HashingAsyncWriter::new(Vec::new());
+            whole.write_all(payload).await.unwrap();
+            whole.shutdown().await.unwrap();
+
+            assert_eq!(short, whole.finalize_hex());
         }
     }
 }
