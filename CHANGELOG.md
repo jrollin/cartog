@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.29.0] - 2026-06-15
+
+### Documentation
+
+- Add article 5 (MCP server) to README and site articles section ([`809702e`](https://github.com/jrollin/cartog/commit/809702e61539f7b53aa691c76b507be74a677084))
+- **architecture**: Add concurrency model explainer ([`26cafc5`](https://github.com/jrollin/cartog/commit/26cafc5580a155053ce5b38c29a5c0fb995e8eda))
+
+### Miscellaneous
+
+- **bench**: Gitignore webapp_kt Eclipse/Buildship artifacts ([`9c5aa2f`](https://github.com/jrollin/cartog/commit/9c5aa2f11490e411456ceb992495d55b35f57d51))
+
+### Performance
+
+- **remote**: Stream-hash pull in a single pass (#69) ([`e534ebc`](https://github.com/jrollin/cartog/commit/e534ebc67d68ff51060f50d71c3de604212d60ca))
+- **db**: Index refs/impact-anchor edge lookups via target_id IN-subquery ([`93e9d55`](https://github.com/jrollin/cartog/commit/93e9d551f1d5d55898f843fca9b196ef2d7d3b2c))
+- **db**: Split impact() recursive OR into two indexed arms ([`7c851da`](https://github.com/jrollin/cartog/commit/7c851daa3a195ad7c1e1b0d1a2788d9eabc9acd7))
+
+### Testing
+
+- **lsp**: Cover auto-response id echo ([`7aad778`](https://github.com/jrollin/cartog/commit/7aad7788452d08b7e244da2a66971973bbd5a1d2))
+
 ## [0.28.0] - 2026-06-12
 
 ### Bug Fixes
