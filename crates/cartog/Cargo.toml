@@ -61,6 +61,9 @@ proptest = { workspace = true }
 # at the workspace level.
 rusqlite = { workspace = true }
 sha2 = { workspace = true }
+# Parse `cartog pull --json` output in `tests/remote_integration.rs`. Already a
+# normal dep above, so no new entry in the lockfile.
+serde_json = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = { workspace = true }

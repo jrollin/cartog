@@ -13,6 +13,8 @@ benchmarks/fixtures/webapp_rs/target/
 benchmarks/fixtures/webapp_swift/.build/
 benchmarks/fixtures/webapp_kt/.gradle/
 benchmarks/fixtures/webapp_kt/build/
+benchmarks/fixtures/webapp_kt/.project
+benchmarks/fixtures/webapp_kt/.settings/
 benchmarks/fixtures/webapp_vue/node_modules/
 benchmarks/fixtures/webapp_svelte/node_modules/
 benchmarks/fixtures/webapp_svelte/.svelte-kit/

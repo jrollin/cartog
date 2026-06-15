@@ -17,6 +17,7 @@ Start here: the root [README](../README.md) for install and quick start.
 - [tech.md](tech.md) — technology stack, architecture decisions, RAG design
 - [structure.md](structure.md) — workspace layout and per-crate links
 - [architecture/incremental-indexing.md](architecture/incremental-indexing.md) — layered change detection, Merkle invariants, failure modes
+- [architecture/concurrency.md](architecture/concurrency.md) — the three concurrency models (rayon / tokio / std::thread), per-site usage, limitations, and impact
 
 ## Release
 

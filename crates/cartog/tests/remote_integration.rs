@@ -161,6 +161,15 @@ fn skip_unless_deps_present() -> bool {
     false
 }
 
+/// Lowercase-hex SHA-256 of `bytes`, matching the binary's `x-amz-meta-sha256`
+/// header format. Several tests fabricate uploads with a matching checksum.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn create_bucket(endpoint: &str, bucket: &str) {
     let st = Command::new("aws")
         .args([
@@ -358,6 +367,103 @@ path_style = true
 
     let dst_bytes = std::fs::read(&dst_db).unwrap();
     assert_eq!(src_bytes, dst_bytes, "round-tripped DB differs from source");
+}
+
+/// End-to-end guard for #69: after a push/pull round-trip, the `sha256` pull
+/// reports must equal an independent hash of the installed file. This proves the
+/// streamed-hash pull path reports a correct, on-disk-consistent digest; the
+/// single-pass streaming behaviour itself (including short writes) is pinned by
+/// the `hashing_writer_*` unit tests in `commands::remote`.
+#[test]
+fn pull_streamed_hash_matches_file_on_disk_against_floci() {
+    if skip_unless_deps_present() {
+        return;
+    }
+    let floci = match FlociContainer::start() {
+        Some(f) => f,
+        None => {
+            eprintln!("SKIP: could not start floci container");
+            return;
+        }
+    };
+    let endpoint = floci.endpoint();
+    create_bucket(&endpoint, "cartog-streamhash");
+
+    let work = tempfile::TempDir::new().unwrap();
+    let repo = work.path().join("repo");
+    let src_db = work.path().join("src.sqlite");
+    let dst_db = work.path().join("dst.sqlite");
+    build_minimal_index(&repo, &src_db);
+
+    let env = &[
+        ("AWS_ACCESS_KEY_ID", "test"),
+        ("AWS_SECRET_ACCESS_KEY", "test"),
+        ("AWS_DEFAULT_REGION", "us-east-1"),
+    ];
+
+    let cfg_dir = work.path().join("cfg");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    std::fs::write(
+        cfg_dir.join(".cartog.toml"),
+        format!(
+            r#"[remote]
+url = "s3://cartog-streamhash/index.sqlite"
+region = "us-east-1"
+endpoint = "{endpoint}"
+path_style = true
+"#
+        ),
+    )
+    .unwrap();
+    let _ = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&cfg_dir)
+        .status();
+
+    let push = Command::new(env!("CARGO_BIN_EXE_cartog"))
+        .args(["--db", &src_db.to_string_lossy(), "push"])
+        .current_dir(&cfg_dir)
+        .envs(env.iter().copied())
+        .output()
+        .unwrap();
+    assert!(
+        push.status.success(),
+        "push failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&push.stdout),
+        String::from_utf8_lossy(&push.stderr)
+    );
+
+    let pull = Command::new(env!("CARGO_BIN_EXE_cartog"))
+        .args(["--db", &dst_db.to_string_lossy(), "pull", "--json"])
+        .current_dir(&cfg_dir)
+        .envs(env.iter().copied())
+        .output()
+        .unwrap();
+    assert!(
+        pull.status.success(),
+        "pull failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&pull.stdout),
+        String::from_utf8_lossy(&pull.stderr)
+    );
+
+    // The streamed hash reported by pull.
+    let parsed: serde_json::Value = serde_json::from_slice(&pull.stdout).unwrap_or_else(|e| {
+        panic!(
+            "pull --json not valid JSON ({e}):\n{}",
+            String::from_utf8_lossy(&pull.stdout)
+        )
+    });
+    let reported_sha = parsed["sha256"]
+        .as_str()
+        .unwrap_or_else(|| panic!("pull --json had no string sha256 field:\n{parsed}"));
+
+    // Independent SHA-256 of the bytes that actually landed on disk.
+    let on_disk_sha = sha256_hex(&std::fs::read(&dst_db).unwrap());
+
+    assert_eq!(
+        reported_sha, on_disk_sha,
+        "streamed pull hash must match the on-disk file hash"
+    );
 }
 
 #[test]
@@ -571,14 +677,7 @@ fn pull_refuses_non_cartog_sqlite_with_valid_sha() {
         .expect("fsync upload.sqlite");
     // Compute the matching sha256 over the frozen bytes — the guard must still
     // refuse this on "not a cartog database" grounds despite the valid sha.
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(&bytes);
-    let sha = h
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+    let sha = sha256_hex(&bytes);
 
     // Upload with sha256 + schema-version headers. Both are now required
     // by pull, so we set both to reach the "schema_version row missing in
@@ -808,15 +907,7 @@ fn upload_with_schema_version(
     }
 
     // Recompute sha256 of the mutated file so the header matches the body.
-    use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(&src_db).unwrap();
-    let mut h = Sha256::new();
-    h.update(&bytes);
-    let sha = h
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+    let sha = sha256_hex(&std::fs::read(&src_db).unwrap());
 
     let st = Command::new("aws")
         .args([
@@ -986,15 +1077,7 @@ fn pull_refuses_git_commit_header_vs_file_mismatch() {
 
     // Hash the real DB so the sha + schema checks pass and we reach the
     // git-commit cross-check. The git-commit header is a deliberate lie.
-    use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(&src_db).unwrap();
-    let mut h = Sha256::new();
-    h.update(&bytes);
-    let sha = h
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+    let sha = sha256_hex(&std::fs::read(&src_db).unwrap());
     let claimed_v = cartog::db::CURRENT_SCHEMA_VERSION;
 
     let st = Command::new("aws")
@@ -1083,15 +1166,7 @@ fn pull_reports_malformed_schema_version_header() {
 
     // Hash the real DB so the sha check passes and we reach the schema-header
     // parse. The header value is deliberately not a u32.
-    use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(&src_db).unwrap();
-    let mut h = Sha256::new();
-    h.update(&bytes);
-    let sha = h
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+    let sha = sha256_hex(&std::fs::read(&src_db).unwrap());
 
     let st = Command::new("aws")
         .args([
