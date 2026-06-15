@@ -98,9 +98,11 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     env:
-      # Deeper proptest exploration than the local default (256); see the `test`
-      # job. This job runs the default-feature property tests.
-      PROPTEST_CASES: 1024
+      # Keep the local default (256) here. The deep 1024-case fuzzing lives in
+      # the uninstrumented `test` job; coverage only needs each branch hit once,
+      # and llvm-cov instrumentation makes 1024 cases ~3-4x slower (the
+      # extractors_never_panic proptest runs all 13 extractors per case).
+      PROPTEST_CASES: 256
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
