@@ -2181,6 +2181,43 @@ mod tests {
     }
 
     #[test]
+    fn test_refs_matches_via_resolved_target_id_short_name() {
+        // The edge's literal target_name is qualified (never equals the short
+        // name), so it only matches `refs("BaseService")` through its resolved
+        // target_id → a symbol named "BaseService". Guards the `target_id IN
+        // (SELECT id ... WHERE name = ?)` arm of refs() against regressing to a
+        // plain `target_name = ?` match. Mirrors the kind-filtered branch too.
+        let db = Database::open_memory().unwrap();
+        let base = test_symbol("BaseService", SymbolKind::Class, "auth/service.php", 1);
+        let child = test_symbol("AuthService", SymbolKind::Class, "auth/service.php", 30);
+        db.insert_symbols(&[base.clone(), child.clone()]).unwrap();
+        db.insert_edge(&Edge::new(
+            &child.id,
+            "App\\Auth\\BaseService",
+            EdgeKind::Inherits,
+            "auth/service.php",
+            30,
+        ))
+        .unwrap();
+        db.resolve_edges().unwrap();
+
+        // Short name finds the edge only via the resolved target_id arm.
+        let by_short = db.refs("BaseService", None).unwrap();
+        assert_eq!(by_short.len(), 1, "short name must match via target_id");
+        assert_eq!(by_short[0].0.target_id.as_ref().unwrap(), &base.id);
+
+        // Same through the kind-filtered branch.
+        let by_short_kind = db.refs("BaseService", Some(EdgeKind::Inherits)).unwrap();
+        assert_eq!(by_short_kind.len(), 1);
+
+        // A non-matching kind filter still excludes it.
+        assert!(db
+            .refs("BaseService", Some(EdgeKind::Calls))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
     fn test_search_exact_match_ranks_first() {
         let db = Database::open_memory().unwrap();
         let exact = test_symbol("parse_config", SymbolKind::Function, "a.py", 1);
@@ -3140,6 +3177,174 @@ mod tests {
         assert!(
             plan.contains("idx_edges_kind_target"),
             "tier-2 must drive off edges(kind, target_name); got plan:\n{plan}"
+        );
+    }
+
+    #[test]
+    fn test_refs_plan_uses_multi_index_or_not_full_scan() {
+        // Plan regression: both refs() branches must resolve via a MULTI-INDEX OR
+        // over the edge target indexes, never the old `OR sym2.name` full scan.
+        let db = Database::open_memory().unwrap();
+        // Populate + ANALYZE: a zero-row DB collapses every plan to a kind-only
+        // scan, hiding the target bound. Selective target_names + half-resolved
+        // target_ids make both MULTI-INDEX OR arms the cheapest plan.
+        let syms: Vec<Symbol> = (0..400)
+            .map(|i| test_symbol(&format!("s{i}"), SymbolKind::Function, "a.py", i))
+            .collect();
+        db.insert_symbols(&syms).unwrap();
+        let edges: Vec<Edge> = (0..400)
+            .map(|i| {
+                let mut e = Edge::new(
+                    &syms[i as usize].id,
+                    format!("t{i}"),
+                    EdgeKind::Calls,
+                    "a.py",
+                    i,
+                );
+                if i % 2 == 0 {
+                    e.target_id = Some(syms[i as usize].id.clone());
+                }
+                e
+            })
+            .collect();
+        db.insert_edges(&edges).unwrap();
+        db.conn.execute_batch("ANALYZE;").unwrap();
+
+        let explain = |sql: &str| -> String {
+            let mut stmt = db.conn.prepare(sql).unwrap();
+            stmt.query_map(params!["x"], |row| row.get::<_, String>(3))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+                .join("\n")
+        };
+        let assert_no_edge_scan = |plan: &str, ctx: &str| {
+            // Core invariant: edges reached by an index, never the old OR-join scan.
+            assert!(
+                !plan.contains("SCAN e\n")
+                    && !plan.ends_with("SCAN e")
+                    && !plan.contains("SCAN edges"),
+                "refs() {ctx} must not full-scan edges; got plan:\n{plan}"
+            );
+        };
+
+        // Unfiltered branch: MULTI-INDEX OR. Assert the full EQP detail (trailing
+        // `(target_name=` / `(target_id=`) so `idx_edges_target` isn't subsumed
+        // by the `idx_edges_target_id` prefix.
+        let unfiltered = explain(
+            "EXPLAIN QUERY PLAN
+             SELECT e.id FROM edges e
+             LEFT JOIN symbols s ON e.source_id = s.id
+             WHERE e.target_name = ?1
+                OR e.target_id IN (SELECT id FROM symbols WHERE name = ?1)",
+        );
+        assert!(
+            unfiltered.contains("MULTI-INDEX OR"),
+            "refs() unfiltered must use a multi-index OR; got plan:\n{unfiltered}"
+        );
+        assert!(
+            unfiltered.contains("idx_edges_target (target_name="),
+            "refs() literal arm must seek idx_edges_target on target_name; got plan:\n{unfiltered}"
+        );
+        assert!(
+            unfiltered.contains("idx_edges_target_id (target_id="),
+            "refs() resolved arm must seek idx_edges_target_id on target_id; got plan:\n{unfiltered}"
+        );
+        assert_no_edge_scan(&unfiltered, "unfiltered");
+
+        // Kind-filtered branch: kind pushed into each OR arm so both stay
+        // target-bounded (composite idx_edges_kind_target + idx_edges_target_id).
+        let kind_filtered = explain(
+            "EXPLAIN QUERY PLAN
+             SELECT e.id FROM edges e
+             LEFT JOIN symbols s ON e.source_id = s.id
+             WHERE (e.target_name = ?1 AND e.kind = 'calls')
+                OR (e.target_id IN (SELECT id FROM symbols WHERE name = ?1)
+                    AND e.kind = 'calls')",
+        );
+        assert!(
+            kind_filtered.contains("MULTI-INDEX OR"),
+            "refs() kind-filtered must use a multi-index OR; got plan:\n{kind_filtered}"
+        );
+        assert!(
+            kind_filtered.contains("idx_edges_kind_target (kind=? AND target_name="),
+            "refs() kind-filtered literal arm must seek (kind, target_name); got plan:\n{kind_filtered}"
+        );
+        assert!(
+            kind_filtered.contains("idx_edges_target_id (target_id="),
+            "refs() kind-filtered resolved arm must seek target_id; got plan:\n{kind_filtered}"
+        );
+        assert_no_edge_scan(&kind_filtered, "kind-filtered");
+    }
+
+    #[test]
+    fn test_impact_recursive_step_avoids_full_edge_scan() {
+        // Plan regression: the impact() recursive step must reach edges through
+        // indexes, never a full SCAN + correlated subquery. The old
+        // `JOIN edges e ON (e.target_name = i.source_name OR EXISTS(...))` form
+        // scanned all edges per frontier row (~310ms at d2 on a real repo);
+        // splitting the OR into two recursive arms keeps each on an index seek
+        // (idx_edges_target and idx_edges_target_id). SQL mirrors impact().
+        let db = Database::open_memory().unwrap();
+        let mut stmt = db
+            .conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 WITH RECURSIVE impacted(edge_id, source_id, target_name, target_id,
+                     kind, file_path, line, resolution_source, source_name, depth) AS (
+                     SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
+                            e.file_path, e.line, e.resolution_source, s.name, 1
+                     FROM edges e LEFT JOIN symbols s ON e.source_id = s.id
+                     WHERE e.target_name = ?1
+                        OR e.target_id IN (SELECT id FROM symbols WHERE name = ?1)
+                     UNION
+                     SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
+                            e.file_path, e.line, e.resolution_source, s.name, i.depth + 1
+                     FROM impacted i
+                     JOIN edges e ON e.target_name = i.source_name
+                     LEFT JOIN symbols s ON e.source_id = s.id
+                     WHERE i.source_name IS NOT NULL AND i.depth < ?2
+                     UNION
+                     SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
+                            e.file_path, e.line, e.resolution_source, s.name, i.depth + 1
+                     FROM impacted i
+                     JOIN symbols t ON t.name = i.source_name
+                     JOIN edges e ON e.target_id = t.id
+                     LEFT JOIN symbols s ON e.source_id = s.id
+                     WHERE i.source_name IS NOT NULL AND i.depth < ?2)
+                 SELECT source_id, MIN(depth) FROM impacted GROUP BY edge_id
+                 ORDER BY depth, edge_id",
+            )
+            .unwrap();
+        let plan = stmt
+            .query_map(params!["x", 3], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        // Assert on the full EQP detail (with the trailing `(target_name=?)` /
+        // `(target_id=?)`): a bare `contains("idx_edges_target")` is subsumed by
+        // `idx_edges_target_id` (prefix), so it would pass even if the literal
+        // arm regressed to a scan. The literal arm must seek idx_edges_target on
+        // target_name; the resolved arm must seek idx_edges_target_id.
+        assert!(
+            plan.contains("idx_edges_target (target_name="),
+            "impact() literal arm must seek idx_edges_target on target_name; got plan:\n{plan}"
+        );
+        assert!(
+            plan.contains("idx_edges_target_id (target_id="),
+            "impact() resolved arm must seek idx_edges_target_id on target_id; got plan:\n{plan}"
+        );
+        assert!(
+            !plan.contains("CORRELATED"),
+            "impact() must not run a correlated subquery per edge; got plan:\n{plan}"
+        );
+        // Direct anti-scan guard (mirrors the refs() plan test): neither
+        // recursive arm may full-scan edges. `SCAN i` over the small frontier
+        // is fine; a `SCAN e`/`SCAN edges` is the regression.
+        assert!(
+            !plan.contains("SCAN e\n") && !plan.ends_with("SCAN e") && !plan.contains("SCAN edges"),
+            "impact() must not full-scan edges; got plan:\n{plan}"
         );
     }
 
