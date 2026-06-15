@@ -255,13 +255,19 @@ impl LspClient {
 
     /// Respond to a server-initiated request with `result: null`.
     fn auto_respond(&mut self, request: &Value) -> Result<()> {
-        let id = request.get("id").cloned().unwrap_or(Value::Null);
-        self.write_message(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": null,
-        }))
+        self.write_message(&build_auto_response(request))
     }
+}
+
+/// Build the auto-response to a server-initiated request: echo its `id` with a
+/// null result, as the LSP spec requires.
+fn build_auto_response(request: &Value) -> Value {
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": null,
+    })
 }
 
 impl Drop for LspClient {
@@ -353,6 +359,28 @@ mod tests {
         let resp = serde_json::json!({"id": 1, "result": null});
         assert!(!is_server_request(&resp));
         assert!(!is_notification(&resp));
+    }
+
+    #[test]
+    fn build_auto_response_echoes_id_with_null_result() {
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 999,
+            "method": "window/workDoneProgress/create",
+            "params": {}
+        });
+        let resp = build_auto_response(&req);
+        assert_eq!(resp["id"], 999);
+        assert_eq!(resp["result"], Value::Null);
+        assert_eq!(resp["jsonrpc"], "2.0");
+        assert!(resp.get("method").is_none()); // a response, not a re-issued request
+    }
+
+    #[test]
+    fn build_auto_response_preserves_string_id() {
+        // LSP ids may be strings; clone keeps the type, not just the value.
+        let req = serde_json::json!({ "id": "abc", "method": "m" });
+        assert_eq!(build_auto_response(&req)["id"], "abc");
     }
 
     #[test]
