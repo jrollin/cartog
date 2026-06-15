@@ -693,6 +693,10 @@ A series on how cartog works, from the code graph to semantic search (English ·
    to re-index only changed symbols, dropping re-index time from seconds to milliseconds.
    [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-incremental-merkle-tree) ·
    [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-incremental-merkle-tree)
+5. **Exposing a code graph as an MCP server** — wiring cartog's 16 tools into the Model Context
+   Protocol so AI agents query structured graph results instead of flooding context with raw files.
+   [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-mcp-server) ·
+   [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-mcp-server)
 
 ## Contributors
 
