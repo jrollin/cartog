@@ -3278,6 +3278,77 @@ mod tests {
     }
 
     #[test]
+    fn test_impact_recursive_step_avoids_full_edge_scan() {
+        // Plan regression: the impact() recursive step must reach edges through
+        // indexes, never a full SCAN + correlated subquery. The old
+        // `JOIN edges e ON (e.target_name = i.source_name OR EXISTS(...))` form
+        // scanned all edges per frontier row (~310ms at d2 on a real repo);
+        // splitting the OR into two recursive arms keeps each on an index seek
+        // (idx_edges_target and idx_edges_target_id). SQL mirrors impact().
+        let db = Database::open_memory().unwrap();
+        let mut stmt = db
+            .conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 WITH RECURSIVE impacted(edge_id, source_id, target_name, target_id,
+                     kind, file_path, line, resolution_source, source_name, depth) AS (
+                     SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
+                            e.file_path, e.line, e.resolution_source, s.name, 1
+                     FROM edges e LEFT JOIN symbols s ON e.source_id = s.id
+                     WHERE e.target_name = ?1
+                        OR e.target_id IN (SELECT id FROM symbols WHERE name = ?1)
+                     UNION
+                     SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
+                            e.file_path, e.line, e.resolution_source, s.name, i.depth + 1
+                     FROM impacted i
+                     JOIN edges e ON e.target_name = i.source_name
+                     LEFT JOIN symbols s ON e.source_id = s.id
+                     WHERE i.source_name IS NOT NULL AND i.depth < ?2
+                     UNION
+                     SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
+                            e.file_path, e.line, e.resolution_source, s.name, i.depth + 1
+                     FROM impacted i
+                     JOIN symbols t ON t.name = i.source_name
+                     JOIN edges e ON e.target_id = t.id
+                     LEFT JOIN symbols s ON e.source_id = s.id
+                     WHERE i.source_name IS NOT NULL AND i.depth < ?2)
+                 SELECT source_id, MIN(depth) FROM impacted GROUP BY edge_id
+                 ORDER BY depth, edge_id",
+            )
+            .unwrap();
+        let plan = stmt
+            .query_map(params!["x", 3], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        // Assert on the full EQP detail (with the trailing `(target_name=?)` /
+        // `(target_id=?)`): a bare `contains("idx_edges_target")` is subsumed by
+        // `idx_edges_target_id` (prefix), so it would pass even if the literal
+        // arm regressed to a scan. The literal arm must seek idx_edges_target on
+        // target_name; the resolved arm must seek idx_edges_target_id.
+        assert!(
+            plan.contains("idx_edges_target (target_name="),
+            "impact() literal arm must seek idx_edges_target on target_name; got plan:\n{plan}"
+        );
+        assert!(
+            plan.contains("idx_edges_target_id (target_id="),
+            "impact() resolved arm must seek idx_edges_target_id on target_id; got plan:\n{plan}"
+        );
+        assert!(
+            !plan.contains("CORRELATED"),
+            "impact() must not run a correlated subquery per edge; got plan:\n{plan}"
+        );
+        // Direct anti-scan guard (mirrors the refs() plan test): neither
+        // recursive arm may full-scan edges. `SCAN i` over the small frontier
+        // is fine; a `SCAN e`/`SCAN edges` is the regression.
+        assert!(
+            !plan.contains("SCAN e\n") && !plan.ends_with("SCAN e") && !plan.contains("SCAN edges"),
+            "impact() must not full-scan edges; got plan:\n{plan}"
+        );
+    }
+
+    #[test]
     fn test_per_file_edge_delete_uses_file_index() {
         // Plan regression: clear_file_data_in_tx's DELETE FROM edges WHERE
         // file_path=? must use an index, not full-scan. A scan makes

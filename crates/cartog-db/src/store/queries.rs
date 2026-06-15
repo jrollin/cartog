@@ -269,10 +269,13 @@ impl Database {
 
     /// Transitive impact analysis: everything reachable within `depth` hops.
     ///
-    /// Evaluated as a single recursive CTE rather than iterating `refs()` per
-    /// frontier node — saves N round-trips and lets SQLite's planner amortize
-    /// the LEFT JOINs. Each unique edge is returned once, labeled with the
-    /// minimum depth at which it was reached.
+    /// Evaluated as one recursive CTE rather than iterating `refs()` per
+    /// frontier node — saves N round-trips. The recursive step is split into
+    /// two complementary arms (a literal `target_name` match and a resolved
+    /// `target_id` match) so each seeks an index instead of full-scanning
+    /// edges; **their UNION must equal the old single OR-join edge set** — keep
+    /// the two arms jointly exhaustive when editing. Each unique edge is
+    /// returned once, labeled with the minimum depth at which it was reached.
     pub fn impact(&self, name: &str, max_depth: u32) -> Result<Vec<(Edge, u32)>> {
         if max_depth == 0 {
             return Ok(Vec::new());
@@ -283,28 +286,40 @@ impl Database {
                 edge_id, source_id, target_name, target_id, kind,
                 file_path, line, resolution_source, source_name, depth
             ) AS (
+                -- Anchor: seed the frontier via the indexed OR-subquery form
+                -- (see refs()) — idx_edges_target + idx_edges_target_id rather
+                -- than a full edges scan.
                 SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
                        e.file_path, e.line, e.resolution_source, s.name, 1
                 FROM edges e
                 LEFT JOIN symbols s ON e.source_id = s.id
-                -- Anchor uses the indexed OR-subquery form (see refs()): seeds
-                -- the frontier via idx_edges_target + idx_edges_target_id
-                -- instead of full-scanning edges. The recursive step below
-                -- still scans (its match correlates on a dynamic CTE column).
                 WHERE e.target_name = ?1
                    OR e.target_id IN (SELECT id FROM symbols WHERE name = ?1)
 
                 UNION
 
+                -- Recursive step, literal arm: an edge whose target_name equals
+                -- a frontier symbol's name. Indexed via idx_edges_target.
                 SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
                        e.file_path, e.line, e.resolution_source, s.name, i.depth + 1
                 FROM impacted i
-                JOIN edges e
-                  ON (e.target_name = i.source_name
-                      OR EXISTS (
-                          SELECT 1 FROM symbols t
-                          WHERE t.id = e.target_id AND t.name = i.source_name
-                      ))
+                JOIN edges e ON e.target_name = i.source_name
+                LEFT JOIN symbols s ON e.source_id = s.id
+                WHERE i.source_name IS NOT NULL AND i.depth < ?2
+
+                UNION
+
+                -- Recursive step, resolved arm: an edge whose resolved target_id
+                -- points at a frontier symbol's name. Splitting this out of the
+                -- literal arm (instead of `OR EXISTS(...)`) turns the recursive
+                -- step from a full edges scan + correlated subquery into two
+                -- index seeks (idx_symbols_name_file → idx_edges_target_id). The
+                -- two arms' UNION equals the old single OR-join edge set.
+                SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind,
+                       e.file_path, e.line, e.resolution_source, s.name, i.depth + 1
+                FROM impacted i
+                JOIN symbols t ON t.name = i.source_name
+                JOIN edges e ON e.target_id = t.id
                 LEFT JOIN symbols s ON e.source_id = s.id
                 WHERE i.source_name IS NOT NULL AND i.depth < ?2
             )
