@@ -35,6 +35,9 @@ proptest = { workspace = true }
 # Pull cartog-rag's deterministic mock providers into tests so the MCP server
 # can be constructed without loading the real ONNX embedding model.
 cartog-rag = { workspace = true, features = ["test-util"] }
+# The e2e progress test drives the server with a real in-process rmcp client
+# over a duplex transport; `client` is test-only, the binary ships server-only.
+rmcp = { workspace = true, features = ["server", "transport-io", "client"] }
 
 [lints]
 workspace = true
