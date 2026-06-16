@@ -133,22 +133,30 @@ const CHANNEL_CAPACITY: usize = 64;
 /// Spawn an async forwarder that consumes [`Phase`] events from `rx` and
 /// pushes them to `notifier` as `notifications/progress` with the given token.
 ///
-/// The MCP spec requires `progress` to strictly increase per token, but each
-/// phase reports a `done` that resets to 0 at its start. The forwarder bridges
-/// this by accumulating a `base` (the summed totals of all completed phases):
-/// within a counting phase it reports `progress = base + done` against
+/// The MCP spec requires `progress` to *increase* with each notification, but
+/// each phase reports a `done` that resets to 0 at its start. The forwarder
+/// bridges this by accumulating a `base` (the summed totals of all completed
+/// phases): within a counting phase it reports `progress = base + done` against
 /// `total = base + phase_total`, so the bar climbs coherently across phases
 /// instead of resetting or overshooting. Marker phases with no counter (walking,
 /// preparing, storing-embeddings) step `progress` by one with no `total`. A new
-/// phase is recognized when the event's [`PhaseKind`] changes; `last_progress`
-/// then clamps the value up so neither a phase boundary nor an out-of-order
-/// rayon emit (which can make `done` jitter) ever makes `progress` dip.
+/// phase is recognized when the event's [`PhaseKind`] changes.
+///
+/// To satisfy the spec's "MUST increase" clause, an internal `last_progress`
+/// clamp keeps the running value non-decreasing across phase boundaries and
+/// out-of-order rayon emits (which can make `done` jitter), and a frame is only
+/// emitted when its `progress` strictly exceeds the last *emitted* value.
+/// Duplicate or straggler events that carry no forward progress are dropped
+/// rather than sent equal, so every notification on the wire strictly increases
+/// (this also tightens flood control). A phase boundary always advances `base`,
+/// so the first frame of a new phase clears the previous one.
 pub fn spawn_forwarder(token: ProgressToken, notifier: Notifier) -> Forwarder {
     let (tx, mut rx) = mpsc::channel::<Phase>(CHANNEL_CAPACITY);
     let join = tokio::spawn(async move {
         let mut base: f64 = 0.0;
         let mut cur: Option<(PhaseKind, u32)> = None; // (kind, total) of the phase in flight
         let mut last_progress: f64 = 0.0;
+        let mut last_emitted: Option<f64> = None; // strictly-increasing wire guard
         while let Some(phase) = rx.recv().await {
             let PhaseProgress {
                 message,
@@ -179,6 +187,12 @@ pub fn spawn_forwarder(token: ProgressToken, notifier: Notifier) -> Forwarder {
                     None
                 }
             };
+            // Spec: progress MUST increase per notification. Drop frames that
+            // would tie or dip the last emitted value (duplicates/stragglers).
+            if last_emitted.is_some_and(|prev| last_progress <= prev) {
+                continue;
+            }
+            last_emitted = Some(last_progress);
             (notifier)(ProgressNotificationParam {
                 progress_token: token.clone(),
                 progress: last_progress,
@@ -303,9 +317,10 @@ mod tests {
         assert_eq!(events[1].message.as_deref(), Some("embedding 512/1024"));
         assert_eq!(events[1].total, Some(1025.0)); // base 1 (preparing) + 1024
         assert_eq!(events[2].message.as_deref(), Some("storing embeddings"));
-        // progress never dips across the marker→counting→marker boundaries.
-        assert!(events[0].progress <= events[1].progress);
-        assert!(events[1].progress <= events[2].progress);
+        // Spec: progress strictly increases across the marker→counting→marker
+        // boundaries (0 → 513 → 1025).
+        assert!(events[0].progress < events[1].progress);
+        assert!(events[1].progress < events[2].progress);
     }
 
     #[tokio::test]
@@ -338,29 +353,33 @@ mod tests {
         fwd.join.await.unwrap();
 
         let e = events.lock().unwrap();
-        assert_eq!(e.len(), 5);
+        // The store phase's first event (done 0) ties the parse phase's final
+        // progress (100), so it is dropped to keep the wire strictly increasing:
+        // 0 → 64 → 100 → 140, four frames, not five.
+        assert_eq!(e.len(), 4);
         // Within the parse phase: 0 → 64 → 100 against total 100.
         assert_eq!((e[0].progress, e[0].total), (0.0, Some(100.0)));
         assert_eq!((e[1].progress, e[1].total), (64.0, Some(100.0)));
         assert_eq!((e[2].progress, e[2].total), (100.0, Some(100.0)));
-        // Store phase folds the finished parse total (100) into the base, so it
-        // climbs 100 → 140 against cumulative total 140 — never resets to 0.
-        assert_eq!((e[3].progress, e[3].total), (100.0, Some(140.0)));
-        assert_eq!((e[4].progress, e[4].total), (140.0, Some(140.0)));
-        // Globally non-decreasing.
+        // Store phase folds the finished parse total (100) into the base and
+        // climbs to 140 against cumulative total 140 — never resets to 0.
+        assert_eq!((e[3].progress, e[3].total), (140.0, Some(140.0)));
+        // Spec: progress strictly increases with each notification.
         for w in e.windows(2) {
-            assert!(w[0].progress <= w[1].progress);
+            assert!(w[0].progress < w[1].progress);
         }
     }
 
     #[tokio::test]
-    async fn out_of_order_done_never_makes_progress_dip() {
+    async fn out_of_order_straggler_is_dropped_not_emitted_equal() {
         let (notifier, events) = capturing_notifier();
         let fwd = spawn_forwarder(token(), notifier);
         let cb = indexer_callback(fwd.tx.clone());
 
         // Rayon workers can emit out of order: a higher done arrives before a
-        // lower one. The clamp must keep progress non-decreasing.
+        // lower one. The straggler clamps to the running max, which ties the
+        // last emitted value — so it is dropped, not sent equal (spec: progress
+        // MUST increase per notification).
         cb(IxU::Parsing {
             done: 0,
             total: 100,
@@ -379,9 +398,39 @@ mod tests {
         fwd.join.await.unwrap();
 
         let e = events.lock().unwrap();
-        assert_eq!(e.len(), 3);
-        assert_eq!(e[1].progress, 64.0);
-        assert_eq!(e[2].progress, 64.0); // clamped up, not 32
+        assert_eq!(e.len(), 2);
+        assert_eq!(e[0].progress, 0.0);
+        assert_eq!(e[1].progress, 64.0); // straggler (clamped to 64) suppressed
+    }
+
+    #[tokio::test]
+    async fn duplicate_events_never_emit_equal_progress() {
+        let (notifier, events) = capturing_notifier();
+        let fwd = spawn_forwarder(token(), notifier);
+        let cb = indexer_callback(fwd.tx.clone());
+
+        // Rayon can re-emit an identical (done, total). The spec requires every
+        // notification to increase, so duplicates are dropped, not sent equal.
+        cb(IxU::Parsing {
+            done: 10,
+            total: 50,
+        });
+        cb(IxU::Parsing {
+            done: 10,
+            total: 50,
+        });
+        cb(IxU::Parsing {
+            done: 10,
+            total: 50,
+        });
+
+        drop(cb);
+        drop(fwd.tx);
+        fwd.join.await.unwrap();
+
+        let e = events.lock().unwrap();
+        assert_eq!(e.len(), 1, "duplicate-progress frames must be suppressed");
+        assert_eq!(e[0].progress, 10.0);
     }
 
     #[tokio::test]

@@ -607,7 +607,22 @@ cartog serve --watch --rag    <span class="comment"># force auto-embed even on a
 
         <p style="font-size: 13px; color: var(--text-tertiary);">The size cap (<code>CARTOG_MCP_MAX_BYTES</code>, default 64&nbsp;KB) counts the text block plus the structured copy: <code>structuredContent</code> is dropped when the combined size would exceed the cap, so an oversized payload can't blow the caller's context window. The two index-write tools (<code>cartog_index</code>, <code>cartog_rag_index</code>) have no <code>outputSchema</code> and report <code>readOnlyHint: false</code> with <code>destructiveHint: false</code> (they only add to the index).</p>
 
-        <p><strong>Progress notifications:</strong> <code>cartog_index</code> and <code>cartog_rag_index</code> emit standard MCP <code>notifications/progress</code> when the client includes a <code>progressToken</code> in the request's <code>_meta</code>. <code>cartog_index</code> reports climbing per-phase counters — <code>scanning files</code>, then <code>parsing M/N files</code>, <code>storing M/N files</code>, and (when the LSP pass runs) <code>resolving M/N edges with LSP</code> — so a phase emits many ticks as it advances. <code>cartog_rag_index</code> emits <code>preparing</code>, one <code>embedding processed/total</code> per ~512-symbol batch, then <code>storing embeddings</code>. The <code>progress</code>/<code>total</code> values accumulate across phases so the bar climbs monotonically; the <code>message</code> field is human-readable, not a contract. Clients that don't supply a <code>progressToken</code> see no notifications.</p>
+        <p><strong>Progress notifications:</strong> <code>cartog_index</code> and <code>cartog_rag_index</code> emit standard MCP <code>notifications/progress</code> when the client includes a <code>progressToken</code> in the request's <code>_meta</code>. <code>cartog_index</code> reports climbing per-phase counters — <code>scanning files</code>, then <code>parsing M/N files</code>, <code>storing M/N files</code>, and (when the LSP pass runs) <code>resolving M/N edges with LSP</code> — so a phase emits many ticks as it advances. <code>cartog_rag_index</code> emits <code>preparing</code>, one <code>embedding processed/total</code> per ~512-symbol batch, then <code>storing embeddings</code>. The <code>progress</code>/<code>total</code> values accumulate across phases, and per the <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/progress">MCP progress spec</a> each emitted notification <strong>strictly increases</strong> <code>progress</code> — duplicate or out-of-order ticks that would not advance the bar are dropped rather than sent equal. The <code>message</code> field is human-readable, not a contract. Clients that don't supply a <code>progressToken</code> see no notifications.</p>
+
+        <p><strong>Seeing the progress bar:</strong> the bar is drawn by the <em>client</em>, not cartog — the server only emits the notifications above. Support varies:</p>
+        <table>
+          <thead>
+            <tr><th>Client</th><th>Sends <code>progressToken</code></th><th>Renders a bar</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Cursor (≥ 1.7.39)</td><td>yes</td><td>yes</td></tr>
+            <tr><td>GitHub Copilot CLI (≥ 0.0.389)</td><td>yes</td><td>yes (text)</td></tr>
+            <tr><td>Claude Code</td><td>no</td><td>no</td></tr>
+            <tr><td>Claude Desktop</td><td>—</td><td>no (received, not surfaced)</td></tr>
+            <tr><td>opencode</td><td>no</td><td>no (no progress handler wired today)</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size: 13px; color: var(--text-tertiary);">In a client that doesn't render progress (Claude Code, Claude Desktop today), the index call is silent until it returns its summary — a client limitation, not a cartog one. To watch a live bar, run <code>cartog index</code> / <code>cartog rag index</code> from the CLI: the terminal spinner shows the same per-phase counters from the identical <code>ProgressUpdate</code> events.</p>
 
         <h3 id="mcp-quickstart">Wiring cartog into editors: <code>cartog ide</code></h3>
         <p><code>cartog ide</code> is the only verb that writes MCP configs. Run it once per machine, plus any time you install a new editor.</p>

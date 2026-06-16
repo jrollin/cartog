@@ -32,6 +32,9 @@ use cartog_watch::{StaleSnapshot, WatchConfig, WatchHandle};
 
 mod progress;
 
+#[cfg(test)]
+mod e2e_progress;
+
 const MAX_IMPACT_DEPTH: u32 = 10;
 const MAX_TRACE_DEPTH: u32 = 20;
 const DEFAULT_CONTEXT_TOKENS: u32 = 6000;
