@@ -102,6 +102,31 @@ base and reports a `--baseline` delta (controlling for runner variance); it is
 `continue-on-error`, so a noisy result never blocks. Run everything ONNX-free
 locally with `make bench-criterion`.
 
+### Token-savings accounting
+
+`cartog stats --savings` / `cartog savings` reports cumulative tokens saved by
+serving graph queries instead of grep+read. The accounting is deliberately
+coarse and honest:
+
+- **Method**: `savings_breakdown` counts rows in the local `query_log` table and
+  multiplies by two flat per-query constants — `TOKENS_PER_QUERY_CARTOG` (~280)
+  and `TOKENS_PER_QUERY_GREP` (~1,700), defined in `cartog-db/src/lib.rs`. Saved
+  = `count × (1,700 − 280)`, ≈83% of the grep baseline. It is **not** a per-call
+  measurement of actual response size — every tool uses the same multiplier, so
+  the by-tool breakdown shows *which* navigation patterns are used, not which
+  saved the most.
+- **Provenance**: the two constants are the aggregate averages from the
+  13-scenario × multi-language shell suite (`benchmarks/token_savings.sh`). The
+  headline "83% fewer tokens" in [product.md](product.md) is the same figure, so
+  the runtime report and the marketing claim stay consistent.
+- **Always-on, not opt-in**: logging runs unconditionally because it is
+  metadata-only — each row stores the tool name, call surface (`cli`/`mcp`), and
+  a unix timestamp. **No query payload is ever recorded and nothing leaves the
+  machine** (see the no-payload note in [usage.md](usage.md#cartog-savings)).
+  Because there is no privacy surface to gate, there is no `.cartog.toml` opt-in
+  switch; read-only MCP attaches skip the write entirely (so multi-server setups
+  undercount rather than double-count).
+
 ## Architecture Decisions
 
 | Decision | Choice | Rationale |
