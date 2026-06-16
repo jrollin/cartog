@@ -127,6 +127,38 @@ pre,
   fill: var(--text);
 }
 
+/* Right-side action cluster: always visible in the bar (so search stays
+   reachable on mobile, not buried behind the hamburger). The toggle inside
+   is hidden on desktop by the existing .nav-toggle rule. */
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.search-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  /* Comfortable touch target (>=40px) without enlarging the icon. */
+  padding: 10px;
+  margin: -10px;
+}
+
+.search-link svg {
+  width: 19px;
+  height: 19px;
+  stroke: var(--text-secondary);
+  transition: stroke 0.2s;
+}
+
+.search-link:hover svg {
+  stroke: var(--text);
+}
+
 .nav-toggle {
   display: none;
   background: none;
@@ -1413,6 +1445,9 @@ td .badge {
   padding: 2px 6px;
   border-radius: 4px;
   color: var(--accent);
+  /* Long inline tokens (cartog_rag_index, env var names) break instead of
+     widening their container (summary rows, list items) on narrow screens. */
+  overflow-wrap: break-word;
 }
 
 .docs-content pre code {
@@ -1423,6 +1458,12 @@ td .badge {
 
 .docs-content table {
   margin-bottom: 16px;
+  /* Wide reference tables (MCP tool shape, config keys) must scroll within
+     their own box on narrow screens instead of widening the whole page.
+     display:block lets overflow-x:auto take effect on the table element. */
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .mcp-client {

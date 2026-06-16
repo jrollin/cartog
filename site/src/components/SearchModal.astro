@@ -1,0 +1,273 @@
+---
+// Docs search overlay, opened from the nav search icon (or Cmd/Ctrl+K).
+// Pagefind builds the static index at `astro build`; this file owns the modal
+// shell + open/close + keyboard handling and instantiates PagefindUI lazily on
+// first open. The index is scoped to regions tagged `data-pagefind-body` (only
+// usage.astro carries it), so results are docs-only. We instantiate PagefindUI
+// directly (rather than the <Search> component) only to point `bundlePath` at
+// the deployment base; Pagefind already resolves result URLs against the loaded
+// bundle, so they come back base-prefixed (`/cartog/usage.html#...`).
+import "@pagefind/default-ui/css/ui.css";
+const base = import.meta.env.BASE_URL; // "/cartog/"
+---
+
+<div id="search-backdrop" class="search-backdrop" aria-hidden="true"></div>
+
+<div
+  id="search-modal"
+  class="search-modal"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="search-modal-title"
+  data-base={base}
+>
+  <div class="search-modal-inner">
+    <div class="search-modal-head">
+      <h2 id="search-modal-title">Search the docs</h2>
+      <button id="search-close" class="search-close" aria-label="Close search">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="search-modal-body">
+      <div id="docs-search" class="pagefind-ui cartog-search"></div>
+    </div>
+    <p class="search-hint">Press <kbd>Esc</kbd> to close · <kbd>⌘</kbd><kbd>K</kbd> to open</p>
+  </div>
+</div>
+
+<script>
+  import { PagefindUI } from "@pagefind/default-ui";
+
+  const backdrop = document.getElementById("search-backdrop");
+  const modal = document.getElementById("search-modal");
+  const closeBtn = document.getElementById("search-close");
+  const openBtns = document.querySelectorAll("[data-open-search]");
+
+  // Astro's BASE_URL, e.g. "/cartog/". Normalized to a single trailing slash.
+  const base = (modal?.dataset.base ?? "/").replace(/\/+$/, "") + "/";
+
+  let initialized = false;
+  function initPagefind() {
+    if (initialized) return;
+    initialized = true;
+    new PagefindUI({
+      element: "#docs-search",
+      bundlePath: base + "pagefind/",
+      showImages: false,
+      showSubResults: true,
+    });
+  }
+
+  function open() {
+    if (!backdrop || !modal) return;
+    initPagefind();
+    document.body.style.overflow = "hidden";
+    backdrop.classList.add("is-open");
+    modal.classList.add("is-open");
+    // Focus the Pagefind input once it has rendered.
+    setTimeout(() => {
+      modal.querySelector<HTMLInputElement>('input[type="text"]')?.focus();
+    }, 60);
+  }
+
+  function close() {
+    if (!backdrop || !modal) return;
+    backdrop.classList.remove("is-open");
+    modal.classList.remove("is-open");
+    document.body.style.overflow = "";
+  }
+
+  openBtns.forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.preventDefault();
+      open();
+    }),
+  );
+  closeBtn?.addEventListener("click", close);
+  backdrop?.addEventListener("click", close);
+
+  // Close the modal when a result is chosen. Pagefind only renders a link on
+  // the title, so clicking the excerpt body does nothing and would leave the
+  // modal open; here the whole row routes to its link. Also needed for
+  // same-page anchor links (#section), which don't reload the page. Sub-results
+  // each sit in a `.pagefind-ui__result-nested` with their own link, so resolve
+  // the nearest nested block first, then fall back to the card's main title.
+  const results = document.getElementById("docs-search");
+  results?.addEventListener("click", (e) => {
+    const el = e.target as HTMLElement;
+    if (el.closest(".pagefind-ui__result-link")) {
+      close();
+      return;
+    }
+    const scope =
+      el.closest(".pagefind-ui__result-nested") ??
+      el.closest(".pagefind-ui__result");
+    const link = scope?.querySelector<HTMLAnchorElement>(
+      ".pagefind-ui__result-link",
+    );
+    if (link) {
+      link.click(); // navigate, which our link handler above then closes
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    const isOpen = modal?.classList.contains("is-open");
+    if (e.key === "Escape" && isOpen) {
+      close();
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      const t = e.target as HTMLElement;
+      if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
+      e.preventDefault();
+      isOpen ? close() : open();
+    }
+  });
+</script>
+
+<style is:global>
+  .search-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(3, 6, 15, 0.7);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.18s ease, visibility 0.18s ease;
+  }
+  .search-backdrop.is-open {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .search-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 201;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 12vh 16px 16px;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-8px);
+    transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s ease;
+  }
+  .search-modal.is-open {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+  }
+
+  .search-modal-inner {
+    width: 100%;
+    max-width: 640px;
+    max-height: 76vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+  }
+
+  .search-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .search-modal-head h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0;
+  }
+  .search-close {
+    display: flex;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-secondary);
+    padding: 4px;
+    border-radius: 6px;
+    transition: color 0.2s, background 0.2s;
+  }
+  .search-close:hover {
+    color: var(--text);
+    background: var(--bg-tertiary);
+  }
+
+  .search-modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 18px;
+  }
+
+  .search-hint {
+    margin: 0;
+    padding: 8px 18px;
+    border-top: 1px solid var(--border);
+    color: var(--text-tertiary);
+    font-size: 12px;
+  }
+  .search-hint kbd {
+    font-family: "JetBrains Mono", "Fira Code", Menlo, monospace;
+    font-size: 11px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--text-secondary);
+  }
+
+  /* Theme Pagefind's default UI to the cartog palette. */
+  .cartog-search.pagefind-ui {
+    --pagefind-ui-primary: var(--accent);
+    --pagefind-ui-text: var(--text);
+    --pagefind-ui-background: var(--bg-secondary);
+    --pagefind-ui-border: var(--border);
+    --pagefind-ui-border-width: 1px;
+    --pagefind-ui-border-radius: 8px;
+    --pagefind-ui-font: inherit;
+  }
+  .cartog-search .pagefind-ui__search-input {
+    background: var(--bg);
+    color: var(--text);
+    border-color: var(--border);
+    font-size: 15px;
+  }
+  .cartog-search .pagefind-ui__search-input:focus {
+    border-color: var(--accent);
+    outline: none;
+  }
+  .cartog-search .pagefind-ui__search-clear {
+    color: var(--text-secondary);
+    background: transparent;
+  }
+  .cartog-search .pagefind-ui__result {
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .cartog-search .pagefind-ui__result:hover {
+    background: var(--bg-tertiary);
+  }
+  .cartog-search .pagefind-ui__result-link {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .cartog-search .pagefind-ui__result-excerpt,
+  .cartog-search .pagefind-ui__message {
+    color: var(--text-secondary);
+  }
+  .cartog-search mark {
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+    color: var(--text);
+  }
+</style>
