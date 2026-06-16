@@ -30,6 +30,7 @@ import Base from "../layouts/Base.astro";
             <a href="#config-remote">Remote Storage (S3)</a>
             <a href="#config-secrets">Secret Redaction</a>
             <a href="#config-lsp">LSP Server Overrides</a>
+            <a href="#config-index">Index Filtering</a>
           </details>
           <details class="sidebar-group">
             <summary class="sidebar-label">Semantic Search</summary>
@@ -177,7 +178,7 @@ cartog index .          <span class="comment"># 6. re-index after changes</span>
             <tr><td><code>[remote]</code></td><td>unset (no sync)</td><td>sharing an index over S3 — see <a href="#config-remote">Remote Storage</a></td></tr>
             <tr><td><code>[security]</code></td><td><code>redact_secrets = true</code></td><td>opting out of pattern redaction — see <a href="#config-secrets">Secret Redaction</a></td></tr>
             <tr><td><code>[lsp.&lt;lang&gt;]</code></td><td>unset (server resolved from <code>PATH</code>)</td><td>running a custom/Dockerized LSP server — see <a href="#config-lsp">LSP Server Overrides</a></td></tr>
-            <tr><td><code>[index]</code></td><td><code>exclude = []</code></td><td>skipping extra paths (vendored/generated trees) — see <a href="#config-index">Index Exclude Globs</a></td></tr>
+            <tr><td><code>[index]</code></td><td><code>exclude = []</code>, <code>respect_gitignore = true</code></td><td>excluding extra paths, or indexing git-ignored files — see <a href="#config-index">Index Filtering</a></td></tr>
           </tbody>
         </table>
         <p>Example — override just the DB path and switch to Ollama, leaving everything else at its default:</p>
@@ -449,8 +450,8 @@ EOF
 
 cartog index --force .            <span class="comment"># server spawns during the LSP resolution pass</span></pre>
 
-        <h2 id="config-index">Index Exclude Globs</h2>
-        <p>cartog already prunes common dependency and build directories (<code>node_modules</code>, <code>target</code>, <code>vendor</code>, <code>dist</code>, <code>build</code>, <code>.dart_tool</code>, dot-directories, …). <code>[index] exclude</code> adds repo-root-relative globs for paths the built-in list misses — vendored or generated trees under non-standard names.</p>
+        <h2 id="config-index">Index Filtering</h2>
+        <p>cartog skips files three ways, all composing: it honors <code>.gitignore</code> (see below); it prunes a built-in list of dependency and build directories (<code>node_modules</code>, <code>target</code>, <code>vendor</code>, <code>dist</code>, <code>build</code>, <code>.dart_tool</code>, dot-directories, …); and <code>[index] exclude</code> adds repo-root-relative globs for paths the other two miss — vendored or generated trees under non-standard names.</p>
         <ul>
           <li>Globs match both files and directories; a matched <strong>directory is pruned</strong> (never descended into), so excluding a large vendored tree also saves the walk cost.</li>
           <li><code>dir/**</code> excludes everything under <code>dir</code> and prunes <code>dir</code> itself; <code>**/*.ext</code> excludes files by extension anywhere in the tree.</li>

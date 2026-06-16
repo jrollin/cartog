@@ -750,8 +750,21 @@ fn is_relevant_path(path: &Path, root: &Path, exclude: &indexer::ExcludeGlobs) -
         }
     }
 
+    // The file path, then each ancestor as a directory: a bare-name or `dir/*`
+    // exclude matches the directory, not the deep file, so checking ancestors
+    // keeps the watcher from re-indexing files the index walk already prunes.
     if exclude.is_excluded(relative) {
         return false;
+    }
+    let mut ancestor = relative.parent();
+    while let Some(dir) = ancestor {
+        if dir.as_os_str().is_empty() {
+            break;
+        }
+        if exclude.is_excluded_with_dir(dir, true) {
+            return false;
+        }
+        ancestor = dir.parent();
     }
 
     true
@@ -967,6 +980,25 @@ mod tests {
         // A sibling source file outside the glob stays relevant.
         assert!(is_relevant_path(
             Path::new("/project/mobile/lib/main.dart"),
+            &root,
+            &exclude
+        ));
+    }
+
+    #[test]
+    fn is_relevant_path_respects_bare_dir_exclude_via_ancestors() {
+        // A bare-name / `dir/*` exclude matches the directory, not the deep
+        // file — the watcher must still treat files under it as irrelevant
+        // (else it re-indexes paths the walk already prunes).
+        let root = PathBuf::from("/project");
+        let exclude = indexer::ExcludeGlobs::from_globs(&["vendor".to_string()]).unwrap();
+        assert!(!is_relevant_path(
+            Path::new("/project/vendor/sub/lib.py"),
+            &root,
+            &exclude
+        ));
+        assert!(is_relevant_path(
+            Path::new("/project/src/main.py"),
             &root,
             &exclude
         ));
