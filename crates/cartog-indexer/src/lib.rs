@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
+use ignore::WalkBuilder;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use tracing::warn;
-use walkdir::WalkDir;
 
 use cartog_core::{FileInfo, Symbol, PROGRESS_STRIDE};
 use cartog_db::Database;
@@ -354,6 +354,12 @@ pub use cartog_core::{is_cancelled, CANCELLED_MSG};
 /// `lsp_overrides` maps a language to its `[lsp.<lang>] command` argv; it only
 /// takes effect when `lsp` is `true` and the `lsp` feature is compiled in. Pass
 /// an empty map for the default (PATH-resolved) servers.
+///
+/// `filter` controls which files are walked: `.gitignore`/`.cartogignore`
+/// (unless [`WalkFilter::respect_gitignore`] is false) plus `[index] exclude`
+/// globs. The hardcoded floor (`node_modules`, `target`, …) always applies on
+/// top. Pass [`WalkFilter::unrestricted`] for the default (no excludes,
+/// gitignore honored).
 #[allow(clippy::too_many_arguments)] // named, order-stable knobs; a struct would churn 51 call sites
 pub fn index_directory(
     db: &Database,
@@ -364,6 +370,7 @@ pub fn index_directory(
     cancel: Option<CancelProbe<'_>>,
     redact: RedactionConfig,
     lsp_overrides: &std::collections::HashMap<String, Vec<String>>,
+    filter: &WalkFilter,
 ) -> Result<IndexResult> {
     let emit = |u: ProgressUpdate| {
         if let Some(cb) = progress {
@@ -432,12 +439,36 @@ pub fn index_directory(
     let mut candidates: Vec<(PathBuf, String, &'static str)> = Vec::new();
     let mut unsupported_ext: std::collections::HashMap<String, u32> =
         std::collections::HashMap::new();
-    for entry in WalkDir::new(&root)
+    // `ignore` honors .gitignore (incl. nested) + .cartogignore. require_git
+    // makes it apply even without a .git dir. parents/git_global are OFF so only
+    // ignore files INSIDE the indexed tree count — never an ancestor or
+    // $HOME/.gitignore (which would silently drop files when indexing a subdir).
+    // The hardcoded floor + `[index] exclude` run as a `filter_entry` on top.
+    let mut walker = WalkBuilder::new(&root);
+    walker
         .follow_links(true)
-        .max_depth(50)
-        .into_iter()
-        .filter_entry(|e| !is_ignored(e))
-    {
+        .max_depth(Some(50))
+        .hidden(false)
+        .parents(false)
+        .require_git(false)
+        .git_global(false)
+        .git_ignore(filter.respect_gitignore)
+        .git_exclude(filter.respect_gitignore)
+        .add_custom_ignore_filename(".cartogignore");
+    let filter_root = root.clone();
+    let filter_exclude = filter.exclude.clone();
+    walker.filter_entry(move |entry| {
+        let name = entry.file_name().to_string_lossy();
+        let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+        if is_ignored(&name, is_dir, entry.depth()) {
+            return false;
+        }
+        match entry.path().strip_prefix(&filter_root) {
+            Ok(rel) => !is_excluded_path(rel, is_dir, &filter_exclude),
+            Err(_) => true,
+        }
+    });
+    for entry in walker.build() {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
@@ -445,7 +476,7 @@ pub fn index_directory(
                 continue;
             }
         };
-        if !entry.file_type().is_file() {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
         let path = entry.path();
@@ -463,6 +494,10 @@ pub fn index_directory(
             result.files_redacted_skipped += 1;
             continue;
         }
+
+        // `[index] exclude` is enforced in the walk's `filter_entry` above
+        // (`is_excluded_path`), which drops matching files and prunes matching
+        // dirs before they are yielded — so no second check is needed here.
 
         let lang = match detect_language(Path::new(&rel_path)) {
             Some(l) => l,
@@ -729,14 +764,20 @@ pub fn index_directory(
     // means the wrong root (e.g. `cartog rag index --db <db>` run from another
     // directory). Sweeping would silently delete the whole index — refuse.
     if current_files.is_empty() && !all_indexed.is_empty() && !force {
+        let exclude_hint = if filter.exclude.is_empty() {
+            ""
+        } else {
+            " A `[index] exclude` glob is set — check it isn't matching every file."
+        };
         anyhow::bail!(
             "refusing to empty the index: no supported source files found under {} \
              but the database holds {} indexed files. This usually means the wrong \
              root for this database (e.g. `cartog rag index --db <db>` run from \
-             another directory). Re-run from the project root, or pass --force to \
+             another directory).{} Re-run from the project root, or pass --force to \
              really empty the index.",
             root.display(),
-            all_indexed.len()
+            all_indexed.len(),
+            exclude_hint
         );
     }
     for indexed_path in all_indexed {
@@ -862,31 +903,33 @@ fn is_db_sidecar(rel_path: &str) -> bool {
         .any(|stem| name == *stem || name.starts_with(&format!("{stem}-")))
 }
 
-/// Decides whether a walkdir entry should be excluded from indexing.
+/// The hardcoded floor: whether a walked entry should be skipped regardless of
+/// `.gitignore`. Walker-agnostic (takes primitives, not a `DirEntry`).
 ///
 /// Only directories can be ignored — files are always accepted. Common non-code
 /// directories (hidden dirs, `node_modules`, `vendor`, …) are excluded via
 /// [`is_ignored_dirname`]. `var` and `builds` are only excluded at depth 1
 /// (project root); a nested `src/var` is valid application code.
-fn is_ignored(entry: &walkdir::DirEntry) -> bool {
-    let name = entry.file_name().to_string_lossy();
-
-    // Skip hidden directories and common non-code directories
-    if entry.file_type().is_dir() {
+fn is_ignored(name: &str, is_dir: bool, depth: usize) -> bool {
+    if is_dir {
         // "var" and "builds" are only ignored at the project root (depth 1).
-        // A nested path like `src/var` is valid application code.
-        if matches!(name.as_ref(), "var" | "builds") && entry.depth() != 1 {
+        if matches!(name, "var" | "builds") && depth != 1 {
             return false;
         }
-        return is_ignored_dirname(&name);
+        return is_ignored_dirname(name);
     }
-
     false
+}
+
+/// Whether a repo-root-relative path matches a user `[index] exclude` glob
+/// (dirs use the dir-probe form so `dir/**` prunes the directory).
+fn is_excluded_path(rel: &Path, is_dir: bool, exclude: &ExcludeGlobs) -> bool {
+    !exclude.is_empty() && exclude.is_excluded_with_dir(rel, is_dir)
 }
 
 /// Check if a directory name should be ignored during indexing.
 ///
-/// Shared between the walkdir-based indexer and the file watcher.
+/// The hardcoded floor, shared between the indexer's walk and the file watcher.
 pub fn is_ignored_dirname(name: &str) -> bool {
     matches!(
         name,
@@ -987,15 +1030,19 @@ fn dedup_symbol_ids(symbols: &mut [Symbol], edges: &mut [cartog_core::Edge]) {
 }
 
 mod content;
+mod exclude;
 mod git;
 mod merkle;
 mod redact;
+mod walk;
 
 pub(crate) use content::extract_symbol_content_redacted;
+pub use exclude::ExcludeGlobs;
 pub use git::git_recently_changed_files;
 pub(crate) use git::{git_changed_files, git_head_commit};
 pub(crate) use merkle::{compute_merkle_hashes, merkle_diff};
 pub use redact::RedactionConfig;
+pub use walk::WalkFilter;
 
 /// Shared scenario bodies for the indexing benchmarks.
 ///
@@ -1091,6 +1138,7 @@ pub mod bench_support {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .expect("full index")
     }
@@ -1115,6 +1163,7 @@ pub mod bench_support {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .expect("seed index");
         db
@@ -1135,6 +1184,7 @@ pub mod bench_support {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .expect("noop re-index")
     }
@@ -1163,6 +1213,7 @@ pub mod bench_support {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .expect("incremental re-index")
     }
@@ -1182,6 +1233,7 @@ mod tests {
             None,
             RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
     }
 
@@ -1225,6 +1277,286 @@ mod tests {
         let empty = visible_dir(&tmp, "elsewhere");
         index_dir(&db, &empty, true).unwrap();
         assert!(db.all_files().unwrap().is_empty());
+    }
+
+    fn index_dir_excluding(
+        db: &cartog_db::Database,
+        root: &Path,
+        patterns: &[&str],
+    ) -> Result<IndexResult> {
+        let exclude = ExcludeGlobs::from_globs(
+            &patterns
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let filter = WalkFilter {
+            exclude,
+            respect_gitignore: true,
+        };
+        index_directory(
+            db,
+            root,
+            true,
+            false,
+            None,
+            None,
+            RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+            &filter,
+        )
+    }
+
+    #[test]
+    fn exclude_prunes_dir_and_matches_files() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::write(proj.join("a.py"), "def foo():\n    return 1\n").unwrap();
+        std::fs::create_dir(proj.join("Pods")).unwrap();
+        std::fs::write(proj.join("Pods/b.py"), "def bar():\n    return 2\n").unwrap();
+        // A non-source file inside the excluded dir: if the dir were merely
+        // file-filtered (walked + each file dropped) rather than PRUNED, the walk
+        // would tally this as unsupported. Pruning means it's never visited.
+        std::fs::write(proj.join("Pods/readme.xyz"), "junk\n").unwrap();
+        std::fs::write(proj.join("notes.md"), "# Title\n\nbody\n").unwrap();
+
+        let r = index_dir_excluding(&db, &proj, &["Pods/**", "**/*.md"]).unwrap();
+
+        assert_eq!(r.files_indexed, 1, "only a.py should be indexed");
+        assert_eq!(
+            r.files_unsupported, 0,
+            "Pods/ must be pruned (not descended), so its .xyz is never tallied"
+        );
+        let files = db.all_files().unwrap();
+        assert!(files.iter().any(|f| f.ends_with("a.py")));
+        assert!(
+            !files.iter().any(|f| f.contains("Pods")),
+            "pruned dir must contribute no files"
+        );
+        assert!(!files.iter().any(|f| f.ends_with(".md")));
+    }
+
+    #[test]
+    fn exclude_matching_everything_errors_with_exclude_hint() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::write(proj.join("a.py"), "def foo():\n    return 1\n").unwrap();
+        index_dir(&db, &proj, false).unwrap();
+
+        // A valid glob that happens to match every source file empties the walk.
+        // Non-force must refuse AND point at the exclude, not just "wrong root".
+        let filter = WalkFilter {
+            exclude: ExcludeGlobs::from_globs(&["**/*.py".to_string()]).unwrap(),
+            respect_gitignore: true,
+        };
+        let res = index_directory(
+            &db,
+            &proj,
+            false,
+            false,
+            None,
+            None,
+            RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+            &filter,
+        );
+        let err = format!("{:#}", res.unwrap_err());
+        assert!(err.contains("[index] exclude"), "hint missing: {err}");
+        assert!(!db.all_files().unwrap().is_empty(), "index left untouched");
+    }
+
+    #[test]
+    fn exclude_empty_is_noop() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::write(proj.join("a.py"), "def foo():\n    return 1\n").unwrap();
+        std::fs::create_dir(proj.join("Pods")).unwrap();
+        std::fs::write(proj.join("Pods/b.py"), "def bar():\n    return 2\n").unwrap();
+        std::fs::write(proj.join("notes.md"), "# Title\n\nbody\n").unwrap();
+
+        let r = index_dir_excluding(&db, &proj, &[]).unwrap();
+
+        // No globs → everything supported is indexed (both .py + the .md doc).
+        assert_eq!(r.files_indexed, 3);
+        let files = db.all_files().unwrap();
+        assert!(files.iter().any(|f| f.contains("Pods")));
+        assert!(files.iter().any(|f| f.ends_with(".md")));
+    }
+
+    fn index_dir_filtered(
+        db: &cartog_db::Database,
+        root: &Path,
+        filter: &WalkFilter,
+    ) -> Result<IndexResult> {
+        index_directory(
+            db,
+            root,
+            true,
+            false,
+            None,
+            None,
+            RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+            filter,
+        )
+    }
+
+    #[test]
+    fn gitignore_nested_is_honored() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::create_dir_all(proj.join("sub/ignored")).unwrap();
+        // Nested .gitignore (not at the root) — e.g. a CocoaPods Pods/ dir.
+        std::fs::write(proj.join("sub/.gitignore"), "ignored/\n").unwrap();
+        std::fs::write(proj.join("sub/keep.py"), "def keep():\n    pass\n").unwrap();
+        std::fs::write(proj.join("sub/ignored/skip.py"), "def skip():\n    pass\n").unwrap();
+
+        let r = index_dir_filtered(&db, &proj, &WalkFilter::unrestricted()).unwrap();
+
+        let files = db.all_files().unwrap();
+        assert!(files.iter().any(|f| f.ends_with("keep.py")));
+        assert!(
+            !files.iter().any(|f| f.contains("ignored")),
+            "nested .gitignore must hide sub/ignored/; got {files:?}"
+        );
+        assert_eq!(r.files_indexed, 1);
+    }
+
+    #[test]
+    fn gitignore_ancestor_above_root_is_not_applied() {
+        // A .gitignore ABOVE the indexed root (parent dir, or $HOME/.gitignore)
+        // must NOT prune files inside the root — else indexing a subdir of a
+        // repo silently drops files matched by the repo-root or $HOME ignore.
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Ignore file in the PARENT of what we index.
+        std::fs::write(tmp.path().join(".gitignore"), "*.log\nsecret/\n").unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::create_dir(proj.join("secret")).unwrap();
+        std::fs::write(proj.join("app.py"), "def app():\n    pass\n").unwrap();
+        std::fs::write(proj.join("debug.log"), "noise\n").unwrap();
+        std::fs::write(proj.join("secret/s.py"), "def s():\n    pass\n").unwrap();
+
+        index_dir_filtered(&db, &proj, &WalkFilter::unrestricted()).unwrap();
+
+        // The ancestor's `*.log`/`secret/` rules must not reach into proj/.
+        let files = db.all_files().unwrap();
+        assert!(files.iter().any(|f| f.ends_with("app.py")));
+        assert!(
+            files.iter().any(|f| f.ends_with("secret/s.py")),
+            "ancestor .gitignore must NOT prune in-root secret/; got {files:?}"
+        );
+    }
+
+    #[test]
+    fn gitignore_floor_wins_over_unignore() {
+        // Even if .gitignore `!`-unignores node_modules, the hardcoded floor
+        // still skips it.
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::write(proj.join(".gitignore"), "!node_modules/\n").unwrap();
+        std::fs::create_dir(proj.join("node_modules")).unwrap();
+        std::fs::write(proj.join("node_modules/x.py"), "def x():\n    pass\n").unwrap();
+        std::fs::write(proj.join("app.py"), "def app():\n    pass\n").unwrap();
+
+        index_dir_filtered(&db, &proj, &WalkFilter::unrestricted()).unwrap();
+
+        let files = db.all_files().unwrap();
+        assert!(files.iter().any(|f| f.ends_with("app.py")));
+        assert!(!files.iter().any(|f| f.contains("node_modules")));
+    }
+
+    #[test]
+    fn gitignore_honored_without_git_dir() {
+        // No `.git` anywhere — `.gitignore` is still applied (require_git=false).
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::create_dir(proj.join("gen")).unwrap();
+        std::fs::write(proj.join(".gitignore"), "gen/\n").unwrap();
+        std::fs::write(proj.join("gen/derived.py"), "def d():\n    pass\n").unwrap();
+        std::fs::write(proj.join("src.py"), "def s():\n    pass\n").unwrap();
+
+        index_dir_filtered(&db, &proj, &WalkFilter::unrestricted()).unwrap();
+
+        let files = db.all_files().unwrap();
+        assert!(files.iter().any(|f| f.ends_with("src.py")));
+        assert!(!files.iter().any(|f| f.contains("gen")));
+    }
+
+    #[test]
+    fn respect_gitignore_false_indexes_ignored_but_keeps_floor() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::create_dir(proj.join("gen")).unwrap();
+        std::fs::write(proj.join(".gitignore"), "gen/\n").unwrap();
+        std::fs::write(proj.join("gen/derived.py"), "def d():\n    pass\n").unwrap();
+        std::fs::create_dir(proj.join("node_modules")).unwrap();
+        std::fs::write(proj.join("node_modules/x.py"), "def x():\n    pass\n").unwrap();
+
+        let filter = WalkFilter {
+            exclude: ExcludeGlobs::empty(),
+            respect_gitignore: false,
+        };
+        index_dir_filtered(&db, &proj, &filter).unwrap();
+
+        let files = db.all_files().unwrap();
+        // Opt-out indexes the gitignored file...
+        assert!(
+            files.iter().any(|f| f.contains("gen")),
+            "respect_gitignore=false should index gen/; got {files:?}"
+        );
+        // ...but the floor still skips node_modules.
+        assert!(!files.iter().any(|f| f.contains("node_modules")));
+    }
+
+    #[test]
+    fn cartogignore_is_honored() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::create_dir(proj.join("secret")).unwrap();
+        // .cartogignore uses gitignore syntax and is always honored.
+        std::fs::write(proj.join(".cartogignore"), "secret/\n").unwrap();
+        std::fs::write(proj.join("secret/s.py"), "def s():\n    pass\n").unwrap();
+        std::fs::write(proj.join("ok.py"), "def ok():\n    pass\n").unwrap();
+
+        index_dir_filtered(&db, &proj, &WalkFilter::unrestricted()).unwrap();
+
+        let files = db.all_files().unwrap();
+        assert!(files.iter().any(|f| f.ends_with("ok.py")));
+        assert!(!files.iter().any(|f| f.contains("secret")));
+    }
+
+    #[test]
+    fn gitignore_and_exclude_compose() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        for d in ["a", "b", "c"] {
+            std::fs::create_dir(proj.join(d)).unwrap();
+            std::fs::write(proj.join(d).join("f.py"), "def f():\n    pass\n").unwrap();
+        }
+        std::fs::write(proj.join(".gitignore"), "a/\n").unwrap(); // a/ via gitignore
+
+        let filter = WalkFilter {
+            exclude: ExcludeGlobs::from_globs(&["b/**".to_string()]).unwrap(), // b/ via exclude
+            respect_gitignore: true,
+        };
+        index_dir_filtered(&db, &proj, &filter).unwrap();
+
+        // Stored paths are repo-root-relative (e.g. "c/f.py").
+        let files = db.all_files().unwrap();
+        assert!(!files.iter().any(|f| f.starts_with("a/")), "a/ gitignored");
+        assert!(!files.iter().any(|f| f.starts_with("b/")), "b/ excluded");
+        assert!(files.iter().any(|f| f.starts_with("c/")), "c/ kept");
     }
 
     #[test]
@@ -1321,10 +1653,6 @@ mod tests {
 
     #[test]
     fn test_is_ignored_directories() {
-        let tmp = std::env::temp_dir().join("cartog_test_ignored");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-
         let ignored_dirs = [
             ".git",
             "node_modules",
@@ -1336,62 +1664,27 @@ mod tests {
             "var",
             "builds",
         ];
-        let allowed_dirs = ["src", "lib", "tests", "docs"];
-
-        for name in ignored_dirs.iter().chain(allowed_dirs.iter()) {
-            std::fs::create_dir_all(tmp.join(name)).unwrap();
+        for name in ignored_dirs {
+            assert!(is_ignored(name, true, 1), "{name} should be ignored");
         }
-
-        let entries: Vec<_> = WalkDir::new(&tmp)
-            .min_depth(1)
-            .max_depth(1)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .collect();
-
-        for entry in &entries {
-            let name = entry.file_name().to_string_lossy();
-            if ignored_dirs.contains(&name.as_ref()) {
-                assert!(is_ignored(entry), "{name} should be ignored");
-            }
-            if allowed_dirs.contains(&name.as_ref()) {
-                assert!(!is_ignored(entry), "{name} should NOT be ignored");
-            }
+        for name in ["src", "lib", "tests", "docs"] {
+            assert!(!is_ignored(name, true, 1), "{name} should NOT be ignored");
         }
-
-        let _ = std::fs::remove_dir_all(&tmp);
+        // Files are never ignored by the floor.
+        assert!(!is_ignored("node_modules", false, 1));
     }
 
     #[test]
     fn test_var_and_builds_not_ignored_when_nested() {
-        // "var" and "builds" must only be ignored at depth 1 (project root).
-        // A nested path like `src/var` is valid application code.
-        let tmp = std::env::temp_dir().join("cartog_test_nested_var");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(tmp.join("src/var")).unwrap();
-        std::fs::create_dir_all(tmp.join("src/builds")).unwrap();
-
-        let entries: Vec<_> = WalkDir::new(&tmp)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_dir())
-            .collect();
-
-        let nested_var = entries.iter().find(|e| e.path() == tmp.join("src/var"));
-        let nested_builds = entries.iter().find(|e| e.path() == tmp.join("src/builds"));
-
-        assert!(nested_var.is_some());
+        // "var"/"builds" are floored only at depth 1 (project root); a nested
+        // `src/var` (depth 2) is valid application code.
+        assert!(is_ignored("var", true, 1));
+        assert!(is_ignored("builds", true, 1));
+        assert!(!is_ignored("var", true, 2), "src/var should NOT be ignored");
         assert!(
-            !is_ignored(nested_var.unwrap()),
-            "src/var should NOT be ignored"
-        );
-        assert!(nested_builds.is_some());
-        assert!(
-            !is_ignored(nested_builds.unwrap()),
+            !is_ignored("builds", true, 2),
             "src/builds should NOT be ignored"
         );
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1460,6 +1753,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -1506,6 +1800,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -1550,6 +1845,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::WalkFilter::unrestricted(),
             )
             .unwrap();
             assert!(r1.files_indexed > 0);
@@ -1565,6 +1861,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::WalkFilter::unrestricted(),
             )
             .unwrap();
             assert_eq!(r2.files_indexed, 0);
@@ -1588,6 +1885,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::WalkFilter::unrestricted(),
             )
             .unwrap();
             assert_eq!(r3.files_indexed, r1.files_indexed);
@@ -1619,6 +1917,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -1631,6 +1930,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert_eq!(r2.dirty_files, 0);
@@ -1659,6 +1959,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -1699,6 +2000,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert!(
@@ -1730,6 +2032,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -1767,6 +2070,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::WalkFilter::unrestricted(),
             )
             .unwrap()
         };
@@ -1829,6 +2133,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::WalkFilter::unrestricted(),
             )
             .unwrap()
         };
@@ -1888,6 +2193,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::WalkFilter::unrestricted(),
             )
             .unwrap()
         };
@@ -1941,6 +2247,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -1971,6 +2278,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
         // --force clears the sticky LSP markers (reset_all_unresolvable), then
@@ -2011,6 +2319,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -2041,6 +2350,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -2082,6 +2392,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -2110,6 +2421,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert_eq!(r.dirty_files, 0);
@@ -2414,6 +2726,7 @@ def main():
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert_eq!(r1.files_indexed, 2);
@@ -2473,6 +2786,7 @@ def standalone():
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert_eq!(r2.files_indexed, 1, "only a.py changed");
@@ -2530,6 +2844,7 @@ def standalone():
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert_eq!(r3.files_indexed, 1);
@@ -2594,6 +2909,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -2682,6 +2998,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .expect("seed index should succeed");
 
@@ -2723,6 +3040,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         );
         assert!(
             result.is_err(),
@@ -2793,6 +3111,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -2835,6 +3154,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -2850,6 +3170,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -2881,6 +3202,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -2936,6 +3258,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -2984,6 +3307,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             Some(&probe),
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .expect_err("index must abort when probe trips at first phase boundary");
         assert!(
@@ -3009,6 +3333,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             Some(&probe),
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .expect("non-cancelling probe must not affect normal indexing");
         assert!(result.files_indexed >= 2);
@@ -3033,6 +3358,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             Some(&probe),
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .expect_err("first run cancels");
 
@@ -3047,6 +3373,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             Some(&probe),
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .expect("re-run after cancellation must succeed");
         assert!(result.files_indexed >= 2);
@@ -3089,6 +3416,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::enabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -3110,6 +3438,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -3131,6 +3460,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::enabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -3163,6 +3493,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::enabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -3188,6 +3519,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert!(only_content(&db).contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
@@ -3203,6 +3535,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::enabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert!(r.redaction_backfilled, "policy change must flag a backfill");
@@ -3225,6 +3558,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::enabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 
@@ -3238,6 +3572,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
         )
         .unwrap();
 

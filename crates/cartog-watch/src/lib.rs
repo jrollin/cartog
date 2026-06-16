@@ -42,6 +42,11 @@ pub struct WatchConfig {
     pub rag_config: rag::EmbeddingProviderConfig,
     /// Secret-redaction policy applied to each re-index pass.
     pub redact: indexer::RedactionConfig,
+    /// Walk filter (`[index] exclude` globs + gitignore policy), honored by
+    /// each re-index so watch and a manual `cartog index` agree on scope. The
+    /// relevance filter consults only its `exclude` field (gitignore is the
+    /// walker's job, not the event filter's).
+    pub walk_filter: indexer::WalkFilter,
     /// Emit newline-delimited JSON events on stdout. When false, the loop
     /// only produces tracing logs on stderr (existing behavior).
     pub json_events: bool,
@@ -90,6 +95,7 @@ impl WatchConfig {
             rag_delay: Duration::from_secs(30),
             rag_config: rag::EmbeddingProviderConfig::default(),
             redact: indexer::RedactionConfig::default(),
+            walk_filter: indexer::WalkFilter::unrestricted(),
             json_events: false,
             pid_lock_dir: None,
             pid_lock_slot: None,
@@ -409,6 +415,7 @@ fn watch_loop(
         None,
         config.redact,
         &std::collections::HashMap::new(),
+        &config.walk_filter,
     ) {
         Ok(r) => {
             info!(
@@ -519,7 +526,8 @@ fn watch_loop(
             Ok(Ok(events)) => {
                 // Filter events to only supported source files in non-ignored dirs
                 let relevant = events.iter().any(|event| {
-                    event.kind == DebouncedEventKind::Any && is_relevant_path(&event.path, root)
+                    event.kind == DebouncedEventKind::Any
+                        && is_relevant_path(&event.path, root, &config.walk_filter.exclude)
                 });
 
                 if relevant {
@@ -544,6 +552,7 @@ fn watch_loop(
                         None,
                         config.redact,
                         &std::collections::HashMap::new(),
+                        &config.walk_filter,
                     ) {
                         Ok(r) => {
                             if r.files_indexed > 0 || r.files_removed > 0 {
@@ -715,7 +724,8 @@ fn watch_loop(
 /// - Files with unsupported extensions (no tree-sitter extractor)
 /// - Files outside the watched root (e.g., symlink escapes)
 /// - Files under an ignored directory (`.git`, `node_modules`, etc.)
-fn is_relevant_path(path: &Path, root: &Path) -> bool {
+/// - Files matching a `[index] exclude` glob (keeps watch scope = index scope)
+fn is_relevant_path(path: &Path, root: &Path, exclude: &indexer::ExcludeGlobs) -> bool {
     // Must be a supported source file
     if detect_language(path).is_none() {
         return false;
@@ -740,6 +750,23 @@ fn is_relevant_path(path: &Path, root: &Path) -> bool {
         }
     }
 
+    // The file path, then each ancestor as a directory: a bare-name or `dir/*`
+    // exclude matches the directory, not the deep file, so checking ancestors
+    // keeps the watcher from re-indexing files the index walk already prunes.
+    if exclude.is_excluded(relative) {
+        return false;
+    }
+    let mut ancestor = relative.parent();
+    while let Some(dir) = ancestor {
+        if dir.as_os_str().is_empty() {
+            break;
+        }
+        if exclude.is_excluded_with_dir(dir, true) {
+            return false;
+        }
+        ancestor = dir.parent();
+    }
+
     true
 }
 
@@ -753,43 +780,71 @@ mod tests {
     #[test]
     fn test_relevant_python_file() {
         let root = PathBuf::from("/project");
-        assert!(is_relevant_path(Path::new("/project/src/main.py"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/src/main.py"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
     fn test_relevant_python_stub() {
         let root = PathBuf::from("/project");
-        assert!(is_relevant_path(Path::new("/project/src/types.pyi"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/src/types.pyi"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
     fn test_relevant_typescript_file() {
         let root = PathBuf::from("/project");
-        assert!(is_relevant_path(Path::new("/project/src/app.ts"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/src/app.ts"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
     fn test_relevant_tsx_file() {
         let root = PathBuf::from("/project");
-        assert!(is_relevant_path(Path::new("/project/src/App.tsx"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/src/App.tsx"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
     fn test_relevant_javascript_file() {
         let root = PathBuf::from("/project");
-        assert!(is_relevant_path(Path::new("/project/src/index.js"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/src/index.js"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
     fn test_relevant_jsx_file() {
         let root = PathBuf::from("/project");
-        assert!(is_relevant_path(Path::new("/project/src/App.jsx"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/src/App.jsx"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
     fn test_relevant_mjs_file() {
         let root = PathBuf::from("/project");
-        assert!(is_relevant_path(Path::new("/project/src/utils.mjs"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/src/utils.mjs"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
@@ -797,20 +852,29 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(is_relevant_path(
             Path::new("/project/src/config.cjs"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
     #[test]
     fn test_relevant_rust_file() {
         let root = PathBuf::from("/project");
-        assert!(is_relevant_path(Path::new("/project/src/lib.rs"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/src/lib.rs"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
     fn test_relevant_go_file() {
         let root = PathBuf::from("/project");
-        assert!(is_relevant_path(Path::new("/project/cmd/main.go"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/cmd/main.go"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
@@ -818,7 +882,8 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(is_relevant_path(
             Path::new("/project/lib/service.rb"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -827,7 +892,8 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(is_relevant_path(
             Path::new("/project/src/UserService.java"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -836,23 +902,36 @@ mod tests {
     #[test]
     fn test_irrelevant_json_file() {
         let root = PathBuf::from("/project");
-        assert!(!is_relevant_path(Path::new("/project/package.json"), &root));
+        assert!(!is_relevant_path(
+            Path::new("/project/package.json"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
     fn test_relevant_markdown_file() {
         let root = PathBuf::from("/project");
-        assert!(is_relevant_path(Path::new("/project/README.md"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/README.md"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
         assert!(is_relevant_path(
             Path::new("/project/docs/design.md"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
     #[test]
     fn test_irrelevant_toml_file() {
         let root = PathBuf::from("/project");
-        assert!(!is_relevant_path(Path::new("/project/Cargo.toml"), &root));
+        assert!(!is_relevant_path(
+            Path::new("/project/Cargo.toml"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
@@ -860,14 +939,19 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/.github/ci.yml"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
     #[test]
     fn test_irrelevant_no_extension() {
         let root = PathBuf::from("/project");
-        assert!(!is_relevant_path(Path::new("/project/Makefile"), &root));
+        assert!(!is_relevant_path(
+            Path::new("/project/Makefile"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     // ── Ignored directories (all entries from is_ignored_dirname) ──
@@ -877,7 +961,62 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/node_modules/pkg/index.js"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
+    }
+
+    #[test]
+    fn is_relevant_path_respects_exclude_globs() {
+        let root = PathBuf::from("/project");
+        let exclude =
+            indexer::ExcludeGlobs::from_globs(&["mobile/ios/Pods/**".to_string()]).unwrap();
+        // Excluded by the glob even though it's a supported (.swift) source file.
+        assert!(!is_relevant_path(
+            Path::new("/project/mobile/ios/Pods/Firebase/Core.swift"),
+            &root,
+            &exclude
+        ));
+        // A sibling source file outside the glob stays relevant.
+        assert!(is_relevant_path(
+            Path::new("/project/mobile/lib/main.dart"),
+            &root,
+            &exclude
+        ));
+    }
+
+    #[test]
+    fn is_relevant_path_respects_bare_dir_exclude_via_ancestors() {
+        // A bare-name / `dir/*` exclude matches the directory, not the deep
+        // file — the watcher must still treat files under it as irrelevant
+        // (else it re-indexes paths the walk already prunes).
+        let root = PathBuf::from("/project");
+        let exclude = indexer::ExcludeGlobs::from_globs(&["vendor".to_string()]).unwrap();
+        assert!(!is_relevant_path(
+            Path::new("/project/vendor/sub/lib.py"),
+            &root,
+            &exclude
+        ));
+        assert!(is_relevant_path(
+            Path::new("/project/src/main.py"),
+            &root,
+            &exclude
+        ));
+    }
+
+    #[test]
+    fn is_relevant_path_empty_exclude_is_noop() {
+        let root = PathBuf::from("/project");
+        let none = indexer::ExcludeGlobs::empty();
+        assert!(is_relevant_path(
+            Path::new("/project/src/main.py"),
+            &root,
+            &none
+        ));
+        assert!(!is_relevant_path(
+            Path::new("/project/node_modules/pkg/index.js"),
+            &root,
+            &none
         ));
     }
 
@@ -886,7 +1025,8 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/.git/hooks/pre-commit.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -895,7 +1035,8 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/target/debug/build.rs"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -904,7 +1045,8 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/src/__pycache__/mod.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -913,7 +1055,8 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/lib/vendor/gem/lib.rb"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -922,11 +1065,13 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/.venv/lib/site.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
         assert!(!is_relevant_path(
             Path::new("/project/venv/lib/site.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -935,11 +1080,13 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/.env/lib/site.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
         assert!(!is_relevant_path(
             Path::new("/project/env/lib/site.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -948,11 +1095,13 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/dist/bundle.js"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
         assert!(!is_relevant_path(
             Path::new("/project/build/output.js"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -961,11 +1110,13 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/.next/server/app.js"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
         assert!(!is_relevant_path(
             Path::new("/project/.nuxt/dist/app.js"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -974,15 +1125,18 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/.mypy_cache/3.11/mod.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
         assert!(!is_relevant_path(
             Path::new("/project/.pytest_cache/v/test.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
         assert!(!is_relevant_path(
             Path::new("/project/.tox/py311/lib.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -991,11 +1145,13 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/.hg/store/data.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
         assert!(!is_relevant_path(
             Path::new("/project/.svn/entries.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -1006,14 +1162,19 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(!is_relevant_path(
             Path::new("/project/.hidden/script.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
     #[test]
     fn test_root_level_file_allowed() {
         let root = PathBuf::from("/project");
-        assert!(is_relevant_path(Path::new("/project/setup.py"), &root));
+        assert!(is_relevant_path(
+            Path::new("/project/setup.py"),
+            &root,
+            &indexer::ExcludeGlobs::empty()
+        ));
     }
 
     #[test]
@@ -1021,7 +1182,8 @@ mod tests {
         let root = PathBuf::from("/project");
         assert!(is_relevant_path(
             Path::new("/project/src/auth/tokens/validate.py"),
-            &root
+            &root,
+            &indexer::ExcludeGlobs::empty()
         ));
     }
 
@@ -1029,7 +1191,11 @@ mod tests {
     fn test_path_outside_root_rejected() {
         let root = PathBuf::from("/project");
         assert!(
-            !is_relevant_path(Path::new("/other/project/main.py"), &root),
+            !is_relevant_path(
+                Path::new("/other/project/main.py"),
+                &root,
+                &indexer::ExcludeGlobs::empty()
+            ),
             "files outside root should be rejected"
         );
     }
@@ -1038,7 +1204,11 @@ mod tests {
     fn test_path_sibling_of_root_rejected() {
         let root = PathBuf::from("/workspace/project-a");
         assert!(
-            !is_relevant_path(Path::new("/workspace/project-b/main.py"), &root),
+            !is_relevant_path(
+                Path::new("/workspace/project-b/main.py"),
+                &root,
+                &indexer::ExcludeGlobs::empty()
+            ),
             "files in sibling directory should be rejected"
         );
     }
@@ -1048,7 +1218,11 @@ mod tests {
         let root = PathBuf::from("/project");
         // "/project-b/main.py" starts with "/project" as a string but is not under /project/
         assert!(
-            !is_relevant_path(Path::new("/project-b/main.py"), &root),
+            !is_relevant_path(
+                Path::new("/project-b/main.py"),
+                &root,
+                &indexer::ExcludeGlobs::empty()
+            ),
             "partial prefix match should be rejected (strip_prefix handles this correctly)"
         );
     }

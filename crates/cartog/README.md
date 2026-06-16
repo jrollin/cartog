@@ -77,7 +77,7 @@ Index a directory, then query the graph:
 
 ```rust,no_run
 use cartog::db::{Database, DEFAULT_EMBEDDING_DIM};
-use cartog::indexer::{index_directory, RedactionConfig};
+use cartog::indexer::{index_directory, RedactionConfig, WalkFilter};
 
 # fn main() -> anyhow::Result<()> {
 let db = Database::open(".cartog/db.sqlite", DEFAULT_EMBEDDING_DIM)?;
@@ -86,12 +86,13 @@ let db = Database::open(".cartog/db.sqlite", DEFAULT_EMBEDDING_DIM)?;
 index_directory(
     &db,
     std::path::Path::new("."),
-    false,                      // force: reuse incremental cache
-    false,                      // lsp: heuristic edge resolution only
-    None,                       // progress callback
-    None,                       // cancellation probe
-    RedactionConfig::default(), // scrub secrets (default-on)
-    &Default::default(),        // [lsp.<lang>] command overrides (none)
+    false,                       // force: reuse incremental cache
+    false,                       // lsp: heuristic edge resolution only
+    None,                        // progress callback
+    None,                        // cancellation probe
+    RedactionConfig::default(),  // scrub secrets (default-on)
+    &Default::default(),         // [lsp.<lang>] command overrides (none)
+    &WalkFilter::unrestricted(), // .gitignore honored, no extra excludes
 )?;
 
 // Symbol search ranked by match tier + centrality.

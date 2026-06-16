@@ -50,6 +50,15 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # text. On by default. Sensitive files (.env, *.pem, id_rsa, ...) are always
 # excluded regardless of this setting.
 # redact_secrets = true
+
+# [index]
+# cartog honors .gitignore (incl. nested) and .cartogignore by default. These
+# globs skip ADDITIONAL repo-root-relative paths (matched dirs are pruned), on
+# top of .gitignore and the built-in dependency/build-dir prune list.
+# exclude = ["vendor/**", "**/*.generated.*"]
+# Set false to index files git ignores (e.g. committed generated code); the
+# prune list and `exclude` still apply.
+# respect_gitignore = true
 "##;
 
 #[derive(Debug, Serialize)]

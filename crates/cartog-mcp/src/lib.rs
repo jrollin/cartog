@@ -402,6 +402,7 @@ fn warm_lsp_pass(
 /// through [`warm_lsp_pass`], which reopens the state-4 seals left by the
 /// internal `lsp=false` index run.
 #[cfg(feature = "lsp")]
+#[allow(clippy::too_many_arguments)] // mirrors index_directory's order-stable knobs
 fn index_with_optional_lsp(
     db: &Arc<Mutex<Database>>,
     lsp_manager: &Arc<Mutex<cartog_lsp::manager::LspManager>>,
@@ -410,6 +411,7 @@ fn index_with_optional_lsp(
     progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
     cancel: Option<indexer::CancelProbe<'_>>,
     redact: indexer::RedactionConfig,
+    filter: &indexer::WalkFilter,
 ) -> Result<indexer::IndexResult, McpError> {
     let indexer_cb = progress_tx
         .as_ref()
@@ -432,6 +434,7 @@ fn index_with_optional_lsp(
             cancel,
             redact,
             &std::collections::HashMap::new(),
+            filter,
         )
         .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
     };
@@ -476,6 +479,7 @@ fn index_with_optional_lsp(
 }
 
 #[cfg(not(feature = "lsp"))]
+#[allow(clippy::too_many_arguments)] // mirrors index_directory's order-stable knobs
 fn index_with_optional_lsp(
     db: &Arc<Mutex<Database>>,
     _lsp_manager: &(),
@@ -484,6 +488,7 @@ fn index_with_optional_lsp(
     progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
     cancel: Option<indexer::CancelProbe<'_>>,
     redact: indexer::RedactionConfig,
+    filter: &indexer::WalkFilter,
 ) -> Result<indexer::IndexResult, McpError> {
     let indexer_cb = progress_tx
         .as_ref()
@@ -502,6 +507,7 @@ fn index_with_optional_lsp(
         cancel,
         redact,
         &std::collections::HashMap::new(),
+        filter,
     )
     .map_err(|e| mcp_err(format!("indexing failed: {e}")))
 }
@@ -1075,6 +1081,10 @@ pub struct CartogServer {
     stale: Arc<Mutex<Option<Arc<cartog_watch::StaleState>>>>,
     /// Secret-redaction policy applied to indexing tools.
     redact: indexer::RedactionConfig,
+    /// Walk filter (`[index] exclude` globs + gitignore policy), applied by
+    /// the indexing tools. `Arc` so `#[derive(Clone)]` stays cheap (WalkFilter
+    /// is not Copy).
+    walk_filter: Arc<indexer::WalkFilter>,
 }
 
 /// Role of this MCP server instance under single-writer election.
@@ -1128,15 +1138,17 @@ impl CartogServer {
     /// embedding fingerprint; returns `Err` if the DB can't be opened or the
     /// embedding model fails to load. `rag_config` selects the embedding +
     /// reranker providers, `redact` is the secret-redaction policy applied to
-    /// indexed content, and `lsp_overrides` maps a cartog language to its
+    /// indexed content, `lsp_overrides` maps a cartog language to its
     /// `[lsp.<lang>] command` argv for the warm `LspManager` (empty = default
-    /// PATH-resolved servers). For the read-only attach path see
-    /// [`new_read_only`](Self::new_read_only).
+    /// PATH-resolved servers), and `filter` is the walk filter (`[index]
+    /// exclude` globs + gitignore policy) the indexing tools apply. For the
+    /// read-only attach path see [`new_read_only`](Self::new_read_only).
     pub fn new(
         db_path: &std::path::Path,
         rag_config: rag::EmbeddingProviderConfig,
         redact: indexer::RedactionConfig,
         lsp_overrides: std::collections::HashMap<String, Vec<String>>,
+        filter: indexer::WalkFilter,
     ) -> anyhow::Result<Self> {
         let db = Database::open(db_path, rag_config.resolved_dimension())
             .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
@@ -1149,7 +1161,15 @@ impl CartogServer {
             rag_config.reranker_model.as_deref(),
             rag_config.intra_threads,
         );
-        Self::from_parts(db, provider, reranker, redact, lsp_overrides, Role::Primary)
+        Self::from_parts(
+            db,
+            provider,
+            reranker,
+            redact,
+            lsp_overrides,
+            filter,
+            Role::Primary,
+        )
     }
 
     /// Construct a secondary MCP server that attached read-only because
@@ -1163,6 +1183,7 @@ impl CartogServer {
         rag_config: rag::EmbeddingProviderConfig,
         redact: indexer::RedactionConfig,
         lsp_overrides: std::collections::HashMap<String, Vec<String>>,
+        filter: indexer::WalkFilter,
     ) -> anyhow::Result<Self> {
         let db = Database::open_readonly(db_path)
             .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?;
@@ -1179,6 +1200,7 @@ impl CartogServer {
             reranker,
             redact,
             lsp_overrides,
+            filter,
             Role::ReadOnly,
         )
     }
@@ -1209,6 +1231,7 @@ impl CartogServer {
         reranker: Option<Box<dyn rag::provider::RerankerProvider>>,
         redact: indexer::RedactionConfig,
         lsp_overrides: std::collections::HashMap<String, Vec<String>>,
+        filter: indexer::WalkFilter,
         role: Role,
     ) -> anyhow::Result<Self> {
         let cwd = Self::cwd()?;
@@ -1234,6 +1257,7 @@ impl CartogServer {
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             stale: Arc::new(Mutex::new(None)),
             redact,
+            walk_filter: Arc::new(filter),
         })
     }
 
@@ -1248,6 +1272,7 @@ impl CartogServer {
         db_path: &std::path::Path,
         provider: Box<dyn rag::provider::EmbeddingProvider>,
         redact: indexer::RedactionConfig,
+        filter: indexer::WalkFilter,
         role: Role,
     ) -> anyhow::Result<Self> {
         let db = match role {
@@ -1269,6 +1294,7 @@ impl CartogServer {
             None,
             redact,
             std::collections::HashMap::new(),
+            filter,
             role,
         )
     }
@@ -1335,6 +1361,7 @@ impl CartogServer {
         let db = Arc::clone(&self.db);
         let cwd = Arc::clone(&self.cwd);
         let redact = self.redact;
+        let walk_filter = Arc::clone(&self.walk_filter);
         #[cfg(feature = "lsp")]
         let lsp_manager = Arc::clone(&self.lsp_manager);
         #[cfg(not(feature = "lsp"))]
@@ -1367,6 +1394,7 @@ impl CartogServer {
                 progress_tx.clone(),
                 probe_ref,
                 redact,
+                walk_filter.as_ref(),
             )?;
             let result = catch_up_lsp(
                 &db,
@@ -2015,6 +2043,7 @@ impl CartogServer {
         let db = Arc::clone(&self.db);
         let cwd = Arc::clone(&self.cwd);
         let redact = self.redact;
+        let walk_filter = Arc::clone(&self.walk_filter);
         let provider = Arc::clone(&self.embedding_provider);
 
         let (progress_tx, forwarder) = match ctx.meta.get_progress_token() {
@@ -2051,6 +2080,7 @@ impl CartogServer {
                 probe_ref,
                 redact,
                 &std::collections::HashMap::new(),
+                walk_filter.as_ref(),
             )
             .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
 
@@ -3314,6 +3344,7 @@ mod tests {
             &db_path,
             test_provider(),
             indexer::RedactionConfig::disabled(),
+            indexer::WalkFilter::unrestricted(),
             Role::Primary,
         )
         .expect("primary server constructs");
@@ -3330,6 +3361,7 @@ mod tests {
                 &db_path,
                 test_provider(),
                 indexer::RedactionConfig::disabled(),
+                indexer::WalkFilter::unrestricted(),
                 Role::Primary,
             )
             .expect("primary server constructs");
@@ -3338,6 +3370,7 @@ mod tests {
             &db_path,
             test_provider(),
             indexer::RedactionConfig::disabled(),
+            indexer::WalkFilter::unrestricted(),
             Role::ReadOnly,
         )
         .expect("read-only server constructs");
@@ -3405,6 +3438,7 @@ mod tests {
                 &db_path,
                 test_provider(),
                 indexer::RedactionConfig::disabled(),
+                indexer::WalkFilter::unrestricted(),
                 Role::Primary,
             )
             .expect("primary server constructs");
@@ -3413,6 +3447,7 @@ mod tests {
             &db_path,
             test_provider(),
             indexer::RedactionConfig::disabled(),
+            indexer::WalkFilter::unrestricted(),
             Role::ReadOnly,
         )
         .expect("read-only server constructs");
@@ -3454,6 +3489,7 @@ mod tests {
             &db_path,
             test_provider(),
             indexer::RedactionConfig::disabled(),
+            indexer::WalkFilter::unrestricted(),
             Role::Primary,
         )
         .expect("primary reconstructs");
@@ -3526,6 +3562,7 @@ mod tests {
             None,
             None,
             indexer::RedactionConfig::disabled(),
+            &indexer::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert!(
@@ -3543,6 +3580,7 @@ mod tests {
             None,
             None,
             indexer::RedactionConfig::disabled(),
+            &indexer::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert_eq!(r2.dirty_files, 0);
@@ -3581,6 +3619,7 @@ mod tests {
             None,
             indexer::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &indexer::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert!(
@@ -3800,6 +3839,7 @@ mod tests {
             rag_override: Some(false),
             rag_config: rag::EmbeddingProviderConfig::default(),
             redact: indexer::RedactionConfig::disabled(),
+            walk_filter: indexer::WalkFilter::unrestricted(),
             // Very short for tests so the loop responds quickly.
             poll_interval: std::time::Duration::from_millis(20),
         }
@@ -4361,6 +4401,7 @@ def main():
                 None,
                 indexer::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &indexer::WalkFilter::unrestricted(),
             )
             .expect("fixture indexes");
         }
@@ -4368,6 +4409,7 @@ def main():
             &db_path,
             provider,
             indexer::RedactionConfig::disabled(),
+            indexer::WalkFilter::unrestricted(),
             Role::Primary,
         )
         .expect("server constructs");

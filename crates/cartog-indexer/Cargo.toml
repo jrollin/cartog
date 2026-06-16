@@ -19,9 +19,10 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 tracing = { workspace = true }
-walkdir = { workspace = true }
+ignore = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
+globset = { workspace = true }
 cartog-lsp = { workspace = true, optional = true }
 
 [dev-dependencies]

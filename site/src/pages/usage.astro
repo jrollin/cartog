@@ -30,6 +30,7 @@ import Base from "../layouts/Base.astro";
             <a href="#config-remote">Remote Storage (S3)</a>
             <a href="#config-secrets">Secret Redaction</a>
             <a href="#config-lsp">LSP Server Overrides</a>
+            <a href="#config-index">Index Filtering</a>
           </details>
           <details class="sidebar-group">
             <summary class="sidebar-label">Semantic Search</summary>
@@ -177,6 +178,7 @@ cartog index .          <span class="comment"># 6. re-index after changes</span>
             <tr><td><code>[remote]</code></td><td>unset (no sync)</td><td>sharing an index over S3 — see <a href="#config-remote">Remote Storage</a></td></tr>
             <tr><td><code>[security]</code></td><td><code>redact_secrets = true</code></td><td>opting out of pattern redaction — see <a href="#config-secrets">Secret Redaction</a></td></tr>
             <tr><td><code>[lsp.&lt;lang&gt;]</code></td><td>unset (server resolved from <code>PATH</code>)</td><td>running a custom/Dockerized LSP server — see <a href="#config-lsp">LSP Server Overrides</a></td></tr>
+            <tr><td><code>[index]</code></td><td><code>exclude = []</code>, <code>respect_gitignore = true</code></td><td>excluding extra paths, or indexing git-ignored files — see <a href="#config-index">Index Filtering</a></td></tr>
           </tbody>
         </table>
         <p>Example — override just the DB path and switch to Ollama, leaving everything else at its default:</p>
@@ -447,6 +449,30 @@ command = ["docker", "run", "--rm", "-i",
 EOF
 
 cartog index --force .            <span class="comment"># server spawns during the LSP resolution pass</span></pre>
+
+        <h2 id="config-index">Index Filtering</h2>
+        <p>cartog skips files three ways, all composing: it honors <code>.gitignore</code> (see below); it prunes a built-in list of dependency and build directories (<code>node_modules</code>, <code>target</code>, <code>vendor</code>, <code>dist</code>, <code>build</code>, <code>.dart_tool</code>, dot-directories, …); and <code>[index] exclude</code> adds repo-root-relative globs for paths the other two miss — vendored or generated trees under non-standard names.</p>
+        <ul>
+          <li>Globs match both files and directories; a matched <strong>directory is pruned</strong> (never descended into), so excluding a large vendored tree also saves the walk cost.</li>
+          <li><code>dir/**</code> excludes everything under <code>dir</code> and prunes <code>dir</code> itself; <code>**/*.ext</code> excludes files by extension anywhere in the tree.</li>
+          <li><code>*</code> and <code>?</code> are segment-local (they don't cross <code>/</code>), like <code>.gitignore</code>. <code>src/*</code> matches every direct entry of <code>src</code> — including subdirectories, which are then pruned — so it excludes the whole of <code>src</code>. Use a suffix glob like <code>src/*.rs</code> to exclude only files at one level, or <code>src/**</code> for an explicit subtree.</li>
+          <li>A malformed or empty glob is rejected when the config loads, not at first index.</li>
+          <li>The same globs are honored by <code>cartog watch</code> / <code>serve --watch</code>, so the live index and a manual <code>cartog index</code> always agree on scope.</li>
+          <li>This is a cartog-specific filter applied on top of <code>.gitignore</code> and the built-in prune list (see below).</li>
+        </ul>
+
+        <h3>Example: skip vendored and generated trees</h3>
+        <pre>cat &gt;&gt; .cartog.toml &lt;&lt;EOF
+[index]
+exclude = ["vendor/**", "third_party/**", "**/*.generated.*"]
+EOF
+
+cartog index --force .            <span class="comment"># removes now-excluded paths from the index</span></pre>
+
+        <h3><code>.gitignore</code> awareness</h3>
+        <p>cartog honors <code>.gitignore</code> (and <code>.git/info/exclude</code>) by default, including <strong>nested</strong> <code>.gitignore</code> files in subdirectories — so vendored or generated trees git already ignores (a CocoaPods <code>Pods/</code>, build output, …) are skipped with no cartog config, even in a tree with no <code>.git</code> directory. A <code>.cartogignore</code> file (same syntax) adds cartog-specific ignores. The built-in prune list and <code>[index] exclude</code> apply on top (they prune even where <code>.gitignore</code> would keep a path). To index files git ignores (e.g. committed generated code), opt out — the prune list and <code>exclude</code> still apply:</p>
+        <pre>[index]
+respect_gitignore = false</pre>
 
         <!-- ── Semantic Search ───────────────────── -->
 

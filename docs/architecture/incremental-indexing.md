@@ -106,7 +106,6 @@ Column-level schema, the `resolution_state` lifecycle, and additional tables (RA
 
 ## 9. Not pursued
 
-- `.gitignore` parsing (Layer 0 / ignore engine work).
 - Cross-user or cross-machine shared cache.
 - Branch-aware caching (per-branch rollup snapshots).
 - Multi-tenant access control over a shared index.
