@@ -54,7 +54,7 @@ def generate_token(user, password, mfa_token):
             None,
             indexer::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
-            &indexer::ExcludeGlobs::empty(),
+            &indexer::WalkFilter::unrestricted(),
         )
         .expect("plain index");
         assert!(

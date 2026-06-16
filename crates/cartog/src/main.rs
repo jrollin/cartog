@@ -4,7 +4,7 @@ mod config;
 use cartog::auto_check::{self, CommandKind, MaybeSpawnInput};
 use cartog::state;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use cartog_mcp as mcp;
 use clap::Parser;
 use std::io::IsTerminal;
@@ -142,11 +142,9 @@ fn main() -> Result<()> {
     let db_path = config::resolve_db_path(cli.db.clone(), &cartog_config);
     let provider_config = config::to_provider_config(&cartog_config);
     let redact = config::to_redaction_config(&cartog_config);
-    // read_config already validated these globs, so this only re-compiles a
-    // known-good set; the `?` keeps any surprise catchable via main's Result.
-    let exclude = config::to_index_exclude(&cartog_config)
-        .map_err(anyhow::Error::msg)
-        .context("compiling [index] exclude globs")?;
+    // read_config already validated this, so it only re-builds a known-good
+    // filter; the `?` keeps any surprise catchable via main's Result.
+    let walk_filter = config::to_walk_filter(&cartog_config).map_err(|e| anyhow::anyhow!("{e}"))?;
     let embedding_dim = provider_config.resolved_dimension();
     let search_tuning = cartog_config
         .rag
@@ -215,7 +213,7 @@ fn main() -> Result<()> {
             embedding_dim,
             redact,
             &lsp_overrides,
-            &exclude,
+            &walk_filter,
         ),
         Command::Outline { file } => commands::cmd_outline(
             &db_path,
@@ -358,7 +356,7 @@ fn main() -> Result<()> {
             rag_delay,
             provider_config,
             redact,
-            exclude,
+            walk_filter,
             cli.json,
         ),
         Command::Init { dry_run } => commands::init::cmd_init(dry_run, cli.json),
@@ -401,7 +399,7 @@ fn main() -> Result<()> {
                 provider_config,
                 redact,
                 lsp_overrides,
-                exclude,
+                walk_filter,
                 opts,
             ))
         }
@@ -414,7 +412,7 @@ fn main() -> Result<()> {
                 cli.json,
                 &provider_config,
                 redact,
-                &exclude,
+                &walk_filter,
             ),
             RagCommand::Search { query, kind, limit } => commands::cmd_rag_search(
                 &db_path,

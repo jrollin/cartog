@@ -64,9 +64,13 @@ impl SecurityConfig {
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct IndexConfig {
     /// Repo-root-relative globs whose matching files and directories are skipped
-    /// during indexing (e.g. `mobile/ios/Pods/**`, `**/*.md`). Complements the
+    /// during indexing (e.g. `vendor/**`, `**/*.generated.*`). Complements the
     /// built-in dep/gen-dir prune list; matched directories are not descended.
     pub exclude: Option<Vec<String>>,
+    /// Honor `.gitignore`/`.gitexclude` (including nested files) when walking.
+    /// Default `true`. Set `false` to index gitignored files (e.g. committed
+    /// generated code); the built-in prune list and `exclude` still apply.
+    pub respect_gitignore: Option<bool>,
 }
 
 /// Optional S3-compatible remote for `cartog push` / `cartog pull`.
@@ -365,18 +369,23 @@ pub fn to_redaction_config(config: &CartogConfig) -> cartog_indexer::RedactionCo
     cartog_indexer::RedactionConfig { enabled }
 }
 
-/// Compile the `[index] exclude` globs. Absent section → empty (no-op) matcher.
+/// Build the [`WalkFilter`](cartog_indexer::WalkFilter) from the `[index]`
+/// section: the `exclude` globs plus `respect_gitignore` (default `true`).
+/// Absent section → no excludes, gitignore honored.
 ///
 /// # Errors
-/// Returns the offending pattern's message if any glob is malformed, so a bad
-/// `[index] exclude` entry is rejected at config load.
-pub fn to_index_exclude(config: &CartogConfig) -> Result<cartog_indexer::ExcludeGlobs, String> {
-    let globs = config
-        .index
-        .as_ref()
-        .and_then(|i| i.exclude.as_deref())
-        .unwrap_or(&[]);
-    cartog_indexer::ExcludeGlobs::from_globs(globs).map_err(|e| format!("[index] exclude: {e:#}"))
+/// Returns the offending pattern's message if any glob is malformed or empty,
+/// so a bad `[index] exclude` entry is rejected at config load.
+pub fn to_walk_filter(config: &CartogConfig) -> Result<cartog_indexer::WalkFilter, String> {
+    let index = config.index.as_ref();
+    let globs = index.and_then(|i| i.exclude.as_deref()).unwrap_or(&[]);
+    let exclude = cartog_indexer::ExcludeGlobs::from_globs(globs)
+        .map_err(|e| format!("[index] exclude: {e:#}"))?;
+    let respect_gitignore = index.and_then(|i| i.respect_gitignore).unwrap_or(true);
+    Ok(cartog_indexer::WalkFilter {
+        exclude,
+        respect_gitignore,
+    })
 }
 
 /// Convert the embedding config section into an `EmbeddingProviderConfig` for cartog-rag.
@@ -638,7 +647,7 @@ fn read_config(path: &Path) -> Option<CartogConfig> {
     }
 
     // Reject a malformed `[index] exclude` glob at parse time, not first index.
-    if let Err(msg) = to_index_exclude(&parsed) {
+    if let Err(msg) = to_walk_filter(&parsed) {
         eprintln!("cartog: error in {}: {msg}", path.display());
         return None;
     }
@@ -967,7 +976,7 @@ mod tests {
         )
         .unwrap();
         let cfg = read_config(&cfg_path).expect("should parse");
-        assert!(!to_index_exclude(&cfg).unwrap().is_empty());
+        assert!(!to_walk_filter(&cfg).unwrap().exclude.is_empty());
     }
 
     #[test]
@@ -984,7 +993,25 @@ mod tests {
     #[test]
     fn index_exclude_absent_is_empty() {
         let cfg = CartogConfig::default();
-        assert!(to_index_exclude(&cfg).unwrap().is_empty());
+        let filter = to_walk_filter(&cfg).unwrap();
+        assert!(filter.exclude.is_empty());
+        assert!(filter.respect_gitignore, "default honors .gitignore");
+    }
+
+    #[test]
+    fn respect_gitignore_defaults_true_and_parses_false() {
+        // Default (no key) → true.
+        assert!(
+            to_walk_filter(&CartogConfig::default())
+                .unwrap()
+                .respect_gitignore
+        );
+        // Explicit false parses through.
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        fs::write(&cfg_path, "[index]\nrespect_gitignore = false\n").unwrap();
+        let cfg = read_config(&cfg_path).expect("should parse");
+        assert!(!to_walk_filter(&cfg).unwrap().respect_gitignore);
     }
 
     #[test]

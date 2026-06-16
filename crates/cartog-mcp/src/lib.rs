@@ -411,7 +411,7 @@ fn index_with_optional_lsp(
     progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
     cancel: Option<indexer::CancelProbe<'_>>,
     redact: indexer::RedactionConfig,
-    exclude: &indexer::ExcludeGlobs,
+    filter: &indexer::WalkFilter,
 ) -> Result<indexer::IndexResult, McpError> {
     let indexer_cb = progress_tx
         .as_ref()
@@ -434,7 +434,7 @@ fn index_with_optional_lsp(
             cancel,
             redact,
             &std::collections::HashMap::new(),
-            exclude,
+            filter,
         )
         .map_err(|e| mcp_err(format!("indexing failed: {e}")))?
     };
@@ -488,7 +488,7 @@ fn index_with_optional_lsp(
     progress_tx: Option<tokio::sync::mpsc::Sender<progress::Phase>>,
     cancel: Option<indexer::CancelProbe<'_>>,
     redact: indexer::RedactionConfig,
-    exclude: &indexer::ExcludeGlobs,
+    filter: &indexer::WalkFilter,
 ) -> Result<indexer::IndexResult, McpError> {
     let indexer_cb = progress_tx
         .as_ref()
@@ -507,7 +507,7 @@ fn index_with_optional_lsp(
         cancel,
         redact,
         &std::collections::HashMap::new(),
-        exclude,
+        filter,
     )
     .map_err(|e| mcp_err(format!("indexing failed: {e}")))
 }
@@ -1081,9 +1081,10 @@ pub struct CartogServer {
     stale: Arc<Mutex<Option<Arc<cartog_watch::StaleState>>>>,
     /// Secret-redaction policy applied to indexing tools.
     redact: indexer::RedactionConfig,
-    /// User `[index] exclude` globs, applied by the indexing tools. `Arc` so
-    /// `#[derive(Clone)]` stays cheap (ExcludeGlobs is not Copy).
-    exclude: Arc<indexer::ExcludeGlobs>,
+    /// Walk filter (`[index] exclude` globs + gitignore policy), applied by
+    /// the indexing tools. `Arc` so `#[derive(Clone)]` stays cheap (WalkFilter
+    /// is not Copy).
+    walk_filter: Arc<indexer::WalkFilter>,
 }
 
 /// Role of this MCP server instance under single-writer election.
@@ -1139,15 +1140,15 @@ impl CartogServer {
     /// reranker providers, `redact` is the secret-redaction policy applied to
     /// indexed content, `lsp_overrides` maps a cartog language to its
     /// `[lsp.<lang>] command` argv for the warm `LspManager` (empty = default
-    /// PATH-resolved servers), and `exclude` is the `[index] exclude` glob set
-    /// the indexing tools skip. For the read-only attach path see
-    /// [`new_read_only`](Self::new_read_only).
+    /// PATH-resolved servers), and `filter` is the walk filter (`[index]
+    /// exclude` globs + gitignore policy) the indexing tools apply. For the
+    /// read-only attach path see [`new_read_only`](Self::new_read_only).
     pub fn new(
         db_path: &std::path::Path,
         rag_config: rag::EmbeddingProviderConfig,
         redact: indexer::RedactionConfig,
         lsp_overrides: std::collections::HashMap<String, Vec<String>>,
-        exclude: indexer::ExcludeGlobs,
+        filter: indexer::WalkFilter,
     ) -> anyhow::Result<Self> {
         let db = Database::open(db_path, rag_config.resolved_dimension())
             .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
@@ -1166,7 +1167,7 @@ impl CartogServer {
             reranker,
             redact,
             lsp_overrides,
-            exclude,
+            filter,
             Role::Primary,
         )
     }
@@ -1182,7 +1183,7 @@ impl CartogServer {
         rag_config: rag::EmbeddingProviderConfig,
         redact: indexer::RedactionConfig,
         lsp_overrides: std::collections::HashMap<String, Vec<String>>,
-        exclude: indexer::ExcludeGlobs,
+        filter: indexer::WalkFilter,
     ) -> anyhow::Result<Self> {
         let db = Database::open_readonly(db_path)
             .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?;
@@ -1199,7 +1200,7 @@ impl CartogServer {
             reranker,
             redact,
             lsp_overrides,
-            exclude,
+            filter,
             Role::ReadOnly,
         )
     }
@@ -1230,7 +1231,7 @@ impl CartogServer {
         reranker: Option<Box<dyn rag::provider::RerankerProvider>>,
         redact: indexer::RedactionConfig,
         lsp_overrides: std::collections::HashMap<String, Vec<String>>,
-        exclude: indexer::ExcludeGlobs,
+        filter: indexer::WalkFilter,
         role: Role,
     ) -> anyhow::Result<Self> {
         let cwd = Self::cwd()?;
@@ -1256,7 +1257,7 @@ impl CartogServer {
             watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             stale: Arc::new(Mutex::new(None)),
             redact,
-            exclude: Arc::new(exclude),
+            walk_filter: Arc::new(filter),
         })
     }
 
@@ -1271,7 +1272,7 @@ impl CartogServer {
         db_path: &std::path::Path,
         provider: Box<dyn rag::provider::EmbeddingProvider>,
         redact: indexer::RedactionConfig,
-        exclude: indexer::ExcludeGlobs,
+        filter: indexer::WalkFilter,
         role: Role,
     ) -> anyhow::Result<Self> {
         let db = match role {
@@ -1293,7 +1294,7 @@ impl CartogServer {
             None,
             redact,
             std::collections::HashMap::new(),
-            exclude,
+            filter,
             role,
         )
     }
@@ -1360,7 +1361,7 @@ impl CartogServer {
         let db = Arc::clone(&self.db);
         let cwd = Arc::clone(&self.cwd);
         let redact = self.redact;
-        let exclude = Arc::clone(&self.exclude);
+        let walk_filter = Arc::clone(&self.walk_filter);
         #[cfg(feature = "lsp")]
         let lsp_manager = Arc::clone(&self.lsp_manager);
         #[cfg(not(feature = "lsp"))]
@@ -1393,7 +1394,7 @@ impl CartogServer {
                 progress_tx.clone(),
                 probe_ref,
                 redact,
-                exclude.as_ref(),
+                walk_filter.as_ref(),
             )?;
             let result = catch_up_lsp(
                 &db,
@@ -2042,7 +2043,7 @@ impl CartogServer {
         let db = Arc::clone(&self.db);
         let cwd = Arc::clone(&self.cwd);
         let redact = self.redact;
-        let exclude = Arc::clone(&self.exclude);
+        let walk_filter = Arc::clone(&self.walk_filter);
         let provider = Arc::clone(&self.embedding_provider);
 
         let (progress_tx, forwarder) = match ctx.meta.get_progress_token() {
@@ -2079,7 +2080,7 @@ impl CartogServer {
                 probe_ref,
                 redact,
                 &std::collections::HashMap::new(),
-                exclude.as_ref(),
+                walk_filter.as_ref(),
             )
             .map_err(|e| mcp_err(format!("code graph indexing failed: {e}")))?;
 
@@ -3343,7 +3344,7 @@ mod tests {
             &db_path,
             test_provider(),
             indexer::RedactionConfig::disabled(),
-            indexer::ExcludeGlobs::empty(),
+            indexer::WalkFilter::unrestricted(),
             Role::Primary,
         )
         .expect("primary server constructs");
@@ -3360,7 +3361,7 @@ mod tests {
                 &db_path,
                 test_provider(),
                 indexer::RedactionConfig::disabled(),
-                indexer::ExcludeGlobs::empty(),
+                indexer::WalkFilter::unrestricted(),
                 Role::Primary,
             )
             .expect("primary server constructs");
@@ -3369,7 +3370,7 @@ mod tests {
             &db_path,
             test_provider(),
             indexer::RedactionConfig::disabled(),
-            indexer::ExcludeGlobs::empty(),
+            indexer::WalkFilter::unrestricted(),
             Role::ReadOnly,
         )
         .expect("read-only server constructs");
@@ -3437,7 +3438,7 @@ mod tests {
                 &db_path,
                 test_provider(),
                 indexer::RedactionConfig::disabled(),
-                indexer::ExcludeGlobs::empty(),
+                indexer::WalkFilter::unrestricted(),
                 Role::Primary,
             )
             .expect("primary server constructs");
@@ -3446,7 +3447,7 @@ mod tests {
             &db_path,
             test_provider(),
             indexer::RedactionConfig::disabled(),
-            indexer::ExcludeGlobs::empty(),
+            indexer::WalkFilter::unrestricted(),
             Role::ReadOnly,
         )
         .expect("read-only server constructs");
@@ -3488,7 +3489,7 @@ mod tests {
             &db_path,
             test_provider(),
             indexer::RedactionConfig::disabled(),
-            indexer::ExcludeGlobs::empty(),
+            indexer::WalkFilter::unrestricted(),
             Role::Primary,
         )
         .expect("primary reconstructs");
@@ -3561,7 +3562,7 @@ mod tests {
             None,
             None,
             indexer::RedactionConfig::disabled(),
-            &indexer::ExcludeGlobs::empty(),
+            &indexer::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert!(
@@ -3579,7 +3580,7 @@ mod tests {
             None,
             None,
             indexer::RedactionConfig::disabled(),
-            &indexer::ExcludeGlobs::empty(),
+            &indexer::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert_eq!(r2.dirty_files, 0);
@@ -3618,7 +3619,7 @@ mod tests {
             None,
             indexer::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
-            &indexer::ExcludeGlobs::empty(),
+            &indexer::WalkFilter::unrestricted(),
         )
         .unwrap();
         assert!(
@@ -3838,7 +3839,7 @@ mod tests {
             rag_override: Some(false),
             rag_config: rag::EmbeddingProviderConfig::default(),
             redact: indexer::RedactionConfig::disabled(),
-            exclude: indexer::ExcludeGlobs::empty(),
+            walk_filter: indexer::WalkFilter::unrestricted(),
             // Very short for tests so the loop responds quickly.
             poll_interval: std::time::Duration::from_millis(20),
         }
@@ -4400,7 +4401,7 @@ def main():
                 None,
                 indexer::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
-                &indexer::ExcludeGlobs::empty(),
+                &indexer::WalkFilter::unrestricted(),
             )
             .expect("fixture indexes");
         }
@@ -4408,7 +4409,7 @@ def main():
             &db_path,
             provider,
             indexer::RedactionConfig::disabled(),
-            indexer::ExcludeGlobs::empty(),
+            indexer::WalkFilter::unrestricted(),
             Role::Primary,
         )
         .expect("server constructs");

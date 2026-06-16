@@ -154,7 +154,7 @@ pub async fn run_server(
     rag_config: rag::EmbeddingProviderConfig,
     redact: indexer::RedactionConfig,
     lsp_overrides: std::collections::HashMap<String, Vec<String>>,
-    exclude: indexer::ExcludeGlobs,
+    filter: indexer::WalkFilter,
     opts: ServerOptions,
 ) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
@@ -202,7 +202,7 @@ pub async fn run_server(
         config.rag_override = rag_override;
         config.rag_config = rag_config.clone();
         config.redact = redact;
-        config.exclude = exclude.clone();
+        config.walk_filter = filter.clone();
         config.stale = initial_stale.clone();
         // Claim the watcher's PID slot so a separately-running `cartog watch`
         // from a terminal correctly refuses to start against the same DB.
@@ -235,13 +235,11 @@ pub async fn run_server(
     let server = {
         let db_path = db_path.to_path_buf();
         let rag_config = rag_config.clone();
-        let exclude = exclude.clone();
+        let filter = filter.clone();
         tokio::task::spawn_blocking(move || match role {
-            Role::Primary => {
-                CartogServer::new(&db_path, rag_config, redact, lsp_overrides, exclude)
-            }
+            Role::Primary => CartogServer::new(&db_path, rag_config, redact, lsp_overrides, filter),
             Role::ReadOnly => {
-                CartogServer::new_read_only(&db_path, rag_config, redact, lsp_overrides, exclude)
+                CartogServer::new_read_only(&db_path, rag_config, redact, lsp_overrides, filter)
             }
         })
         .await
@@ -309,7 +307,7 @@ pub async fn run_server(
                     rag_override,
                     rag_config,
                     redact: server.redact,
-                    exclude: (*server.exclude).clone(),
+                    walk_filter: (*server.walk_filter).clone(),
                     poll_interval: DEFAULT_PROMOTER_POLL_INTERVAL,
                 })))
             }
@@ -405,8 +403,9 @@ pub(crate) struct PromoterArgs {
     pub(crate) rag_override: Option<bool>,
     pub(crate) rag_config: rag::EmbeddingProviderConfig,
     pub(crate) redact: indexer::RedactionConfig,
-    /// User `[index] exclude` globs forwarded to the post-promotion watcher.
-    pub(crate) exclude: indexer::ExcludeGlobs,
+    /// Walk filter (`[index] exclude` globs + gitignore policy) forwarded to
+    /// the post-promotion watcher.
+    pub(crate) walk_filter: indexer::WalkFilter,
     /// Polling interval. Const in production
     /// ([`DEFAULT_PROMOTER_POLL_INTERVAL`]); override in tests to keep
     /// the suite fast.
@@ -548,7 +547,7 @@ pub(crate) async fn promoter_task(args: PromoterArgs) {
             config.rag_override = args.rag_override;
             config.rag_config = args.rag_config.clone();
             config.redact = args.redact;
-            config.exclude = args.exclude.clone();
+            config.walk_filter = args.walk_filter.clone();
             config.stale = Some(Arc::clone(&new_stale));
             config.pid_lock_dir = Some(args.state_dir.clone());
             config.pid_lock_slot = Some(args.watch_slot.clone());

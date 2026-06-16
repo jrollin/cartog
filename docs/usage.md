@@ -245,11 +245,34 @@ exclude = ["vendor/**", "third_party/**", "**/*.generated.*", "**/*.md"]
 - A malformed or empty glob is rejected when the config loads, not at first index.
 - The same globs are honored by `cartog watch` / `serve --watch`, so the live
   index and a manual `cartog index` always agree on scope.
-- This is a cartog-specific filter applied on top of the built-in prune list; it
-  does not read `.gitignore`.
+- This is a cartog-specific filter applied on top of `.gitignore` and the
+  built-in prune list (see below).
 
 Run `cartog index --force <path>` after changing `exclude` so paths that are now
 excluded are removed from an existing index.
+
+### `.gitignore` awareness
+
+cartog honors `.gitignore` (and `.git/info/exclude`) by default, including
+**nested** `.gitignore` files in subdirectories — so vendored or generated trees
+that git already ignores (`node_modules`, a CocoaPods `Pods/`, build output, …)
+are skipped without any cartog config. `.gitignore` is applied even when the
+tree has no `.git` directory.
+
+- A `.cartogignore` file (same syntax as `.gitignore`, including negation and
+  nested files) adds cartog-specific ignores and is always honored.
+- The built-in prune list (`node_modules`, `target`, `vendor`, `dist`, `build`,
+  `.dart_tool`, dot-directories, …) and `[index] exclude` apply **on top** —
+  they prune even paths that `.gitignore` would have kept (e.g. a repo that
+  `!`-unignores `node_modules`).
+- To index files git ignores (e.g. committed generated code), opt out:
+
+```toml
+[index]
+respect_gitignore = false
+```
+
+  The built-in prune list and `[index] exclude` still apply with the opt-out on.
 
 ### LSP server overrides
 

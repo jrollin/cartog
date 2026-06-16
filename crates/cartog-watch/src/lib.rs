@@ -42,9 +42,11 @@ pub struct WatchConfig {
     pub rag_config: rag::EmbeddingProviderConfig,
     /// Secret-redaction policy applied to each re-index pass.
     pub redact: indexer::RedactionConfig,
-    /// `[index] exclude` globs, honored by the relevance filter and each
-    /// re-index so watch and a manual `cartog index` agree on scope.
-    pub exclude: indexer::ExcludeGlobs,
+    /// Walk filter (`[index] exclude` globs + gitignore policy), honored by
+    /// each re-index so watch and a manual `cartog index` agree on scope. The
+    /// relevance filter consults only its `exclude` field (gitignore is the
+    /// walker's job, not the event filter's).
+    pub walk_filter: indexer::WalkFilter,
     /// Emit newline-delimited JSON events on stdout. When false, the loop
     /// only produces tracing logs on stderr (existing behavior).
     pub json_events: bool,
@@ -93,7 +95,7 @@ impl WatchConfig {
             rag_delay: Duration::from_secs(30),
             rag_config: rag::EmbeddingProviderConfig::default(),
             redact: indexer::RedactionConfig::default(),
-            exclude: indexer::ExcludeGlobs::empty(),
+            walk_filter: indexer::WalkFilter::unrestricted(),
             json_events: false,
             pid_lock_dir: None,
             pid_lock_slot: None,
@@ -413,7 +415,7 @@ fn watch_loop(
         None,
         config.redact,
         &std::collections::HashMap::new(),
-        &config.exclude,
+        &config.walk_filter,
     ) {
         Ok(r) => {
             info!(
@@ -525,7 +527,7 @@ fn watch_loop(
                 // Filter events to only supported source files in non-ignored dirs
                 let relevant = events.iter().any(|event| {
                     event.kind == DebouncedEventKind::Any
-                        && is_relevant_path(&event.path, root, &config.exclude)
+                        && is_relevant_path(&event.path, root, &config.walk_filter.exclude)
                 });
 
                 if relevant {
@@ -550,7 +552,7 @@ fn watch_loop(
                         None,
                         config.redact,
                         &std::collections::HashMap::new(),
-                        &config.exclude,
+                        &config.walk_filter,
                     ) {
                         Ok(r) => {
                             if r.files_indexed > 0 || r.files_removed > 0 {

@@ -52,10 +52,13 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # redact_secrets = true
 
 # [index]
-# Repo-root-relative globs to skip during indexing, in addition to the built-in
-# dependency/build-dir prune list. Matched directories are not descended into.
-# Useful for vendored or generated trees that are not gitignored.
+# cartog honors .gitignore (incl. nested) and .cartogignore by default. These
+# globs skip ADDITIONAL repo-root-relative paths (matched dirs are pruned), on
+# top of .gitignore and the built-in dependency/build-dir prune list.
 # exclude = ["vendor/**", "**/*.generated.*"]
+# Set false to index files git ignores (e.g. committed generated code); the
+# prune list and `exclude` still apply.
+# respect_gitignore = true
 "##;
 
 #[derive(Debug, Serialize)]

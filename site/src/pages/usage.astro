@@ -457,7 +457,7 @@ cartog index --force .            <span class="comment"># server spawns during t
           <li><code>*</code> and <code>?</code> are segment-local (they don't cross <code>/</code>), like <code>.gitignore</code>. <code>src/*</code> matches every direct entry of <code>src</code> — including subdirectories, which are then pruned — so it excludes the whole of <code>src</code>. Use a suffix glob like <code>src/*.rs</code> to exclude only files at one level, or <code>src/**</code> for an explicit subtree.</li>
           <li>A malformed or empty glob is rejected when the config loads, not at first index.</li>
           <li>The same globs are honored by <code>cartog watch</code> / <code>serve --watch</code>, so the live index and a manual <code>cartog index</code> always agree on scope.</li>
-          <li>This is a cartog-specific filter on top of the built-in prune list; it does not read <code>.gitignore</code>.</li>
+          <li>This is a cartog-specific filter applied on top of <code>.gitignore</code> and the built-in prune list (see below).</li>
         </ul>
 
         <h3>Example: skip vendored and generated trees</h3>
@@ -467,6 +467,11 @@ exclude = ["vendor/**", "third_party/**", "**/*.generated.*"]
 EOF
 
 cartog index --force .            <span class="comment"># removes now-excluded paths from the index</span></pre>
+
+        <h3><code>.gitignore</code> awareness</h3>
+        <p>cartog honors <code>.gitignore</code> (and <code>.git/info/exclude</code>) by default, including <strong>nested</strong> <code>.gitignore</code> files in subdirectories — so vendored or generated trees git already ignores (a CocoaPods <code>Pods/</code>, build output, …) are skipped with no cartog config, even in a tree with no <code>.git</code> directory. A <code>.cartogignore</code> file (same syntax) adds cartog-specific ignores. The built-in prune list and <code>[index] exclude</code> apply on top (they prune even where <code>.gitignore</code> would keep a path). To index files git ignores (e.g. committed generated code), opt out — the prune list and <code>exclude</code> still apply:</p>
+        <pre>[index]
+respect_gitignore = false</pre>
 
         <!-- ── Semantic Search ───────────────────── -->
 
