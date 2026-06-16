@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.29.1] - 2026-06-16
+
+### Bug Fixes
+
+- **index**: Address review — watcher ancestor excludes, doc/site sync ([`4cd098e`](https://github.com/jrollin/cartog/commit/4cd098eaa2fb7306b765f5516410546aa2950de6))
+
+### Features
+
+- **index**: Add [index] exclude path globs ([`1642c8e`](https://github.com/jrollin/cartog/commit/1642c8e3a53d705cccbdfe4a441d849573412038))
+- **index**: Honor .gitignore via the ignore crate ([`1a86382`](https://github.com/jrollin/cartog/commit/1a8638232d1ef9aa49839249ba97900f0e692fc6))
+- **mcp**: Enforce strict-increase progress notifications + e2e test ([`223e6a6`](https://github.com/jrollin/cartog/commit/223e6a6f5f890de074415c4af9095d0a9cc08f6d))
+- **site**: Add docs search (Pagefind) + mobile-friendly fixes ([`60f93e7`](https://github.com/jrollin/cartog/commit/60f93e7220503d910ba0eed7f90221b818d81752))
+
 ## [0.29.0] - 2026-06-15
 
 ### Documentation
