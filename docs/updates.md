@@ -10,7 +10,7 @@
 | `cartog self update --check` | Check whether an update exists; do nothing else |
 | `cartog self update --defer` | Arm a deferred update (record the target, do **not** swap); succeeds even while a peer runs |
 | `cartog self update --apply-pending` | Apply a previously-armed deferred update once no peer holds the lock |
-| `cartog self version` | Print version, target triple, install source, last check timestamp, pending update |
+| `cartog self version` | Print version, `describe` build string, target triple, install source, last check timestamp, pending update |
 | `cartog self rollback` | Restore the previous binary (the `<bin>.old` sibling) |
 
 ## Upgrade in place
@@ -112,7 +112,7 @@ cartog self version
 cartog self version --json
 ```
 
-Reports the bare semver, target triple (e.g. `aarch64-apple-darwin`), install source, and the timestamp of the last successful update check (`never` if none).
+Reports the bare semver, a `describe` string (`git describe` output, e.g. `v0.29.1-2-g3e2822c` for an unreleased main build vs `v0.29.1` for a release), target triple (e.g. `aarch64-apple-darwin`), install source, and the timestamp of the last successful update check (`never` if none). The semver, not `describe`, is what `cartog self update` compares against the latest release.
 
 `install_source` is one of:
 - `release-tarball` — downloaded from a GitHub release (or installed via `install.sh`)

@@ -1320,7 +1320,7 @@ Manage the installed cartog binary in place: upgrade, inspect, roll back, or mig
 ```bash
 cartog self update             # upgrade to the latest stable
 cartog self update --check     # report whether an update exists; exit 1 if outdated
-cartog self version            # version + target + install source + last check
+cartog self version            # version + describe build string + target + install source + last check
 cartog self rollback           # restore the previous binary saved at <bin>.old
 cartog self migrate-db         # move legacy .cartog.db (+ -wal/-shm/.bak) into .cartog/
 cartog self migrate-db --dry-run  # preview the planned moves without touching the filesystem

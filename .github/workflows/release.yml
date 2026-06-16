@@ -28,7 +28,11 @@ jobs:
             os: windows-latest
 
     steps:
+      # fetch-depth: 0 so build.rs `git describe` sees tags → release binary
+      # shows the clean tag in its version line, not `unknown`.
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
         with:

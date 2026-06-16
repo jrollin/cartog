@@ -23,6 +23,10 @@ const COMPILE_TIME_INSTALL_SOURCE: &str = env!("CARTOG_INSTALL_SOURCE");
 /// Compile-time target triple, e.g. `aarch64-apple-darwin`.
 const TARGET_TRIPLE: &str = env!("CARTOG_TARGET_TRIPLE");
 
+/// `git describe` display version (e.g. `v0.29.1-2-g3e2822c`); distinct from
+/// the clean semver in [`VersionInfo::version`] used for update comparisons.
+const BUILD_VERSION: &str = env!("CARTOG_BUILD_VERSION");
+
 /// Test seam: when set to `release-tarball`, `cargo`, or `dev`, the install
 /// source is forced to that value, bypassing the compile-time + path
 /// heuristics. Lets the integration suite drive the cargo-refusal branch
@@ -97,6 +101,10 @@ fn looks_like_cargo_install(binary_path: &Path, cargo_home: Option<&Path>) -> bo
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct VersionInfo {
     pub version: String,
+    /// `git describe` display string; additive JSON field (no `deny_unknown_fields`).
+    /// Serialized as `describe` to match the human label and docs.
+    #[serde(rename = "describe")]
+    pub build_version: String,
     pub target: String,
     pub install_source: String,
     /// RFC3339 timestamp of the last successful update check, or `None`.
@@ -114,6 +122,7 @@ impl VersionInfo {
     pub(crate) fn build(state: &State) -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
+            build_version: BUILD_VERSION.to_string(),
             target: TARGET_TRIPLE.to_string(),
             install_source: effective_install_source().to_string(),
             last_update_check: state.last_update_check.clone(),
@@ -124,9 +133,12 @@ impl VersionInfo {
     /// Render the human-readable form printed when `--json` is not set.
     pub(crate) fn render_human(&self) -> String {
         let last = self.last_update_check.as_deref().unwrap_or("never");
+        // Values aligned to the widest label (`last update check:`) so all four
+        // detail lines start their value at the same column.
         format!(
-            "cartog {version}\n  target:           {target}\n  install source:   {source}\n  last update check: {last}\n",
+            "cartog {version}\n  describe:          {build}\n  target:            {target}\n  install source:    {source}\n  last update check: {last}\n",
             version = self.version,
+            build = self.build_version,
             target = self.target,
             source = self.install_source,
             last = last,
@@ -1544,6 +1556,25 @@ fn emit_migrate_result(
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn render_human_shows_describe_value_separately_from_version() {
+        let info = VersionInfo {
+            version: "0.29.1".into(),
+            build_version: "v0.29.1-2-g3e2822c".into(),
+            target: "x".into(),
+            install_source: "dev".into(),
+            last_update_check: None,
+            pending_update: None,
+        };
+        let out = info.render_human();
+        // The version line carries the bare semver, the describe line its own value
+        // — assert on the values, not the column padding.
+        assert!(out.lines().any(|l| l == "cartog 0.29.1"));
+        assert!(out
+            .lines()
+            .any(|l| l.trim_start().starts_with("describe:") && l.contains("v0.29.1-2-g3e2822c")));
+    }
 
     #[test]
     fn update_mode_from_flags_maps_each_combination() {

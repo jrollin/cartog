@@ -8,6 +8,8 @@ use cartog_core::{EdgeKind, SymbolKind};
 /// Short form (`-V`) keeps the bare semver. Populated by `build.rs`.
 pub const LONG_VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
+    "\ndescribe: ",
+    env!("CARTOG_BUILD_VERSION"),
     "\nbuild:    ",
     env!("CARTOG_BUILD_SHA"),
     "\nfeatures: ",
