@@ -1152,12 +1152,13 @@ Dry run only. Re-run without --dry-run to apply.</pre>
         <p>Manage the installed cartog binary in place: upgrade, inspect, or roll back. <code>cargo install cartog</code> users get an exit-3 refusal pointing at <code>cargo install cartog --force</code>; release-tarball installs swap atomically with SHA256 verification and a <code>&lt;bin&gt;.old</code> rollback slot.</p>
         <pre>cartog self update              <span class="comment"># upgrade to the latest stable</span>
 cartog self update --check      <span class="comment"># exit 1 if outdated, 0 if current</span>
-cartog self version             <span class="comment"># target + install source + last check</span>
+cartog self version             <span class="comment"># version + describe + target + install source + last check</span>
 cartog self rollback            <span class="comment"># restore the previous binary</span>
 cartog self migrate-db          <span class="comment"># move legacy .cartog.db into .cartog/db.sqlite</span>
 cartog self migrate-db --dry-run <span class="comment"># preview the move without touching disk</span></pre>
         <p class="example-label">Example output (<code>cartog self version</code>)</p>
-        <pre class="example-output">cartog 0.18.0
+        <pre class="example-output">cartog 0.29.1
+  describe:          v0.29.1
   target:            aarch64-apple-darwin
   install source:    release-tarball
   last update check: 2026-05-27T14:50:47Z</pre>
