@@ -1,6 +1,7 @@
 ---
 import Nav from "../components/Nav.astro";
 import Footer from "../components/Footer.astro";
+import SearchModal from "../components/SearchModal.astro";
 import { withBase } from "../lib/url";
 
 interface Props {
@@ -48,6 +49,7 @@ const favicon =
     <Nav />
     <slot />
     <Footer variant={footerVariant} />
+    <SearchModal />
 
     <script is:inline>
       function copyCmd(btn, text) {

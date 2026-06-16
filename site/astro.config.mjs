@@ -1,5 +1,6 @@
 // @ts-check
 import { defineConfig } from "astro/config";
+import pagefind from "astro-pagefind";
 
 // Deployed to GitHub Pages at https://jrollin.github.io/cartog/.
 // build.format "file" keeps the original flat URLs (usage.html, not usage/),
@@ -15,4 +16,9 @@ export default defineConfig({
     format: "file",
     assets: "_astro",
   },
+  // Pagefind builds a static search index from the built HTML at `astro build`
+  // and serves the UI client-side (no server) — fits GitHub Pages. Only regions
+  // tagged `data-pagefind-body` are indexed; the docs page (usage.astro) carries
+  // it, so search is scoped to the docs.
+  integrations: [pagefind()],
 });
