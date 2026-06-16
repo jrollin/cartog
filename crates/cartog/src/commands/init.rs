@@ -50,6 +50,12 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # text. On by default. Sensitive files (.env, *.pem, id_rsa, ...) are always
 # excluded regardless of this setting.
 # redact_secrets = true
+
+# [index]
+# Repo-root-relative globs to skip during indexing, in addition to the built-in
+# dependency/build-dir prune list. Matched directories are not descended into.
+# Useful for vendored or generated trees that are not gitignored.
+# exclude = ["vendor/**", "**/*.generated.*"]
 "##;
 
 #[derive(Debug, Serialize)]

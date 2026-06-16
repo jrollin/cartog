@@ -356,6 +356,7 @@ pub fn cmd_index(
     embedding_dim: usize,
     redact: indexer::RedactionConfig,
     lsp_overrides: &std::collections::HashMap<String, Vec<String>>,
+    exclude: &indexer::ExcludeGlobs,
 ) -> Result<()> {
     let root = Path::new(path);
     let db = open_db(db_path, embedding_dim)?;
@@ -389,6 +390,7 @@ pub fn cmd_index(
         Some(cancel_ref),
         redact,
         lsp_overrides,
+        exclude,
     );
     drop(cb);
     stop_spinner(spinner);
@@ -1320,6 +1322,7 @@ pub fn cmd_rag_index(
     json: bool,
     provider_config: &rag::EmbeddingProviderConfig,
     redact: indexer::RedactionConfig,
+    exclude: &indexer::ExcludeGlobs,
 ) -> Result<()> {
     let root = Path::new(path);
     // Install the handler first so Ctrl-C also covers the (potentially long,
@@ -1345,6 +1348,7 @@ pub fn cmd_rag_index(
         Some(ix_cancel),
         redact,
         &std::collections::HashMap::new(),
+        exclude,
     );
     drop(ix_cb);
     stop_spinner(spinner);
@@ -1620,6 +1624,7 @@ pub fn cmd_watch(
     rag_delay: u64,
     provider_config: rag::EmbeddingProviderConfig,
     redact: indexer::RedactionConfig,
+    exclude: indexer::ExcludeGlobs,
     json: bool,
 ) -> Result<()> {
     let mut config = WatchConfig::new(PathBuf::from(path));
@@ -1628,6 +1633,7 @@ pub fn cmd_watch(
     config.rag_delay = Duration::from_secs(rag_delay);
     config.rag_config = provider_config;
     config.redact = redact;
+    config.exclude = exclude;
     config.json_events = json;
     // pid_lock_dir/slot must be both-or-neither: a sandboxed host with no
     // resolvable state dir falls back to untracked mode rather than hard-
@@ -1953,6 +1959,7 @@ def main():
             None,
             indexer::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &indexer::ExcludeGlobs::empty(),
         )
         .expect("fixture indexes");
         drop(db);

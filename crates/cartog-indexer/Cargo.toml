@@ -22,6 +22,7 @@ tracing = { workspace = true }
 walkdir = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
+globset = { workspace = true }
 cartog-lsp = { workspace = true, optional = true }
 
 [dev-dependencies]

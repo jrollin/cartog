@@ -633,6 +633,11 @@ base_url = "http://localhost:11434"
 [reranker]
 provider = "none"            # "local" (default) or "none"
 # model  = "BAAI/bge-reranker-base"   # default: jinaai/jina-reranker-v1-turbo-en (~150MB)
+
+# [index]
+# Extra repo-root-relative globs to skip (on top of node_modules/target/vendor/...).
+# Matched directories are pruned. Useful for vendored or generated trees.
+# exclude = ["vendor/**", "**/*.generated.*"]
 ```
 
 ## Privacy

@@ -364,6 +364,7 @@ pub fn index_directory(
     cancel: Option<CancelProbe<'_>>,
     redact: RedactionConfig,
     lsp_overrides: &std::collections::HashMap<String, Vec<String>>,
+    exclude: &ExcludeGlobs,
 ) -> Result<IndexResult> {
     let emit = |u: ProgressUpdate| {
         if let Some(cb) = progress {
@@ -436,7 +437,7 @@ pub fn index_directory(
         .follow_links(true)
         .max_depth(50)
         .into_iter()
-        .filter_entry(|e| !is_ignored(e))
+        .filter_entry(|e| !is_ignored(e) && !is_excluded_entry(e, &root, exclude))
     {
         let entry = match entry {
             Ok(e) => e,
@@ -463,6 +464,10 @@ pub fn index_directory(
             result.files_redacted_skipped += 1;
             continue;
         }
+
+        // `[index] exclude` is enforced in the walk's `filter_entry` below
+        // (`is_excluded_entry`), which drops matching files and prunes matching
+        // dirs before they are yielded — so no second check is needed here.
 
         let lang = match detect_language(Path::new(&rel_path)) {
             Some(l) => l,
@@ -729,14 +734,20 @@ pub fn index_directory(
     // means the wrong root (e.g. `cartog rag index --db <db>` run from another
     // directory). Sweeping would silently delete the whole index — refuse.
     if current_files.is_empty() && !all_indexed.is_empty() && !force {
+        let exclude_hint = if exclude.is_empty() {
+            ""
+        } else {
+            " A `[index] exclude` glob is set — check it isn't matching every file."
+        };
         anyhow::bail!(
             "refusing to empty the index: no supported source files found under {} \
              but the database holds {} indexed files. This usually means the wrong \
              root for this database (e.g. `cartog rag index --db <db>` run from \
-             another directory). Re-run from the project root, or pass --force to \
+             another directory).{} Re-run from the project root, or pass --force to \
              really empty the index.",
             root.display(),
-            all_indexed.len()
+            all_indexed.len(),
+            exclude_hint
         );
     }
     for indexed_path in all_indexed {
@@ -884,6 +895,18 @@ fn is_ignored(entry: &walkdir::DirEntry) -> bool {
     false
 }
 
+/// Whether a walkdir entry matches a user `[index] exclude` glob (repo-root-
+/// relative; dirs use the dir-probe form so `dir/**` prunes the directory).
+fn is_excluded_entry(entry: &walkdir::DirEntry, root: &Path, exclude: &ExcludeGlobs) -> bool {
+    if exclude.is_empty() {
+        return false;
+    }
+    let Ok(rel) = entry.path().strip_prefix(root) else {
+        return false;
+    };
+    exclude.is_excluded_with_dir(rel, entry.file_type().is_dir())
+}
+
 /// Check if a directory name should be ignored during indexing.
 ///
 /// Shared between the walkdir-based indexer and the file watcher.
@@ -987,11 +1010,13 @@ fn dedup_symbol_ids(symbols: &mut [Symbol], edges: &mut [cartog_core::Edge]) {
 }
 
 mod content;
+mod exclude;
 mod git;
 mod merkle;
 mod redact;
 
 pub(crate) use content::extract_symbol_content_redacted;
+pub use exclude::ExcludeGlobs;
 pub use git::git_recently_changed_files;
 pub(crate) use git::{git_changed_files, git_head_commit};
 pub(crate) use merkle::{compute_merkle_hashes, merkle_diff};
@@ -1091,6 +1116,7 @@ pub mod bench_support {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .expect("full index")
     }
@@ -1115,6 +1141,7 @@ pub mod bench_support {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .expect("seed index");
         db
@@ -1135,6 +1162,7 @@ pub mod bench_support {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .expect("noop re-index")
     }
@@ -1163,6 +1191,7 @@ pub mod bench_support {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .expect("incremental re-index")
     }
@@ -1182,6 +1211,7 @@ mod tests {
             None,
             RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
     }
 
@@ -1225,6 +1255,107 @@ mod tests {
         let empty = visible_dir(&tmp, "elsewhere");
         index_dir(&db, &empty, true).unwrap();
         assert!(db.all_files().unwrap().is_empty());
+    }
+
+    fn index_dir_excluding(
+        db: &cartog_db::Database,
+        root: &Path,
+        patterns: &[&str],
+    ) -> Result<IndexResult> {
+        let exclude = ExcludeGlobs::from_globs(
+            &patterns
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        index_directory(
+            db,
+            root,
+            true,
+            false,
+            None,
+            None,
+            RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+            &exclude,
+        )
+    }
+
+    #[test]
+    fn exclude_prunes_dir_and_matches_files() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::write(proj.join("a.py"), "def foo():\n    return 1\n").unwrap();
+        std::fs::create_dir(proj.join("Pods")).unwrap();
+        std::fs::write(proj.join("Pods/b.py"), "def bar():\n    return 2\n").unwrap();
+        // A non-source file inside the excluded dir: if the dir were merely
+        // file-filtered (walked + each file dropped) rather than PRUNED, the walk
+        // would tally this as unsupported. Pruning means it's never visited.
+        std::fs::write(proj.join("Pods/readme.xyz"), "junk\n").unwrap();
+        std::fs::write(proj.join("notes.md"), "# Title\n\nbody\n").unwrap();
+
+        let r = index_dir_excluding(&db, &proj, &["Pods/**", "**/*.md"]).unwrap();
+
+        assert_eq!(r.files_indexed, 1, "only a.py should be indexed");
+        assert_eq!(
+            r.files_unsupported, 0,
+            "Pods/ must be pruned (not descended), so its .xyz is never tallied"
+        );
+        let files = db.all_files().unwrap();
+        assert!(files.iter().any(|f| f.ends_with("a.py")));
+        assert!(
+            !files.iter().any(|f| f.contains("Pods")),
+            "pruned dir must contribute no files"
+        );
+        assert!(!files.iter().any(|f| f.ends_with(".md")));
+    }
+
+    #[test]
+    fn exclude_matching_everything_errors_with_exclude_hint() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::write(proj.join("a.py"), "def foo():\n    return 1\n").unwrap();
+        index_dir(&db, &proj, false).unwrap();
+
+        // A valid glob that happens to match every source file empties the walk.
+        // Non-force must refuse AND point at the exclude, not just "wrong root".
+        let exclude = ExcludeGlobs::from_globs(&["**/*.py".to_string()]).unwrap();
+        let res = index_directory(
+            &db,
+            &proj,
+            false,
+            false,
+            None,
+            None,
+            RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+            &exclude,
+        );
+        let err = format!("{:#}", res.unwrap_err());
+        assert!(err.contains("[index] exclude"), "hint missing: {err}");
+        assert!(!db.all_files().unwrap().is_empty(), "index left untouched");
+    }
+
+    #[test]
+    fn exclude_empty_is_noop() {
+        let db = cartog_db::Database::open_memory().unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proj = visible_dir(&tmp, "proj");
+        std::fs::write(proj.join("a.py"), "def foo():\n    return 1\n").unwrap();
+        std::fs::create_dir(proj.join("Pods")).unwrap();
+        std::fs::write(proj.join("Pods/b.py"), "def bar():\n    return 2\n").unwrap();
+        std::fs::write(proj.join("notes.md"), "# Title\n\nbody\n").unwrap();
+
+        let r = index_dir_excluding(&db, &proj, &[]).unwrap();
+
+        // No globs → everything supported is indexed (both .py + the .md doc).
+        assert_eq!(r.files_indexed, 3);
+        let files = db.all_files().unwrap();
+        assert!(files.iter().any(|f| f.contains("Pods")));
+        assert!(files.iter().any(|f| f.ends_with(".md")));
     }
 
     #[test]
@@ -1460,6 +1591,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -1506,6 +1638,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -1550,6 +1683,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::ExcludeGlobs::empty(),
             )
             .unwrap();
             assert!(r1.files_indexed > 0);
@@ -1565,6 +1699,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::ExcludeGlobs::empty(),
             )
             .unwrap();
             assert_eq!(r2.files_indexed, 0);
@@ -1588,6 +1723,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::ExcludeGlobs::empty(),
             )
             .unwrap();
             assert_eq!(r3.files_indexed, r1.files_indexed);
@@ -1619,6 +1755,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -1631,6 +1768,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
         assert_eq!(r2.dirty_files, 0);
@@ -1659,6 +1797,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -1699,6 +1838,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
         assert!(
@@ -1730,6 +1870,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -1767,6 +1908,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::ExcludeGlobs::empty(),
             )
             .unwrap()
         };
@@ -1829,6 +1971,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::ExcludeGlobs::empty(),
             )
             .unwrap()
         };
@@ -1888,6 +2031,7 @@ mod tests {
                 None,
                 crate::RedactionConfig::disabled(),
                 &std::collections::HashMap::new(),
+                &crate::ExcludeGlobs::empty(),
             )
             .unwrap()
         };
@@ -1941,6 +2085,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -1971,6 +2116,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
         // --force clears the sticky LSP markers (reset_all_unresolvable), then
@@ -2011,6 +2157,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -2041,6 +2188,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -2082,6 +2230,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -2110,6 +2259,7 @@ mod tests {
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
         assert_eq!(r.dirty_files, 0);
@@ -2414,6 +2564,7 @@ def main():
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
         assert_eq!(r1.files_indexed, 2);
@@ -2473,6 +2624,7 @@ def standalone():
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
         assert_eq!(r2.files_indexed, 1, "only a.py changed");
@@ -2530,6 +2682,7 @@ def standalone():
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
         assert_eq!(r3.files_indexed, 1);
@@ -2594,6 +2747,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -2682,6 +2836,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .expect("seed index should succeed");
 
@@ -2723,6 +2878,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         );
         assert!(
             result.is_err(),
@@ -2793,6 +2949,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -2835,6 +2992,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -2850,6 +3008,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -2881,6 +3040,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -2936,6 +3096,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -2984,6 +3145,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             Some(&probe),
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .expect_err("index must abort when probe trips at first phase boundary");
         assert!(
@@ -3009,6 +3171,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             Some(&probe),
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .expect("non-cancelling probe must not affect normal indexing");
         assert!(result.files_indexed >= 2);
@@ -3033,6 +3196,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             Some(&probe),
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .expect_err("first run cancels");
 
@@ -3047,6 +3211,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             Some(&probe),
             crate::RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .expect("re-run after cancellation must succeed");
         assert!(result.files_indexed >= 2);
@@ -3089,6 +3254,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::enabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -3110,6 +3276,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -3131,6 +3298,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::enabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -3163,6 +3331,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::enabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -3188,6 +3357,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
         assert!(only_content(&db).contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
@@ -3203,6 +3373,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::enabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
         assert!(r.redaction_backfilled, "policy change must flag a backfill");
@@ -3225,6 +3396,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::enabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 
@@ -3238,6 +3410,7 @@ We use PostgreSQL with connection pooling via pgbouncer.
             None,
             RedactionConfig::disabled(),
             &std::collections::HashMap::new(),
+            &crate::ExcludeGlobs::empty(),
         )
         .unwrap();
 

@@ -4,7 +4,7 @@ mod config;
 use cartog::auto_check::{self, CommandKind, MaybeSpawnInput};
 use cartog::state;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use cartog_mcp as mcp;
 use clap::Parser;
 use std::io::IsTerminal;
@@ -30,6 +30,19 @@ fn remote_command_label(cmd: &Command) -> Option<&'static str> {
         Command::Pull { .. } => Some("pull"),
         _ => None,
     }
+}
+
+/// Commands that build a code-graph index and therefore consume the
+/// `[index]`/`[security]`/`[lsp]` config — used to warn when a rejected config
+/// silently drops those settings.
+fn indexes_with_config(cmd: &Command) -> bool {
+    matches!(
+        cmd,
+        Command::Index { .. }
+            | Command::Watch { .. }
+            | Command::Serve { .. }
+            | Command::Rag(RagCommand::Index { .. })
+    )
 }
 
 /// Long-lived commands (`serve`, `watch`) skip the auto-check — they run
@@ -111,11 +124,29 @@ fn main() -> Result<()> {
 
     let config_rejected = config_load.is_rejected();
     let config_path = config_load.path().map(|p| p.to_path_buf());
+    // A rejected config silently falls back to defaults, so an indexing command
+    // would ignore `[index] exclude`, `[security]`, and `[lsp.<lang>]` without
+    // saying so. The underlying parse error is already on stderr; add a note
+    // that those settings were dropped for commands that actually consume them.
+    if config_rejected && indexes_with_config(&cli.command) {
+        if let Some(p) = &config_path {
+            eprintln!(
+                "cartog: note: {} was rejected; indexing with defaults \
+                 ([index] exclude, [security], and [lsp] settings ignored).",
+                p.display()
+            );
+        }
+    }
     let cartog_config = config_load.config_or_default();
 
     let db_path = config::resolve_db_path(cli.db.clone(), &cartog_config);
     let provider_config = config::to_provider_config(&cartog_config);
     let redact = config::to_redaction_config(&cartog_config);
+    // read_config already validated these globs, so this only re-compiles a
+    // known-good set; the `?` keeps any surprise catchable via main's Result.
+    let exclude = config::to_index_exclude(&cartog_config)
+        .map_err(anyhow::Error::msg)
+        .context("compiling [index] exclude globs")?;
     let embedding_dim = provider_config.resolved_dimension();
     let search_tuning = cartog_config
         .rag
@@ -184,6 +215,7 @@ fn main() -> Result<()> {
             embedding_dim,
             redact,
             &lsp_overrides,
+            &exclude,
         ),
         Command::Outline { file } => commands::cmd_outline(
             &db_path,
@@ -326,6 +358,7 @@ fn main() -> Result<()> {
             rag_delay,
             provider_config,
             redact,
+            exclude,
             cli.json,
         ),
         Command::Init { dry_run } => commands::init::cmd_init(dry_run, cli.json),
@@ -368,14 +401,21 @@ fn main() -> Result<()> {
                 provider_config,
                 redact,
                 lsp_overrides,
+                exclude,
                 opts,
             ))
         }
         Command::Rag(rag_cmd) => match rag_cmd {
             RagCommand::Setup => commands::cmd_rag_setup(cli.json, &provider_config),
-            RagCommand::Index { path, force } => {
-                commands::cmd_rag_index(&db_path, &path, force, cli.json, &provider_config, redact)
-            }
+            RagCommand::Index { path, force } => commands::cmd_rag_index(
+                &db_path,
+                &path,
+                force,
+                cli.json,
+                &provider_config,
+                redact,
+                &exclude,
+            ),
             RagCommand::Search { query, kind, limit } => commands::cmd_rag_search(
                 &db_path,
                 &query,

@@ -220,6 +220,37 @@ redact_secrets = false
 - Toggling `redact_secrets` triggers a one-time full re-index so already-stored
   content is scrubbed (or restored); a notice is printed.
 
+### Index exclude globs
+
+cartog already prunes common dependency and build directories (`node_modules`,
+`target`, `vendor`, `dist`, `build`, `.dart_tool`, dot-directories, ...). To skip
+additional paths — vendored or generated trees under non-standard names that the
+built-in list misses — add repo-root-relative globs:
+
+```toml
+[index]
+exclude = ["vendor/**", "third_party/**", "**/*.generated.*", "**/*.md"]
+```
+
+- Globs are repo-root-relative and match both files and directories. A matched
+  **directory is pruned** (never descended into), so excluding a large vendored
+  tree also saves the walk cost.
+- `dir/**` excludes everything under `dir` and prunes `dir` itself; `**/*.ext`
+  excludes files by extension anywhere in the tree.
+- `*` and `?` are **segment-local** (they don't cross `/`), like `.gitignore`.
+  `src/*` matches every direct entry of `src` — including subdirectories, which
+  are then pruned — so it effectively excludes the whole of `src` (same as
+  `.gitignore`). To exclude only files at one level, use a suffix glob like
+  `src/*.rs`; to exclude a whole subtree explicitly, use `src/**`.
+- A malformed or empty glob is rejected when the config loads, not at first index.
+- The same globs are honored by `cartog watch` / `serve --watch`, so the live
+  index and a manual `cartog index` always agree on scope.
+- This is a cartog-specific filter applied on top of the built-in prune list; it
+  does not read `.gitignore`.
+
+Run `cartog index --force <path>` after changing `exclude` so paths that are now
+excluded are removed from an existing index.
+
 ### LSP server overrides
 
 By default cartog resolves a language's LSP server from `PATH` (e.g.

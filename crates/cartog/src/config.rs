@@ -21,6 +21,7 @@ pub struct CartogConfig {
     pub security: Option<SecurityConfig>,
     /// Per-language LSP command overrides, keyed by cartog language name.
     pub lsp: Option<HashMap<String, LspLangConfig>>,
+    pub index: Option<IndexConfig>,
 }
 
 /// Override for one language's LSP server command (`[lsp.<lang>]`).
@@ -57,6 +58,15 @@ impl SecurityConfig {
     pub fn redact_secrets(&self) -> bool {
         self.redact_secrets.unwrap_or(true)
     }
+}
+
+/// Indexing settings.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct IndexConfig {
+    /// Repo-root-relative globs whose matching files and directories are skipped
+    /// during indexing (e.g. `mobile/ios/Pods/**`, `**/*.md`). Complements the
+    /// built-in dep/gen-dir prune list; matched directories are not descended.
+    pub exclude: Option<Vec<String>>,
 }
 
 /// Optional S3-compatible remote for `cartog push` / `cartog pull`.
@@ -355,6 +365,20 @@ pub fn to_redaction_config(config: &CartogConfig) -> cartog_indexer::RedactionCo
     cartog_indexer::RedactionConfig { enabled }
 }
 
+/// Compile the `[index] exclude` globs. Absent section → empty (no-op) matcher.
+///
+/// # Errors
+/// Returns the offending pattern's message if any glob is malformed, so a bad
+/// `[index] exclude` entry is rejected at config load.
+pub fn to_index_exclude(config: &CartogConfig) -> Result<cartog_indexer::ExcludeGlobs, String> {
+    let globs = config
+        .index
+        .as_ref()
+        .and_then(|i| i.exclude.as_deref())
+        .unwrap_or(&[]);
+    cartog_indexer::ExcludeGlobs::from_globs(globs).map_err(|e| format!("[index] exclude: {e:#}"))
+}
+
 /// Convert the embedding config section into an `EmbeddingProviderConfig` for cartog-rag.
 pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProviderConfig {
     // The reranker section is independent of the embedding section — honor it even
@@ -512,6 +536,7 @@ const KNOWN_CONFIG_SECTIONS: &[&str] = &[
     "remote",
     "security",
     "lsp",
+    "index",
 ];
 
 /// Collect top-level keys that are not a recognized config section.
@@ -608,6 +633,12 @@ fn read_config(path: &Path) -> Option<CartogConfig> {
     // Reject an empty `[lsp.<lang>] command` — an empty argv has no program to
     // spawn, and the failure would otherwise surface only at LSP start.
     if let Err(msg) = validate_lsp_overrides(&parsed) {
+        eprintln!("cartog: error in {}: {msg}", path.display());
+        return None;
+    }
+
+    // Reject a malformed `[index] exclude` glob at parse time, not first index.
+    if let Err(msg) = to_index_exclude(&parsed) {
         eprintln!("cartog: error in {}: {msg}", path.display());
         return None;
     }
@@ -844,9 +875,10 @@ mod tests {
 
     #[test]
     fn unknown_sections_empty_for_all_known() {
-        let raw: toml::value::Table =
-            toml::from_str("[database]\npath = \"x\"\n[embedding]\nprovider = \"local\"\n")
-                .unwrap();
+        let raw: toml::value::Table = toml::from_str(
+            "[database]\npath = \"x\"\n[embedding]\nprovider = \"local\"\n[index]\nexclude = []\n",
+        )
+        .unwrap();
         assert!(unknown_sections(&raw).is_empty());
     }
 
@@ -923,6 +955,36 @@ mod tests {
         fs::write(&cfg_path, "[security]\nredact_secrets = false\n").unwrap();
         let cfg = read_config(&cfg_path).expect("should parse");
         assert!(!to_redaction_config(&cfg).enabled);
+    }
+
+    #[test]
+    fn index_exclude_parses_valid_globs() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        fs::write(
+            &cfg_path,
+            "[index]\nexclude = [\"mobile/ios/Pods/**\", \"**/*.md\"]\n",
+        )
+        .unwrap();
+        let cfg = read_config(&cfg_path).expect("should parse");
+        assert!(!to_index_exclude(&cfg).unwrap().is_empty());
+    }
+
+    #[test]
+    fn index_exclude_rejects_invalid_glob() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        fs::write(&cfg_path, "[index]\nexclude = [\"[unclosed\"]\n").unwrap();
+        assert!(
+            read_config(&cfg_path).is_none(),
+            "malformed glob must reject"
+        );
+    }
+
+    #[test]
+    fn index_exclude_absent_is_empty() {
+        let cfg = CartogConfig::default();
+        assert!(to_index_exclude(&cfg).unwrap().is_empty());
     }
 
     #[test]

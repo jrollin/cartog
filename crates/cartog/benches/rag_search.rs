@@ -81,6 +81,7 @@ fn setup_db() -> Database {
         None,
         cartog::indexer::RedactionConfig::disabled(),
         &std::collections::HashMap::new(),
+        &cartog::indexer::ExcludeGlobs::empty(),
     )
     .expect("index fixture");
     let mut provider = StubEmbeddingProvider;

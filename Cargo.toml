@@ -31,6 +31,7 @@ schemars = "1.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 thiserror = "2"
+globset = "0.4"
 rusqlite = { version = "0.39", features = ["bundled"] }
 sqlite-vec = "0.1"
 tree-sitter = "0.26"
