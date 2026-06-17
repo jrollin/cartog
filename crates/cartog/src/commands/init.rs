@@ -30,6 +30,11 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # env var, never stored here; leave the var unset for keyless local endpoints.
 # model = "text-embedding-3-small"
 #
+# ollama/openai only: in-flight HTTP embed requests (1..16, default 4). Env
+# CARTOG_EMBED_CONCURRENCY overrides; ignored for local. (Currently gated: both
+# providers run serially until a live batch-composition parity test passes.)
+# max_concurrent_requests = 4
+#
 # Watcher auto-embed under `serve --watch` / `watch`. Omit for auto-detect (embed
 # only if the repo already has embeddings). Precedence: CARTOG_WATCH_RAG > this > --rag.
 # auto_embed = true

@@ -200,6 +200,7 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
             <tr><td><code>CARTOG_DB</code></td><td>auto-detect</td><td>Database path (same as <code>--db</code>).</td></tr>
             <tr><td><code>CARTOG_JOBS</code></td><td>CPU count</td><td>Parse worker pool size for <code>cartog index</code> (clamped <code>1..=64</code>). Overrides <code>[index] jobs</code>; the <code>--jobs</code> flag overrides it.</td></tr>
             <tr><td><code>CARTOG_ONNX_THREADS</code></td><td>all cores</td><td>Caps ONNX CPU threads for <code>rag index</code> + reranking. Overrides <code>[embedding.local] intra_threads</code>; <code>1</code> forces single-core.</td></tr>
+            <tr><td><code>CARTOG_EMBED_CONCURRENCY</code></td><td><code>4</code></td><td>In-flight HTTP embed requests for ollama/openai (clamped <code>1..=16</code>). Overrides <code>[embedding] max_concurrent_requests</code>; ignored for local.</td></tr>
             <tr><td><code>CARTOG_WATCH_RAG</code></td><td>unset</td><td>Force watcher auto-embed; overrides <code>[embedding] auto_embed</code> and <code>--rag</code>:<br><code>1</code> = force on<br><code>0</code> = force off<br>unset = auto-detect from the DB</td></tr>
             <tr><td><code>CARTOG_SINGLE_WRITER</code></td><td><code>1</code></td><td><code>0</code> disables MCP single-writer election (every <code>serve</code> opens read-write).</td></tr>
             <tr><td><code>CARTOG_MCP_MAX_BYTES</code></td><td><code>65536</code></td><td>Max bytes per MCP tool response before truncation.</td></tr>
@@ -223,6 +224,7 @@ path = ".cartog/db.sqlite"        <span class="comment"># DEFAULT (relative to g
 provider = "local"               <span class="comment"># DEFAULT — "local" (ONNX), "ollama", or "openai"</span>
 # model = "BAAI/bge-small-en-v1.5" <span class="comment"># top-level for ALL providers; unset → built-in bge-small (local) / text-embedding-3-small (openai)</span>
 # dimension = 384                <span class="comment"># auto-detected for built-in models</span>
+# max_concurrent_requests = 4    <span class="comment"># ollama/openai only: in-flight HTTP embed requests (1..16); CARTOG_EMBED_CONCURRENCY overrides; ignored for local</span>
 # auto_embed = true              <span class="comment"># watcher auto-embed: unset → auto-detect (embed if repo already has embeddings); true/false force. Precedence: CARTOG_WATCH_RAG > this key > --rag</span>
 
 [embedding.local]                <span class="comment"># only used when provider = "local"</span>
@@ -318,6 +320,20 @@ url        = "s3://my-team-bucket/cartog/main"
           scores higher on BEIR than the older <code>BAAI/bge-reranker-base</code> (~1.1GB), which you
           can opt back into. Switching needs no re-index — the reranker runs at query time and isn't
           persisted.
+        </p>
+
+        <h3>Concurrent embedding requests (ollama / openai)</h3>
+        <pre>[embedding]
+max_concurrent_requests = 4   <span class="comment"># in-flight HTTP embed requests; 1..16, default 4</span></pre>
+        <p>
+          <code>max_concurrent_requests</code> caps how many embedding requests are in flight at once
+          for the network providers. The local ONNX provider ignores it (it parallelizes via
+          <code>[embedding.local] intra_threads</code>). Default <strong>4</strong>, clamped
+          <code>1..=16</code>; <code>1</code> is serial. <code>CARTOG_EMBED_CONCURRENCY</code> overrides
+          it (env &gt; TOML &gt; default). It is a transport setting, not part of the embedding
+          fingerprint, so changing it never forces a re-embed. The fan-out is currently gated behind a
+          live batch-composition parity check; until that passes, both providers run serially regardless
+          of this value.
         </p>
 
         <h3>Example: Ollama with GPU acceleration</h3>

@@ -130,6 +130,22 @@ base_url    = "https://api.openai.com/v1"  # or http://localhost:11434/v1 (Ollam
 api_key_env = "OPENAI_API_KEY"             # env var NAME, not the key itself
 ```
 
+**Concurrent embedding requests (ollama/openai):**
+
+```toml
+[embedding]
+max_concurrent_requests = 4   # in-flight HTTP embed requests; 1..16, default 4
+```
+
+`max_concurrent_requests` caps how many embedding requests are in flight at once
+for the network providers (the local ONNX provider ignores it — it parallelizes
+via `[embedding.local] intra_threads`). Default **4**, clamped `1..=16`; `1` is
+serial. `CARTOG_EMBED_CONCURRENCY` overrides it (env > TOML > default). It is a
+transport setting, not part of the embedding fingerprint, so changing it never
+forces a re-embed. Note: the fan-out is currently gated behind a live
+batch-composition parity check; until that passes, both providers run serially
+regardless of this value.
+
 **Provider options:**
 
 | Provider | Config | Setup | Notes |
@@ -349,6 +365,7 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 | `CARTOG_DB` | auto-detect | Database path (same as `--db`). |
 | `CARTOG_JOBS` | CPU count | Parse worker pool size for `cartog index` (clamped `1..=64`). Overrides `[index] jobs`; the `--jobs` flag overrides it. |
 | `CARTOG_ONNX_THREADS` | all cores | Caps ONNX CPU threads for `rag index` + reranking. Overrides `[embedding.local] intra_threads`. `1` forces single-core. |
+| `CARTOG_EMBED_CONCURRENCY` | `4` | In-flight HTTP embed requests for ollama/openai (clamped `1..=16`). Overrides `[embedding] max_concurrent_requests`. Ignored for local. |
 | `CARTOG_WATCH_RAG` | unset | Force watcher auto-embed; overrides `[embedding] auto_embed` and `--rag`:<br>`1` = force on<br>`0` = force off<br>unset = auto-detect from the DB |
 | `CARTOG_SINGLE_WRITER` | `1` | `0` disables MCP single-writer election (every `cartog serve` opens read-write). |
 | `CARTOG_MCP_MAX_BYTES` | `65536` | Max bytes per MCP tool response before truncation. |

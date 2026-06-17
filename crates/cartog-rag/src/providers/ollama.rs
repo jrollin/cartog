@@ -10,6 +10,8 @@ pub struct OllamaEmbeddingProvider {
     base_url: String,
     model: String,
     dim: usize,
+    /// Max concurrent in-flight requests (clamped `1..=16`). `1` = serial.
+    concurrency: usize,
 }
 
 #[derive(Serialize)]
@@ -58,6 +60,7 @@ impl OllamaEmbeddingProvider {
         base_url: Option<&str>,
         model: Option<&str>,
         dimension: Option<usize>,
+        max_concurrent: usize,
     ) -> Result<Self> {
         let base_url = base_url
             .unwrap_or(super::DEFAULT_OLLAMA_BASE_URL)
@@ -105,14 +108,12 @@ impl OllamaEmbeddingProvider {
             base_url: base_url.to_string(),
             model: model.to_string(),
             dim,
+            concurrency: super::concurrent::clamp_concurrency(max_concurrent),
         })
     }
 
-    fn embed_texts(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
-            return Ok(Vec::new());
-        }
-
+    /// One `/api/embed` POST for `texts`, validated for count and per-vector dim.
+    fn embed_one_request(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         let resp = self
             .client
             .post(format!("{}/api/embed", self.base_url))
@@ -147,7 +148,28 @@ impl OllamaEmbeddingProvider {
 
         Ok(resp.embeddings)
     }
+
+    fn embed_texts(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Serial = one whole-array POST; concurrent splits + fans out. Both use
+        // the retry-wrapped closure, so resilience is concurrency-independent.
+        let sub_batches: Vec<&[&str]> = if self.concurrency <= 1 {
+            vec![texts]
+        } else {
+            texts.chunks(OLLAMA_SUB_BATCH).collect()
+        };
+        super::concurrent::run_concurrent(sub_batches, self.concurrency, |ordinal, chunk| {
+            super::concurrent::with_retry(ordinal, || self.embed_one_request(chunk))
+        })
+    }
 }
+
+/// Concurrent-path sub-batch size for Ollama. Smaller than OpenAI's: a local
+/// server has more variable per-request latency, so more, smaller units help.
+const OLLAMA_SUB_BATCH: usize = 64;
 
 impl EmbeddingProvider for OllamaEmbeddingProvider {
     fn name(&self) -> &str {
@@ -221,5 +243,31 @@ mod tests {
     fn status_hint_other_status_stays_generic() {
         let h = status_hint("m", Some(reqwest::StatusCode::INTERNAL_SERVER_ERROR));
         assert_eq!(h, "Ollama returned an error");
+    }
+
+    /// Ship gate for Ollama fan-out: Ollama returns positional (un-indexed)
+    /// embeddings, so splitting one `/api/embed` POST into N is a stronger
+    /// assumption than OpenAI's array-batch. This must prove byte-identical
+    /// per-text vectors against a live model before `create_embedding_provider`
+    /// stops forcing concurrency = 1. Run with `CARTOG_OLLAMA_LIVE=1`.
+    #[test]
+    #[ignore = "requires a live Ollama server; set CARTOG_OLLAMA_LIVE=1"]
+    fn sub_batch_split_matches_single_request() {
+        if std::env::var("CARTOG_OLLAMA_LIVE").is_err() {
+            return;
+        }
+        let owned: Vec<String> = (0..OLLAMA_SUB_BATCH * 3)
+            .map(|i| format!("text {i}"))
+            .collect();
+        let texts: Vec<&str> = owned.iter().map(String::as_str).collect();
+
+        let serial = OllamaEmbeddingProvider::new(None, None, None, 1).unwrap();
+        let concurrent = OllamaEmbeddingProvider::new(None, None, None, 4).unwrap();
+        let single = serial.embed_one_request(&texts).unwrap();
+        let chunked = concurrent.embed_texts(&texts).unwrap();
+        assert_eq!(
+            single, chunked,
+            "sub-batch splitting must be byte-identical to one /api/embed POST"
+        );
     }
 }

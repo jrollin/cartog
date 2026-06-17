@@ -231,6 +231,10 @@ pub struct EmbeddingConfig {
     pub ollama: Option<OllamaConfig>,
     /// OpenAI-compatible provider settings.
     pub openai: Option<OpenAiConfig>,
+    /// Cap concurrent in-flight HTTP embedding requests for ollama/openai.
+    /// `None` = 4. `CARTOG_EMBED_CONCURRENCY` overrides; clamped `1..=16`.
+    /// Ignored for `provider = "local"`.
+    pub max_concurrent_requests: Option<usize>,
     /// Auto-embed under `serve --watch` / `watch`. `None` = auto-detect (embed
     /// only if the repo already has embeddings); `Some(false)` = never;
     /// `Some(true)` = always. Precedence: `CARTOG_WATCH_RAG` env > this key >
@@ -403,6 +407,15 @@ fn resolve_jobs(env: Option<usize>, toml: Option<usize>) -> usize {
     env.or(toml).unwrap_or(0)
 }
 
+/// Resolve the network-embed concurrency cap: env (`CARTOG_EMBED_CONCURRENCY`) >
+/// `[embedding] max_concurrent_requests` > default 4, clamped `1..=16`. Applies
+/// to ollama/openai only (the local arm never reads it).
+fn resolve_embed_concurrency(env: Option<usize>, toml: Option<usize>) -> usize {
+    env.or(toml)
+        .unwrap_or(cartog_rag::providers::DEFAULT_EMBED_CONCURRENCY)
+        .clamp(1, 16)
+}
+
 /// Read a non-negative integer env var, warning and ignoring a malformed value.
 fn parse_env_usize(var: &str) -> Option<usize> {
     parse_usize_or_warn(var, std::env::var(var).ok()?.as_str())
@@ -472,6 +485,10 @@ pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProvide
                 reranker_provider,
                 reranker_model,
                 intra_threads,
+                max_concurrent_requests: Some(resolve_embed_concurrency(
+                    parse_env_usize("CARTOG_EMBED_CONCURRENCY"),
+                    embed.max_concurrent_requests,
+                )),
             }
         }
         None => cartog_rag::EmbeddingProviderConfig {
@@ -1060,6 +1077,31 @@ mod tests {
             resolve_jobs(Some(0), Some(4)),
             0,
             "env 0 overrides toml → auto"
+        );
+    }
+
+    #[test]
+    fn resolve_embed_concurrency_precedence_and_clamp() {
+        assert_eq!(resolve_embed_concurrency(None, None), 4, "default 4");
+        assert_eq!(
+            resolve_embed_concurrency(None, Some(8)),
+            8,
+            "toml when env absent"
+        );
+        assert_eq!(
+            resolve_embed_concurrency(Some(2), Some(8)),
+            2,
+            "env wins over toml"
+        );
+        assert_eq!(
+            resolve_embed_concurrency(Some(0), None),
+            1,
+            "clamped up to 1"
+        );
+        assert_eq!(
+            resolve_embed_concurrency(Some(99), None),
+            16,
+            "clamped down to 16"
         );
     }
 
