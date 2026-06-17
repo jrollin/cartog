@@ -59,6 +59,9 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # Set false to index files git ignores (e.g. committed generated code); the
 # prune list and `exclude` still apply.
 # respect_gitignore = true
+# Parse worker threads. 0 or omitted = auto (CPU count); clamped 1..=64; use 1
+# for serial. Cap it on low-CPU hosts. Overridden by CARTOG_JOBS and --jobs N.
+# jobs = 4
 "##;
 
 #[derive(Debug, Serialize)]

@@ -154,6 +154,11 @@ pub enum Command {
         /// Disable LSP-based edge resolution (auto-detected by default when servers are on PATH)
         #[arg(long)]
         no_lsp: bool,
+
+        /// Parse worker threads. 0 or omitted = auto (CPU count); clamped
+        /// 1..=64. Overrides CARTOG_JOBS and [index] jobs.
+        #[arg(long, value_name = "N")]
+        jobs: Option<usize>,
     },
 
     /// Show symbols and structure of a file

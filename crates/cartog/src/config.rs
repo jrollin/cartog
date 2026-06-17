@@ -71,6 +71,12 @@ pub struct IndexConfig {
     /// Default `true`. Set `false` to index gitignored files (e.g. committed
     /// generated code); the built-in prune list and `exclude` still apply.
     pub respect_gitignore: Option<bool>,
+    /// Worker threads for the parallel parse phase. Absent / `0` = auto
+    /// (`available_parallelism`); clamped to `1..=64`. Overridden by the
+    /// `CARTOG_JOBS` env var and the `cartog index --jobs N` flag (flag > env >
+    /// this). The value applies on every index, including under a long-lived
+    /// `serve`/`watch`.
+    pub jobs: Option<usize>,
 }
 
 /// Optional S3-compatible remote for `cartog push` / `cartog pull`.
@@ -382,10 +388,40 @@ pub fn to_walk_filter(config: &CartogConfig) -> Result<cartog_indexer::WalkFilte
     let exclude = cartog_indexer::ExcludeGlobs::from_globs(globs)
         .map_err(|e| format!("[index] exclude: {e:#}"))?;
     let respect_gitignore = index.and_then(|i| i.respect_gitignore).unwrap_or(true);
+    let jobs = resolve_jobs(parse_env_usize("CARTOG_JOBS"), index.and_then(|i| i.jobs));
     Ok(cartog_indexer::WalkFilter {
         exclude,
         respect_gitignore,
+        jobs,
     })
+}
+
+/// Resolve the parse-pool size: env (`CARTOG_JOBS`) > `[index] jobs` > 0 (auto).
+/// The `--jobs` flag wins over both and is applied by the caller. `0` stays 0
+/// (auto); it is resolved + clamped inside the indexer.
+fn resolve_jobs(env: Option<usize>, toml: Option<usize>) -> usize {
+    env.or(toml).unwrap_or(0)
+}
+
+/// Read a non-negative integer env var, warning and ignoring a malformed value.
+fn parse_env_usize(var: &str) -> Option<usize> {
+    parse_usize_or_warn(var, std::env::var(var).ok()?.as_str())
+}
+
+/// Pure parse + warn, split out so it is testable without touching the env.
+fn parse_usize_or_warn(var: &str, raw: &str) -> Option<usize> {
+    match raw.trim().parse::<usize>() {
+        Ok(n) => Some(n),
+        Err(_) => {
+            // eprintln, not tracing: env resolution runs before the tracing
+            // subscriber is initialised in main, so a `tracing::warn!` here is
+            // dropped (cf. warn_legacy_db_once). TTY-gated to spare MCP/--json.
+            if config_diagnostics_visible() {
+                eprintln!("cartog: {var}={raw:?} is not a non-negative integer; ignoring");
+            }
+            None
+        }
+    }
 }
 
 /// Convert the embedding config section into an `EmbeddingProviderConfig` for cartog-rag.
@@ -1012,6 +1048,40 @@ mod tests {
         fs::write(&cfg_path, "[index]\nrespect_gitignore = false\n").unwrap();
         let cfg = read_config(&cfg_path).expect("should parse");
         assert!(!to_walk_filter(&cfg).unwrap().respect_gitignore);
+    }
+
+    #[test]
+    fn resolve_jobs_precedence_env_over_toml_over_auto() {
+        assert_eq!(resolve_jobs(None, None), 0, "neither set → 0 (auto)");
+        assert_eq!(resolve_jobs(None, Some(4)), 4, "toml when env absent");
+        assert_eq!(resolve_jobs(Some(2), Some(4)), 2, "env wins over toml");
+        // env=0 is an explicit value that wins; 0 = auto (documented).
+        assert_eq!(
+            resolve_jobs(Some(0), Some(4)),
+            0,
+            "env 0 overrides toml → auto"
+        );
+    }
+
+    #[test]
+    fn index_jobs_parses_from_toml() {
+        // env-free: drives the TOML tier directly via resolve_jobs to avoid a
+        // CARTOG_JOBS leak in to_walk_filter.
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        fs::write(&cfg_path, "[index]\njobs = 4\n").unwrap();
+        let cfg = read_config(&cfg_path).expect("should parse");
+        assert_eq!(cfg.index.and_then(|i| i.jobs), Some(4));
+    }
+
+    #[test]
+    fn parse_usize_or_warn_accepts_integers_and_rejects_garbage() {
+        assert_eq!(parse_usize_or_warn("X", "8"), Some(8));
+        assert_eq!(parse_usize_or_warn("X", " 8 "), Some(8));
+        assert_eq!(parse_usize_or_warn("X", "0"), Some(0));
+        assert_eq!(parse_usize_or_warn("X", "abc"), None);
+        assert_eq!(parse_usize_or_warn("X", "-1"), None);
+        assert_eq!(parse_usize_or_warn("X", ""), None);
     }
 
     #[test]

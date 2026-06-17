@@ -178,7 +178,7 @@ cartog index .          <span class="comment"># 6. re-index after changes</span>
             <tr><td><code>[remote]</code></td><td>unset (no sync)</td><td>sharing an index over S3 — see <a href="#config-remote">Remote Storage</a></td></tr>
             <tr><td><code>[security]</code></td><td><code>redact_secrets = true</code></td><td>opting out of pattern redaction — see <a href="#config-secrets">Secret Redaction</a></td></tr>
             <tr><td><code>[lsp.&lt;lang&gt;]</code></td><td>unset (server resolved from <code>PATH</code>)</td><td>running a custom/Dockerized LSP server — see <a href="#config-lsp">LSP Server Overrides</a></td></tr>
-            <tr><td><code>[index]</code></td><td><code>exclude = []</code>, <code>respect_gitignore = true</code></td><td>excluding extra paths, or indexing git-ignored files — see <a href="#config-index">Index Filtering</a></td></tr>
+            <tr><td><code>[index]</code></td><td><code>exclude = []</code>, <code>respect_gitignore = true</code>, <code>jobs = 0</code> (auto)</td><td>excluding extra paths, indexing git-ignored files, or capping parse threads — see <a href="#config-index">Index Filtering</a></td></tr>
           </tbody>
         </table>
         <p>Example — override just the DB path and switch to Ollama, leaving everything else at its default:</p>
@@ -198,6 +198,7 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
           </thead>
           <tbody>
             <tr><td><code>CARTOG_DB</code></td><td>auto-detect</td><td>Database path (same as <code>--db</code>).</td></tr>
+            <tr><td><code>CARTOG_JOBS</code></td><td>CPU count</td><td>Parse worker pool size for <code>cartog index</code> (clamped <code>1..=64</code>). Overrides <code>[index] jobs</code>; the <code>--jobs</code> flag overrides it.</td></tr>
             <tr><td><code>CARTOG_ONNX_THREADS</code></td><td>all cores</td><td>Caps ONNX CPU threads for <code>rag index</code> + reranking. Overrides <code>[embedding.local] intra_threads</code>; <code>1</code> forces single-core.</td></tr>
             <tr><td><code>CARTOG_WATCH_RAG</code></td><td>unset</td><td>Force watcher auto-embed; overrides <code>[embedding] auto_embed</code> and <code>--rag</code>:<br><code>1</code> = force on<br><code>0</code> = force off<br>unset = auto-detect from the DB</td></tr>
             <tr><td><code>CARTOG_SINGLE_WRITER</code></td><td><code>1</code></td><td><code>0</code> disables MCP single-writer election (every <code>serve</code> opens read-write).</td></tr>
@@ -473,6 +474,12 @@ cartog index --force .            <span class="comment"># removes now-excluded p
         <p>cartog honors <code>.gitignore</code> (and <code>.git/info/exclude</code>) by default, including <strong>nested</strong> <code>.gitignore</code> files in subdirectories — so vendored or generated trees git already ignores (a CocoaPods <code>Pods/</code>, build output, …) are skipped with no cartog config, even in a tree with no <code>.git</code> directory. A <code>.cartogignore</code> file (same syntax) adds cartog-specific ignores. The built-in prune list and <code>[index] exclude</code> apply on top (they prune even where <code>.gitignore</code> would keep a path). To index files git ignores (e.g. committed generated code), opt out — the prune list and <code>exclude</code> still apply:</p>
         <pre>[index]
 respect_gitignore = false</pre>
+
+        <h3>Parse parallelism</h3>
+        <p>The CPU-bound parse phase runs across a rayon worker pool. Cap it for low-CPU or memory-constrained hosts (e.g. shared CI). Absent or <code>0</code> means auto (CPU count), not serial — use <code>1</code> for single-threaded; any value is clamped to <code>1..=64</code>.</p>
+        <pre>[index]
+jobs = 4</pre>
+        <p>Precedence: <code>cartog index --jobs N</code> &gt; <code>CARTOG_JOBS</code> env &gt; this key. The parse phase runs inside a dedicated pool sized to this value, so the cap applies on <strong>every</strong> index, including under a long-lived <code>cartog serve</code> / <code>serve --watch</code>. The <code>--jobs</code> flag is per-invocation; for daemons set the env var or this key.</p>
 
         <!-- ── Semantic Search ───────────────────── -->
 

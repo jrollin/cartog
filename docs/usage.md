@@ -251,6 +251,24 @@ exclude = ["vendor/**", "third_party/**", "**/*.generated.*", "**/*.md"]
 Run `cartog index --force <path>` after changing `exclude` so paths that are now
 excluded are removed from an existing index.
 
+### Parse parallelism
+
+The parse phase runs across a rayon worker pool. Cap it for low-CPU or
+memory-constrained hosts (e.g. shared CI):
+
+```toml
+[index]
+jobs = 4
+```
+
+- Absent or `0` = auto (`available_parallelism`, i.e. CPU count); any value is
+  clamped to `1..=64`. (`0` means auto, not serial — use `1` for single-threaded.)
+- Precedence: `cartog index --jobs N` flag > `CARTOG_JOBS` env > this key.
+- The parse phase runs inside a dedicated pool sized to this value, so the cap
+  applies on **every** index, including under a long-lived `cartog serve` /
+  `serve --watch`. The `--jobs` flag is per-invocation (the `index` command);
+  for daemons set the env var or this key.
+
 ### `.gitignore` awareness
 
 cartog honors `.gitignore` (and `.git/info/exclude`) by default, including
@@ -329,6 +347,7 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `CARTOG_DB` | auto-detect | Database path (same as `--db`). |
+| `CARTOG_JOBS` | CPU count | Parse worker pool size for `cartog index` (clamped `1..=64`). Overrides `[index] jobs`; the `--jobs` flag overrides it. |
 | `CARTOG_ONNX_THREADS` | all cores | Caps ONNX CPU threads for `rag index` + reranking. Overrides `[embedding.local] intra_threads`. `1` forces single-core. |
 | `CARTOG_WATCH_RAG` | unset | Force watcher auto-embed; overrides `[embedding] auto_embed` and `--rag`:<br>`1` = force on<br>`0` = force off<br>unset = auto-detect from the DB |
 | `CARTOG_SINGLE_WRITER` | `1` | `0` disables MCP single-writer election (every `cartog serve` opens read-write). |
@@ -698,7 +717,14 @@ Build or update the graph. Run this first, then again after code changes.
 cartog index .              # index current directory
 cartog index src/           # index a subdirectory only
 cartog index . --force      # full re-index, bypassing change detection
+cartog index . --jobs 4     # cap the parse worker pool at 4 threads
 ```
+
+`--jobs N` caps the worker pool for the CPU-bound parse phase (default / `0` =
+auto = CPU count, clamped `1..=64`; use `1` for single-threaded). It overrides
+`CARTOG_JOBS` and `[index] jobs` (flag > env > TOML). The cap applies on every
+index; for daemons (`serve`/`watch`, which take no flag) set `CARTOG_JOBS` or
+`[index] jobs`.
 
 Incremental by default — skips unchanged files (git diff + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. Stable symbol IDs (`file:kind:qualified_name`) survive line movements, so edges from unchanged files remain valid. The LSP pass skips edges already classified as `resolution_state = 2` (unresolvable: typo, dyn dispatch, macro) or `3` (external: stdlib, deps, node_modules); both auto-retry when a matching symbol is added in-tree. Use `--force` when results seem stale or after updating cartog itself — it also resets state-2 and state-3 markers for a clean retry.
 

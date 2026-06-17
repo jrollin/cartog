@@ -29,6 +29,11 @@ pub struct WalkFilter {
     /// `.cartogignore`/`.ignore` files still apply regardless (this toggle only
     /// governs git's view).
     pub respect_gitignore: bool,
+    /// Parse-phase worker threads. `0` = auto (`available_parallelism`), clamped
+    /// `1..=64`. Sizes a dedicated rayon pool (cached per size, reused across
+    /// re-indexes) that the parse phase runs in, so the cap applies on every
+    /// index, including under a long-lived `serve`/`watch`.
+    pub jobs: usize,
 }
 
 impl Default for WalkFilter {
@@ -36,6 +41,7 @@ impl Default for WalkFilter {
         Self {
             exclude: ExcludeGlobs::empty(),
             respect_gitignore: true,
+            jobs: 0,
         }
     }
 }

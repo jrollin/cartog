@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -47,6 +48,53 @@ enum ParseOutput {
     },
     /// Read or extraction failed — already logged; caller increments nothing.
     Failed,
+}
+
+/// Resolve a configured job count into a concrete pool size. `0` = auto
+/// (`available_parallelism`), then clamped `1..=64` so a bad config never yields
+/// a zero-thread pool or an unbounded thread explosion.
+fn clamp_jobs(n: usize) -> usize {
+    let resolved = if n == 0 {
+        std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(1)
+    } else {
+        n
+    };
+    resolved.clamp(1, 64)
+}
+
+/// Pools keyed by resolved thread count, reused across `index_directory` calls.
+/// Reuse keeps each pool's worker threads (and their warm `THREAD_EXTRACTORS`
+/// cache) alive between re-indexes; a fresh pool per call would re-pay parser
+/// construction every incremental pass.
+static PARSE_POOLS: std::sync::OnceLock<std::sync::Mutex<HashMap<usize, Arc<rayon::ThreadPool>>>> =
+    std::sync::OnceLock::new();
+
+/// A dedicated parse pool sized to `jobs`. Unlike the rayon global pool this
+/// applies on every call (so the cap is honored under serve/watch and is
+/// unaffected by another subsystem initializing the global pool first). Falls
+/// back to the global pool only if the sized pool cannot be built.
+fn parse_pool(jobs: usize) -> Option<Arc<rayon::ThreadPool>> {
+    let size = clamp_jobs(jobs);
+    let mut pools = PARSE_POOLS
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+        .ok()?;
+    if let Some(p) = pools.get(&size) {
+        return Some(Arc::clone(p));
+    }
+    match rayon::ThreadPoolBuilder::new().num_threads(size).build() {
+        Ok(pool) => {
+            let pool = Arc::new(pool);
+            pools.insert(size, Arc::clone(&pool));
+            Some(pool)
+        }
+        Err(e) => {
+            warn!("failed to build parse pool ({size} threads): {e:#}; using default pool");
+            None
+        }
+    }
 }
 
 fn parse_one_file(
@@ -547,31 +595,39 @@ pub fn index_directory(
     use std::sync::atomic::{AtomicU32, Ordering};
     let parsed_count = AtomicU32::new(0);
     let reported_high = AtomicU32::new(0);
-    let parsed: Vec<ParseOutput> = candidates
-        .par_iter()
-        .map(|(abs, rel, lang)| {
-            let out = parse_one_file(
-                abs,
-                rel,
-                lang,
-                force,
-                stored_hashes.get(rel).map(String::as_str),
-                redact,
-            );
-            let n = parsed_count.fetch_add(1, Ordering::Relaxed) + 1;
-            if n % PROGRESS_STRIDE == 0 || n == parse_total {
-                // fetch_max returns the prior high; only emit if we raised it,
-                // so emitted `done` is non-decreasing despite out-of-order calls.
-                if reported_high.fetch_max(n, Ordering::Relaxed) < n {
-                    emit(ProgressUpdate::Parsing {
-                        done: n,
-                        total: parse_total,
-                    });
+    let run_parse = || -> Vec<ParseOutput> {
+        candidates
+            .par_iter()
+            .map(|(abs, rel, lang)| {
+                let out = parse_one_file(
+                    abs,
+                    rel,
+                    lang,
+                    force,
+                    stored_hashes.get(rel).map(String::as_str),
+                    redact,
+                );
+                let n = parsed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                if n % PROGRESS_STRIDE == 0 || n == parse_total {
+                    // fetch_max returns the prior high; only emit if we raised it,
+                    // so emitted `done` is non-decreasing despite out-of-order calls.
+                    if reported_high.fetch_max(n, Ordering::Relaxed) < n {
+                        emit(ProgressUpdate::Parsing {
+                            done: n,
+                            total: parse_total,
+                        });
+                    }
                 }
-            }
-            out
-        })
-        .collect();
+                out
+            })
+            .collect()
+    };
+    // Run on a dedicated pool sized to `jobs` so the cap applies on every call;
+    // fall back to the global pool if it can't be built.
+    let parsed: Vec<ParseOutput> = match parse_pool(filter.jobs) {
+        Some(pool) => pool.install(run_parse),
+        None => run_parse(),
+    };
 
     // ── Phase 3: sequential DB writes inside one transaction ──
     //
@@ -1223,6 +1279,35 @@ pub mod bench_support {
 mod tests {
     use super::*;
 
+    #[test]
+    fn clamp_jobs_resolves_zero_to_available_and_bounds_the_rest() {
+        // 0 = auto, but capped at 64 even on a >64-core host.
+        let auto = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(1)
+            .min(64);
+        assert_eq!(clamp_jobs(0), auto, "0 = auto, clamped to the upper bound");
+        assert_eq!(clamp_jobs(1), 1);
+        assert_eq!(clamp_jobs(8), 8);
+        assert_eq!(clamp_jobs(64), 64);
+        assert_eq!(clamp_jobs(1000), 64, "clamped to the upper bound");
+    }
+
+    #[test]
+    fn parse_pool_is_sized_to_jobs_and_reused() {
+        // A sized pool actually has that many threads, and the same size hands
+        // back the cached instance (warm threads survive re-index).
+        let p3 = parse_pool(3).expect("pool builds");
+        assert_eq!(p3.current_num_threads(), 3);
+        let p3_again = parse_pool(3).expect("pool builds");
+        assert!(
+            Arc::ptr_eq(&p3, &p3_again),
+            "same size reuses the cached pool"
+        );
+        let p1 = parse_pool(1).expect("pool builds");
+        assert_eq!(p1.current_num_threads(), 1);
+    }
+
     fn index_dir(db: &cartog_db::Database, root: &Path, force: bool) -> Result<IndexResult> {
         index_directory(
             db,
@@ -1235,6 +1320,70 @@ mod tests {
             &std::collections::HashMap::new(),
             &crate::WalkFilter::unrestricted(),
         )
+    }
+
+    fn index_dir_with_jobs(db: &cartog_db::Database, root: &Path, jobs: usize) -> IndexResult {
+        let filter = WalkFilter {
+            jobs,
+            ..Default::default()
+        };
+        index_directory(
+            db,
+            root,
+            false,
+            false,
+            None,
+            None,
+            RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+            &filter,
+        )
+        .unwrap()
+    }
+
+    fn symbol_names(db: &cartog_db::Database) -> Vec<String> {
+        let files = db.all_files().unwrap();
+        db.symbols_for_files(&files, None)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.name)
+            .collect()
+    }
+
+    #[test]
+    fn index_output_is_identical_across_pool_sizes() {
+        // The dedicated parse pool applies per call, so two pool sizes are
+        // comparable in one process: parallel parsing must not change results.
+        let make = || {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let proj = visible_dir(&tmp, "proj");
+            for i in 0..12 {
+                std::fs::write(
+                    proj.join(format!("m{i}.py")),
+                    format!("def f{i}():\n    return {i}\n"),
+                )
+                .unwrap();
+            }
+            (tmp, proj)
+        };
+
+        let db1 = cartog_db::Database::open_memory().unwrap();
+        let (_t1, p1) = make();
+        let r1 = index_dir_with_jobs(&db1, &p1, 1);
+
+        let db8 = cartog_db::Database::open_memory().unwrap();
+        let (_t8, p8) = make();
+        let r8 = index_dir_with_jobs(&db8, &p8, 8);
+
+        assert_eq!(r1.files_indexed, 12);
+        assert_eq!(r1.files_indexed, r8.files_indexed);
+        assert_eq!(r1.symbols_added, r8.symbols_added);
+
+        let mut names1 = symbol_names(&db1);
+        let mut names8 = symbol_names(&db8);
+        names1.sort();
+        names8.sort();
+        assert_eq!(names1, names8, "symbol set is pool-size independent");
     }
 
     // TempDir roots are dot-prefixed (`.tmpXXXX`) and the walker skips hidden
@@ -1294,6 +1443,7 @@ mod tests {
         let filter = WalkFilter {
             exclude,
             respect_gitignore: true,
+            ..Default::default()
         };
         index_directory(
             db,
@@ -1351,6 +1501,7 @@ mod tests {
         let filter = WalkFilter {
             exclude: ExcludeGlobs::from_globs(&["**/*.py".to_string()]).unwrap(),
             respect_gitignore: true,
+            ..Default::default()
         };
         let res = index_directory(
             &db,
@@ -1504,6 +1655,7 @@ mod tests {
         let filter = WalkFilter {
             exclude: ExcludeGlobs::empty(),
             respect_gitignore: false,
+            ..Default::default()
         };
         index_dir_filtered(&db, &proj, &filter).unwrap();
 
@@ -1549,6 +1701,7 @@ mod tests {
         let filter = WalkFilter {
             exclude: ExcludeGlobs::from_globs(&["b/**".to_string()]).unwrap(), // b/ via exclude
             respect_gitignore: true,
+            ..Default::default()
         };
         index_dir_filtered(&db, &proj, &filter).unwrap();
 
