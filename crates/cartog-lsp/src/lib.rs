@@ -18,7 +18,94 @@ use anyhow::Result;
 use cartog_core::{detect_language, PROGRESS_STRIDE};
 use cartog_db::{Database, UnresolvedEdge};
 
-use manager::{DefinitionOutcome, LspManager};
+use manager::{DefinitionLocation, DefinitionOutcome, LspManager};
+
+/// One language's drained LSP outcomes, before any DB write. Splitting drain
+/// (network) from apply (DB) lets per-language drains run concurrently while a
+/// single applier owns the writer.
+#[derive(Default)]
+struct LangOutcomes {
+    /// `(edge_id, in-root location)`; applier resolves each to a symbol.
+    in_root: Vec<(i64, DefinitionLocation)>,
+    /// Definitive "no definition"; marked unresolvable only if ≥1 edge resolved.
+    pending_unresolvable: Vec<i64>,
+    /// Target outside the indexed root (stdlib/deps).
+    pending_external: Vec<i64>,
+    /// Server died mid-drain — suppresses all marking for this language.
+    server_died: bool,
+}
+
+/// Apply one language's outcomes to the DB, preserving the health gates.
+/// Returns `(resolved, marked_unresolvable, marked_external)`.
+fn apply_lang_outcomes(
+    db: &Database,
+    language: &str,
+    outcomes: &LangOutcomes,
+) -> Result<(u32, u32, u32)> {
+    let mut resolved = 0u32;
+    let mut marked_unresolvable = 0u32;
+    let mut marked_external = 0u32;
+
+    // A located line with no covering symbol is an extraction gap, not external
+    // → unresolvable (keeps state=3 stdlib/deps-only).
+    let mut extra_unresolvable: Vec<i64> = Vec::new();
+    for (edge_id, loc) in &outcomes.in_root {
+        match db.find_symbol_at_location(&loc.file_path, loc.line)? {
+            Some(symbol_id) => match db.update_edge_target(*edge_id, &symbol_id) {
+                Ok(()) => resolved += 1,
+                Err(e) => tracing::debug!("failed to update edge {edge_id}: {e:#}"),
+            },
+            None => {
+                tracing::debug!("no cartog symbol at {}:{}", loc.file_path, loc.line);
+                extra_unresolvable.push(*edge_id);
+            }
+        }
+    }
+    let lang_resolved = resolved;
+
+    // Unresolvable: gate on lang_resolved > 0 (a half-loaded server fabricates
+    // Ok(None) before its index is ready; don't burn good edges with state=2).
+    if !outcomes.server_died && lang_resolved > 0 {
+        for edge_id in outcomes
+            .pending_unresolvable
+            .iter()
+            .chain(&extra_unresolvable)
+        {
+            if let Err(e) = db.mark_edge_unresolvable(*edge_id) {
+                tracing::debug!("failed to mark edge {edge_id} unresolvable: {e:#}");
+                continue;
+            }
+            marked_unresolvable += 1;
+        }
+    } else {
+        let n = outcomes.pending_unresolvable.len() + extra_unresolvable.len();
+        if n > 0 {
+            tracing::info!(
+                "LSP: {language} produced {n} unresolvable answers but no successes — \
+                 not marking (server may be half-loaded or unhealthy)"
+            );
+        }
+    }
+
+    // External: a half-loaded server can't fabricate a concrete out-of-root URI,
+    // so no lang_resolved gate — commit whenever the server stayed alive.
+    if !outcomes.server_died {
+        for edge_id in &outcomes.pending_external {
+            if let Err(e) = db.mark_edge_external(*edge_id) {
+                tracing::debug!("failed to mark edge {edge_id} external: {e:#}");
+                continue;
+            }
+            marked_external += 1;
+        }
+    } else if !outcomes.pending_external.is_empty() {
+        tracing::info!(
+            "LSP: {language} produced {} external answers but server died — not marking",
+            outcomes.pending_external.len()
+        );
+    }
+
+    Ok((resolved, marked_unresolvable, marked_external))
+}
 
 /// Per-edge progress callback for [`lsp_resolve_edges`]: `(done, total)`.
 /// Called synchronously from the resolution loop; keep it cheap.
@@ -157,15 +244,8 @@ pub fn lsp_resolve_edges(
             by_file.len()
         );
 
-        // Buffer "definitive negative" marks here and only commit them at the
-        // end of the language loop *if* the language proved healthy by resolving
-        // at least one edge. Catches half-loaded rust-analyzer cases where the
-        // server returns Ok(None) or out-of-root locations before its index is
-        // ready — without this gate we would burn good edges with sticky markers.
-        let mut pending_unresolvable: Vec<i64> = Vec::new();
-        let mut pending_external: Vec<i64> = Vec::new();
-        let mut lang_resolved: u32 = 0;
-        let mut server_died = false;
+        // Drain (no DB writes); the applier replays outcomes + health gates.
+        let mut out = LangOutcomes::default();
 
         for (file_path, file_edges) in by_file {
             check_cancel()?;
@@ -185,7 +265,7 @@ pub fn lsp_resolve_edges(
                         "{language} LSP server died during didOpen — remaining {language} edges \
                          resolved via heuristics only. Rerun with --no-lsp to skip LSP entirely."
                     );
-                    server_died = true;
+                    out.server_died = true;
                     break;
                 }
                 continue;
@@ -223,10 +303,10 @@ pub fn lsp_resolve_edges(
                             "{language} LSP server died — remaining {language} edges resolved \
                              via heuristics only. Rerun with --no-lsp to skip LSP entirely."
                         );
-                        server_died = true;
+                        out.server_died = true;
                     }
                     let _ = manager.close_file(language, file_path);
-                    if server_died {
+                    if out.server_died {
                         break;
                     }
                     continue;
@@ -239,54 +319,21 @@ pub fn lsp_resolve_edges(
                     emit(processed);
                 }
                 match outcome {
+                    // Defer symbol resolution to the applier (it owns the DB).
                     Ok(Some(DefinitionOutcome::InRoot(loc))) => {
-                        match db.find_symbol_at_location(&loc.file_path, loc.line) {
-                            Ok(Some(symbol_id)) => {
-                                match db.update_edge_target(edge.edge_id, &symbol_id) {
-                                    Ok(()) => {
-                                        resolved += 1;
-                                        lang_resolved += 1;
-                                    }
-                                    Err(e) => tracing::debug!(
-                                        "failed to update edge {}: {e:#}",
-                                        edge.edge_id
-                                    ),
-                                }
-                            }
-                            Ok(None) => {
-                                // LSP located the target inside the root but
-                                // cartog has no extracted symbol covering that
-                                // line (cartog extraction gap, unindexed
-                                // language, top-level statement between
-                                // symbols). This is NOT external — the target
-                                // is in-root. Treat as unresolvable so the
-                                // state=3 "external" bucket stays semantically
-                                // clean (stdlib/deps only).
-                                tracing::debug!(
-                                    "no cartog symbol at {}:{}",
-                                    loc.file_path,
-                                    loc.line
-                                );
-                                pending_unresolvable.push(edge.edge_id);
-                            }
-                            Err(e) => return Err(e), // DB errors propagate
-                        }
+                        out.in_root.push((edge.edge_id, loc));
                     }
+                    // Target outside the root (stdlib/deps) → state=3.
                     Ok(Some(DefinitionOutcome::External)) => {
-                        // LSP located the target outside the indexed root
-                        // (stdlib, deps, node_modules). Buffer for state=3.
-                        pending_external.push(edge.edge_id);
+                        out.pending_external.push(edge.edge_id);
                     }
+                    // Definitive "no definition"; gated as unresolvable later.
                     Ok(None) => {
-                        // LSP definitively answered "no definition". Buffer it
-                        // until we know the language server resolved at least
-                        // one edge this run (per-language success gate).
-                        pending_unresolvable.push(edge.edge_id);
+                        out.pending_unresolvable.push(edge.edge_id);
                     }
                     Err(e) => {
-                        // Transient: server crash, didOpen race, IO. NEVER mark
-                        // — the marker is sticky and a transient failure must
-                        // not burn this edge for future runs.
+                        // Transient (crash, didOpen race, IO): never mark — the
+                        // marker is sticky and must not burn the edge.
                         tracing::debug!(
                             "definition failed for {} at {file_path}:{}: {e:#}",
                             edge.target_name,
@@ -297,7 +344,7 @@ pub fn lsp_resolve_edges(
                                 "{language} LSP server died — remaining {language} edges resolved \
                                  via heuristics only. Rerun with --no-lsp to skip LSP entirely."
                             );
-                            server_died = true;
+                            out.server_died = true;
                             break;
                         }
                     }
@@ -307,51 +354,16 @@ pub fn lsp_resolve_edges(
             // Close the file to free server memory
             let _ = manager.close_file(language, file_path);
 
-            if server_died {
+            if out.server_died {
                 break;
             }
         }
 
-        // Unresolvable marks come from `Ok(None)` — an answer a half-loaded
-        // server can fabricate before its index is ready. Gate behind
-        // `lang_resolved > 0` to avoid burning good edges as sticky state=2
-        // when the server is unhealthy.
-        if !server_died && lang_resolved > 0 {
-            for edge_id in &pending_unresolvable {
-                if let Err(e) = db.mark_edge_unresolvable(*edge_id) {
-                    tracing::debug!("failed to mark edge {edge_id} unresolvable: {e:#}");
-                    continue;
-                }
-                marked_unresolvable += 1;
-            }
-        } else if !pending_unresolvable.is_empty() {
-            tracing::info!(
-                "LSP: {language} produced {} unresolvable answers but no successes — \
-                 not marking (server may be half-loaded or unhealthy)",
-                pending_unresolvable.len(),
-            );
-        }
-
-        // External marks come from positive LSP answers (a concrete URI
-        // outside the indexed root). A half-loaded server cannot fabricate
-        // those, so the lang_resolved gate is unnecessary. Commit whenever
-        // the server stayed alive — a stdlib-only file would otherwise
-        // re-query the LSP forever.
-        if !server_died {
-            for edge_id in &pending_external {
-                if let Err(e) = db.mark_edge_external(*edge_id) {
-                    tracing::debug!("failed to mark edge {edge_id} external: {e:#}");
-                    continue;
-                }
-                marked_external += 1;
-            }
-        } else if !pending_external.is_empty() {
-            tracing::info!(
-                "LSP: {language} produced {} external answers but server died — \
-                 not marking",
-                pending_external.len(),
-            );
-        }
+        // Apply this language's outcomes to the DB (single writer, serial).
+        let (r, u, x) = apply_lang_outcomes(db, language, &out)?;
+        resolved += r;
+        marked_unresolvable += u;
+        marked_external += x;
     }
 
     emit(processed); // final tick (deduped): lands on total when every edge ran
