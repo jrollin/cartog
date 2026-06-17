@@ -1,6 +1,6 @@
 //! Token-savings report rendering for `cartog stats --savings`.
 
-use super::*;
+use std::path::Path;
 
 /// Project label shown above the savings report. Strips the SQLite filename
 /// and walks up to the closest meaningful directory (typically the git root)
