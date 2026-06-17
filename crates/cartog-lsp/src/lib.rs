@@ -8,6 +8,7 @@
 
 pub mod client;
 pub mod manager;
+mod resolve;
 pub mod servers;
 
 use std::collections::HashMap;
@@ -18,94 +19,8 @@ use anyhow::Result;
 use cartog_core::{detect_language, PROGRESS_STRIDE};
 use cartog_db::{Database, UnresolvedEdge};
 
-use manager::{DefinitionLocation, DefinitionOutcome, LspManager};
-
-/// One language's drained LSP outcomes, before any DB write. Splitting drain
-/// (network) from apply (DB) lets per-language drains run concurrently while a
-/// single applier owns the writer.
-#[derive(Default)]
-struct LangOutcomes {
-    /// `(edge_id, in-root location)`; applier resolves each to a symbol.
-    in_root: Vec<(i64, DefinitionLocation)>,
-    /// Definitive "no definition"; marked unresolvable only if ≥1 edge resolved.
-    pending_unresolvable: Vec<i64>,
-    /// Target outside the indexed root (stdlib/deps).
-    pending_external: Vec<i64>,
-    /// Server died mid-drain — suppresses all marking for this language.
-    server_died: bool,
-}
-
-/// Apply one language's outcomes to the DB, preserving the health gates.
-/// Returns `(resolved, marked_unresolvable, marked_external)`.
-fn apply_lang_outcomes(
-    db: &Database,
-    language: &str,
-    outcomes: &LangOutcomes,
-) -> Result<(u32, u32, u32)> {
-    let mut resolved = 0u32;
-    let mut marked_unresolvable = 0u32;
-    let mut marked_external = 0u32;
-
-    // A located line with no covering symbol is an extraction gap, not external
-    // → unresolvable (keeps state=3 stdlib/deps-only).
-    let mut extra_unresolvable: Vec<i64> = Vec::new();
-    for (edge_id, loc) in &outcomes.in_root {
-        match db.find_symbol_at_location(&loc.file_path, loc.line)? {
-            Some(symbol_id) => match db.update_edge_target(*edge_id, &symbol_id) {
-                Ok(()) => resolved += 1,
-                Err(e) => tracing::debug!("failed to update edge {edge_id}: {e:#}"),
-            },
-            None => {
-                tracing::debug!("no cartog symbol at {}:{}", loc.file_path, loc.line);
-                extra_unresolvable.push(*edge_id);
-            }
-        }
-    }
-    let lang_resolved = resolved;
-
-    // Unresolvable: gate on lang_resolved > 0 (a half-loaded server fabricates
-    // Ok(None) before its index is ready; don't burn good edges with state=2).
-    if !outcomes.server_died && lang_resolved > 0 {
-        for edge_id in outcomes
-            .pending_unresolvable
-            .iter()
-            .chain(&extra_unresolvable)
-        {
-            if let Err(e) = db.mark_edge_unresolvable(*edge_id) {
-                tracing::debug!("failed to mark edge {edge_id} unresolvable: {e:#}");
-                continue;
-            }
-            marked_unresolvable += 1;
-        }
-    } else {
-        let n = outcomes.pending_unresolvable.len() + extra_unresolvable.len();
-        if n > 0 {
-            tracing::info!(
-                "LSP: {language} produced {n} unresolvable answers but no successes — \
-                 not marking (server may be half-loaded or unhealthy)"
-            );
-        }
-    }
-
-    // External: a half-loaded server can't fabricate a concrete out-of-root URI,
-    // so no lang_resolved gate — commit whenever the server stayed alive.
-    if !outcomes.server_died {
-        for edge_id in &outcomes.pending_external {
-            if let Err(e) = db.mark_edge_external(*edge_id) {
-                tracing::debug!("failed to mark edge {edge_id} external: {e:#}");
-                continue;
-            }
-            marked_external += 1;
-        }
-    } else if !outcomes.pending_external.is_empty() {
-        tracing::info!(
-            "LSP: {language} produced {} external answers but server died — not marking",
-            outcomes.pending_external.len()
-        );
-    }
-
-    Ok((resolved, marked_unresolvable, marked_external))
-}
+use manager::{DefinitionOutcome, LspManager};
+use resolve::{apply_lang_outcomes, LangOutcomes};
 
 /// Per-edge progress callback for [`lsp_resolve_edges`]: `(done, total)`.
 /// Called synchronously from the resolution loop; keep it cheap.
