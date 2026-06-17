@@ -67,6 +67,10 @@ pub struct EmbeddingProviderConfig {
     /// Optional cap on ONNX intra-op threads for the local provider. None =
     /// fastembed's default (all cores). `CARTOG_ONNX_THREADS` overrides this.
     pub intra_threads: Option<usize>,
+    /// Cap on concurrent in-flight HTTP embedding requests for ollama/openai.
+    /// None = [`providers::DEFAULT_EMBED_CONCURRENCY`]; clamped `1..=16` at
+    /// provider construction. Ignored for `provider = "local"`.
+    pub max_concurrent_requests: Option<usize>,
 }
 
 impl Default for EmbeddingProviderConfig {
@@ -82,6 +86,7 @@ impl Default for EmbeddingProviderConfig {
             reranker_provider: "local".to_string(),
             reranker_model: None,
             intra_threads: None,
+            max_concurrent_requests: None,
         }
     }
 }
@@ -113,20 +118,24 @@ pub fn create_embedding_provider(
         }
         #[cfg(feature = "provider-ollama")]
         "ollama" => {
+            // Fan-out gated on a live batch-composition parity test; force serial.
             let provider = providers::ollama::OllamaEmbeddingProvider::new(
                 config.base_url.as_deref(),
                 config.model.as_deref(),
                 config.dimension,
+                1,
             )?;
             Ok(Box::new(provider))
         }
         #[cfg(feature = "provider-openai")]
         "openai" => {
+            // Fan-out gated on a live batch-composition parity test; force serial.
             let provider = providers::openai::OpenAiEmbeddingProvider::new(
                 config.base_url.as_deref(),
                 config.model.as_deref(),
                 config.dimension,
                 config.api_key_env.as_deref(),
+                1,
             )?;
             Ok(Box::new(provider))
         }

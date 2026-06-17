@@ -358,6 +358,7 @@ fn warm_lsp_pass(
         &std::collections::HashMap::new(),
         progress,
         cancel,
+        1, // warm pass shares one manager → serial (cap ignored on this path)
     ) {
         Ok(stats) => stats,
         // A cancel must surface as an error (the MCP cancellation contract),

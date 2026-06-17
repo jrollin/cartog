@@ -30,6 +30,11 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # env var, never stored here; leave the var unset for keyless local endpoints.
 # model = "text-embedding-3-small"
 #
+# ollama/openai only: in-flight HTTP embed requests (1..16, default 4). Env
+# CARTOG_EMBED_CONCURRENCY overrides; ignored for local. (Currently gated: both
+# providers run serially until a live batch-composition parity test passes.)
+# max_concurrent_requests = 4
+#
 # Watcher auto-embed under `serve --watch` / `watch`. Omit for auto-detect (embed
 # only if the repo already has embeddings). Precedence: CARTOG_WATCH_RAG > this > --rag.
 # auto_embed = true
@@ -37,6 +42,15 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # [embedding.openai]                            # only used when provider = "openai"
 # base_url    = "https://api.openai.com/v1"     # or http://localhost:11434/v1 (Ollama), etc.
 # api_key_env = "OPENAI_API_KEY"                # env var NAME, not the key itself
+
+# [lsp]
+# Max LSP servers run concurrently during the indexer's edge-resolution pass.
+# 0 or omitted = auto (min(languages, 4)). Each server is RAM-heavy
+# (rust-analyzer ~1-2GB). Env CARTOG_LSP_MAX_SERVERS overrides; 1 = serial.
+# max_concurrent_servers = 2
+# Per-language server override (Dockerized server, custom binary, ...):
+# [lsp.dart]
+# command = ["docker", "run", "--rm", "-i", "-v", "${ROOT}:${ROOT}", "-w", "${ROOT}", "cartog-lsp-dart:stable"]
 
 # [reranker]
 # enabled = true
@@ -59,6 +73,9 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # Set false to index files git ignores (e.g. committed generated code); the
 # prune list and `exclude` still apply.
 # respect_gitignore = true
+# Parse worker threads. 0 or omitted = auto (CPU count); clamped 1..=64; use 1
+# for serial. Cap it on low-CPU hosts. Overridden by CARTOG_JOBS and --jobs N.
+# jobs = 4
 "##;
 
 #[derive(Debug, Serialize)]

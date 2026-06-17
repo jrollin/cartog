@@ -29,6 +29,16 @@ pub struct WalkFilter {
     /// `.cartogignore`/`.ignore` files still apply regardless (this toggle only
     /// governs git's view).
     pub respect_gitignore: bool,
+    /// Parse-phase worker threads. `0` = auto (`available_parallelism`), clamped
+    /// `1..=64`. Sizes a dedicated rayon pool (cached per size, reused across
+    /// re-indexes) that the parse phase runs in, so the cap applies on every
+    /// index, including under a long-lived `serve`/`watch`.
+    pub jobs: usize,
+    /// Max concurrent LSP server processes during the edge-resolution pass.
+    /// `0` = auto (`min(languages_in_pass, 4)`). Each server is RAM-heavy
+    /// (rust-analyzer ~1-2GB). Only the indexer's owned-manager pass fans out;
+    /// the warm MCP pass stays serial.
+    pub lsp_max_servers: usize,
 }
 
 impl Default for WalkFilter {
@@ -36,6 +46,8 @@ impl Default for WalkFilter {
         Self {
             exclude: ExcludeGlobs::empty(),
             respect_gitignore: true,
+            jobs: 0,
+            lsp_max_servers: 0,
         }
     }
 }

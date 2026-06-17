@@ -26,6 +26,8 @@ pub struct OpenAiEmbeddingProvider {
     api_key_env: String,
     /// Emit the `dimensions` param only when the user pinned an explicit dimension.
     send_dimensions: bool,
+    /// Max concurrent in-flight requests (clamped `1..=16`). `1` = serial.
+    concurrency: usize,
 }
 
 #[derive(Serialize)]
@@ -114,6 +116,7 @@ impl OpenAiEmbeddingProvider {
         model: Option<&str>,
         dimension: Option<usize>,
         api_key_env: Option<&str>,
+        max_concurrent: usize,
     ) -> Result<Self> {
         let base_url = base_url
             .unwrap_or(super::DEFAULT_OPENAI_BASE_URL)
@@ -168,6 +171,7 @@ impl OpenAiEmbeddingProvider {
             api_key,
             api_key_env: api_key_env.to_string(),
             send_dimensions,
+            concurrency: super::concurrent::clamp_concurrency(max_concurrent),
         })
     }
 
@@ -191,31 +195,45 @@ impl OpenAiEmbeddingProvider {
             .context("Failed to parse OpenAI embed response")
     }
 
+    /// One `/v1/embeddings` POST for `chunk`, validated + reordered to input order.
+    fn embed_one_request(&self, chunk: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let resp = Self::request(
+            &self.client,
+            &self.base_url,
+            self.api_key.as_deref(),
+            &self.api_key_env,
+            &EmbedRequest {
+                model: &self.model,
+                input: chunk,
+                dimensions: self.send_dimensions.then_some(self.dim),
+            },
+        )?;
+        reorder_by_index(resp.data, chunk.len(), self.dim)
+    }
+
     fn embed_texts(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        // Chunk to stay under the OpenAI per-request input cap (2048); a whole-repo
-        // index passes thousands of texts at once and would otherwise 400.
-        let mut out = Vec::with_capacity(texts.len());
-        for chunk in texts.chunks(MAX_INPUTS_PER_REQUEST) {
-            let resp = Self::request(
-                &self.client,
-                &self.base_url,
-                self.api_key.as_deref(),
-                &self.api_key_env,
-                &EmbedRequest {
-                    model: &self.model,
-                    input: chunk,
-                    dimensions: self.send_dimensions.then_some(self.dim),
-                },
-            )?;
-            out.extend(reorder_by_index(resp.data, chunk.len(), self.dim)?);
-        }
-        Ok(out)
+        // Serial keeps the 2048-input wire shape; concurrent uses smaller chunks
+        // to fan out. Both use the retry-wrapped closure (concurrency-independent
+        // resilience; per-ordinal jitter de-correlates concurrent retries).
+        let chunk_size = if self.concurrency <= 1 {
+            MAX_INPUTS_PER_REQUEST
+        } else {
+            OPENAI_SUB_BATCH
+        };
+        let sub_batches: Vec<&[&str]> = texts.chunks(chunk_size).collect();
+        super::concurrent::run_concurrent(sub_batches, self.concurrency, |ordinal, chunk| {
+            super::concurrent::with_retry(ordinal, || self.embed_one_request(chunk))
+        })
     }
 }
 
 /// Max inputs per `/v1/embeddings` request. OpenAI caps at 2048; this also keeps
 /// each request well under typical per-request token limits for code-sized text.
 const MAX_INPUTS_PER_REQUEST: usize = 2048;
+
+/// Concurrent-path sub-batch size: smaller than the 2048 cap so a typical
+/// indexer batch (512) splits into several in-flight requests.
+const OPENAI_SUB_BATCH: usize = 128;
 
 /// Reorder response data to request order, validating count, the index
 /// permutation, and per-vector dimension in one pass. The API does not
@@ -401,5 +419,31 @@ mod tests {
     fn status_hint_other_status_stays_generic() {
         let h = status_hint("m", "K", Some(reqwest::StatusCode::INTERNAL_SERVER_ERROR));
         assert_eq!(h, "OpenAI endpoint returned an error");
+    }
+
+    /// Ship gate for OpenAI fan-out: splitting one big request into N concurrent
+    /// sub-batches must produce byte-identical per-text vectors. Needs a live
+    /// endpoint — run with `CARTOG_OPENAI_LIVE=1` (+ base_url/model/key env).
+    /// Until this passes, `create_embedding_provider` forces concurrency = 1.
+    #[test]
+    #[ignore = "requires a live OpenAI-compatible endpoint; set CARTOG_OPENAI_LIVE=1"]
+    fn sub_batch_split_matches_serial_request() {
+        if std::env::var("CARTOG_OPENAI_LIVE").is_err() {
+            return;
+        }
+        // More than OPENAI_SUB_BATCH so the concurrent path actually splits.
+        let owned: Vec<String> = (0..OPENAI_SUB_BATCH * 3)
+            .map(|i| format!("text {i}"))
+            .collect();
+        let texts: Vec<&str> = owned.iter().map(String::as_str).collect();
+
+        let serial = OpenAiEmbeddingProvider::new(None, None, None, None, 1).unwrap();
+        let concurrent = OpenAiEmbeddingProvider::new(None, None, None, None, 4).unwrap();
+        let a = serial.embed_texts(&texts).unwrap();
+        let b = concurrent.embed_texts(&texts).unwrap();
+        assert_eq!(
+            a, b,
+            "sub-batch splitting must be byte-identical to one request"
+        );
     }
 }

@@ -8,6 +8,7 @@
 
 pub mod client;
 pub mod manager;
+mod resolve;
 pub mod servers;
 
 use std::collections::HashMap;
@@ -15,10 +16,11 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use cartog_core::{detect_language, PROGRESS_STRIDE};
+use cartog_core::detect_language;
 use cartog_db::{Database, UnresolvedEdge};
 
-use manager::{DefinitionOutcome, LspManager};
+use manager::LspManager;
+use resolve::{effective_cap, resolve_parallel, resolve_serial, ProgressSink};
 
 /// Per-edge progress callback for [`lsp_resolve_edges`]: `(done, total)`.
 /// Called synchronously from the resolution loop; keep it cheap.
@@ -73,313 +75,71 @@ pub fn lsp_resolve_edges(
     overrides: &HashMap<String, Vec<String>>,
     progress: Option<LspProgress<'_>>,
     cancel: Option<LspCancel<'_>>,
+    max_concurrent_servers: usize,
 ) -> Result<LspResolveStats> {
     let unresolved = db.unresolved_edges()?;
-
     if unresolved.is_empty() {
         return Ok(LspResolveStats::default());
     }
 
-    // Total candidate edges before grouping; drives the (done, total) callback.
     let total = unresolved.len() as u32;
-    let mut processed = 0u32;
-    // Dedup so the post-loop final tick never repeats the last in-loop value
-    // (last edge on a stride boundary, or no server started so it stays 0).
-    let last_emitted = std::cell::Cell::new(u32::MAX);
-    let emit = |processed: u32| {
-        if let Some(cb) = progress {
-            if last_emitted.replace(processed) != processed {
-                cb(processed, total);
-            }
-        }
-    };
-    let check_cancel = || -> Result<()> {
-        if cancel.is_some_and(|c| c()) {
-            anyhow::bail!(cartog_core::CANCELLED_MSG);
-        }
-        Ok(())
-    };
 
-    // Group by language (derived from file extension)
+    // Group by language (derived from file extension).
     let mut by_language: HashMap<String, Vec<UnresolvedEdge>> = HashMap::new();
     for edge in unresolved {
-        let path = Path::new(&edge.file_path);
-        if let Some(lang) = detect_language(path) {
+        if let Some(lang) = detect_language(Path::new(&edge.file_path)) {
             by_language.entry(lang.to_string()).or_default().push(edge);
         }
     }
-
     if by_language.is_empty() {
         return Ok(LspResolveStats::default());
     }
 
-    // Use shared manager if provided, otherwise create a temporary one
-    let mut owned_manager;
-    let manager: &mut LspManager = match shared_manager {
+    let sink = ProgressSink::new(total, progress);
+    sink.emit(0); // phase-start tick so the total shows before the first stride
+
+    let cap = effective_cap(max_concurrent_servers, by_language.len());
+
+    // The shared-manager (warm MCP) path and cap<=1 stay serial. Only the
+    // owned-manager path with cap>1 fans out per-language.
+    let stats = match shared_manager {
         Some(m) => {
             m.ensure_root(root);
-            m
+            resolve_serial(db, root, m, &by_language, &sink, cancel)
         }
-        None => {
-            owned_manager = LspManager::with_overrides(root, overrides.clone());
-            &mut owned_manager
+        None if cap <= 1 => {
+            let mut manager = LspManager::with_overrides(root, overrides.clone());
+            resolve_serial(db, root, &mut manager, &by_language, &sink, cancel)
         }
-    };
+        None => resolve_parallel(db, root, overrides, by_language, &sink, cap, cancel),
+    }?;
 
-    let mut resolved = 0u32;
-    let mut marked_unresolvable = 0u32;
-    let mut marked_external = 0u32;
-    let mut any_server_started = false;
+    sink.emit_final(sink.processed()); // lands on total when every edge ran
 
-    emit(0); // phase-start tick, so the total shows before the first stride
-
-    for (language, edges) in &by_language {
-        check_cancel()?;
-        match manager.start(language) {
-            Ok(()) => {
-                any_server_started = true;
-            }
-            Err(e) => {
-                tracing::info!("LSP: {language} — {e:#} ({} unresolved edges)", edges.len());
-                continue;
-            }
-        }
-
-        // Group edges by file for batched didOpen
-        let mut by_file: HashMap<&str, Vec<&UnresolvedEdge>> = HashMap::new();
-        for edge in edges {
-            by_file.entry(&edge.file_path).or_default().push(edge);
-        }
-
-        tracing::info!(
-            "LSP: resolving {} unresolved {language} edges across {} files...",
-            edges.len(),
-            by_file.len()
-        );
-
-        // Buffer "definitive negative" marks here and only commit them at the
-        // end of the language loop *if* the language proved healthy by resolving
-        // at least one edge. Catches half-loaded rust-analyzer cases where the
-        // server returns Ok(None) or out-of-root locations before its index is
-        // ready — without this gate we would burn good edges with sticky markers.
-        let mut pending_unresolvable: Vec<i64> = Vec::new();
-        let mut pending_external: Vec<i64> = Vec::new();
-        let mut lang_resolved: u32 = 0;
-        let mut server_died = false;
-
-        for (file_path, file_edges) in by_file {
-            check_cancel()?;
-            let abs_path = root.join(file_path);
-            let content = match std::fs::read_to_string(&abs_path) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::debug!("cannot read {file_path}: {e}");
-                    continue;
-                }
-            };
-
-            if let Err(e) = manager.open_file(language, file_path, &content) {
-                tracing::debug!("didOpen failed for {file_path}: {e:#}");
-                if !manager.is_alive(language) {
-                    tracing::warn!(
-                        "{language} LSP server died during didOpen — remaining {language} edges \
-                         resolved via heuristics only. Rerun with --no-lsp to skip LSP entirely."
-                    );
-                    server_died = true;
-                    break;
-                }
-                continue;
-            }
-
-            let lines: Vec<&str> = content.lines().collect();
-
-            // Pair each edge whose target column we can locate with its LSP
-            // position in ONE vec, so the edge↔position↔outcome correspondence
-            // can't drift, then resolve the batch (round-trips overlap).
-            let batch: Vec<(&UnresolvedEdge, (u32, u32))> = file_edges
-                .iter()
-                .filter_map(|&edge| {
-                    find_column_in_line(&lines, edge.line, &edge.target_name)
-                        .map(|col| (edge, (edge.line.saturating_sub(1), col))) // 1-based → 0-based
-                })
-                .collect();
-            let positions: Vec<(u32, u32)> = batch.iter().map(|&(_, pos)| pos).collect();
-
-            let outcomes = match manager.definitions_batch(language, file_path, &positions, cancel)
-            {
-                Ok(o) => o,
-                // Cancelled, not a server failure: propagate before the death
-                // path can mislog or the loop can commit buffered marks.
-                Err(e) if cartog_core::is_cancelled(&e) => {
-                    let _ = manager.close_file(language, file_path);
-                    return Err(e);
-                }
-                Err(e) => {
-                    // The send pipe broke mid-batch (server gone). Treat like a
-                    // death: never mark, stop this language.
-                    tracing::debug!("definition batch failed for {file_path}: {e:#}");
-                    if !manager.is_alive(language) {
-                        tracing::warn!(
-                            "{language} LSP server died — remaining {language} edges resolved \
-                             via heuristics only. Rerun with --no-lsp to skip LSP entirely."
-                        );
-                        server_died = true;
-                    }
-                    let _ = manager.close_file(language, file_path);
-                    if server_died {
-                        break;
-                    }
-                    continue;
-                }
-            };
-
-            for ((edge, _pos), outcome) in batch.iter().zip(outcomes) {
-                processed += 1;
-                if processed % PROGRESS_STRIDE == 0 {
-                    emit(processed);
-                }
-                match outcome {
-                    Ok(Some(DefinitionOutcome::InRoot(loc))) => {
-                        match db.find_symbol_at_location(&loc.file_path, loc.line) {
-                            Ok(Some(symbol_id)) => {
-                                match db.update_edge_target(edge.edge_id, &symbol_id) {
-                                    Ok(()) => {
-                                        resolved += 1;
-                                        lang_resolved += 1;
-                                    }
-                                    Err(e) => tracing::debug!(
-                                        "failed to update edge {}: {e:#}",
-                                        edge.edge_id
-                                    ),
-                                }
-                            }
-                            Ok(None) => {
-                                // LSP located the target inside the root but
-                                // cartog has no extracted symbol covering that
-                                // line (cartog extraction gap, unindexed
-                                // language, top-level statement between
-                                // symbols). This is NOT external — the target
-                                // is in-root. Treat as unresolvable so the
-                                // state=3 "external" bucket stays semantically
-                                // clean (stdlib/deps only).
-                                tracing::debug!(
-                                    "no cartog symbol at {}:{}",
-                                    loc.file_path,
-                                    loc.line
-                                );
-                                pending_unresolvable.push(edge.edge_id);
-                            }
-                            Err(e) => return Err(e), // DB errors propagate
-                        }
-                    }
-                    Ok(Some(DefinitionOutcome::External)) => {
-                        // LSP located the target outside the indexed root
-                        // (stdlib, deps, node_modules). Buffer for state=3.
-                        pending_external.push(edge.edge_id);
-                    }
-                    Ok(None) => {
-                        // LSP definitively answered "no definition". Buffer it
-                        // until we know the language server resolved at least
-                        // one edge this run (per-language success gate).
-                        pending_unresolvable.push(edge.edge_id);
-                    }
-                    Err(e) => {
-                        // Transient: server crash, didOpen race, IO. NEVER mark
-                        // — the marker is sticky and a transient failure must
-                        // not burn this edge for future runs.
-                        tracing::debug!(
-                            "definition failed for {} at {file_path}:{}: {e:#}",
-                            edge.target_name,
-                            edge.line
-                        );
-                        if !manager.is_alive(language) {
-                            tracing::warn!(
-                                "{language} LSP server died — remaining {language} edges resolved \
-                                 via heuristics only. Rerun with --no-lsp to skip LSP entirely."
-                            );
-                            server_died = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Close the file to free server memory
-            let _ = manager.close_file(language, file_path);
-
-            if server_died {
-                break;
-            }
-        }
-
-        // Unresolvable marks come from `Ok(None)` — an answer a half-loaded
-        // server can fabricate before its index is ready. Gate behind
-        // `lang_resolved > 0` to avoid burning good edges as sticky state=2
-        // when the server is unhealthy.
-        if !server_died && lang_resolved > 0 {
-            for edge_id in &pending_unresolvable {
-                if let Err(e) = db.mark_edge_unresolvable(*edge_id) {
-                    tracing::debug!("failed to mark edge {edge_id} unresolvable: {e:#}");
-                    continue;
-                }
-                marked_unresolvable += 1;
-            }
-        } else if !pending_unresolvable.is_empty() {
-            tracing::info!(
-                "LSP: {language} produced {} unresolvable answers but no successes — \
-                 not marking (server may be half-loaded or unhealthy)",
-                pending_unresolvable.len(),
-            );
-        }
-
-        // External marks come from positive LSP answers (a concrete URI
-        // outside the indexed root). A half-loaded server cannot fabricate
-        // those, so the lang_resolved gate is unnecessary. Commit whenever
-        // the server stayed alive — a stdlib-only file would otherwise
-        // re-query the LSP forever.
-        if !server_died {
-            for edge_id in &pending_external {
-                if let Err(e) = db.mark_edge_external(*edge_id) {
-                    tracing::debug!("failed to mark edge {edge_id} external: {e:#}");
-                    continue;
-                }
-                marked_external += 1;
-            }
-        } else if !pending_external.is_empty() {
-            tracing::info!(
-                "LSP: {language} produced {} external answers but server died — \
-                 not marking",
-                pending_external.len(),
-            );
-        }
-    }
-
-    emit(processed); // final tick (deduped): lands on total when every edge ran
-
-    if !any_server_started {
+    if !stats.any_server_started {
         tracing::debug!("LSP: no servers found on PATH, skipping");
-    } else if resolved > 0 || marked_unresolvable > 0 || marked_external > 0 {
+    } else if stats.resolved > 0 || stats.marked_unresolvable > 0 || stats.marked_external > 0 {
         tracing::info!(
-            "LSP: resolved {resolved} additional edges, \
-             marked {marked_unresolvable} unresolvable, {marked_external} external"
+            "LSP: resolved {} additional edges, marked {} unresolvable, {} external",
+            stats.resolved,
+            stats.marked_unresolvable,
+            stats.marked_external
         );
     } else {
         tracing::info!("LSP: no additional edges resolved");
     }
 
-    // manager.shutdown_all() called via Drop
-    Ok(LspResolveStats {
-        resolved,
-        marked_unresolvable,
-        marked_external,
-        any_server_started,
-    })
+    Ok(stats) // managers shut down via Drop
 }
 
 /// Find the column (0-based UTF-16 offset) of `target_name` in the given source line.
 /// Uses word-boundary matching to avoid matching inside longer identifiers.
 /// LSP positions use UTF-16 code units by default.
-fn find_column_in_line(lines: &[&str], line_1based: u32, target_name: &str) -> Option<u32> {
+pub(crate) fn find_column_in_line(
+    lines: &[&str],
+    line_1based: u32,
+    target_name: &str,
+) -> Option<u32> {
     let idx = line_1based.checked_sub(1)? as usize;
     let line = lines.get(idx)?;
 
@@ -492,7 +252,7 @@ mod tests {
         let ticks: std::sync::Mutex<Vec<(u32, u32)>> = std::sync::Mutex::new(Vec::new());
         let cb = |done, total| ticks.lock().unwrap().push((done, total));
         let stats =
-            lsp_resolve_edges(&db, tmp.path(), None, &HashMap::new(), Some(&cb), None).unwrap();
+            lsp_resolve_edges(&db, tmp.path(), None, &HashMap::new(), Some(&cb), None, 0).unwrap();
         // No server ran, so no edges were processed. The phase-start emit(0) and
         // the post-loop final emit(0) carry the same value; the dedup collapses
         // them to a single (0, 1) tick rather than a duplicate pair.
@@ -527,8 +287,16 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let cancel = || true; // trip immediately at the first language boundary
-        let err = lsp_resolve_edges(&db, tmp.path(), None, &HashMap::new(), None, Some(&cancel))
-            .expect_err("a tripped cancel probe must abort");
+        let err = lsp_resolve_edges(
+            &db,
+            tmp.path(),
+            None,
+            &HashMap::new(),
+            None,
+            Some(&cancel),
+            0,
+        )
+        .expect_err("a tripped cancel probe must abort");
         assert!(
             err.to_string().contains("cancelled"),
             "error must mention cancellation, got: {err}"
@@ -555,8 +323,16 @@ mod tests {
         let cancel = || false;
         // No server on PATH → returns Ok with zero resolutions (same as the
         // no-probe path); a non-tripping probe must not change that.
-        let stats = lsp_resolve_edges(&db, tmp.path(), None, &HashMap::new(), None, Some(&cancel))
-            .expect("a non-cancelling probe must not abort");
+        let stats = lsp_resolve_edges(
+            &db,
+            tmp.path(),
+            None,
+            &HashMap::new(),
+            None,
+            Some(&cancel),
+            0,
+        )
+        .expect("a non-cancelling probe must not abort");
         assert_eq!(stats.resolved, 0);
     }
 }

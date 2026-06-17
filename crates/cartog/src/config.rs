@@ -19,9 +19,23 @@ pub struct CartogConfig {
     pub rag: Option<RagConfig>,
     pub remote: Option<RemoteConfig>,
     pub security: Option<SecurityConfig>,
-    /// Per-language LSP command overrides, keyed by cartog language name.
-    pub lsp: Option<HashMap<String, LspLangConfig>>,
+    /// LSP settings: per-language command overrides plus `max_concurrent_servers`.
+    pub lsp: Option<LspConfig>,
     pub index: Option<IndexConfig>,
+}
+
+/// `[lsp]` section: per-language command overrides (flattened as `[lsp.<lang>]`)
+/// plus a sibling `max_concurrent_servers` cap. No `deny_unknown_fields` here —
+/// it is incompatible with `#[serde(flatten)]`; the inner `LspLangConfig` keeps it.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct LspConfig {
+    /// Per-language `[lsp.<lang>] command = [...]` overrides.
+    #[serde(default, flatten)]
+    pub langs: HashMap<String, LspLangConfig>,
+    /// Max LSP server processes run concurrently during the indexer's edge pass.
+    /// Absent / `0` = auto (`min(languages_in_pass, 4)`). `CARTOG_LSP_MAX_SERVERS`
+    /// overrides. Each server is RAM-heavy (rust-analyzer ~1-2GB).
+    pub max_concurrent_servers: Option<usize>,
 }
 
 /// Override for one language's LSP server command (`[lsp.<lang>]`).
@@ -71,6 +85,12 @@ pub struct IndexConfig {
     /// Default `true`. Set `false` to index gitignored files (e.g. committed
     /// generated code); the built-in prune list and `exclude` still apply.
     pub respect_gitignore: Option<bool>,
+    /// Worker threads for the parallel parse phase. Absent / `0` = auto
+    /// (`available_parallelism`); clamped to `1..=64`. Overridden by the
+    /// `CARTOG_JOBS` env var and the `cartog index --jobs N` flag (flag > env >
+    /// this). The value applies on every index, including under a long-lived
+    /// `serve`/`watch`.
+    pub jobs: Option<usize>,
 }
 
 /// Optional S3-compatible remote for `cartog push` / `cartog pull`.
@@ -225,6 +245,10 @@ pub struct EmbeddingConfig {
     pub ollama: Option<OllamaConfig>,
     /// OpenAI-compatible provider settings.
     pub openai: Option<OpenAiConfig>,
+    /// Cap concurrent in-flight HTTP embedding requests for ollama/openai.
+    /// `None` = 4. `CARTOG_EMBED_CONCURRENCY` overrides; clamped `1..=16`.
+    /// Ignored for `provider = "local"`.
+    pub max_concurrent_requests: Option<usize>,
     /// Auto-embed under `serve --watch` / `watch`. `None` = auto-detect (embed
     /// only if the repo already has embeddings); `Some(false)` = never;
     /// `Some(true)` = always. Precedence: `CARTOG_WATCH_RAG` env > this key >
@@ -382,10 +406,61 @@ pub fn to_walk_filter(config: &CartogConfig) -> Result<cartog_indexer::WalkFilte
     let exclude = cartog_indexer::ExcludeGlobs::from_globs(globs)
         .map_err(|e| format!("[index] exclude: {e:#}"))?;
     let respect_gitignore = index.and_then(|i| i.respect_gitignore).unwrap_or(true);
+    let jobs = resolve_jobs(parse_env_usize("CARTOG_JOBS"), index.and_then(|i| i.jobs));
+    let lsp_max_servers = resolve_lsp_max_servers(
+        parse_env_usize("CARTOG_LSP_MAX_SERVERS"),
+        config.lsp.as_ref().and_then(|l| l.max_concurrent_servers),
+    );
     Ok(cartog_indexer::WalkFilter {
         exclude,
         respect_gitignore,
+        jobs,
+        lsp_max_servers,
     })
+}
+
+/// Resolve the parse-pool size: env (`CARTOG_JOBS`) > `[index] jobs` > 0 (auto).
+/// The `--jobs` flag wins over both and is applied by the caller. `0` stays 0
+/// (auto); it is resolved + clamped inside the indexer.
+fn resolve_jobs(env: Option<usize>, toml: Option<usize>) -> usize {
+    env.or(toml).unwrap_or(0)
+}
+
+/// Resolve the concurrent-LSP-server cap: env (`CARTOG_LSP_MAX_SERVERS`) >
+/// `[lsp] max_concurrent_servers` > 0 (auto). `0` stays 0 (auto →
+/// `min(languages, 4)`); clamped at the cartog-lsp use site.
+fn resolve_lsp_max_servers(env: Option<usize>, toml: Option<usize>) -> usize {
+    env.or(toml).unwrap_or(0)
+}
+
+/// Resolve the network-embed concurrency cap: env (`CARTOG_EMBED_CONCURRENCY`) >
+/// `[embedding] max_concurrent_requests` > default 4, clamped `1..=16`. Applies
+/// to ollama/openai only (the local arm never reads it).
+fn resolve_embed_concurrency(env: Option<usize>, toml: Option<usize>) -> usize {
+    env.or(toml)
+        .unwrap_or(cartog_rag::providers::DEFAULT_EMBED_CONCURRENCY)
+        .clamp(1, 16)
+}
+
+/// Read a non-negative integer env var, warning and ignoring a malformed value.
+fn parse_env_usize(var: &str) -> Option<usize> {
+    parse_usize_or_warn(var, std::env::var(var).ok()?.as_str())
+}
+
+/// Pure parse + warn, split out so it is testable without touching the env.
+fn parse_usize_or_warn(var: &str, raw: &str) -> Option<usize> {
+    match raw.trim().parse::<usize>() {
+        Ok(n) => Some(n),
+        Err(_) => {
+            // eprintln, not tracing: env resolution runs before the tracing
+            // subscriber is initialised in main, so a `tracing::warn!` here is
+            // dropped (cf. warn_legacy_db_once). TTY-gated to spare MCP/--json.
+            if config_diagnostics_visible() {
+                eprintln!("cartog: {var}={raw:?} is not a non-negative integer; ignoring");
+            }
+            None
+        }
+    }
 }
 
 /// Convert the embedding config section into an `EmbeddingProviderConfig` for cartog-rag.
@@ -436,6 +511,10 @@ pub fn to_provider_config(config: &CartogConfig) -> cartog_rag::EmbeddingProvide
                 reranker_provider,
                 reranker_model,
                 intra_threads,
+                max_concurrent_requests: Some(resolve_embed_concurrency(
+                    parse_env_usize("CARTOG_EMBED_CONCURRENCY"),
+                    embed.max_concurrent_requests,
+                )),
             }
         }
         None => cartog_rag::EmbeddingProviderConfig {
@@ -661,7 +740,7 @@ fn read_config(path: &Path) -> Option<CartogConfig> {
 /// failures into clear config errors, mirroring [`validate_providers`].
 fn validate_lsp_overrides(config: &CartogConfig) -> Result<(), String> {
     if let Some(lsp) = config.lsp.as_ref() {
-        for (lang, cfg) in lsp {
+        for (lang, cfg) in &lsp.langs {
             if cfg.command.is_empty() {
                 return Err(format!(
                     "[lsp.{lang}] command is empty; provide at least the executable, \
@@ -691,7 +770,8 @@ pub fn to_lsp_overrides(config: &CartogConfig) -> HashMap<String, Vec<String>> {
         .lsp
         .as_ref()
         .map(|lsp| {
-            lsp.iter()
+            lsp.langs
+                .iter()
                 .map(|(lang, cfg)| (lang.clone(), cfg.command.clone()))
                 .collect()
         })
@@ -1012,6 +1092,95 @@ mod tests {
         fs::write(&cfg_path, "[index]\nrespect_gitignore = false\n").unwrap();
         let cfg = read_config(&cfg_path).expect("should parse");
         assert!(!to_walk_filter(&cfg).unwrap().respect_gitignore);
+    }
+
+    #[test]
+    fn resolve_jobs_precedence_env_over_toml_over_auto() {
+        assert_eq!(resolve_jobs(None, None), 0, "neither set → 0 (auto)");
+        assert_eq!(resolve_jobs(None, Some(4)), 4, "toml when env absent");
+        assert_eq!(resolve_jobs(Some(2), Some(4)), 2, "env wins over toml");
+        // env=0 is an explicit value that wins; 0 = auto (documented).
+        assert_eq!(
+            resolve_jobs(Some(0), Some(4)),
+            0,
+            "env 0 overrides toml → auto"
+        );
+    }
+
+    #[test]
+    fn resolve_lsp_max_servers_precedence() {
+        assert_eq!(resolve_lsp_max_servers(None, None), 0, "neither → 0 (auto)");
+        assert_eq!(
+            resolve_lsp_max_servers(None, Some(4)),
+            4,
+            "toml when env absent"
+        );
+        assert_eq!(
+            resolve_lsp_max_servers(Some(2), Some(4)),
+            2,
+            "env wins over toml"
+        );
+    }
+
+    #[test]
+    fn lsp_max_servers_coexists_with_lang_overrides() {
+        // The flatten must route max_concurrent_servers to the named field, not
+        // into langs, while [lsp.<lang>] still populates langs.
+        let toml_str = "[lsp]\nmax_concurrent_servers = 2\n[lsp.rust]\ncommand = [\"x\"]\n";
+        let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+        let lsp = cfg.lsp.unwrap();
+        assert_eq!(lsp.max_concurrent_servers, Some(2));
+        assert!(lsp.langs.contains_key("rust"));
+        assert!(
+            !lsp.langs.contains_key("max_concurrent_servers"),
+            "scalar not swept into langs"
+        );
+    }
+
+    #[test]
+    fn resolve_embed_concurrency_precedence_and_clamp() {
+        assert_eq!(resolve_embed_concurrency(None, None), 4, "default 4");
+        assert_eq!(
+            resolve_embed_concurrency(None, Some(8)),
+            8,
+            "toml when env absent"
+        );
+        assert_eq!(
+            resolve_embed_concurrency(Some(2), Some(8)),
+            2,
+            "env wins over toml"
+        );
+        assert_eq!(
+            resolve_embed_concurrency(Some(0), None),
+            1,
+            "clamped up to 1"
+        );
+        assert_eq!(
+            resolve_embed_concurrency(Some(99), None),
+            16,
+            "clamped down to 16"
+        );
+    }
+
+    #[test]
+    fn index_jobs_parses_from_toml() {
+        // env-free: drives the TOML tier directly via resolve_jobs to avoid a
+        // CARTOG_JOBS leak in to_walk_filter.
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        fs::write(&cfg_path, "[index]\njobs = 4\n").unwrap();
+        let cfg = read_config(&cfg_path).expect("should parse");
+        assert_eq!(cfg.index.and_then(|i| i.jobs), Some(4));
+    }
+
+    #[test]
+    fn parse_usize_or_warn_accepts_integers_and_rejects_garbage() {
+        assert_eq!(parse_usize_or_warn("X", "8"), Some(8));
+        assert_eq!(parse_usize_or_warn("X", " 8 "), Some(8));
+        assert_eq!(parse_usize_or_warn("X", "0"), Some(0));
+        assert_eq!(parse_usize_or_warn("X", "abc"), None);
+        assert_eq!(parse_usize_or_warn("X", "-1"), None);
+        assert_eq!(parse_usize_or_warn("X", ""), None);
     }
 
     #[test]
@@ -1757,7 +1926,7 @@ provider = "local"
 command = ["docker", "run", "--rm", "-i", "-v", "${ROOT}:${ROOT}", "cartog-lsp-dart:stable"]
 "#;
         let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
-        let dart = &cfg.lsp.unwrap()["dart"];
+        let dart = &cfg.lsp.unwrap().langs["dart"];
         assert_eq!(dart.command[0], "docker");
         assert_eq!(dart.command.last().unwrap(), "cartog-lsp-dart:stable");
     }
@@ -1801,7 +1970,7 @@ command = ["gopls", "serve"]
         let cfg_path = dir.path().join(".cartog.toml");
         fs::write(&cfg_path, "[lsp.go]\ncommand = [\"gopls\", \"serve\"]\n").unwrap();
         let cfg = read_config(&cfg_path).expect("valid lsp block parses");
-        assert!(cfg.lsp.unwrap().contains_key("go"));
+        assert!(cfg.lsp.unwrap().langs.contains_key("go"));
     }
 
     #[cfg(feature = "lsp")]

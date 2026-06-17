@@ -204,17 +204,28 @@ fn main() -> Result<()> {
             path,
             force,
             no_lsp,
-        } => commands::cmd_index(
-            &db_path,
-            &path,
-            force,
-            !no_lsp,
-            cli.json,
-            embedding_dim,
-            redact,
-            &lsp_overrides,
-            &walk_filter,
-        ),
+            jobs,
+        } => {
+            // --jobs wins over CARTOG_JOBS / [index] jobs (already in walk_filter).
+            let filter = match jobs {
+                Some(n) => cartog_indexer::WalkFilter {
+                    jobs: n,
+                    ..walk_filter.clone()
+                },
+                None => walk_filter.clone(),
+            };
+            commands::cmd_index(
+                &db_path,
+                &path,
+                force,
+                !no_lsp,
+                cli.json,
+                embedding_dim,
+                redact,
+                &lsp_overrides,
+                &filter,
+            )
+        }
         Command::Outline { file } => commands::cmd_outline(
             &db_path,
             &file,

@@ -177,8 +177,8 @@ cartog index .          <span class="comment"># 6. re-index after changes</span>
             <tr><td><code>[rag]</code></td><td>tuned retrieval/rerank pools</td><td>tuning hybrid-search recall vs. cost</td></tr>
             <tr><td><code>[remote]</code></td><td>unset (no sync)</td><td>sharing an index over S3 — see <a href="#config-remote">Remote Storage</a></td></tr>
             <tr><td><code>[security]</code></td><td><code>redact_secrets = true</code></td><td>opting out of pattern redaction — see <a href="#config-secrets">Secret Redaction</a></td></tr>
-            <tr><td><code>[lsp.&lt;lang&gt;]</code></td><td>unset (server resolved from <code>PATH</code>)</td><td>running a custom/Dockerized LSP server — see <a href="#config-lsp">LSP Server Overrides</a></td></tr>
-            <tr><td><code>[index]</code></td><td><code>exclude = []</code>, <code>respect_gitignore = true</code></td><td>excluding extra paths, or indexing git-ignored files — see <a href="#config-index">Index Filtering</a></td></tr>
+            <tr><td><code>[lsp]</code></td><td><code>max_concurrent_servers</code> = auto; <code>[lsp.&lt;lang&gt;]</code> unset (server from <code>PATH</code>)</td><td>capping concurrent LSP servers, or a custom/Dockerized server — see <a href="#config-lsp">LSP Server Overrides</a></td></tr>
+            <tr><td><code>[index]</code></td><td><code>exclude = []</code>, <code>respect_gitignore = true</code>, <code>jobs = 0</code> (auto)</td><td>excluding extra paths, indexing git-ignored files, or capping parse threads — see <a href="#config-index">Index Filtering</a></td></tr>
           </tbody>
         </table>
         <p>Example — override just the DB path and switch to Ollama, leaving everything else at its default:</p>
@@ -198,7 +198,10 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
           </thead>
           <tbody>
             <tr><td><code>CARTOG_DB</code></td><td>auto-detect</td><td>Database path (same as <code>--db</code>).</td></tr>
+            <tr><td><code>CARTOG_JOBS</code></td><td>CPU count</td><td>Parse worker pool size for <code>cartog index</code> (clamped <code>1..=64</code>). Overrides <code>[index] jobs</code>; the <code>--jobs</code> flag overrides it.</td></tr>
+            <tr><td><code>CARTOG_LSP_MAX_SERVERS</code></td><td><code>min(langs, 4)</code></td><td>Max concurrent LSP servers in the indexer's edge pass. Overrides <code>[lsp] max_concurrent_servers</code>; <code>1</code> forces serial.</td></tr>
             <tr><td><code>CARTOG_ONNX_THREADS</code></td><td>all cores</td><td>Caps ONNX CPU threads for <code>rag index</code> + reranking. Overrides <code>[embedding.local] intra_threads</code>; <code>1</code> forces single-core.</td></tr>
+            <tr><td><code>CARTOG_EMBED_CONCURRENCY</code></td><td><code>4</code></td><td>In-flight HTTP embed requests for ollama/openai (clamped <code>1..=16</code>). Overrides <code>[embedding] max_concurrent_requests</code>; ignored for local.</td></tr>
             <tr><td><code>CARTOG_WATCH_RAG</code></td><td>unset</td><td>Force watcher auto-embed; overrides <code>[embedding] auto_embed</code> and <code>--rag</code>:<br><code>1</code> = force on<br><code>0</code> = force off<br>unset = auto-detect from the DB</td></tr>
             <tr><td><code>CARTOG_SINGLE_WRITER</code></td><td><code>1</code></td><td><code>0</code> disables MCP single-writer election (every <code>serve</code> opens read-write).</td></tr>
             <tr><td><code>CARTOG_MCP_MAX_BYTES</code></td><td><code>65536</code></td><td>Max bytes per MCP tool response before truncation.</td></tr>
@@ -222,6 +225,7 @@ path = ".cartog/db.sqlite"        <span class="comment"># DEFAULT (relative to g
 provider = "local"               <span class="comment"># DEFAULT — "local" (ONNX), "ollama", or "openai"</span>
 # model = "BAAI/bge-small-en-v1.5" <span class="comment"># top-level for ALL providers; unset → built-in bge-small (local) / text-embedding-3-small (openai)</span>
 # dimension = 384                <span class="comment"># auto-detected for built-in models</span>
+# max_concurrent_requests = 4    <span class="comment"># ollama/openai only: in-flight HTTP embed requests (1..16); CARTOG_EMBED_CONCURRENCY overrides; ignored for local</span>
 # auto_embed = true              <span class="comment"># watcher auto-embed: unset → auto-detect (embed if repo already has embeddings); true/false force. Precedence: CARTOG_WATCH_RAG > this key > --rag</span>
 
 [embedding.local]                <span class="comment"># only used when provider = "local"</span>
@@ -317,6 +321,20 @@ url        = "s3://my-team-bucket/cartog/main"
           scores higher on BEIR than the older <code>BAAI/bge-reranker-base</code> (~1.1GB), which you
           can opt back into. Switching needs no re-index — the reranker runs at query time and isn't
           persisted.
+        </p>
+
+        <h3>Concurrent embedding requests (ollama / openai)</h3>
+        <pre>[embedding]
+max_concurrent_requests = 4   <span class="comment"># in-flight HTTP embed requests; 1..16, default 4</span></pre>
+        <p>
+          <code>max_concurrent_requests</code> caps how many embedding requests are in flight at once
+          for the network providers. The local ONNX provider ignores it (it parallelizes via
+          <code>[embedding.local] intra_threads</code>). Default <strong>4</strong>, clamped
+          <code>1..=16</code>; <code>1</code> is serial. <code>CARTOG_EMBED_CONCURRENCY</code> overrides
+          it (env &gt; TOML &gt; default). It is a transport setting, not part of the embedding
+          fingerprint, so changing it never forces a re-embed. The fan-out is currently gated behind a
+          live batch-composition parity check; until that passes, both providers run serially regardless
+          of this value.
         </p>
 
         <h3>Example: Ollama with GPU acceleration</h3>
@@ -450,6 +468,12 @@ EOF
 
 cartog index --force .            <span class="comment"># server spawns during the LSP resolution pass</span></pre>
 
+        <h3>Concurrent LSP servers</h3>
+        <p>On a polyglot repo the indexer's edge-resolution pass starts one LSP server per language and runs them concurrently (up to a cap), so the wall-clock is closer to the slowest single server than the sum of all of them.</p>
+        <pre>[lsp]
+max_concurrent_servers = 2</pre>
+        <p>Absent or <code>0</code> = auto (<code>min(languages, 4)</code>); <code>CARTOG_LSP_MAX_SERVERS</code> overrides (env &gt; TOML); <code>1</code> forces serial. Each server is RAM-heavy (rust-analyzer ~1-2GB resident) — lower the cap on a constrained host. Applies to a bare <code>cartog index</code> with no live <code>serve</code> peer (a serve peer resolves serially on its warm servers). Resolution output is byte-identical regardless of the cap.</p>
+
         <h2 id="config-index">Index Filtering</h2>
         <p>cartog skips files three ways, all composing: it honors <code>.gitignore</code> (see below); it prunes a built-in list of dependency and build directories (<code>node_modules</code>, <code>target</code>, <code>vendor</code>, <code>dist</code>, <code>build</code>, <code>.dart_tool</code>, dot-directories, …); and <code>[index] exclude</code> adds repo-root-relative globs for paths the other two miss — vendored or generated trees under non-standard names.</p>
         <ul>
@@ -473,6 +497,12 @@ cartog index --force .            <span class="comment"># removes now-excluded p
         <p>cartog honors <code>.gitignore</code> (and <code>.git/info/exclude</code>) by default, including <strong>nested</strong> <code>.gitignore</code> files in subdirectories — so vendored or generated trees git already ignores (a CocoaPods <code>Pods/</code>, build output, …) are skipped with no cartog config, even in a tree with no <code>.git</code> directory. A <code>.cartogignore</code> file (same syntax) adds cartog-specific ignores. The built-in prune list and <code>[index] exclude</code> apply on top (they prune even where <code>.gitignore</code> would keep a path). To index files git ignores (e.g. committed generated code), opt out — the prune list and <code>exclude</code> still apply:</p>
         <pre>[index]
 respect_gitignore = false</pre>
+
+        <h3>Parse parallelism</h3>
+        <p>The CPU-bound parse phase runs across a rayon worker pool. Cap it for low-CPU or memory-constrained hosts (e.g. shared CI). Absent or <code>0</code> means auto (CPU count), not serial — use <code>1</code> for single-threaded; any value is clamped to <code>1..=64</code>.</p>
+        <pre>[index]
+jobs = 4</pre>
+        <p>Precedence: <code>cartog index --jobs N</code> &gt; <code>CARTOG_JOBS</code> env &gt; this key. The parse phase runs inside a dedicated pool sized to this value, so the cap applies on <strong>every</strong> index, including under a long-lived <code>cartog serve</code> / <code>serve --watch</code>. The <code>--jobs</code> flag is per-invocation; for daemons set the env var or this key.</p>
 
         <!-- ── Semantic Search ───────────────────── -->
 
