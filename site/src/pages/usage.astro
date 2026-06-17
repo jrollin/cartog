@@ -177,7 +177,7 @@ cartog index .          <span class="comment"># 6. re-index after changes</span>
             <tr><td><code>[rag]</code></td><td>tuned retrieval/rerank pools</td><td>tuning hybrid-search recall vs. cost</td></tr>
             <tr><td><code>[remote]</code></td><td>unset (no sync)</td><td>sharing an index over S3 — see <a href="#config-remote">Remote Storage</a></td></tr>
             <tr><td><code>[security]</code></td><td><code>redact_secrets = true</code></td><td>opting out of pattern redaction — see <a href="#config-secrets">Secret Redaction</a></td></tr>
-            <tr><td><code>[lsp.&lt;lang&gt;]</code></td><td>unset (server resolved from <code>PATH</code>)</td><td>running a custom/Dockerized LSP server — see <a href="#config-lsp">LSP Server Overrides</a></td></tr>
+            <tr><td><code>[lsp]</code></td><td><code>max_concurrent_servers</code> = auto; <code>[lsp.&lt;lang&gt;]</code> unset (server from <code>PATH</code>)</td><td>capping concurrent LSP servers, or a custom/Dockerized server — see <a href="#config-lsp">LSP Server Overrides</a></td></tr>
             <tr><td><code>[index]</code></td><td><code>exclude = []</code>, <code>respect_gitignore = true</code>, <code>jobs = 0</code> (auto)</td><td>excluding extra paths, indexing git-ignored files, or capping parse threads — see <a href="#config-index">Index Filtering</a></td></tr>
           </tbody>
         </table>
@@ -199,6 +199,7 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
           <tbody>
             <tr><td><code>CARTOG_DB</code></td><td>auto-detect</td><td>Database path (same as <code>--db</code>).</td></tr>
             <tr><td><code>CARTOG_JOBS</code></td><td>CPU count</td><td>Parse worker pool size for <code>cartog index</code> (clamped <code>1..=64</code>). Overrides <code>[index] jobs</code>; the <code>--jobs</code> flag overrides it.</td></tr>
+            <tr><td><code>CARTOG_LSP_MAX_SERVERS</code></td><td><code>min(langs, 4)</code></td><td>Max concurrent LSP servers in the indexer's edge pass. Overrides <code>[lsp] max_concurrent_servers</code>; <code>1</code> forces serial.</td></tr>
             <tr><td><code>CARTOG_ONNX_THREADS</code></td><td>all cores</td><td>Caps ONNX CPU threads for <code>rag index</code> + reranking. Overrides <code>[embedding.local] intra_threads</code>; <code>1</code> forces single-core.</td></tr>
             <tr><td><code>CARTOG_EMBED_CONCURRENCY</code></td><td><code>4</code></td><td>In-flight HTTP embed requests for ollama/openai (clamped <code>1..=16</code>). Overrides <code>[embedding] max_concurrent_requests</code>; ignored for local.</td></tr>
             <tr><td><code>CARTOG_WATCH_RAG</code></td><td>unset</td><td>Force watcher auto-embed; overrides <code>[embedding] auto_embed</code> and <code>--rag</code>:<br><code>1</code> = force on<br><code>0</code> = force off<br>unset = auto-detect from the DB</td></tr>
@@ -466,6 +467,12 @@ command = ["docker", "run", "--rm", "-i",
 EOF
 
 cartog index --force .            <span class="comment"># server spawns during the LSP resolution pass</span></pre>
+
+        <h3>Concurrent LSP servers</h3>
+        <p>On a polyglot repo the indexer's edge-resolution pass starts one LSP server per language and runs them concurrently (up to a cap), so the wall-clock is closer to the slowest single server than the sum of all of them.</p>
+        <pre>[lsp]
+max_concurrent_servers = 2</pre>
+        <p>Absent or <code>0</code> = auto (<code>min(languages, 4)</code>); <code>CARTOG_LSP_MAX_SERVERS</code> overrides (env &gt; TOML); <code>1</code> forces serial. Each server is RAM-heavy (rust-analyzer ~1-2GB resident) — lower the cap on a constrained host. Applies to a bare <code>cartog index</code> with no live <code>serve</code> peer (a serve peer resolves serially on its warm servers). Resolution output is byte-identical regardless of the cap.</p>
 
         <h2 id="config-index">Index Filtering</h2>
         <p>cartog skips files three ways, all composing: it honors <code>.gitignore</code> (see below); it prunes a built-in list of dependency and build directories (<code>node_modules</code>, <code>target</code>, <code>vendor</code>, <code>dist</code>, <code>build</code>, <code>.dart_tool</code>, dot-directories, …); and <code>[index] exclude</code> adds repo-root-relative globs for paths the other two miss — vendored or generated trees under non-standard names.</p>

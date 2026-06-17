@@ -348,6 +348,26 @@ Pinned Docker recipes for all 13 LSP languages live in `benchmarks/lsp-images/`
 each (strict: a missing image is an error, not a host fallback). All 13 resolve
 identically to host. See `benchmarks/README.md`.
 
+### Concurrent LSP servers
+
+On a polyglot repo the indexer's edge-resolution pass starts one LSP server per
+language. By default they run concurrently (up to a cap), so the wall-clock is
+closer to the slowest single server than the sum of all of them:
+
+```toml
+[lsp]
+max_concurrent_servers = 2
+```
+
+- Absent or `0` = auto (`min(languages_in_pass, 4)`). `CARTOG_LSP_MAX_SERVERS`
+  overrides (env > TOML); `1` forces serial.
+- Each server is RAM-heavy (rust-analyzer ~1-2GB resident). Lower the cap on a
+  constrained host; most repos have fewer than 4 LSP languages so the cap rarely
+  binds.
+- Applies to `cartog index` with no live `cartog serve` peer (a bare index). When
+  a serve peer holds the DB, the index defers its LSP pass to that warm peer,
+  which resolves serially. Resolution output is byte-identical regardless of cap.
+
 **Compile-time feature flags**:
 
 ```bash
@@ -364,6 +384,7 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 |----------|---------|--------|
 | `CARTOG_DB` | auto-detect | Database path (same as `--db`). |
 | `CARTOG_JOBS` | CPU count | Parse worker pool size for `cartog index` (clamped `1..=64`). Overrides `[index] jobs`; the `--jobs` flag overrides it. |
+| `CARTOG_LSP_MAX_SERVERS` | `min(langs, 4)` | Max concurrent LSP servers in the indexer's edge pass. Overrides `[lsp] max_concurrent_servers`; `1` forces serial. |
 | `CARTOG_ONNX_THREADS` | all cores | Caps ONNX CPU threads for `rag index` + reranking. Overrides `[embedding.local] intra_threads`. `1` forces single-core. |
 | `CARTOG_EMBED_CONCURRENCY` | `4` | In-flight HTTP embed requests for ollama/openai (clamped `1..=16`). Overrides `[embedding] max_concurrent_requests`. Ignored for local. |
 | `CARTOG_WATCH_RAG` | unset | Force watcher auto-embed; overrides `[embedding] auto_embed` and `--rag`:<br>`1` = force on<br>`0` = force off<br>unset = auto-detect from the DB |

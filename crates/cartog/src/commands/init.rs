@@ -43,6 +43,15 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # base_url    = "https://api.openai.com/v1"     # or http://localhost:11434/v1 (Ollama), etc.
 # api_key_env = "OPENAI_API_KEY"                # env var NAME, not the key itself
 
+# [lsp]
+# Max LSP servers run concurrently during the indexer's edge-resolution pass.
+# 0 or omitted = auto (min(languages, 4)). Each server is RAM-heavy
+# (rust-analyzer ~1-2GB). Env CARTOG_LSP_MAX_SERVERS overrides; 1 = serial.
+# max_concurrent_servers = 2
+# Per-language server override (Dockerized server, custom binary, ...):
+# [lsp.dart]
+# command = ["docker", "run", "--rm", "-i", "-v", "${ROOT}:${ROOT}", "-w", "${ROOT}", "cartog-lsp-dart:stable"]
+
 # [reranker]
 # enabled = true
 

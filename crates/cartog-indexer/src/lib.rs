@@ -902,6 +902,7 @@ pub fn index_directory(
                 lsp_overrides,
                 Some(&lsp_progress),
                 cancel,
+                filter.lsp_max_servers,
             )
             .with_context(|| format!("resolving LSP edges for root {}", root.display()))?;
             result.edges_lsp_resolved = stats.resolved;
