@@ -1,6 +1,7 @@
 //! Path-validation, normalization, depth-capping, edge-kind and provenance tests.
 
 use crate::*;
+use cartog_core::EdgeKind;
 
 // ── Path validation tests ──
 

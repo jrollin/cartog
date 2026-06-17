@@ -2,6 +2,7 @@
 
 use super::test_provider;
 use crate::*;
+use rmcp::handler::server::wrapper::Parameters;
 
 // ── Read-tool handler tests over a real indexed DB ──
 //

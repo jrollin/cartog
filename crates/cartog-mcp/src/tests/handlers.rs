@@ -2,6 +2,8 @@
 
 use super::snap;
 use crate::*;
+use cartog_core::EdgeKind;
+use cartog_db::MAX_SEARCH_LIMIT;
 
 // ── Tool handler tests (using in-memory DB) ──
 
