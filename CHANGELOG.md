@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.29.2] - 2026-06-17
+
+### Documentation
+
+- **tech**: Document token-savings accounting method and always-on rationale ([`baf0c12`](https://github.com/jrollin/cartog/commit/baf0c12b7291777ce29d9ab3bd5900c15f9643eb))
+
+### Features
+
+- **version**: Show git-describe build string in --version and self version ([`fffdb53`](https://github.com/jrollin/cartog/commit/fffdb5352486d88e4f503d49cb171986f0c107bc))
+- **index**: Configurable parse-pool size via --jobs/CARTOG_JOBS/[index] jobs ([`4129e31`](https://github.com/jrollin/cartog/commit/4129e3165d3be01d962dec3a367c2a924969028a))
+- **rag**: Bounded concurrent network-embed for ollama/openai (gated) ([`0ba7aa0`](https://github.com/jrollin/cartog/commit/0ba7aa074d8c36d2d71b74cef1323095aac84863))
+- **lsp**: Resolve per-language LSP servers concurrently in the indexer pass ([`024ad99`](https://github.com/jrollin/cartog/commit/024ad9903def8dcb615a2eb76ca2227db90f400b))
+
+### Refactor
+
+- **lsp**: Split LSP drain from DB apply (no behavior change) ([`e7296e0`](https://github.com/jrollin/cartog/commit/e7296e084e0559bb203d352274332a2b2e5d9cbb))
+- **lsp**: Move drain/apply split to resolve.rs + unit-test the gates ([`4a227ed`](https://github.com/jrollin/cartog/commit/4a227ed0bbbf18978b8a4a04f5d5ba5e35a34619))
+
 ## [0.29.1] - 2026-06-16
 
 ### Bug Fixes
