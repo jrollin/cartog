@@ -46,7 +46,7 @@ pub struct ProcessLock {
 #[derive(Debug)]
 pub enum AcquireError {
     /// Another process holds the lock and its PID is still alive (and, if
-    /// the file uses the new 2-line format, the start_time matches —
+    /// the file uses the new 2-line format, the `start_time` matches —
     /// closing the PID-reuse window). The held lock is returned so the
     /// caller can format a useful message or attach in read-only mode.
     Held(ActiveLock),
@@ -86,7 +86,7 @@ impl From<io::Error> for AcquireError {
 impl ProcessLock {
     /// Atomically acquire `<state_dir>/<slot>.pid` for this process. Fails
     /// with [`AcquireError::Held`] if another live cartog process already
-    /// holds the slot. Stale files (PID gone, or start_time mismatch from
+    /// holds the slot. Stale files (PID gone, or `start_time` mismatch from
     /// PID reuse) are unlinked and the acquire is retried once.
     ///
     /// Implementation: writes the full payload to a per-PID temp file,
@@ -98,7 +98,16 @@ impl ProcessLock {
     /// inode).
     ///
     /// Creates `state_dir` if missing.
+    ///
+    /// # Errors
+    /// Returns [`AcquireError::Held`] when a live peer already owns the slot,
+    /// and [`AcquireError::Io`] for an invalid slot name or any filesystem /
+    /// permission failure while staging or linking the PID file.
     pub fn acquire(state_dir: &Path, slot: &str) -> Result<Self, AcquireError> {
+        // Per-(PID, thread) staging file disambiguator; appended to the tmp
+        // name so concurrent acquires (and retries) never share a tmp.
+        static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         validate_slot(slot).map_err(AcquireError::Io)?;
         fs::create_dir_all(state_dir).map_err(AcquireError::Io)?;
         // Reap any stale `*.pid` files left by crashed peers before we try
@@ -117,7 +126,6 @@ impl ProcessLock {
         // same process don't clobber each other's tmp before the link.
         // A monotonic counter is appended to disambiguate retries within
         // the same thread.
-        static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tid = thread_id_hash();
         let tmp = state_dir.join(format!(".{slot}.{pid}.{tid}.{n}.{PID_EXTENSION}.tmp"));
@@ -214,7 +222,6 @@ impl ProcessLock {
                                     }
                                 }
                             }
-                            continue;
                         }
                         (None, _) => {
                             // We tried to clean up but lost the next race
@@ -255,6 +262,10 @@ impl ProcessLock {
     /// both report success and the DB-level migration race that the
     /// election was meant to prevent comes back. Phase 6a's busy-retry
     /// remains the only defense in that case.
+    ///
+    /// # Errors
+    /// Returns an [`io::Error`] for an invalid slot name or any filesystem /
+    /// permission failure while staging or renaming the PID file.
     pub fn acquire_overwriting(state_dir: &Path, slot: &str) -> io::Result<Self> {
         validate_slot(slot)?;
         fs::create_dir_all(state_dir)?;
@@ -274,6 +285,7 @@ impl ProcessLock {
     }
 
     /// Path of the on-disk PID file. Useful in tests.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -323,6 +335,7 @@ const REAPER_SCAN_CAP: usize = 256;
 /// Uncapped: this is the correctness path used by `cartog self update`,
 /// `cartog self migrate-db`, and the watch-slot promoter to decide whether
 /// a live peer exists. Missing a real peer here is unsafe.
+#[must_use]
 pub fn find_active_locks(state_dir: &Path) -> Vec<ActiveLock> {
     scan_locks(state_dir, None)
 }
@@ -331,9 +344,8 @@ pub fn find_active_locks(state_dir: &Path) -> Vec<ActiveLock> {
 /// uncapped (correctness); `Some(n)` = inspect at most `n` entries (used
 /// by the opportunistic reaper in [`sweep_stale_locks`]).
 fn scan_locks(state_dir: &Path, cap: Option<usize>) -> Vec<ActiveLock> {
-    let entries = match fs::read_dir(state_dir) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
+    let Ok(entries) = fs::read_dir(state_dir) else {
+        return Vec::new();
     };
     let mut active = Vec::new();
     let mut inspected: usize = 0;
@@ -352,19 +364,16 @@ fn scan_locks(state_dir: &Path, cap: Option<usize>) -> Vec<ActiveLock> {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => continue,
         };
-        let (pid, recorded_st) = match read_lock_file(&path) {
-            Some(v) => v,
-            None => {
-                // Side effect: clean malformed files so the slot is reusable.
-                // Only unlink if the content is *still* unreadable on a
-                // second read — otherwise we'd race a partially-written
-                // file from a concurrent acquire (which writes its
-                // payload over multiple syscalls inside the O_EXCL guard).
-                if read_lock_file(&path).is_none() {
-                    let _ = fs::remove_file(&path);
-                }
-                continue;
+        let Some((pid, recorded_st)) = read_lock_file(&path) else {
+            // Side effect: clean malformed files so the slot is reusable.
+            // Only unlink if the content is *still* unreadable on a
+            // second read — otherwise we'd race a partially-written
+            // file from a concurrent acquire (which writes its
+            // payload over multiple syscalls inside the O_EXCL guard).
+            if read_lock_file(&path).is_none() {
+                let _ = fs::remove_file(&path);
             }
+            continue;
         };
         let alive = match recorded_st {
             // New format: PID + start_time pinned the original process. If
@@ -395,7 +404,7 @@ fn scan_locks(state_dir: &Path, cap: Option<usize>) -> Vec<ActiveLock> {
 /// the cap are reaped on a subsequent run.
 ///
 /// Each inspected `*.pid` whose recorded PID is dead (or whose recorded
-/// start_time disagrees with the live PID, i.e. PID-reuse) is unlinked
+/// `start_time` disagrees with the live PID, i.e. PID-reuse) is unlinked
 /// via `unlink_if_unchanged` so a concurrent writer landing fresh
 /// content in the TOCTOU window is preserved. Malformed files
 /// (unreadable on two consecutive reads) are removed unconditionally
@@ -432,6 +441,7 @@ fn unlink_if_unchanged(path: &Path, expected_pid: u32, expected_st: Option<u64>)
 /// True when `pid` is still running AND its start time matches `recorded`.
 /// Use this in preference to [`is_alive`] anywhere PID reuse would matter
 /// (election, peer detection across long-lived state files).
+#[must_use]
 pub fn is_same_process(pid: u32, recorded: u64) -> bool {
     match process_start_time(pid) {
         Some(current) => current == recorded,
@@ -441,18 +451,19 @@ pub fn is_same_process(pid: u32, recorded: u64) -> bool {
 
 /// Cross-platform "is this PID currently a running process?" check.
 #[cfg(unix)]
+#[must_use]
 pub fn is_alive(pid: u32) -> bool {
     // kill(0, 0) signals our own process group — would always report alive. Reject.
     if pid == 0 {
         return false;
     }
-    // PID > i32::MAX casts negative to pid_t, flipping kill semantics.
-    if pid > i32::MAX as u32 {
+    // PID > i32::MAX would cast negative to pid_t, flipping kill semantics.
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
-    }
+    };
     // SAFETY: kill(pid, 0) is documented as side-effect-free aside from
     // setting errno. It validates the PID exists and we have permission.
-    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    let result = unsafe { libc::kill(pid, 0) };
     if result == 0 {
         return true;
     }
@@ -463,6 +474,7 @@ pub fn is_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
+#[must_use]
 pub fn is_alive(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
@@ -484,6 +496,7 @@ pub fn is_alive(pid: u32) -> bool {
 }
 
 #[cfg(not(any(unix, windows)))]
+#[must_use]
 pub fn is_alive(_pid: u32) -> bool {
     // Unsupported platform: fail safe by reporting "alive" so we never
     // clobber a possibly-running peer. The user will see a refusal and can
@@ -532,7 +545,7 @@ fn read_lock_file(path: &Path) -> Option<(u32, Option<u64>)> {
 /// Write `bytes` to `target` atomically: stage at `tmp`, then rename onto
 /// `target`. The caller picks `tmp` so concurrent writers can stage to
 /// distinct files. Used by `acquire_overwriting` (the kill-switch path);
-/// the O_EXCL acquire path uses `write_tmp` + `hard_link` so the target
+/// the `O_EXCL` acquire path uses `write_tmp` + `hard_link` so the target
 /// is never observed in an empty state.
 fn write_atomic(tmp: &Path, target: &Path, bytes: &[u8]) -> io::Result<()> {
     write_tmp(tmp, bytes)?;
@@ -552,10 +565,10 @@ fn thread_id_hash() -> u64 {
 /// Write `bytes` to `tmp` and fsync. Caller is responsible for linking
 /// or renaming `tmp` to its final destination.
 fn write_tmp(tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
     // fsync before linking so a crash between the data write and the
     // link doesn't leave a zero-byte file on disk after recovery.
     let f = fs::File::create(tmp)?;
-    use std::io::Write;
     (&f).write_all(bytes)?;
     f.sync_all()?;
     Ok(())
@@ -736,7 +749,9 @@ mod tests {
             "watch.pid expected, got {names:?}",
         );
         assert!(
-            !names.iter().any(|n| n.ends_with(".tmp")),
+            !names.iter().any(|n| std::path::Path::new(n)
+                .extension()
+                .is_some_and(|e| e == "tmp")),
             "no leftover .tmp files expected, got {names:?}",
         );
         drop(lock);
@@ -762,7 +777,7 @@ mod tests {
         fs::write(&path, "42\n123456789\n").unwrap();
         let (pid, st) = read_lock_file(&path).expect("new format parses");
         assert_eq!(pid, 42);
-        assert_eq!(st, Some(123456789));
+        assert_eq!(st, Some(123_456_789));
     }
 
     #[test]
@@ -796,10 +811,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("watch.pid");
         let pid = std::process::id();
-        let real_st = match process_start_time(pid) {
-            Some(s) => s,
-            // Skip on unsupported platforms — the reuse check is a no-op there.
-            None => return,
+        // Skip on unsupported platforms — the reuse check is a no-op there.
+        let Some(real_st) = process_start_time(pid) else {
+            return;
         };
         let bogus = real_st.wrapping_add(999_999);
         fs::write(&path, format!("{pid}\n{bogus}\n")).unwrap();
@@ -817,9 +831,8 @@ mod tests {
     #[test]
     fn is_same_process_matches_self() {
         let pid = std::process::id();
-        let st = match process_start_time(pid) {
-            Some(s) => s,
-            None => return,
+        let Some(st) = process_start_time(pid) else {
+            return;
         };
         assert!(is_same_process(pid, st));
         assert!(
@@ -927,7 +940,7 @@ mod tests {
         // No leftover tmp files (hard_link succeeded, we cleaned up).
         let tmp_count = fs::read_dir(dir.path())
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .count();
         assert_eq!(tmp_count, 0, "no leftover .tmp files expected");
@@ -1082,9 +1095,9 @@ mod tests {
         // claim the slot.
         let dir = TempDir::new().unwrap();
         let pid = std::process::id();
-        let real_st = match process_start_time(pid) {
-            Some(s) => s,
-            None => return, // unsupported platform: skip
+        // unsupported platform: skip
+        let Some(real_st) = process_start_time(pid) else {
+            return;
         };
         let path = dir.path().join("serve.pid");
         fs::write(&path, format!("{pid}\n{}\n", real_st.wrapping_add(1))).unwrap();

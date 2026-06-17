@@ -37,9 +37,9 @@ This ID is **invariant to line movements** within a file — renaming or moving 
 | Export | Description |
 |--------|-------------|
 | `Symbol` | Code symbol with stable ID, kind, location, signature, visibility |
-| `SymbolKind` | Function, Class, Method, Variable, Import, Interface, Enum, TypeAlias, Trait, Module, Document |
+| `SymbolKind` | Function, Class, Method, Variable, Import, Interface, Enum, `TypeAlias`, Trait, Module, Document |
 | `Edge` | Relationship between symbols (source → target) |
-| `EdgeKind` | Calls, Imports, Inherits, References, Raises, Implements, TypeOf |
+| `EdgeKind` | Calls, Imports, Inherits, References, Raises, Implements, `TypeOf` |
 | `EdgeProvenance` | Which tier/source resolved a `target_id` (heuristic tiers + LSP outcomes) |
 | `Visibility` | Public, Private, Protected |
 | `FileInfo` | Indexed file metadata (path, hash, language, symbol count) |
