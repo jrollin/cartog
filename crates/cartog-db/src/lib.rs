@@ -395,6 +395,7 @@ impl std::fmt::Debug for Database {
 pub fn register_sqlite_vec() {
     use std::sync::Once;
     static INIT: Once = Once::new();
+    // Safety: sqlite3_vec_init matches the C ABI sqlite3_auto_extension expects.
     INIT.call_once(|| unsafe {
         #[allow(clippy::missing_transmute_annotations)]
         sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
