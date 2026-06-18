@@ -27,9 +27,7 @@ impl Default for GoExtractor {
 
 impl Extractor for GoExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        let tree = self
-            .parser
-            .parse(source, None)
+        let tree = crate::parse_bounded(&mut self.parser, source)
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;
 
         let mut symbols = Vec::new();
@@ -58,6 +56,7 @@ fn extract_node(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "function_declaration" => {
             extract_function(
@@ -346,6 +345,7 @@ fn extract_interface_embeds(
     line: u32,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             // Direct embedded type at any nesting level
@@ -401,6 +401,7 @@ fn extract_import(
 }
 
 fn collect_import_specs<'a>(node: Node<'a>, specs: &mut Vec<Node<'a>>) {
+    crate::parse::guard_recursion!();
     for child in node.named_children(&mut node.walk()) {
         if child.kind() == "import_spec" {
             specs.push(child);
@@ -769,6 +770,7 @@ fn collect_type_refs_recursive(
     sym_id: &str,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "type_identifier" => {
             let name = node_text(node, source);
@@ -817,6 +819,7 @@ fn go_visibility(name: &str) -> Visibility {
 
 /// Extract the type name, stripping pointer indirection.
 fn extract_type_name(node: Node, source: &str) -> String {
+    crate::parse::guard_recursion!(String::new());
     match node.kind() {
         "pointer_type" => {
             // *Type → "Type"

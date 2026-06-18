@@ -40,9 +40,7 @@ impl Default for KotlinExtractor {
 
 impl crate::Extractor for KotlinExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        let tree = self
-            .parser
-            .parse(source, None)
+        let tree = crate::parse_bounded(&mut self.parser, source)
             .ok_or_else(|| anyhow::anyhow!("failed to parse {file_path}"))?;
 
         if tree_depth_exceeds(tree.root_node(), MAX_TREE_DEPTH) {
@@ -75,6 +73,7 @@ fn extract_node(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "class_declaration" => {
             extract_type_like(node, source, file_path, parent, symbols, edges);
@@ -651,6 +650,7 @@ fn collect_type_refs(
     source_id: &str,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "annotation" | "type_parameters" | "modifiers" => return,
         // A qualified `user_type` is ONE reference (its leaf), not one per dotted
@@ -700,6 +700,7 @@ fn collect_type_refs(
 /// Walk a subtree for `call_expression` nodes, emitting Calls edges. Recurses,
 /// skipping nested function/lambda bodies — their calls belong to the nested symbol.
 fn walk_calls(node: Node, source: &str, file_path: &str, source_id: &str, edges: &mut Vec<Edge>) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "function_declaration" | "lambda_literal" | "anonymous_function" => return,
         "call_expression" => {
@@ -729,6 +730,7 @@ fn walk_calls_through_lambdas(
     source_id: &str,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     if node.kind() == "call_expression" {
         if let Some(name) = callee_name(node, source) {
             edges.push(Edge::new(
@@ -757,6 +759,7 @@ fn walk_nested_decls(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
@@ -815,6 +818,7 @@ fn type_identifier_name(node: Node, source: &str) -> Option<String> {
 /// the leading ones are the package path, so we take the last segment, not the
 /// first (taking the first would resolve `com.example.Base` to `com`).
 fn type_name(node: Node, source: &str) -> Option<String> {
+    crate::parse::guard_recursion!(None);
     match node.kind() {
         "type_identifier" => Some(node_text(node, source).to_string()),
         "user_type" => {

@@ -27,9 +27,7 @@ impl Default for JavaExtractor {
 
 impl Extractor for JavaExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        let tree = self
-            .parser
-            .parse(source, None)
+        let tree = crate::parse_bounded(&mut self.parser, source)
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;
 
         let mut symbols = Vec::new();
@@ -58,6 +56,7 @@ fn extract_node(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "class_declaration" | "enum_declaration" | "annotation_type_declaration" => {
             extract_class_like(
@@ -280,6 +279,7 @@ fn extract_class_body(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             "method_declaration" => {
@@ -883,6 +883,7 @@ fn collect_type_refs(
     line: u32,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "type_identifier" => {
             let name = node_text(node, source);
@@ -924,6 +925,7 @@ fn is_primitive(name: &str) -> bool {
 
 /// Extract the simple (unqualified) type name from a type node.
 fn extract_simple_type_name(node: Node, source: &str) -> String {
+    crate::parse::guard_recursion!(String::new());
     match node.kind() {
         "type_identifier" => node_text(node, source).to_string(),
         "scoped_type_identifier" => {

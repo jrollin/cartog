@@ -196,7 +196,7 @@ impl SfcExtractor {
 
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
         // Envelope parse failure on junk input degrades to empty, never errors.
-        let Some(tree) = self.envelope.parse(source, None) else {
+        let Some(tree) = crate::parse_bounded(&mut self.envelope, source) else {
             return Ok(ExtractionResult::default());
         };
         let spans = (self.find_scripts)(tree.root_node(), source);
