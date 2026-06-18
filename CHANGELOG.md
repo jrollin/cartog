@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.29.3] - 2026-06-18
+
+### Bug Fixes
+
+- **languages**: Bound parsing and AST-walk recursion to prevent stack-overflow aborts ([`e08e7ae`](https://github.com/jrollin/cartog/commit/e08e7ae5e9f01cbc4b304aa523645665aa56a512))
+
+### Documentation
+
+- **agents**: Harden Rust quality bar and align contributor gate with CI ([`c29db4f`](https://github.com/jrollin/cartog/commit/c29db4f450e005c462c9ec6f2b669b4efca09184))
+- **db**: Add # Safety note to sqlite-vec registration; fix unsafe claim ([`90ace08`](https://github.com/jrollin/cartog/commit/90ace0848954d813600a95077b10350a07894d58))
+
+### Features
+
+- **db**: Add error context to public query methods ([`9593f25`](https://github.com/jrollin/cartog/commit/9593f259773287c802057f8a98aa037168e57a5d))
+
+### Miscellaneous
+
+- **ci**: Point gitleaks allowlist at the moved redaction fixtures ([`8aa60aa`](https://github.com/jrollin/cartog/commit/8aa60aa916db126870f15e90ce96a4e325240402))
+- **deps**: Bump rusqlite 0.39 -> 0.40 (bundled SQLite 3.53.2) ([`d7d0a2e`](https://github.com/jrollin/cartog/commit/d7d0a2e07d4c6d04ece7a5a5220dc2070645552c))
+
+### Refactor
+
+- **cli**: Split commands/mod.rs into per-domain modules ([`f7743b7`](https://github.com/jrollin/cartog/commit/f7743b70964ac11a9773c2252656ebecdbeb57d0))
+- **db**: Extract cartog-db test module into focused files ([`dc27937`](https://github.com/jrollin/cartog/commit/dc279375bf9e3fc2c17b4129cc3264b0b05df076))
+- **mcp**: Extract MCP param/result structs into types.rs ([`a4b0a51`](https://github.com/jrollin/cartog/commit/a4b0a519ecef8eaad4b92a389a7d0fc35308f89c))
+- **mcp**: Extract cartog-mcp test module into focused files ([`b7345af`](https://github.com/jrollin/cartog/commit/b7345af78a4412f578a8604092f83aab8554b86d))
+- **cli**: Split config.rs into a config/ module directory ([`5bfaa68`](https://github.com/jrollin/cartog/commit/5bfaa683ab886716962769dddd92b7c3227bd5fb))
+- **cli**: Split ide.rs into an ide/ module directory ([`8671958`](https://github.com/jrollin/cartog/commit/86719588705c705fb2731411a859670057943b5a))
+- **cli**: Split self_cmd.rs into a self_cmd/ module directory ([`f7a8383`](https://github.com/jrollin/cartog/commit/f7a838391832cbc8d4f79190fab724fcac0420ea))
+- **mcp**: Split the tool_router impl into per-domain tools/ modules ([`ab56691`](https://github.com/jrollin/cartog/commit/ab56691a7d6190039a21965fa7d32472c02675dd))
+- **indexer**: Extract cartog-indexer test module into focused files ([`5b67f45`](https://github.com/jrollin/cartog/commit/5b67f45d3d80ab69f080114b6c87c1d7229d4083))
+- **indexer**: Decompose index_directory into phase functions ([`5f76349`](https://github.com/jrollin/cartog/commit/5f7634909164f091b0cb45661b74304af95e20ac))
+
+### Testing
+
+- **rag**: Cover 3-source RRF merge and tie-score behavior ([`c0b65f6`](https://github.com/jrollin/cartog/commit/c0b65f6c2a12a1e6d04f8f412b6328f4e72df68c))
+- Address review findings on the split test + ide modules ([`834e8d3`](https://github.com/jrollin/cartog/commit/834e8d35a7509c3b99a5ab01a3c41247e4df48da))
+- **indexer**: Cover whole-tx rollback and cross-file symbol accumulation ([`ef4c5e4`](https://github.com/jrollin/cartog/commit/ef4c5e46610d85197af1a24cb5a4b36103fea28d))
+
 ## [0.29.2] - 2026-06-17
 
 ### Documentation
