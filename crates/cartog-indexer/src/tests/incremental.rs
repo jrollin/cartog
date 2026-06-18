@@ -218,6 +218,72 @@ fn test_added_symbol_reopens_unresolvable_edges() {
 }
 
 #[test]
+fn added_symbols_accumulate_across_files_in_one_pass() {
+    // The phase split threads `added_symbol_names` as a `&mut HashSet` through
+    // every `store_parsed_file` call in the store loop. This guards the union:
+    // two new files added in ONE pass, each defining a symbol that a distinct
+    // state=2 edge was waiting on, must BOTH reopen — proving the accumulation
+    // isn't dropped or overwritten between per-file calls.
+    use cartog_db::Database;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap().join("project");
+    std::fs::create_dir(&root).unwrap();
+    // Two callers, two distinct unresolved targets.
+    std::fs::write(root.join("a.py"), "def caller_a():\n    find_user('x')\n").unwrap();
+    std::fs::write(root.join("c.py"), "def caller_c():\n    find_role('y')\n").unwrap();
+
+    let db = Database::open_memory().unwrap();
+    let idx = |db: &Database| {
+        index_directory(
+            db,
+            &root,
+            false,
+            false,
+            None,
+            None,
+            crate::RedactionConfig::disabled(),
+            &std::collections::HashMap::new(),
+            &crate::WalkFilter::unrestricted(),
+        )
+        .unwrap()
+    };
+    idx(&db);
+
+    // Seal-then-reopen so both edges sit at the state=0 marker lifecycle, then
+    // mark each definitively unresolvable (state=2).
+    db.reopen_heuristic_exhausted().unwrap();
+    let unresolved = db.unresolved_edges().unwrap();
+    let edge_of = |name: &str| {
+        unresolved
+            .iter()
+            .find(|e| e.target_name == name)
+            .unwrap_or_else(|| panic!("{name} edge should be unresolved after first index"))
+            .edge_id
+    };
+    let edge_user = edge_of("find_user");
+    let edge_role = edge_of("find_role");
+    db.mark_edge_unresolvable(edge_user).unwrap();
+    db.mark_edge_unresolvable(edge_role).unwrap();
+    assert!(db.is_edge_unresolvable(edge_user).unwrap());
+    assert!(db.is_edge_unresolvable(edge_role).unwrap());
+
+    // One index pass adds BOTH definitions in separate files.
+    std::fs::write(root.join("b.py"), "def find_user(name):\n    return None\n").unwrap();
+    std::fs::write(root.join("d.py"), "def find_role(name):\n    return None\n").unwrap();
+    idx(&db);
+
+    assert!(
+        !db.is_edge_unresolvable(edge_user).unwrap(),
+        "find_user edge must reopen — its definition was added this pass"
+    );
+    assert!(
+        !db.is_edge_unresolvable(edge_role).unwrap(),
+        "find_role edge must reopen — added in a different file, same pass"
+    );
+}
+
+#[test]
 fn reindex_invalidates_embedding_of_modified_symbol() {
     // Drift regression: a symbol whose body changes keeps its stable id, so
     // its old embedding must be dropped on re-index — otherwise
@@ -738,6 +804,14 @@ fn test_index_directory_rolls_back_on_disk_full() {
         .expect("seed symbol must be present after the first index");
     let seed_keep_me_id = seed_keep_me.id.clone();
 
+    // Snapshot Phase-4 state written by the seed run. The failed run reaches
+    // Phase 4 (resolve + metadata) only if Phase 3 succeeds, but a regression
+    // that split the transaction could let a partial Phase-3 commit land while
+    // Phase 4 never runs — leaving these stale. Assert they are untouched so the
+    // test covers the whole-tx rollback, not just the symbol writes.
+    let seed_redact_meta = db.get_metadata("redact_secrets").unwrap();
+    let seed_total_symbols = db.outline("seed.py").unwrap().len();
+
     // Add a second file that the next `index_directory` call will try to
     // ingest. Combined with a tight page cap, the new symbol/edge/content
     // writes will hit `SQLITE_FULL` somewhere inside Phase 3.
@@ -806,4 +880,19 @@ fn test_index_directory_rolls_back_on_disk_full() {
         .find(|s| s.id == seed_keep_me_id)
         .unwrap();
     assert_eq!(kept.kind, SymbolKind::Function);
+
+    // 3. Phase-4 state is unchanged: metadata and the seed file's symbol set
+    //    match the seed run exactly. Proves the rollback spans Phase 3 (store)
+    //    AND Phase 4 (resolve + metadata) as one transaction — the invariant
+    //    the phase decomposition had to preserve across fn boundaries.
+    assert_eq!(
+        db.get_metadata("redact_secrets").unwrap(),
+        seed_redact_meta,
+        "redact_secrets metadata (Phase 4) must not change on a rolled-back run"
+    );
+    assert_eq!(
+        seed_outline_after.len(),
+        seed_total_symbols,
+        "seed file's symbol count must be byte-identical after the rolled-back run"
+    );
 }
