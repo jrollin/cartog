@@ -695,6 +695,58 @@ mod tests {
         assert!(merged.is_empty());
     }
 
+    #[test]
+    fn test_rrf_merge_three_sources_item_in_all_ranks_highest() {
+        // An item in all 3 sources accrues 3 contributions and outranks items found by fewer.
+        let lists = vec![
+            (
+                "fts5",
+                vec!["x".to_string(), "a".to_string(), "b".to_string()],
+            ),
+            (
+                "vec",
+                vec!["a".to_string(), "x".to_string(), "c".to_string()],
+            ),
+            (
+                "rerank",
+                vec!["a".to_string(), "d".to_string(), "x".to_string()],
+            ),
+        ];
+        let merged = rrf_merge(&lists, 60.0);
+
+        // "a" (ranks 1,0,0) and "x" (ranks 0,1,2) are both in all three; "a" scores higher.
+        assert_eq!(merged[0].0, "a", "item near the top of all 3 lists wins");
+        let a = merged.iter().find(|(id, _, _)| id == "a").unwrap();
+        let mut sources = a.2.clone();
+        sources.sort();
+        assert_eq!(sources, vec!["fts5", "rerank", "vec"]); // all three tags, deduped
+        let b = merged.iter().find(|(id, _, _)| id == "b").unwrap(); // only in fts5
+        assert_eq!(b.2, vec!["fts5"]);
+        assert!(a.1 > b.1, "three-source item outscores a single-source one");
+    }
+
+    #[test]
+    fn test_rrf_merge_equal_rank_items_get_equal_scores() {
+        // Symmetric ranks → equal scores. Tie order is unstable (HashMap), so
+        // assert on score equality and the set, never on a fixed order.
+        let lists = vec![
+            ("fts5", vec!["p".to_string(), "q".to_string()]),
+            ("vec", vec!["q".to_string(), "p".to_string()]),
+        ];
+        let merged = rrf_merge(&lists, 60.0);
+
+        assert_eq!(merged.len(), 2);
+        assert!(
+            (merged[0].1 - merged[1].1).abs() < f64::EPSILON,
+            "symmetric ranks must yield equal scores, got {} vs {}",
+            merged[0].1,
+            merged[1].1
+        );
+        let mut ids: Vec<&str> = merged.iter().map(|(id, _, _)| id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["p", "q"]);
+    }
+
     // ── hybrid_search integration tests (FTS5-only, no model needed) ──
     //
     // These tests populate an in-memory DB with realistic code symbols and assert
