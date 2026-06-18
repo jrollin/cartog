@@ -1,6 +1,16 @@
 //! `cartog doctor`: environment/config/database/provider health checks.
 
-use super::*;
+use std::path::Path;
+use std::time::Duration;
+
+use anyhow::Result;
+use serde::Serialize;
+
+#[cfg(feature = "remote-s3")]
+use super::remote;
+use crate::config::CartogConfig;
+use cartog_db::Database;
+use cartog_rag as rag;
 
 #[derive(Serialize)]
 struct CheckResult {

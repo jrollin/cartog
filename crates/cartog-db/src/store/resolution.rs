@@ -20,9 +20,13 @@ impl Database {
     /// 5. Unique project-wide match — exactly one symbol with that name globally
     /// 6. Class over constructor — when exactly 2 matches and one is a class, prefer class
     pub fn resolve_edges(&self) -> Result<u32> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("Failed to begin edge-resolution transaction")?;
         let total = self.resolve_edges_in_tx()?;
-        tx.commit()?;
+        tx.commit()
+            .context("Failed to commit edge-resolution transaction")?;
         Ok(total)
     }
 
@@ -30,8 +34,10 @@ impl Database {
     /// open transaction.
     pub fn resolve_edges_in_tx(&self) -> Result<u32> {
         let mut total_resolved = 0u32;
-        for _pass in 0..2 {
-            let resolved = self.resolve_edges_pass()?;
+        for pass in 0..2 {
+            let resolved = self
+                .resolve_edges_pass()
+                .with_context(|| format!("Failed to resolve edges (pass {pass})"))?;
             if resolved == 0 {
                 break;
             }
@@ -199,20 +205,25 @@ impl Database {
     /// tx-safe: two unconditional statements participate in any active outer
     /// transaction — see [`Self::begin_indexing_tx`].
     pub fn compute_in_degrees(&self) -> Result<u32> {
-        self.conn.execute("UPDATE symbols SET in_degree = 0", [])?;
+        self.conn
+            .execute("UPDATE symbols SET in_degree = 0", [])
+            .context("Failed to reset in-degree counts")?;
 
         // UPDATE...FROM joins each count to its symbol by PK once. A correlated
         // subquery here re-scans the counts set per row — O(symbols×edges).
-        let updated = self.conn.execute(
-            "UPDATE symbols SET in_degree = counts.cnt
+        let updated = self
+            .conn
+            .execute(
+                "UPDATE symbols SET in_degree = counts.cnt
              FROM (
                  SELECT target_id, COUNT(*) AS cnt
                  FROM edges WHERE target_id IS NOT NULL
                  GROUP BY target_id
              ) AS counts
              WHERE symbols.id = counts.target_id",
-            [],
-        )?;
+                [],
+            )
+            .context("Failed to compute in-degree counts")?;
 
         Ok(updated as u32)
     }
@@ -239,12 +250,15 @@ impl Database {
         // the heuristic + LSP passes get another shot. Without the state reset
         // the edge would stay at state=1 (resolved) but with target_id NULL —
         // permanently invisible to `unresolved_edges()`.
-        let n = self.conn.execute(
-            "UPDATE edges SET target_id = NULL, resolution_state = 0, resolution_source = NULL
+        let n = self
+            .conn
+            .execute(
+                "UPDATE edges SET target_id = NULL, resolution_state = 0, resolution_source = NULL
              WHERE target_id IS NOT NULL
                AND NOT EXISTS (SELECT 1 FROM symbols WHERE symbols.id = edges.target_id)",
-            [],
-        )?;
+                [],
+            )
+            .context("Failed to invalidate edges targeting dirty files")?;
         Ok(n as u32)
     }
 
@@ -262,9 +276,13 @@ impl Database {
         &self,
         dirty_files: &std::collections::HashSet<String>,
     ) -> Result<u32> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("Failed to begin scoped edge-resolution transaction")?;
         let total = self.resolve_edges_scoped_in_tx(dirty_files)?;
-        tx.commit()?;
+        tx.commit()
+            .context("Failed to commit scoped edge-resolution transaction")?;
         Ok(total)
     }
 
@@ -304,11 +322,14 @@ impl Database {
     ///
     /// tx-safe: single statement — see [`Self::begin_indexing_tx`].
     pub fn mark_heuristic_exhausted_in_tx(&self) -> Result<u32> {
-        let n = self.conn.execute(
-            "UPDATE edges SET resolution_state = 4
+        let n = self
+            .conn
+            .execute(
+                "UPDATE edges SET resolution_state = 4
              WHERE target_id IS NULL AND resolution_state = 0",
-            [],
-        )?;
+                [],
+            )
+            .context("Failed to mark edges heuristic-exhausted")?;
         Ok(n as u32)
     }
 
@@ -334,18 +355,23 @@ impl Database {
         }
 
         // Zero symbols that no longer have any incoming edge.
-        let zeroed = self.conn.execute(
-            "UPDATE symbols SET in_degree = 0
+        let zeroed = self
+            .conn
+            .execute(
+                "UPDATE symbols SET in_degree = 0
              WHERE in_degree != 0
                AND id NOT IN (SELECT target_id FROM edges WHERE target_id IS NOT NULL)",
-            [],
-        )?;
+                [],
+            )
+            .context("Failed to zero stale in-degree counts")?;
 
         // Fix symbols whose stored value disagrees with the actual count.
         // UPDATE...FROM avoids the correlated re-scan (see compute_in_degrees);
         // the `!=` predicate keeps the write set to only changed rows.
-        let updated = self.conn.execute(
-            "UPDATE symbols SET in_degree = counts.cnt
+        let updated = self
+            .conn
+            .execute(
+                "UPDATE symbols SET in_degree = counts.cnt
              FROM (
                  SELECT target_id, COUNT(*) AS cnt
                  FROM edges WHERE target_id IS NOT NULL
@@ -353,8 +379,9 @@ impl Database {
              ) AS counts
              WHERE symbols.id = counts.target_id
                AND symbols.in_degree != counts.cnt",
-            [],
-        )?;
+                [],
+            )
+            .context("Failed to recompute scoped in-degree counts")?;
 
         Ok((zeroed + updated) as u32)
     }

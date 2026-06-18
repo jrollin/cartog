@@ -10,5 +10,5 @@ commits = [
 # tokens) to exercise the detector; they are not real credentials.
 paths = [
     '''crates/cartog-indexer/src/redact\.rs''',
-    '''crates/cartog-indexer/src/lib\.rs''',
+    '''crates/cartog-indexer/src/tests/redaction\.rs''',
 ]

@@ -1,6 +1,11 @@
 //! `cartog config`: render the resolved configuration with default-value markers.
 
-use super::*;
+use std::path::Path;
+
+use anyhow::Result;
+use serde::Serialize;
+
+use crate::config::CartogConfig;
 
 /// Display the current configuration with default-value indicators.
 pub fn cmd_config(

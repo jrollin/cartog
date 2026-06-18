@@ -31,23 +31,28 @@ impl Database {
     ///
     /// tx-safe: read-only single statement — see note above the section header.
     pub fn unresolved_edges(&self) -> Result<Vec<UnresolvedEdge>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.target_name, e.file_path, e.line
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT e.id, e.target_name, e.file_path, e.line
              FROM edges e
              WHERE e.resolution_state = 0",
-        )?;
+            )
+            .context("Failed to prepare unresolved-edges query")?;
 
-        let rows = stmt.query_map([], |row| {
-            Ok(UnresolvedEdge {
-                edge_id: row.get(0)?,
-                target_name: row.get(1)?,
-                file_path: row.get(2)?,
-                line: row.get(3)?,
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(UnresolvedEdge {
+                    edge_id: row.get(0)?,
+                    target_name: row.get(1)?,
+                    file_path: row.get(2)?,
+                    line: row.get(3)?,
+                })
             })
-        })?;
+            .context("Failed to query unresolved edges")?;
 
         rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
+            .context("Failed to read unresolved edges")
     }
 
     /// Find the tightest-enclosing symbol at a given file + line.
@@ -64,7 +69,8 @@ impl Database {
                 params![file_path, line],
                 |row| row.get(0),
             )
-            .optional()?;
+            .optional()
+            .with_context(|| format!("Failed to find symbol at {file_path}:{line}"))?;
         Ok(id)
     }
 
@@ -76,11 +82,13 @@ impl Database {
     /// outer transaction.
     pub fn update_edge_target(&self, edge_id: i64, target_id: &str) -> Result<()> {
         // Overwrites any heuristic provenance: an LSP definition is more precise.
-        self.conn.execute(
-            "UPDATE edges SET target_id = ?1, resolution_state = 1, resolution_source = ?2
+        self.conn
+            .execute(
+                "UPDATE edges SET target_id = ?1, resolution_state = 1, resolution_source = ?2
              WHERE id = ?3",
-            params![target_id, EdgeProvenance::Lsp.as_str(), edge_id],
-        )?;
+                params![target_id, EdgeProvenance::Lsp.as_str(), edge_id],
+            )
+            .with_context(|| format!("Failed to update target of edge {edge_id}"))?;
         Ok(())
     }
 
@@ -97,11 +105,14 @@ impl Database {
     ///
     /// 0=unresolved, 1=resolved, 2=unresolvable, 3=external, 4=heuristic-exhausted.
     pub fn edge_resolution_state(&self, edge_id: i64) -> Result<i64> {
-        let state: i64 = self.conn.query_row(
-            "SELECT resolution_state FROM edges WHERE id = ?1",
-            params![edge_id],
-            |row| row.get(0),
-        )?;
+        let state: i64 = self
+            .conn
+            .query_row(
+                "SELECT resolution_state FROM edges WHERE id = ?1",
+                params![edge_id],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("Failed to read resolution state of edge {edge_id}"))?;
         Ok(state)
     }
 
@@ -110,11 +121,14 @@ impl Database {
     ///
     /// tx-safe: read-only single statement — see the LSP-section header note.
     pub fn has_heuristic_exhausted(&self) -> Result<bool> {
-        let exists: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM edges WHERE resolution_state = 4)",
-            [],
-            |row| row.get(0),
-        )?;
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM edges WHERE resolution_state = 4)",
+                [],
+                |row| row.get(0),
+            )
+            .context("Failed to check for heuristic-exhausted edges")?;
         Ok(exists)
     }
 
@@ -123,11 +137,14 @@ impl Database {
     ///
     /// tx-safe: read-only single statement — see the LSP-section header note.
     pub fn count_edges_in_state(&self, state: i64) -> Result<u32> {
-        let n: u32 = self.conn.query_row(
-            "SELECT COUNT(*) FROM edges WHERE resolution_state = ?1",
-            params![state],
-            |row| row.get(0),
-        )?;
+        let n: u32 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM edges WHERE resolution_state = ?1",
+                params![state],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("Failed to count edges in state {state}"))?;
         Ok(n)
     }
 
@@ -139,11 +156,14 @@ impl Database {
     ///
     /// tx-safe: single statement — see the LSP-section header note.
     pub fn reset_all_unresolvable(&self) -> Result<u32> {
-        let n = self.conn.execute(
-            "UPDATE edges SET resolution_state = 0, resolution_source = NULL
+        let n = self
+            .conn
+            .execute(
+                "UPDATE edges SET resolution_state = 0, resolution_source = NULL
              WHERE resolution_state IN (2, 3, 4)",
-            [],
-        )?;
+                [],
+            )
+            .context("Failed to reset unresolvable edges")?;
         Ok(n as u32)
     }
 
@@ -159,10 +179,13 @@ impl Database {
     ///
     /// tx-safe: single statement — see the LSP-section header note.
     pub fn reopen_heuristic_exhausted(&self) -> Result<u32> {
-        let n = self.conn.execute(
-            "UPDATE edges SET resolution_state = 0 WHERE resolution_state = 4",
-            [],
-        )?;
+        let n = self
+            .conn
+            .execute(
+                "UPDATE edges SET resolution_state = 0 WHERE resolution_state = 4",
+                [],
+            )
+            .context("Failed to reopen heuristic-exhausted edges")?;
         Ok(n as u32)
     }
 
@@ -183,11 +206,13 @@ impl Database {
     ///
     /// tx-safe: single statement — see the LSP-section header note.
     pub fn mark_edge_unresolvable(&self, edge_id: i64) -> Result<()> {
-        self.conn.execute(
-            "UPDATE edges SET resolution_state = 2, resolution_source = ?2
+        self.conn
+            .execute(
+                "UPDATE edges SET resolution_state = 2, resolution_source = ?2
              WHERE id = ?1 AND resolution_state = 0",
-            params![edge_id, EdgeProvenance::LspUnresolvable.as_str()],
-        )?;
+                params![edge_id, EdgeProvenance::LspUnresolvable.as_str()],
+            )
+            .with_context(|| format!("Failed to mark edge {edge_id} unresolvable"))?;
         Ok(())
     }
 
@@ -202,11 +227,13 @@ impl Database {
     ///
     /// tx-safe: single statement — see the LSP-section header note.
     pub fn mark_edge_external(&self, edge_id: i64) -> Result<()> {
-        self.conn.execute(
-            "UPDATE edges SET resolution_state = 3, resolution_source = ?2
+        self.conn
+            .execute(
+                "UPDATE edges SET resolution_state = 3, resolution_source = ?2
              WHERE id = ?1 AND resolution_state = 0",
-            params![edge_id, EdgeProvenance::LspExternal.as_str()],
-        )?;
+                params![edge_id, EdgeProvenance::LspExternal.as_str()],
+            )
+            .with_context(|| format!("Failed to mark edge {edge_id} external"))?;
         Ok(())
     }
 
@@ -237,7 +264,10 @@ impl Database {
             );
             let params: Vec<&dyn rusqlite::ToSql> =
                 chunk.iter().map(|n| n as &dyn rusqlite::ToSql).collect();
-            let n = self.conn.execute(&sql, params.as_slice())?;
+            let n = self
+                .conn
+                .execute(&sql, params.as_slice())
+                .context("Failed to reset unresolvable edges for names")?;
             total += n as u32;
         }
         Ok(total)

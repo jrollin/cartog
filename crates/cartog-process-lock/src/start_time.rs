@@ -17,6 +17,7 @@
 /// Look up the start time of a running process. Returns `None` if the
 /// process is gone, inaccessible, or the platform is unsupported.
 #[cfg(target_os = "linux")]
+#[must_use]
 pub fn process_start_time(pid: u32) -> Option<u64> {
     // /proc/<pid>/stat field 22 is `starttime`, the time the process started
     // after system boot in clock ticks. Stable for the life of the process.
@@ -31,6 +32,7 @@ pub fn process_start_time(pid: u32) -> Option<u64> {
 }
 
 #[cfg(target_os = "macos")]
+#[must_use]
 pub fn process_start_time(pid: u32) -> Option<u64> {
     use libc::{c_int, c_void};
 
@@ -84,16 +86,23 @@ pub fn process_start_time(pid: u32) -> Option<u64> {
     // doesn't match the target. Treated identically to "process gone";
     // callers fall back to is_alive() semantics.
     let mut info = std::mem::MaybeUninit::<ProcBsdInfo>::uninit();
-    let size = std::mem::size_of::<ProcBsdInfo>() as c_int;
+    // size_of::<ProcBsdInfo>() is a small compile-time constant, well within c_int.
+    let Ok(size) = c_int::try_from(std::mem::size_of::<ProcBsdInfo>()) else {
+        return None;
+    };
+    // pid was bounded to <= i32::MAX above, so try_from cannot fail.
+    let Ok(pid) = c_int::try_from(pid) else {
+        return None;
+    };
     // SAFETY: proc_pidinfo is a stable libproc entry point; we pass an
     // uninitialized buffer of the documented size and check the return
     // value before reading any field.
     let bytes_written = unsafe {
         proc_pidinfo(
-            pid as c_int,
+            pid,
             PROC_PIDTBSDINFO,
             0,
-            info.as_mut_ptr() as *mut c_void,
+            info.as_mut_ptr().cast::<c_void>(),
             size,
         )
     };
@@ -110,6 +119,7 @@ pub fn process_start_time(pid: u32) -> Option<u64> {
 }
 
 #[cfg(windows)]
+#[must_use]
 pub fn process_start_time(pid: u32) -> Option<u64> {
     use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
     use windows_sys::Win32::System::Threading::{
@@ -144,6 +154,7 @@ pub fn process_start_time(pid: u32) -> Option<u64> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[must_use]
 pub fn process_start_time(_pid: u32) -> Option<u64> {
     // Unsupported platform: returning None disables the PID-reuse check.
     // Callers fall back to `is_alive` semantics — same as before this module.

@@ -62,8 +62,10 @@ impl Database {
         //   exact import=6, ...
         // Within the same rank score, secondary sort by kind (fn < method < class)
         // then by file_path and start_line for determinism.
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, kind, file_path, start_line, end_line,
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, name, kind, file_path, start_line, end_line,
                     start_byte, end_byte, parent_id, signature, visibility,
                     is_async, docstring, in_degree, content_hash, subtree_hash,
                     (CASE
@@ -93,44 +95,57 @@ impl Database {
                       END,
                       file_path, start_line
              LIMIT ?5",
-        )?;
+            )
+            .with_context(|| format!("Failed to prepare symbol search for {query:?}"))?;
         // ?1 = raw query (exact equality), ?2 = escaped query (LIKE patterns), ?3 = kind, ?4 = file, ?5 = limit
         let rows = stmt
             .query_map(
                 params![query, escaped, kind_str, file_filter, limit],
                 row_to_symbol,
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            )
+            .with_context(|| format!("Failed to search symbols for {query:?}"))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("Failed to read symbol search results for {query:?}"))?;
         Ok(rows)
     }
 
     /// Outline: all symbols in a file, ordered by line.
     pub fn outline(&self, file_path: &str) -> Result<Vec<Symbol>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
                     parent_id, signature, visibility, is_async, docstring, in_degree,
                     content_hash, subtree_hash
              FROM symbols WHERE file_path = ?1
              ORDER BY start_line",
-        )?;
+            )
+            .with_context(|| format!("Failed to prepare outline query for {file_path}"))?;
         let rows = stmt
-            .query_map(params![file_path], row_to_symbol)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map(params![file_path], row_to_symbol)
+            .with_context(|| format!("Failed to outline {file_path}"))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("Failed to read outline results for {file_path}"))?;
         Ok(rows)
     }
 
     /// Find what a symbol calls (edges originating from symbols matching the name).
     pub fn callees(&self, name: &str) -> Result<Vec<Edge>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
                     e.resolution_source
              FROM edges e
              JOIN symbols s ON e.source_id = s.id
              WHERE s.name = ?1 AND e.kind = 'calls'",
-        )?;
+            )
+            .with_context(|| format!("Failed to prepare callees query for {name}"))?;
         let rows = stmt
-            .query_map(params![name], row_to_edge)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map(params![name], row_to_edge)
+            .with_context(|| format!("Failed to query callees of {name}"))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("Failed to read callees of {name}"))?;
         Ok(rows)
     }
 
@@ -138,13 +153,18 @@ impl Database {
     /// resolved `target_id` are returned — keyed on the exact source id (not a
     /// name), so an overloaded source resolves to the right callees.
     pub fn callee_ids_of(&self, source_id: &str) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT DISTINCT e.target_id FROM edges e
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT DISTINCT e.target_id FROM edges e
              WHERE e.source_id = ?1 AND e.kind = 'calls' AND e.target_id IS NOT NULL",
-        )?;
+            )
+            .with_context(|| format!("Failed to prepare callee-ids query for {source_id}"))?;
         let ids = stmt
-            .query_map(params![source_id], |row| row.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map(params![source_id], |row| row.get::<_, String>(0))
+            .with_context(|| format!("Failed to query callee ids of {source_id}"))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("Failed to read callee ids of {source_id}"))?;
         Ok(ids)
     }
 
@@ -152,13 +172,18 @@ impl Database {
     /// `calls` edges). Keyed on the exact target id, so callers of one overload
     /// aren't confused with another sharing its name.
     pub fn caller_ids_of(&self, target_id: &str) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT DISTINCT e.source_id FROM edges e
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT DISTINCT e.source_id FROM edges e
              WHERE e.target_id = ?1 AND e.kind = 'calls'",
-        )?;
+            )
+            .with_context(|| format!("Failed to prepare caller-ids query for {target_id}"))?;
         let ids = stmt
-            .query_map(params![target_id], |row| row.get::<_, String>(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map(params![target_id], |row| row.get::<_, String>(0))
+            .with_context(|| format!("Failed to query caller ids of {target_id}"))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("Failed to read caller ids of {target_id}"))?;
         Ok(ids)
     }
 
@@ -191,9 +216,12 @@ impl Database {
             Ok((edge, sym))
         };
 
+        let ctx = || format!("Failed to query refs for {name}");
         let rows = if let Some(kind) = kind_filter {
-            let mut stmt = self.conn.prepare_cached(
-                "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+            let mut stmt = self
+                .conn
+                .prepare_cached(
+                    "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
                         e.resolution_source,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
@@ -206,14 +234,19 @@ impl Database {
                  WHERE (e.target_name = ?1 AND e.kind = ?2)
                     OR (e.target_id IN (SELECT id FROM symbols WHERE name = ?1)
                         AND e.kind = ?2)",
-            )?;
+                )
+                .with_context(ctx)?;
             let rows = stmt
-                .query_map(params![name, kind.as_str()], map_row)?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+                .query_map(params![name, kind.as_str()], map_row)
+                .with_context(ctx)?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(ctx)?;
             rows
         } else {
-            let mut stmt = self.conn.prepare_cached(
-                "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+            let mut stmt = self
+                .conn
+                .prepare_cached(
+                    "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
                         e.resolution_source,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
@@ -222,10 +255,13 @@ impl Database {
                  LEFT JOIN symbols s ON e.source_id = s.id
                  WHERE e.target_name = ?1
                     OR e.target_id IN (SELECT id FROM symbols WHERE name = ?1)",
-            )?;
+                )
+                .with_context(ctx)?;
             let rows = stmt
-                .query_map(params![name], map_row)?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+                .query_map(params![name], map_row)
+                .with_context(ctx)?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(ctx)?;
             rows
         };
         Ok(rows)
@@ -239,31 +275,41 @@ impl Database {
     /// parent column reports the resolved short name when available.
     pub fn hierarchy(&self, class_name: &str) -> Result<Vec<(String, String)>> {
         // Returns (child, parent) pairs
-        let mut stmt = self.conn.prepare(
-            "SELECT s.name, COALESCE(sym2.name, e.target_name)
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT s.name, COALESCE(sym2.name, e.target_name)
              FROM edges e
              JOIN symbols s ON e.source_id = s.id
              LEFT JOIN symbols sym2 ON e.target_id = sym2.id
              WHERE e.kind = 'inherits'
                AND (s.name = ?1 OR e.target_name = ?1 OR sym2.name = ?1)",
-        )?;
+            )
+            .with_context(|| format!("Failed to prepare hierarchy query for {class_name}"))?;
         let rows = stmt
-            .query_map(params![class_name], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map(params![class_name], |row| Ok((row.get(0)?, row.get(1)?)))
+            .with_context(|| format!("Failed to query hierarchy of {class_name}"))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("Failed to read hierarchy of {class_name}"))?;
         Ok(rows)
     }
 
     /// File-level dependencies (imports from a file).
     pub fn file_deps(&self, file_path: &str) -> Result<Vec<Edge>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT e.id, e.source_id, e.target_name, e.target_id, e.kind, e.file_path, e.line,
                     e.resolution_source
              FROM edges e
              WHERE e.file_path = ?1 AND e.kind = 'imports'",
-        )?;
+            )
+            .with_context(|| format!("Failed to prepare deps query for {file_path}"))?;
         let rows = stmt
-            .query_map(params![file_path], row_to_edge)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map(params![file_path], row_to_edge)
+            .with_context(|| format!("Failed to query deps of {file_path}"))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("Failed to read deps of {file_path}"))?;
         Ok(rows)
     }
 
@@ -330,15 +376,20 @@ impl Database {
             ORDER BY depth, edge_id
         ";
 
-        let mut stmt = self.conn.prepare_cached(sql)?;
+        let mut stmt = self
+            .conn
+            .prepare_cached(sql)
+            .with_context(|| format!("Failed to prepare impact query for {name}"))?;
         let rows = stmt
             .query_map(params![name, max_depth], |row| {
                 // Bare projection: edge columns 0..=6, depth at column 7.
                 let edge = edge_from_row(row, 0)?;
                 let depth: u32 = row.get(7)?;
                 Ok((edge, depth))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            })
+            .with_context(|| format!("Failed to query impact of {name}"))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("Failed to read impact of {name}"))?;
         Ok(rows)
     }
 
@@ -369,7 +420,9 @@ impl Database {
             std::collections::HashMap::new();
 
         // Seed: every symbol named `from` starts the frontier at depth 0.
-        let mut frontier: Vec<String> = self.symbol_ids_named(from)?;
+        let mut frontier: Vec<String> = self
+            .symbol_ids_named(from)
+            .with_context(|| format!("Failed to seed trace from {from}"))?;
         for id in &frontier {
             visited.insert(id.clone());
         }
@@ -380,7 +433,10 @@ impl Database {
             }
             let mut next: Vec<String> = Vec::new();
             for src_id in &frontier {
-                for hop in self.outgoing_calls(src_id)? {
+                for hop in self
+                    .outgoing_calls(src_id)
+                    .with_context(|| format!("Failed to trace calls from {src_id}"))?
+                {
                     // A reached symbol is any symbol whose name matches the
                     // edge's target (resolved id preferred when present).
                     for tgt_id in self.resolved_call_targets(&hop)? {
@@ -484,9 +540,10 @@ impl Database {
     /// a single `EXISTS(SELECT 1 FROM symbols)` that stops at the first row.
     /// Used by query commands to distinguish "no index yet" from a no-match.
     pub fn is_empty(&self) -> Result<bool> {
-        let exists: bool =
-            self.conn
-                .query_row("SELECT EXISTS(SELECT 1 FROM symbols)", [], |row| row.get(0))?;
+        let exists: bool = self
+            .conn
+            .query_row("SELECT EXISTS(SELECT 1 FROM symbols)", [], |row| row.get(0))
+            .context("Failed to check whether the index is empty")?;
         Ok(!exists)
     }
 
@@ -494,26 +551,31 @@ impl Database {
     pub fn stats(&self) -> Result<IndexStats> {
         let num_files: u32 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))
+            .context("Failed to count files for stats")?;
         let num_symbols: u32 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))?;
+            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+            .context("Failed to count symbols for stats")?;
         // Single GROUP BY over edges replaces what would otherwise be four
         // sequential full table scans (one COUNT(*) per bucket). The partial
         // index `idx_edges_unresolved` only covers state=0, so state=2 and
         // state=3 counts can't use it — one scan + a 4-row Vec is cheaper.
         let mut bucket_stmt = self
             .conn
-            .prepare("SELECT resolution_state, COUNT(*) FROM edges GROUP BY resolution_state")?;
+            .prepare("SELECT resolution_state, COUNT(*) FROM edges GROUP BY resolution_state")
+            .context("Failed to prepare edge-state stats query")?;
         let mut num_resolved: u32 = 0;
         let mut num_unresolvable: u32 = 0;
         let mut num_external: u32 = 0;
         let mut num_edges: u32 = 0;
-        let rows = bucket_stmt.query_map([], |row| {
-            let state: i64 = row.get(0)?;
-            let count: u32 = row.get(1)?;
-            Ok((state, count))
-        })?;
+        let rows = bucket_stmt
+            .query_map([], |row| {
+                let state: i64 = row.get(0)?;
+                let count: u32 = row.get(1)?;
+                Ok((state, count))
+            })
+            .context("Failed to query edge-state stats")?;
         for row in rows {
             let (state, count) = row?;
             num_edges += count;
@@ -525,19 +587,27 @@ impl Database {
             }
         }
 
-        let mut lang_stmt = self.conn.prepare(
-            "SELECT language, COUNT(*) FROM files GROUP BY language ORDER BY COUNT(*) DESC",
-        )?;
+        let mut lang_stmt = self
+            .conn
+            .prepare(
+                "SELECT language, COUNT(*) FROM files GROUP BY language ORDER BY COUNT(*) DESC",
+            )
+            .context("Failed to prepare language stats query")?;
         let languages: Vec<(String, u32)> = lang_stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .context("Failed to query language stats")?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to read language stats")?;
 
         let mut kind_stmt = self
             .conn
-            .prepare("SELECT kind, COUNT(*) FROM symbols GROUP BY kind ORDER BY COUNT(*) DESC")?;
+            .prepare("SELECT kind, COUNT(*) FROM symbols GROUP BY kind ORDER BY COUNT(*) DESC")
+            .context("Failed to prepare symbol-kind stats query")?;
         let symbol_kinds: Vec<(String, u32)> = kind_stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .context("Failed to query symbol-kind stats")?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to read symbol-kind stats")?;
 
         Ok(IndexStats {
             num_files,
@@ -614,19 +684,29 @@ impl Database {
             return Err(e.into());
         }
 
-        let mut tool_stmt = self.conn.prepare(
-            "SELECT tool, COUNT(*) FROM query_log GROUP BY tool ORDER BY COUNT(*) DESC, tool",
-        )?;
+        let mut tool_stmt = self
+            .conn
+            .prepare(
+                "SELECT tool, COUNT(*) FROM query_log GROUP BY tool ORDER BY COUNT(*) DESC, tool",
+            )
+            .context("Failed to prepare savings by-tool query")?;
         let by_tool: Vec<(String, u64)> = tool_stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))
+            .context("Failed to query savings by tool")?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to read savings by tool")?;
 
-        let mut src_stmt = self.conn.prepare(
-            "SELECT source, COUNT(*) FROM query_log GROUP BY source ORDER BY COUNT(*) DESC, source",
-        )?;
+        let mut src_stmt = self
+            .conn
+            .prepare(
+                "SELECT source, COUNT(*) FROM query_log GROUP BY source ORDER BY COUNT(*) DESC, source",
+            )
+            .context("Failed to prepare savings by-source query")?;
         let by_source: Vec<(String, u64)> = src_stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map([], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)))
+            .context("Failed to query savings by source")?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to read savings by source")?;
 
         let total_queries: u64 = by_tool.iter().map(|(_, c)| c).sum();
         let tokens_used_cartog = total_queries.saturating_mul(TOKENS_PER_QUERY_CARTOG as u64);
@@ -657,18 +737,23 @@ impl Database {
     ///
     /// Used by `cartog map` to produce a centrality-ranked codebase summary.
     pub fn top_symbols(&self, limit: u32) -> Result<Vec<Symbol>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
                     parent_id, signature, visibility, is_async, docstring, in_degree,
                     content_hash, subtree_hash
              FROM symbols
              WHERE kind != 'import' AND kind != 'variable'
              ORDER BY in_degree DESC, file_path, start_line
              LIMIT ?1",
-        )?;
+            )
+            .context("Failed to prepare top-symbols query")?;
         let rows = stmt
-            .query_map(params![limit], row_to_symbol)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map(params![limit], row_to_symbol)
+            .context("Failed to query top symbols")?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to read top symbols")?;
         Ok(rows)
     }
 
@@ -680,7 +765,8 @@ impl Database {
         Ok(self
             .conn
             .query_row("SELECT 1 FROM files LIMIT 1", [], |_| Ok(()))
-            .optional()?
+            .optional()
+            .context("Failed to check for indexed files")?
             .is_some())
     }
 
@@ -718,7 +804,10 @@ impl Database {
                  ORDER BY file_path, start_line",
                 placeholders.join(", ")
             );
-            let mut stmt = self.conn.prepare(&sql)?;
+            let mut stmt = self
+                .conn
+                .prepare(&sql)
+                .context("Failed to prepare symbols-for-files query")?;
 
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = chunk
                 .iter()
@@ -729,8 +818,10 @@ impl Database {
             let params: Vec<&dyn rusqlite::types::ToSql> =
                 param_values.iter().map(|p| &**p).collect();
             let rows = stmt
-                .query_map(&*params, row_to_symbol)?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+                .query_map(&*params, row_to_symbol)
+                .context("Failed to query symbols for files")?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .context("Failed to read symbols for files")?;
             all_results.extend(rows);
         }
 
@@ -748,10 +839,15 @@ impl Database {
 
     /// Get all indexed file paths, sorted alphabetically.
     pub fn all_files(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare("SELECT path FROM files ORDER BY path")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM files ORDER BY path")
+            .context("Failed to prepare all-files query")?;
         let rows = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .query_map([], |row| row.get(0))
+            .context("Failed to query all files")?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to read all files")?;
         Ok(rows)
     }
 
@@ -760,12 +856,17 @@ impl Database {
     /// Used by the parallel indexer to avoid per-file DB round trips when
     /// deciding whether a file needs re-parsing.
     pub fn all_file_hashes(&self) -> Result<std::collections::HashMap<String, String>> {
-        let mut stmt = self.conn.prepare("SELECT path, hash FROM files")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, hash FROM files")
+            .context("Failed to prepare file-hashes query")?;
         let rows = stmt
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            })
+            .context("Failed to query file hashes")?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to read file hashes")?;
         Ok(rows.into_iter().collect())
     }
 }

@@ -28,7 +28,7 @@ pub enum EdgeProvenance {
     KindDisambig,
     /// LSP located the definition inside the indexed root.
     Lsp,
-    /// LSP located the definition outside the indexed root (stdlib, deps, node_modules).
+    /// LSP located the definition outside the indexed root (stdlib, deps, `node_modules`).
     LspExternal,
     /// LSP definitively returned no definition (typo, dynamic dispatch, macro).
     LspUnresolvable,
