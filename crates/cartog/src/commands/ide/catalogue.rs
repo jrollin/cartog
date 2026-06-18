@@ -343,6 +343,7 @@ pub(super) fn client_display_name(kind: ClientKind) -> &'static str {
     }
 }
 
+/// Stable lowercase slug for a client (used in report output and paths).
 pub(super) fn client_name(kind: ClientKind) -> &'static str {
     match kind {
         ClientKind::ClaudeCode => "claude-code",

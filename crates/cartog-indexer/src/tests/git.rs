@@ -21,12 +21,11 @@ fn test_git_changed_files_invalid_commit() {
 
 #[test]
 fn test_git_changed_files_valid_head() {
-    // If we diff HEAD against HEAD, the changed set should be empty
-    // (only working tree / untracked files would appear)
-    let head = git_head_commit(Path::new("."));
-    if let Some(commit) = head {
-        let result = git_changed_files(Path::new("."), Some(&commit));
-        // Should return Some (valid commit), though the set may contain untracked/modified files
-        assert!(result.is_some());
-    }
+    // Diffing the working tree against the current HEAD: the result is Some
+    // for a valid commit (the set may include uncommitted/untracked files).
+    // expect() so the test fails loudly outside a git checkout rather than
+    // silently skipping the assertion below.
+    let head = git_head_commit(Path::new(".")).expect("test runs inside a git repo");
+    let result = git_changed_files(Path::new("."), Some(&head));
+    assert!(result.is_some());
 }

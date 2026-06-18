@@ -15,11 +15,13 @@ fn test_db_error_wraps_into_anyhow() {
 
 #[test]
 fn test_db_error_open_variant_has_path() {
-    // Give Database::open a path inside a non-writable location to force
-    // a failure. We accept either PrepareDir (mkdir failed on the parent)
-    // or Open (SQLite refused), since the failure point depends on the
-    // platform's handling of `/dev/null/…`.
-    let bad_path = std::path::PathBuf::from("/dev/null/definitely/not/a/db.sqlite");
+    // A path whose parent component is a regular file (not a directory) can
+    // never host a database on any platform. We accept either PrepareDir
+    // (mkdir on the parent failed) or Open (SQLite refused).
+    let tmp = tempfile::TempDir::new().unwrap();
+    let file = tmp.path().join("not-a-dir");
+    std::fs::write(&file, b"x").unwrap();
+    let bad_path = file.join("db.sqlite");
     let err = Database::open(&bad_path, DEFAULT_EMBEDDING_DIM).unwrap_err();
     match err {
         DbError::Open { path, .. } => assert_eq!(path, bad_path),

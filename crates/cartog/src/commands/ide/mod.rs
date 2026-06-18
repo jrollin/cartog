@@ -110,12 +110,14 @@ impl IdeStatus {
     }
 }
 
+/// Before/after config content for one client, shown as a diff in `--json`.
 #[derive(Debug, Serialize)]
 pub struct DiffPair {
     pub before: Option<String>,
     pub after: String,
 }
 
+/// One client's outcome in an `IdeReport`: where it wrote, the status, and the diff.
 #[derive(Debug, Serialize)]
 pub struct IdeStep {
     pub client: String,
@@ -127,6 +129,7 @@ pub struct IdeStep {
     pub diff: Option<DiffPair>,
 }
 
+/// Per-status tallies across all steps in an `IdeReport`.
 #[derive(Debug, Serialize, Default)]
 pub struct IdeSummary {
     pub total: usize,
@@ -137,6 +140,7 @@ pub struct IdeSummary {
     pub error: usize,
 }
 
+/// Full result of an `ide`/`install` run: one step per client plus the summary.
 #[derive(Debug, Serialize)]
 pub struct IdeReport {
     pub steps: Vec<IdeStep>,
