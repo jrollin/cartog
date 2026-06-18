@@ -24,6 +24,8 @@ use cartog_core::{FileInfo, Symbol, PROGRESS_STRIDE};
 use cartog_db::Database;
 use cartog_languages::{detect_language, get_extractor, Extractor};
 
+use crate::walk::Candidates;
+
 thread_local! {
     /// Per-worker cache of tree-sitter extractors. Reused across files within
     /// a single rayon worker thread so the Parser is constructed once per
@@ -455,11 +457,16 @@ pub fn index_directory(
         db.clear_all_embeddings()?;
     }
 
-    // Collect files that should be indexed
-    let mut current_files = std::collections::HashSet::new();
-
     // Track files that were actually re-indexed (for scoped edge resolution)
     let mut dirty_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Names of symbols added this run. Used after the per-file loop to reset
+    // resolution_state {2, 3} markers on edges that newly have a matching
+    // target — closes the "added b.ts after a.ts's import was marked
+    // unresolvable" gap, and the "vendored a dep in-tree so an external edge
+    // is now internal" gap.
+    let mut added_symbol_names: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     // Git-based change detection: get set of files changed since last indexed commit
     let last_commit = if force {
@@ -484,169 +491,35 @@ pub fn index_directory(
     // ── Phase 1: walk + filter candidates (cheap, single-threaded) ──
     check_cancel()?;
     emit(ProgressUpdate::Walking);
-    let mut candidates: Vec<(PathBuf, String, &'static str)> = Vec::new();
-    let mut unsupported_ext: std::collections::HashMap<String, u32> =
-        std::collections::HashMap::new();
-    // `ignore` honors .gitignore (incl. nested) + .cartogignore. require_git
-    // makes it apply even without a .git dir. parents/git_global are OFF so only
-    // ignore files INSIDE the indexed tree count — never an ancestor or
-    // $HOME/.gitignore (which would silently drop files when indexing a subdir).
-    // The hardcoded floor + `[index] exclude` run as a `filter_entry` on top.
-    let mut walker = WalkBuilder::new(&root);
-    walker
-        .follow_links(true)
-        .max_depth(Some(50))
-        .hidden(false)
-        .parents(false)
-        .require_git(false)
-        .git_global(false)
-        .git_ignore(filter.respect_gitignore)
-        .git_exclude(filter.respect_gitignore)
-        .add_custom_ignore_filename(".cartogignore");
-    let filter_root = root.clone();
-    let filter_exclude = filter.exclude.clone();
-    walker.filter_entry(move |entry| {
-        let name = entry.file_name().to_string_lossy();
-        let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
-        if is_ignored(&name, is_dir, entry.depth()) {
-            return false;
-        }
-        match entry.path().strip_prefix(&filter_root) {
-            Ok(rel) => !is_excluded_path(rel, is_dir, &filter_exclude),
-            Err(_) => true,
-        }
-    });
-    for entry in walker.build() {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                warn!(error = %e, "directory walk error");
-                continue;
-            }
-        };
-        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-            continue;
-        }
-        let path = entry.path();
-        let rel_path = match path.strip_prefix(&root) {
-            Ok(p) => p.to_string_lossy().to_string(),
-            Err(_) => continue,
-        };
-
-        // Sensitive files (.env, *.pem, id_rsa, ...) are never indexed, always.
-        // Checked before detect_language so it also catches files with no code
-        // extension, and so they count as redacted-skips rather than
-        // unsupported. Dropping before current_files.insert lets the removal
-        // sweep delete any rows from a prior un-gated index.
-        if redact::is_sensitive_file(&rel_path) {
-            result.files_redacted_skipped += 1;
-            continue;
-        }
-
-        // `[index] exclude` is enforced in the walk's `filter_entry` above
-        // (`is_excluded_path`), which drops matching files and prunes matching
-        // dirs before they are yielded — so no second check is needed here.
-
-        let lang = match detect_language(Path::new(&rel_path)) {
-            Some(l) => l,
-            None => {
-                // Tally genuine source files in unsupported languages, but skip
-                // cartog's own database sidecars (.cartog.db, -wal, -shm) — they
-                // aren't user code and would be noise in the breakdown.
-                if let Some(ext) = Path::new(&rel_path).extension().and_then(|e| e.to_str()) {
-                    if !is_db_sidecar(&rel_path) {
-                        result.files_unsupported += 1;
-                        *unsupported_ext.entry(ext.to_ascii_lowercase()).or_insert(0) += 1;
-                    }
-                }
-                continue;
-            }
-        };
-
-        current_files.insert(rel_path.clone());
-
-        // Git-based skip: files not in the changed set and already indexed stay put.
-        if !force {
-            if let Some(ref changed) = changed_files {
-                if !changed.contains(&rel_path) && stored_hashes.contains_key(&rel_path) {
-                    result.files_skipped += 1;
-                    continue;
-                }
-            }
-        }
-
-        candidates.push((path.to_path_buf(), rel_path, lang));
-    }
-
-    let mut by_ext: Vec<(String, u32)> = unsupported_ext.into_iter().collect();
-    by_ext.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    result.unsupported_by_ext = by_ext;
+    let Candidates {
+        items: candidates,
+        current_files,
+    } = walk::walk_candidates(
+        &root,
+        force,
+        filter,
+        changed_files.as_ref(),
+        &stored_hashes,
+        &mut result,
+    );
 
     // ── Phase 2: parallel parse + extract (CPU-bound, rayon-worker pool) ──
     check_cancel()?;
-    let parse_total = candidates.len() as u32;
-    emit(ProgressUpdate::Parsing {
-        done: 0,
-        total: parse_total,
-    });
-    // Rayon workers finish out of order. `parsed_count` assigns each a unique n;
-    // `reported_high` is a running max so a late straggler never emits a `done`
-    // below one already shown (the spinner would otherwise flicker backward).
-    use std::sync::atomic::{AtomicU32, Ordering};
-    let parsed_count = AtomicU32::new(0);
-    let reported_high = AtomicU32::new(0);
-    let run_parse = || -> Vec<ParseOutput> {
-        candidates
-            .par_iter()
-            .map(|(abs, rel, lang)| {
-                let out = parse_one_file(
-                    abs,
-                    rel,
-                    lang,
-                    force,
-                    stored_hashes.get(rel).map(String::as_str),
-                    redact,
-                );
-                let n = parsed_count.fetch_add(1, Ordering::Relaxed) + 1;
-                if n % PROGRESS_STRIDE == 0 || n == parse_total {
-                    // fetch_max returns the prior high; only emit if we raised it,
-                    // so emitted `done` is non-decreasing despite out-of-order calls.
-                    if reported_high.fetch_max(n, Ordering::Relaxed) < n {
-                        emit(ProgressUpdate::Parsing {
-                            done: n,
-                            total: parse_total,
-                        });
-                    }
-                }
-                out
-            })
-            .collect()
-    };
-    // Run on a dedicated pool sized to `jobs` so the cap applies on every call;
-    // fall back to the global pool if it can't be built.
-    let parsed: Vec<ParseOutput> = match parse_pool(filter.jobs) {
-        Some(pool) => pool.install(run_parse),
-        None => run_parse(),
-    };
+    let parsed = pass::parse_candidates(
+        &candidates,
+        force,
+        redact,
+        &stored_hashes,
+        filter.jobs,
+        &emit,
+    );
 
     // ── Phase 3: sequential DB writes inside one transaction ──
     //
-    // All writes from here through the `last_commit` metadata update participate
-    // in a single transaction. A panic, error, or hard process exit before
-    // `tx.commit()` rolls everything back — the DB never sees a partial Phase 3
-    // state (e.g. symbols updated but `files` row stale, or edges resolved
-    // against a half-rebuilt symbol set).
-    //
-    // Inside the transaction, we use the `*_in_tx` variants of the batch
-    // helpers — the regular versions issue their own `BEGIN` and would fail
-    // here.
-    // Names of symbols added this run. Used after the per-file loop to reset
-    // resolution_state {2, 3} markers on edges that newly have a matching
-    // target — closes the "added b.ts after a.ts's import was marked
-    // unresolvable" gap, and the "vendored a dep in-tree so an external edge
-    // is now internal" gap.
-    let mut added_symbol_names: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    // One transaction spans store + resolve through the final metadata write;
+    // a crash before `tx.commit()` rolls everything back atomically. The `tx`
+    // guard stays owned here — the phase helpers take `&Database` and call only
+    // `*_in_tx` batch helpers, so their writes join this tx.
 
     // `total` here is the number of files that will actually be written, not
     // the parsed-vec length: `ParseOutput::Skipped` short-circuits before the
@@ -681,126 +554,21 @@ pub fn index_directory(
             } => (rel_path, lang, source, hash, modified, symbols, edges),
         };
 
-        // Force skips Merkle diff: source is unchanged on a policy-change
-        // re-index, so a diff would find nothing dirty and skip the content
-        // rewrite, leaving stale (un-redacted) rows.
-        let old_hashes = db.get_symbol_hashes_for_file(&rel_path)?;
-        let has_old_hashes =
-            !force && !old_hashes.is_empty() && old_hashes.iter().any(|(_, ch, _)| ch.is_some());
-
-        if has_old_hashes {
-            // Merkle diff: surgical updates
-            let diff = merkle_diff(&symbols, &old_hashes);
-
-            dirty_files.insert(rel_path.clone());
-
-            // Newly-added symbol names — used post-loop to retry edges that
-            // were previously marked unresolvable but now have a matching target.
-            for &i in &diff.added {
-                added_symbol_names.insert(symbols[i].name.clone());
-            }
-
-            db.delete_symbols_in_tx(&diff.removed)?;
-            result.symbols_removed += diff.removed.len() as u32;
-
-            let mut changed: Vec<cartog_core::Symbol> = Vec::with_capacity(
-                diff.added.len() + diff.modified.len() + diff.children_changed.len(),
-            );
-            changed.extend(diff.added.iter().map(|&i| symbols[i].clone()));
-            changed.extend(diff.modified.iter().map(|&i| symbols[i].clone()));
-            changed.extend(diff.children_changed.iter().map(|&i| symbols[i].clone()));
-            db.insert_symbols_in_tx(&changed)?;
-
-            // A modified symbol keeps its stable id, so its old embedding lingers
-            // and `symbols_needing_embeddings` would skip it — drop the drifted
-            // vector so it re-embeds. children_changed symbols have unchanged own
-            // content, so their embeddings are still valid. Skip the work entirely
-            // for repos with no embeddings (the common non-RAG case).
-            let modified_ids: Vec<String> = diff
-                .modified
-                .iter()
-                .map(|&i| symbols[i].id.clone())
-                .collect();
-            if !modified_ids.is_empty() && db.embedding_count()? > 0 {
-                db.clear_embeddings_for_symbols_in_tx(&modified_ids)?;
-            }
-
-            result.symbols_added += diff.added.len() as u32;
-            result.symbols_modified += diff.modified.len() as u32;
-            result.symbols_unchanged += diff.unchanged as u32;
-
-            db.clear_edges_for_file(&rel_path)?;
-            db.insert_edges_in_tx(&edges)?;
-            result.edges_added += edges.len() as u32;
-
-            let dirty_indices: Vec<usize> = diff
-                .added
-                .iter()
-                .chain(diff.modified.iter())
-                .copied()
-                .collect();
-            let contents: Vec<(String, String, String, String)> = dirty_indices
-                .iter()
-                .map(|&i| &symbols[i])
-                .filter(|sym| sym.kind != cartog_core::SymbolKind::Import)
-                .filter_map(|sym| {
-                    extract_symbol_content_redacted(&source, sym, redact).map(
-                        |(content, header)| (sym.id.clone(), sym.name.clone(), content, header),
-                    )
-                })
-                .collect();
-            // A modified symbol whose new body no longer yields content is absent
-            // from `contents`, so its pre-edit content row would linger and
-            // re-embed stale text. Delete content for any modified id not rewritten.
-            let rewritten: std::collections::HashSet<&str> =
-                contents.iter().map(|(id, ..)| id.as_str()).collect();
-            let lost_content: Vec<String> = modified_ids
-                .iter()
-                .filter(|id| !rewritten.contains(id.as_str()))
-                .cloned()
-                .collect();
-            db.clear_content_for_symbols_in_tx(&lost_content)?;
-            if !contents.is_empty() {
-                db.insert_symbol_contents_in_tx(&contents)?;
-            }
-        } else {
-            // No stored hashes (first index or post-migration): full insert
-            dirty_files.insert(rel_path.clone());
-            // Every symbol in a freshly-inserted file is "new" wrt the marker.
-            for sym in &symbols {
-                added_symbol_names.insert(sym.name.clone());
-            }
-            db.clear_file_data_in_tx(&rel_path)?;
-
-            db.insert_symbols_in_tx(&symbols)?;
-            db.insert_edges_in_tx(&edges)?;
-
-            result.symbols_added += symbols.len() as u32;
-            result.edges_added += edges.len() as u32;
-
-            let contents: Vec<(String, String, String, String)> = symbols
-                .iter()
-                .filter(|sym| sym.kind != cartog_core::SymbolKind::Import)
-                .filter_map(|sym| {
-                    extract_symbol_content_redacted(&source, sym, redact).map(
-                        |(content, header)| (sym.id.clone(), sym.name.clone(), content, header),
-                    )
-                })
-                .collect();
-            if !contents.is_empty() {
-                db.insert_symbol_contents_in_tx(&contents)?;
-            }
-        }
-
-        let num_symbols = symbols.len() as u32;
-
-        db.upsert_file(&FileInfo {
-            path: rel_path,
-            last_modified: modified,
+        pass::store_parsed_file(
+            db,
+            rel_path,
+            lang,
+            &source,
             hash,
-            language: lang.to_string(),
-            num_symbols,
-        })?;
+            modified,
+            &symbols,
+            &edges,
+            force,
+            redact,
+            &mut dirty_files,
+            &mut added_symbol_names,
+            &mut result,
+        )?;
 
         result.files_indexed += 1;
         if result.files_indexed % PROGRESS_STRIDE == 0 || result.files_indexed == storing_total {
@@ -844,93 +612,22 @@ pub fn index_directory(
         }
     }
 
-    // Force-reindex must retry edges previously marked unresolvable OR
-    // external — otherwise --force would silently honor a stale state {2, 3}
-    // marker.
-    if force {
-        db.reset_all_unresolvable()?;
-    }
-
-    // Reopen state {2, 3} markers whose target_name was just added. Runs
-    // BEFORE the heuristic + LSP passes so reopened edges flow through both.
-    if !added_symbol_names.is_empty() {
-        let names: Vec<String> = added_symbol_names.iter().cloned().collect();
-        db.reset_unresolvable_for_names(&names)?;
-    }
-
-    // Resolve edges — scoped to dirty files for incremental, global for force/first-index
-    if force || dirty_files.len() == current_files.len() {
-        result.edges_resolved = db.resolve_edges_in_tx()?;
-        db.compute_in_degrees()?;
-    } else if !dirty_files.is_empty() {
-        // Invalidate edges from unchanged files that pointed to symbols in dirty files
-        // (those symbol IDs may have changed even with stable IDs if a symbol was renamed/removed)
-        db.invalidate_edges_targeting(&dirty_files)?;
-        result.edges_resolved = db.resolve_edges_scoped_in_tx(&dirty_files)?;
-        db.compute_in_degrees_scoped(&dirty_files)?;
-    }
-
-    // LSP-based resolution for edges the heuristic couldn't resolve.
-    // Auto-detected when `lsp` feature is compiled in; silently skipped otherwise.
-    // The LSP-side helpers (`unresolved_edges`, `find_symbol_at_location`,
-    // `update_edge_target`) all use single-statement execs that participate in
-    // the outer transaction — no extra plumbing needed.
-    //
-    // Skipped on no-op runs: unresolved set is identical to last run, so
-    // re-querying the LSP repeats work. Use `--force` to retry.
-    let lsp_ran;
-    #[cfg(feature = "lsp")]
-    {
-        lsp_ran = lsp && !dirty_files.is_empty();
-        if lsp_ran {
-            // Watch (lsp=false) may have sealed edges at state=4; give LSP a shot.
-            db.reopen_heuristic_exhausted()?;
-            // No phase event is forced here: lsp_resolve_edges fires the first
-            // ResolvingLsp tick only when there are edges to resolve. A run with
-            // zero unresolved edges intentionally shows no "resolving" phase
-            // rather than a misleading "resolving 0 edges" marker.
-            let lsp_progress = |done: u32, total: u32| {
-                emit(ProgressUpdate::ResolvingLsp { done, total });
-            };
-            // Thread the caller's cancel probe so Ctrl-C interrupts the LSP
-            // phase (the dominant cost) between files/windows, not just the
-            // store loop.
-            let stats = cartog_lsp::lsp_resolve_edges(
-                db,
-                &root,
-                None,
-                lsp_overrides,
-                Some(&lsp_progress),
-                cancel,
-                filter.lsp_max_servers,
-            )
-            .with_context(|| format!("resolving LSP edges for root {}", root.display()))?;
-            result.edges_lsp_resolved = stats.resolved;
-            result.edges_marked_unresolvable = stats.marked_unresolvable;
-            result.edges_marked_external = stats.marked_external;
-        }
-    }
-    #[cfg(not(feature = "lsp"))]
-    {
-        lsp_ran = false;
-        let _ = (lsp, lsp_overrides); // suppress unused warnings when feature is off
-    }
-
-    // No LSP pass ran, so the heuristic was the only resolver: seal remaining
-    // state=0 edges at state=4 to keep the next re-index's resolution scan from
-    // re-walking the permanent-failure backlog (#109 watch amplification).
-    if !lsp_ran && !dirty_files.is_empty() {
-        db.mark_heuristic_exhausted_in_tx()?;
-    }
-
-    // Store the current git commit as last indexed
-    if let Some(commit) = git_head_commit(&root) {
-        db.set_metadata("last_commit", &commit)?;
-    }
-
-    // Record the redaction policy this index was built under so the next run
-    // can detect a toggle and force a re-index.
-    db.set_metadata("redact_secrets", &redact.enabled.to_string())?;
+    // ── Phase 4: edge resolution (heuristic + LSP) + run metadata ──
+    pass::resolve_and_finalize(
+        db,
+        &root,
+        force,
+        lsp,
+        lsp_overrides,
+        filter,
+        &dirty_files,
+        &current_files,
+        &added_symbol_names,
+        redact,
+        &emit,
+        cancel,
+        &mut result,
+    )?;
 
     result.dirty_files = dirty_files.len() as u32;
     let did_work = !dirty_files.is_empty();
@@ -1090,6 +787,7 @@ mod content;
 mod exclude;
 mod git;
 mod merkle;
+mod pass;
 mod redact;
 mod walk;
 
