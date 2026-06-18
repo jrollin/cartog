@@ -33,7 +33,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 thiserror = "2"
 globset = "0.4"
 ignore = "0.4"
-rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 sqlite-vec = "0.1"
 tree-sitter = "0.26"
 streaming-iterator = "0.1"
