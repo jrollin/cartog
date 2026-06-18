@@ -27,9 +27,7 @@ impl Default for RustExtractor {
 
 impl Extractor for RustExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        let tree = self
-            .parser
-            .parse(source, None)
+        let tree = crate::parse_bounded(&mut self.parser, source)
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;
 
         let mut symbols = Vec::new();
@@ -58,6 +56,7 @@ fn extract_node(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "function_item" => {
             extract_function(
@@ -472,6 +471,7 @@ fn extract_use_path(node: Node, source: &str) -> String {
 }
 
 fn extract_path_prefix(node: Node, source: &str) -> String {
+    crate::parse::guard_recursion!(String::new());
     match node.kind() {
         "scoped_identifier" => {
             // foo::bar::Baz — get "foo::bar"
@@ -505,6 +505,7 @@ fn collect_use_names(node: Node, source: &str) -> Vec<String> {
 }
 
 fn collect_use_names_recursive(node: Node, source: &str, names: &mut Vec<String>) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "use_as_clause" => {
             // use foo::Bar as Baz  →  collect "Bar"
@@ -783,6 +784,7 @@ fn collect_type_refs_recursive(
     sym_id: &str,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "type_identifier" => {
             let name = node_text(node, source);
@@ -905,6 +907,7 @@ fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
 }
 
 fn extract_type_name(node: Node, source: &str) -> String {
+    crate::parse::guard_recursion!(String::new());
     match node.kind() {
         "type_identifier" | "identifier" => node_text(node, source).to_string(),
         "scoped_type_identifier" | "scoped_identifier" => {

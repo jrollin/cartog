@@ -31,9 +31,7 @@ impl Default for DartExtractor {
 
 impl Extractor for DartExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        let tree = self
-            .parser
-            .parse(source, None)
+        let tree = crate::parse_bounded(&mut self.parser, source)
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;
 
         let mut symbols = Vec::new();
@@ -60,6 +58,7 @@ fn extract_node(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "class_declaration" | "mixin_declaration" | "extension_declaration" => {
             extract_class_like(node, source, file_path, parent, symbols, edges);
@@ -971,6 +970,7 @@ fn walk_for_nested_decls(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             "local_function_declaration" | "function_declaration" => {

@@ -15,6 +15,7 @@ pub mod javascript;
 mod js_shared;
 pub mod kotlin;
 pub mod markdown;
+pub(crate) mod parse;
 pub mod php;
 pub mod python;
 pub(crate) mod queries;
@@ -64,36 +65,6 @@ pub(crate) fn qualified(parent_qname: Option<&str>, name: &str) -> String {
     }
 }
 
-/// Deepest AST nesting a recursive extractor will descend before bailing. Recursive
-/// walkers use one stack frame per level; pathological/generated source would
-/// otherwise overflow the worker stack and abort the whole index run.
-pub(crate) const MAX_TREE_DEPTH: usize = 600;
-
-/// Iterative (non-recursive) check that the tree's max depth stays within `limit`.
-/// Uses a `TreeCursor` so it can't itself overflow on the very input it guards.
-pub(crate) fn tree_depth_exceeds(root: Node, limit: usize) -> bool {
-    let mut cursor = root.walk();
-    let mut depth = 0usize;
-    loop {
-        if depth > limit {
-            return true;
-        }
-        if cursor.goto_first_child() {
-            depth += 1;
-            continue;
-        }
-        loop {
-            if cursor.goto_next_sibling() {
-                break;
-            }
-            if !cursor.goto_parent() {
-                return false;
-            }
-            depth -= 1;
-        }
-    }
-}
-
 /// Enclosing scope while extracting: `id` becomes the child's `parent_id`,
 /// `qname` its `parent_name`. Top level: `id` is `None`, `qname` the namespace.
 #[derive(Clone, Copy, Default)]
@@ -119,6 +90,8 @@ impl<'a> ParentScope<'a> {
         }
     }
 }
+
+pub(crate) use parse::{parse_bounded, tree_depth_exceeds, MAX_TREE_DEPTH};
 
 pub use cartog_core::detect_language;
 

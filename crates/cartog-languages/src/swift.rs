@@ -38,9 +38,7 @@ impl Default for SwiftExtractor {
 
 impl crate::Extractor for SwiftExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        let tree = self
-            .parser
-            .parse(source, None)
+        let tree = crate::parse_bounded(&mut self.parser, source)
             .ok_or_else(|| anyhow::anyhow!("failed to parse {file_path}"))?;
 
         if tree_depth_exceeds(tree.root_node(), MAX_TREE_DEPTH) {
@@ -73,6 +71,7 @@ fn extract_node(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "class_declaration" => {
             extract_type_like(node, source, file_path, parent, symbols, edges);
@@ -564,6 +563,7 @@ fn collect_type_refs(
     source_id: &str,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     if node.kind() == "type_identifier" {
         let name = node_text(node, source);
         if !name.is_empty() && !is_builtin_type(name) {
@@ -588,6 +588,7 @@ fn collect_type_refs(
 /// IS a call), then recurses, skipping nested function/closure bodies — their
 /// calls belong to the nested symbol.
 fn walk_calls(node: Node, source: &str, file_path: &str, source_id: &str, edges: &mut Vec<Edge>) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         // Nested decls own their own calls; don't descend.
         "function_declaration"
@@ -626,6 +627,7 @@ fn walk_nested_decls(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
@@ -680,6 +682,7 @@ fn func_name(node: Node, source: &str) -> Option<String> {
 
 /// Leaf type name from a `type_identifier` / `user_type` node.
 fn type_name(node: Node, source: &str) -> Option<String> {
+    crate::parse::guard_recursion!(None);
     match node.kind() {
         "type_identifier" => Some(node_text(node, source).to_string()),
         "user_type" => {
@@ -704,6 +707,7 @@ fn type_name(node: Node, source: &str) -> Option<String> {
 /// All identifiers bound by a `pattern` node. A simple binding yields one name;
 /// a tuple-destructuring pattern (`(a, b)`) yields one per element.
 fn pattern_identifiers(pattern: Node, source: &str, out: &mut Vec<String>) {
+    crate::parse::guard_recursion!();
     match pattern.kind() {
         "simple_identifier" => out.push(node_text(pattern, source).to_string()),
         _ => {

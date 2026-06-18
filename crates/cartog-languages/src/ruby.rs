@@ -28,9 +28,7 @@ impl Default for RubyExtractor {
 
 impl Extractor for RubyExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        let tree = self
-            .parser
-            .parse(source, None)
+        let tree = crate::parse_bounded(&mut self.parser, source)
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;
 
         let mut symbols = Vec::new();
@@ -57,6 +55,7 @@ fn extract_node(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "method" => {
             extract_method(node, source, file_path, parent, symbols, edges);
@@ -645,6 +644,7 @@ fn ruby_visibility(name: &str) -> Visibility {
 
 /// Extract a constant name from a node, handling `constant`, `scope_resolution`, etc.
 fn extract_constant_name(node: Node, source: &str) -> String {
+    crate::parse::guard_recursion!(String::new());
     match node.kind() {
         "constant" => node_text(node, source).to_string(),
         "scope_resolution" => {

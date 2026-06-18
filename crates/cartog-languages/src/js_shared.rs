@@ -101,8 +101,7 @@ pub fn extract(
     source: &str,
     file_path: &str,
 ) -> Result<ExtractionResult> {
-    let tree = parser
-        .parse(source, None)
+    let tree = crate::parse_bounded(parser, source)
         .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;
 
     let mut symbols = Vec::new();
@@ -130,6 +129,7 @@ fn extract_node(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         // Functions
         "function_declaration" => {

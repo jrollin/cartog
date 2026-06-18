@@ -262,6 +262,7 @@ fn collect_type_names<'a>(node: Node<'a>, source: &'a str) -> Vec<(&'a str, u32)
 
 /// Recursively accumulates `name`/`qualified_name` nodes into `out`.
 fn collect_type_names_in<'a>(node: Node<'a>, source: &'a str, out: &mut Vec<(&'a str, u32)>) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "name" | "qualified_name" => {
             let text = node_text(node, source);
@@ -280,9 +281,7 @@ fn collect_type_names_in<'a>(node: Node<'a>, source: &'a str, out: &mut Vec<(&'a
 impl Extractor for PhpExtractor {
     /// Parses `source` as PHP and extracts symbols and edges into an [`ExtractionResult`].
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        let tree = self
-            .parser
-            .parse(source, None)
+        let tree = crate::parse_bounded(&mut self.parser, source)
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;
 
         let ctx = collect_file_context(tree.root_node(), source);
@@ -311,6 +310,7 @@ fn extract_top_level(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     let parent = ParentScope::top_level(ctx.namespace.as_deref());
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
@@ -732,6 +732,7 @@ fn collect_injected_named_types<'a>(
     source: &'a str,
     out: &mut Vec<(&'a str, u32)>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "named_type" => {
             if let Some(child) = node.named_children(&mut node.walk()).next() {

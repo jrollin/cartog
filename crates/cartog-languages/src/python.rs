@@ -75,9 +75,7 @@ struct Queries<'a> {
 
 impl Extractor for PythonExtractor {
     fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> {
-        let tree = self
-            .parser
-            .parse(source, None)
+        let tree = crate::parse_bounded(&mut self.parser, source)
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {file_path}"))?;
 
         let mut symbols = Vec::new();
@@ -114,6 +112,7 @@ fn extract_node(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    crate::parse::guard_recursion!();
     match node.kind() {
         "function_definition" => {
             extract_function(queries, node, source, file_path, parent, symbols, edges);
