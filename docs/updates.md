@@ -63,7 +63,7 @@ cartog self update --apply-pending          # apply the armed update once no pee
 cartog self update --apply-pending --at-startup  # as above, but ignore THIS project's own serve peer (SessionStart use)
 ```
 
-#### Flow
+### Flow
 
 ```mermaid
 flowchart TD
