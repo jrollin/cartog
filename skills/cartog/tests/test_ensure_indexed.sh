@@ -172,6 +172,8 @@ elif [ "\$1" = "self" ] && [ "\$2" = "update" ] && [ "\$3" = "--help" ]; then
     fi
     exit $self_update_help_exit
 elif [ "\$1" = "self" ] && [ "\$2" = "update" ]; then
+    # Witness: did the caller bracket us with the marker BEFORE invoking apply?
+    [ -e "$CARTOG_LOG_DIR/apply-in-progress" ] && : > "$CARTOG_LOG_DIR/marker-seen-during-apply"
     if [ "$self_update_exit" -ne 0 ]; then
         echo "self update mock failure" >&2
     else
@@ -1040,7 +1042,16 @@ test_b0_apply_clears_its_own_marker_on_success() {
     run_ensure_indexed > /dev/null 2>&1
     wait_for_rag_index
 
-    # After a completed B0 apply, the bracket marker must not linger.
+    # The marker must exist DURING the apply (witness written by the mock) — this
+    # is what makes the test non-vacuous: dropping B0's marker write fails here.
+    if [ -e "$CARTOG_LOG_DIR/marker-seen-during-apply" ]; then
+        echo "  PASS: B0 wrote the bracket marker before invoking the apply"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: B0 did not bracket the apply with the marker"
+        FAIL=$((FAIL + 1))
+    fi
+    # ...and must be cleared after a completed apply.
     if [ ! -e "$CARTOG_LOG_DIR/apply-in-progress" ]; then
         echo "  PASS: B0 cleared its bracket marker after the apply"
         PASS=$((PASS + 1))

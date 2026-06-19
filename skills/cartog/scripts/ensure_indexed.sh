@@ -139,9 +139,9 @@ apply_pending_update_bg() {
     command -v cartog >/dev/null 2>&1 || return 0
     supports_deferred_update || return 0
     local rc=0
-    # Bracket the apply with the bare marker (same convention as the SessionEnd
-    # hook). F1c reaps it only when stale (age-based), so a live concurrent apply
-    # isn't falsely flagged and a killed swap is surfaced next session.
+    # Bracket the apply with the bare marker (same one the SessionEnd hook uses
+    # and F1c surfaces): written before the swap, removed after. A kill in
+    # between leaves it for next SessionStart's F1c to surface.
     printf '%s\n' "${PLUGIN_VERSION}" > "$APPLY_MARKER_FILE" 2>/dev/null || true
     cartog self update --apply-pending --quiet --at-startup || rc=$?
     rm -f "$APPLY_MARKER_FILE" 2>/dev/null || true
