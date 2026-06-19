@@ -9,24 +9,29 @@ use crate::commands::self_cmd::*;
 #[test]
 fn update_mode_from_flags_maps_each_combination() {
     assert_eq!(
-        UpdateMode::from_flags(true, false, None, false),
+        UpdateMode::from_flags(true, false, None, false, false),
         UpdateMode::Check
     );
     assert_eq!(
-        UpdateMode::from_flags(false, true, None, false),
+        UpdateMode::from_flags(false, true, None, false, false),
         UpdateMode::Defer(None)
     );
     assert_eq!(
-        UpdateMode::from_flags(false, true, Some("0.20.0".to_string()), false),
+        UpdateMode::from_flags(false, true, Some("0.20.0".to_string()), false, false),
         UpdateMode::Defer(Some("0.20.0".to_string())),
         "--to pins an explicit target"
     );
     assert_eq!(
-        UpdateMode::from_flags(false, false, None, true),
-        UpdateMode::ApplyPending
+        UpdateMode::from_flags(false, false, None, true, false),
+        UpdateMode::ApplyPending { at_startup: false }
     );
     assert_eq!(
-        UpdateMode::from_flags(false, false, None, false),
+        UpdateMode::from_flags(false, false, None, true, true),
+        UpdateMode::ApplyPending { at_startup: true },
+        "--at-startup propagates into the apply-pending variant"
+    );
+    assert_eq!(
+        UpdateMode::from_flags(false, false, None, false, false),
         UpdateMode::Now
     );
 }
@@ -208,4 +213,39 @@ fn wait_for_no_peer_times_out_with_live_peer() {
         elapsed < Duration::from_secs(2),
         "must not block far beyond the budget, took {elapsed:?}"
     );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn wait_for_no_peer_excluding_ignores_listed_slot() {
+    // A live peer whose slot is excluded (this project's own serve at startup)
+    // must be treated as not-a-peer → immediate Ok.
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("serve-abc123.pid"),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+    let excluded = vec!["serve-abc123".to_string()];
+    assert!(
+        wait_for_no_peer_excluding(dir.path(), Duration::from_millis(50), &excluded).is_ok(),
+        "an excluded slot must not block the wait"
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn wait_for_no_peer_excluding_still_blocks_other_slot() {
+    // A live peer in a DIFFERENT slot (another project) must still block, even
+    // when this project's own slot is excluded.
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("serve-other999.pid"),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+    let excluded = vec!["serve-abc123".to_string()];
+    let result = wait_for_no_peer_excluding(dir.path(), Duration::from_millis(150), &excluded);
+    assert!(result.is_err(), "a non-excluded peer must still time out");
+    assert_eq!(result.unwrap_err().slot, "serve-other999");
 }

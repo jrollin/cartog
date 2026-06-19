@@ -540,6 +540,19 @@ pub enum SelfCommand {
         #[arg(long, conflicts_with_all = ["check", "defer"])]
         apply_pending: bool,
 
+        /// With `--apply-pending`, exclude THIS project's own serve/watch peer
+        /// from the peer-wait.
+        ///
+        /// At SessionStart the session's own `cartog serve --watch` has just
+        /// taken the serve lock and will hold it all session, so a normal
+        /// peer-wait can never clear and the swap never lands. The atomic
+        /// same-FS swap is safe under a live same-project peer (it keeps its fd
+        /// on the old inode until it re-execs), so we ignore only that peer.
+        /// Other projects' peers still block. No-op on Windows (a running .exe
+        /// cannot be renamed while a peer holds it). Requires `--apply-pending`.
+        #[arg(long, requires = "apply_pending")]
+        at_startup: bool,
+
         /// Suppress all output; the exit code is the sole signal.
         #[arg(long)]
         quiet: bool,

@@ -117,6 +117,9 @@ create_mock_cartog() {
     # $6 (optional): install_source reported by `self version --json`
     # (release-tarball|cargo|dev), so drift tests can exercise the cargo cohort.
     local install_source="${6:-release-tarball}"
+    # $7 (optional): exit code of `self update --help` (0 = supports the deferred
+    # flags; non-zero models a pre-0.20.0 binary without --apply-pending).
+    local self_update_help_exit="${7:-0}"
     cat > "$TEST_DIR/bin/cartog" <<MOCK
 #!/usr/bin/env bash
 if [ "\$1" = "--version" ]; then
@@ -161,6 +164,13 @@ elif [ "\$1" = "rag" ] && [ "\$2" = "setup" ]; then
 elif [ "\$1" = "rag" ] && [ "\$2" = "index" ]; then
     sleep 0.1
     exit 0
+elif [ "\$1" = "self" ] && [ "\$2" = "update" ] && [ "\$3" = "--help" ]; then
+    if [ "$self_update_help_exit" -eq 0 ]; then
+        echo "Usage: cartog self update [--check|--defer|--apply-pending]"
+    else
+        echo "Usage: cartog self update [--check]" >&2
+    fi
+    exit $self_update_help_exit
 elif [ "\$1" = "self" ] && [ "\$2" = "update" ]; then
     if [ "$self_update_exit" -ne 0 ]; then
         echo "self update mock failure" >&2
@@ -333,13 +343,16 @@ test_phase_order() {
         FAIL=$((FAIL + 1))
     fi
 
-    # SessionStart never invokes self update — that's the SessionEnd hook's job.
-    if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  FAIL: 'self update' ran during SessionStart; should be deferred to SessionEnd"
-        FAIL=$((FAIL + 1))
-    else
-        echo "  PASS: 'self update' not invoked during SessionStart"
+    # The deferred apply runs in the BACKGROUND pipeline (B0), so it must land
+    # after the foreground index (line1, asserted above), never on the foreground path.
+    local apply_line
+    apply_line=$(grep -n 'self update --apply-pending --quiet --at-startup' "$CARTOG_TEST_LOG" | head -1 | cut -d: -f1)
+    if [ -n "$apply_line" ] && [ "$apply_line" -gt 1 ] && [ "$line1" = "index ." ]; then
+        echo "  PASS: apply-pending ran in background (after foreground index)"
         PASS=$((PASS + 1))
+    else
+        echo "  FAIL: apply-pending ($apply_line) should run after the foreground index (line 1=$line1)"
+        FAIL=$((FAIL + 1))
     fi
     teardown
 }
@@ -866,12 +879,13 @@ test_drift_warning_emitted_when_versions_differ() {
     assert_contains "drift notice is on stdout (not the discarded stderr)" \
         "out of sync with plugin 0.14.3" "$stdout_only"
 
-    # Crucially: SessionStart must NOT actually update.
+    # Drift warning is foreground/warn-only; apply is background — no bare
+    # foreground `self update`, only the background apply-pending.
     if grep -qx 'self update' "$CARTOG_TEST_LOG"; then
-        echo "  FAIL: 'self update' ran during SessionStart drift warning"
+        echo "  FAIL: foreground 'self update' ran during the drift warning"
         FAIL=$((FAIL + 1))
     else
-        echo "  PASS: 'self update' not invoked (drift only warned, not acted on)"
+        echo "  PASS: drift only warned in foreground; apply deferred to background"
         PASS=$((PASS + 1))
     fi
     teardown
@@ -919,6 +933,121 @@ test_drift_warning_silent_when_no_plugin_json() {
     wait_for_rag_index
 
     assert_not_contains "no drift warning" "out of sync with plugin" "$output"
+    teardown
+}
+
+test_apply_pending_runs_in_background_at_startup() {
+    echo "TEST: a deferred update armed in a prior session is applied (in background) at SessionStart"
+    setup
+    write_plugin_json "0.29.3"
+    # Installed 0.29.0 < pin, with a pending_update armed for 0.29.3 — the exact
+    # stuck-loop shape: SessionEnd never landed it, so SessionStart must catch up.
+    create_mock_cartog "0.29.0" 0 "" 0 "0.29.3"
+
+    run_ensure_indexed > /dev/null
+    wait_for_rag_index
+
+    # The apply runs via the background pipeline, with --at-startup so the
+    # session's own serve peer doesn't block it.
+    if grep -q 'self update --apply-pending --quiet --at-startup' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: apply-pending --at-startup invoked at SessionStart"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: apply-pending --at-startup was NOT invoked at SessionStart (stuck-loop regression)"
+        FAIL=$((FAIL + 1))
+    fi
+    teardown
+}
+
+test_apply_pending_skipped_when_binary_lacks_flag() {
+    echo "TEST: apply-pending is skipped when the binary lacks --apply-pending support"
+    setup
+    write_plugin_json "0.29.3"
+    # help-exit=1 → `self update --help` fails → supports_deferred_update is
+    # false, modelling a pre-0.20.0 binary that lacks the deferred flags.
+    create_mock_cartog "0.18.0" 0 "" 0 "0.29.3" "release-tarball" 1
+
+    run_ensure_indexed > /dev/null
+    wait_for_rag_index
+
+    if grep -q 'apply-pending' "$CARTOG_TEST_LOG"; then
+        echo "  FAIL: apply-pending ran against a binary lacking the flag"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: apply-pending skipped (no --apply-pending capability)"
+        PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+test_apply_failure_message_survives_pipeline_failure() {
+    echo "TEST: B0's actionable apply-failure message is NOT clobbered when rag setup/index also fail"
+    setup
+    write_plugin_json "0.29.3"
+    # apply-pending exits 7 (verification/rollback, terminal) AND rag setup fails (exit 1).
+    create_mock_cartog "0.29.0" 1 "model download failed" 7 "0.29.3"
+
+    run_ensure_indexed > /dev/null
+    wait_for_rag_index
+
+    local err
+    err=$(cat "$CARTOG_LOG_DIR/last-error" 2>/dev/null || true)
+    case "$err" in
+        *"Will not retry"*)
+            echo "  PASS: actionable update-failure message preserved over the pipeline summary"
+            PASS=$((PASS + 1)) ;;
+        *)
+            echo "  FAIL: last-error was clobbered by the generic pipeline summary: $err"
+            FAIL=$((FAIL + 1)) ;;
+    esac
+    teardown
+}
+
+test_apply_checksum_failure_gets_actionable_message() {
+    echo "TEST: apply-pending exit 4 (checksum) yields an actionable, non-transient message"
+    setup
+    write_plugin_json "0.29.3"
+    create_mock_cartog "0.29.0" 0 "" 4 "0.29.3"
+
+    run_ensure_indexed > /dev/null
+    wait_for_rag_index
+
+    # Exit 4 is a checksum mismatch — it fails BEFORE any swap, so the message
+    # must NOT claim a rollback (which only happens on exit 7, smoke failure).
+    local err
+    err=$(cat "$CARTOG_LOG_DIR/last-error" 2>/dev/null || true)
+    case "$err" in
+        *"rolled back"*)
+            echo "  FAIL: exit 4 wrongly claims a rollback (checksum fails before any swap): $err"
+            FAIL=$((FAIL + 1)) ;;
+        *"Will not retry"*)
+            echo "  PASS: exit 4 surfaces a non-transient, non-rollback message"
+            PASS=$((PASS + 1)) ;;
+        *)
+            echo "  FAIL: exit 4 did not surface the actionable message: $err"
+            FAIL=$((FAIL + 1)) ;;
+    esac
+    teardown
+}
+
+test_b0_apply_clears_its_own_marker_on_success() {
+    echo "TEST: B0's startup apply brackets the bare marker and clears it on completion"
+    setup
+    write_plugin_json "0.29.3"
+    # Installed 0.29.0 < pin so B0 runs the apply; exit 0 (success).
+    create_mock_cartog "0.29.0" 0 "" 0 "0.29.3"
+
+    run_ensure_indexed > /dev/null 2>&1
+    wait_for_rag_index
+
+    # After a completed B0 apply, the bracket marker must not linger.
+    if [ ! -e "$CARTOG_LOG_DIR/apply-in-progress" ]; then
+        echo "  PASS: B0 cleared its bracket marker after the apply"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: B0 left a stale bracket marker"
+        FAIL=$((FAIL + 1))
+    fi
     teardown
 }
 
@@ -1785,6 +1914,16 @@ echo ""
 test_drift_warning_silent_when_binary_newer_than_pin
 echo ""
 test_drift_warning_silent_when_no_plugin_json
+echo ""
+test_apply_pending_runs_in_background_at_startup
+echo ""
+test_apply_pending_skipped_when_binary_lacks_flag
+echo ""
+test_apply_failure_message_survives_pipeline_failure
+echo ""
+test_apply_checksum_failure_gets_actionable_message
+echo ""
+test_b0_apply_clears_its_own_marker_on_success
 echo ""
 test_drift_warning_cargo_cohort_gets_cargo_command
 echo ""
