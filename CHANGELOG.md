@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.29.4] - 2026-06-19
+
+### Bug Fixes
+
+- **self-update**: Converge deferred updates at SessionStart ([`be0f86d`](https://github.com/jrollin/cartog/commit/be0f86dee19008eb4ad689d5b61c12a977b07942))
+- **self-update**: Correct B0 marker comment and harden its test ([`b90bab8`](https://github.com/jrollin/cartog/commit/b90bab8f73ccc2d295112a26da0f5ff21fd6cde4))
+
+### Documentation
+
+- **updates**: Fix heading level for Flow section (MD001) ([`3f9c1e8`](https://github.com/jrollin/cartog/commit/3f9c1e8b7bcd3cbae36446de51d3f70a3e2c72db))
+
 ## [0.29.3] - 2026-06-18
 
 ### Bug Fixes
