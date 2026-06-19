@@ -18,8 +18,10 @@ pub enum UpdateMode {
     /// Arm a deferred update without swapping (`--defer`). `Some(version)`
     /// pins an explicit target (`--to`); `None` resolves the latest stable.
     Defer(Option<String>),
-    /// Apply a previously-armed deferred update (`--apply-pending`).
-    ApplyPending,
+    /// Apply a previously-armed deferred update (`--apply-pending`). The bool
+    /// is `--at-startup`: exclude this project's own serve/watch peer from the
+    /// peer-wait (the same-session peer never clears; the swap is safe under it).
+    ApplyPending { at_startup: bool },
     /// Default: upgrade in place now.
     Now,
 }
@@ -29,11 +31,17 @@ impl UpdateMode {
     /// most one of check/defer/apply_pending is set (via `conflicts_with_all`)
     /// and that `to` is only present with `defer` (via `requires`).
     #[must_use]
-    pub fn from_flags(check: bool, defer: bool, to: Option<String>, apply_pending: bool) -> Self {
+    pub fn from_flags(
+        check: bool,
+        defer: bool,
+        to: Option<String>,
+        apply_pending: bool,
+        at_startup: bool,
+    ) -> Self {
         match (check, defer, apply_pending) {
             (true, _, _) => Self::Check,
             (_, true, _) => Self::Defer(to),
-            (_, _, true) => Self::ApplyPending,
+            (_, _, true) => Self::ApplyPending { at_startup },
             _ => Self::Now,
         }
     }
@@ -56,11 +64,13 @@ impl UpdateMode {
 ///    checksum (exit 4 on mismatch), atomically swap the binary in
 ///    place, preserve `<bin>.old`, smoke-test the new binary
 ///    (exit 5 on failure → restore `.old`).
-pub fn cmd_self_update(mode: UpdateMode, quiet: bool, json: bool) -> Result<()> {
+pub fn cmd_self_update(mode: UpdateMode, db_path: &Path, quiet: bool, json: bool) -> Result<()> {
     let exit_code = match mode {
         UpdateMode::Check => run_check(quiet, json),
         UpdateMode::Defer(target) => run_arm(target.as_deref(), quiet, json),
-        UpdateMode::ApplyPending => run_apply_pending(quiet, json),
+        UpdateMode::ApplyPending { at_startup } => {
+            run_apply_pending(at_startup, db_path, quiet, json)
+        }
         UpdateMode::Now => run_upgrade(quiet, json),
     };
     std::process::exit(exit_code);
@@ -285,7 +295,7 @@ pub(crate) enum UpgradeError {
 /// land the swap on the same boundary rather than deferring a session.
 const APPLY_PEER_WAIT: Duration = Duration::from_secs(10);
 
-/// Poll interval while waiting for peers to clear in [`wait_for_no_peer`].
+/// Poll interval while waiting for peers to clear in [`wait_for_no_peer_excluding`].
 const APPLY_PEER_POLL: Duration = Duration::from_millis(200);
 
 /// Machine-global lock slot serializing concurrent `--apply-pending` swaps.
@@ -364,14 +374,32 @@ pub(crate) fn intent_disposition(err: &UpgradeError) -> IntentDisposition {
 /// concurrent `--apply-pending`, not a serve/watch process whose live binary we
 /// would unlink. A second apply must reach the lock-acquire step (and cleanly
 /// skip via `Held`) rather than time out here waiting on its sibling.
+/// Test-only thin wrapper: the no-exclusions case. Production always goes
+/// through [`wait_for_no_peer_excluding`] (empty slice when not at startup).
+#[cfg(test)]
 pub(crate) fn wait_for_no_peer(
     state_dir: &Path,
     budget: Duration,
 ) -> std::result::Result<(), cartog_process_lock::ActiveLock> {
+    wait_for_no_peer_excluding(state_dir, budget, &[])
+}
+
+/// Poll for peer locks to clear, up to `budget`. Treats the [`APPLY_LOCK_SLOT`]
+/// coordination lock and any slot in `extra_excluded` as not-a-peer. Returns
+/// `Err(peer)` if the budget elapses with a real peer still live. Used by
+/// `--apply-pending --at-startup` to ignore this project's own serve/watch
+/// peer, which never clears mid-session.
+pub(crate) fn wait_for_no_peer_excluding(
+    state_dir: &Path,
+    budget: Duration,
+    extra_excluded: &[String],
+) -> std::result::Result<(), cartog_process_lock::ActiveLock> {
     let deadline = std::time::Instant::now() + budget;
     loop {
         let mut active = cartog_process_lock::find_active_locks(state_dir);
-        active.retain(|lock| lock.slot != APPLY_LOCK_SLOT);
+        active.retain(|lock| {
+            lock.slot != APPLY_LOCK_SLOT && !extra_excluded.iter().any(|s| s == &lock.slot)
+        });
         match active.into_iter().next() {
             None => return Ok(()),
             Some(peer) => {
@@ -382,6 +410,19 @@ pub(crate) fn wait_for_no_peer(
             }
         }
     }
+}
+
+/// The serve/watch lock slots this project's own peers would hold, so
+/// `--apply-pending --at-startup` can exclude them from the peer-wait. Covers
+/// both command families on the resolved DB path only — unlike
+/// `migrate::target_db_slots`, it does NOT also hash the legacy `.cartog.db`
+/// path, so a peer started pre-migration on the legacy path is not excluded
+/// (it blocks the apply, which is the safe default).
+fn current_project_peer_slots(db_path: &Path) -> Vec<String> {
+    ["serve", "watch"]
+        .iter()
+        .map(|prefix| state::slot_for_db(prefix, db_path))
+        .collect()
 }
 
 /// Drive `--defer`: arm a deferred update without swapping the binary. Unlike
@@ -504,8 +545,14 @@ fn run_arm(target_override: Option<&str>, quiet: bool, json: bool) -> i32 {
 
 /// Drive `--apply-pending`: apply a previously-armed deferred update once no
 /// peer holds the lock. Owns read-state → re-check-peer → swap → clear-state so
-/// the SessionEnd hook stays thin and the race logic is unit-tested in Rust.
-fn run_apply_pending(quiet: bool, json: bool) -> i32 {
+/// the hook stays thin and the race logic is unit-tested in Rust.
+///
+/// `at_startup` excludes this project's own serve/watch slots from the
+/// peer-wait: at SessionStart the session's own `serve --watch` holds the lock
+/// for the whole session, so waiting on it can never clear. The atomic same-FS
+/// swap is safe under a live same-project peer (it keeps its fd on the old
+/// inode); other projects' peers still block. No-op on Windows.
+fn run_apply_pending(at_startup: bool, db_path: &Path, quiet: bool, json: bool) -> i32 {
     let Some(state_path) = state::default_state_file() else {
         // No state file means nothing could have been armed.
         return exit::SUCCESS;
@@ -542,9 +589,16 @@ fn run_apply_pending(quiet: bool, json: bool) -> i32 {
 
     // Re-check for a live peer, waiting briefly for normal session-teardown
     // lag. If a peer is still live after the budget, keep the intent armed and
-    // retry on the next boundary.
+    // retry on the next boundary. At startup, ignore this project's own peer
+    // (see fn doc) — except on Windows, where a peer's running .exe can't be
+    // renamed, so the full wait still applies.
+    let self_peer_slots = if at_startup && !cfg!(windows) {
+        current_project_peer_slots(db_path)
+    } else {
+        Vec::new()
+    };
     if let Some(dir) = state::default_state_dir() {
-        if let Err(peer) = wait_for_no_peer(&dir, apply_peer_wait()) {
+        if let Err(peer) = wait_for_no_peer_excluding(&dir, apply_peer_wait(), &self_peer_slots) {
             emit_upgrade_message(
                 quiet,
                 json,

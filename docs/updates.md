@@ -48,8 +48,10 @@ cartog self update --check --quiet      # no output; exit code is the only signa
 Inside a Claude Code session the cartog plugin runs `cartog serve --watch` as the MCP server. That process holds the serve PID lock for the whole session, so a plain `cartog self update` would refuse (exit `6`) — you cannot swap the inode of a running binary. The deferred flow splits the decision from the swap:
 
 1. **Arm** — `cartog self update --defer` records the target version in the state file and exits **without** touching the binary. It succeeds even while the serve peer is live (it deliberately skips the peer check). By default it arms the **latest stable** release; pass `--to <version>` to pin an exact target. Both `/cartog-install` and the `cartog_update` MCP tool arm the plugin's **pinned** version (`--to $PLUGIN_VERSION`, discovered from the plugin manifest) so a plugin-managed update can't overshoot the pin; they fall back to latest only outside a plugin install.
-2. **Apply** — at the next safe boundary (the plugin's SessionEnd hook, after the serve process has exited and released its lock) `cartog self update --apply-pending` reads the armed target, waits up to ~10s for any peer lock to clear, performs the real swap, and clears the intent. The swap only proceeds when the armed target is **newer** than the installed binary — an armed target at or below the current version is a clean no-op (no downgrade). If a peer is still live after the wait (e.g. a second Claude Code window on the same project), it exits `6`, keeps the intent, and retries at the next boundary — the binary lands once the other session closes.
+2. **Apply** — `cartog self update --apply-pending` reads the armed target, waits up to ~10s for any peer lock to clear, performs the real swap, and clears the intent. The swap only proceeds when the armed target is **newer** than the installed binary — an armed target at or below the current version is a clean no-op (no downgrade). If a peer is still live after the wait (e.g. a second Claude Code window on the same project), it exits `6`, keeps the intent, and retries — the binary lands once the other session closes. Apply runs at **two** boundaries: the plugin's SessionEnd hook (after the serve process exits), and the **next SessionStart** as a catch-up. The SessionStart apply runs in the background pipeline, so it never blocks the session.
 3. **Confirm** — the next SessionStart surfaces a one-line "cartog updated to X" breadcrumb, and the drift warning becomes "cartog X will be applied when this session ends" while an update is pending.
+
+> **Why two apply points.** SessionEnd is bounded by Claude Code's teardown grace window; if the serve peer is slow to exit (SIGTERM → SIGKILL) the hook can be cancelled mid-download and the swap never lands. The SessionStart catch-up has no such deadline. But the new session's own `cartog serve --watch` takes the serve lock at startup and holds it all session, so the catch-up runs `--apply-pending --at-startup`, which **excludes this project's own serve/watch peer** from the peer-wait — the atomic same-FS swap is safe under a live same-project peer (it keeps its file descriptor on the old inode until it re-execs). A serve peer from **another** project still blocks (exit `6`, retry). On Windows, `--at-startup` is a no-op (a running `.exe` cannot be renamed while a peer holds it), so there the swap still waits for the same-project peer to exit. The apply is idempotent (`decide_apply` skips when already at/past the target) and self-clearing, so running at both boundaries is safe.
 
 The tarball is fetched at **apply** time, keyed to the armed target — not at arm time.
 
@@ -58,14 +60,45 @@ cartog self update --defer                 # arm the latest stable release, no s
 cartog self update --defer --to 0.20.0     # arm an exact pinned version instead of latest
 cartog self update --defer --json          # {"status":"armed","current":…,"target":…,"apply":"session-end-or-restart"}
 cartog self update --apply-pending          # apply the armed update once no peer holds the lock
+cartog self update --apply-pending --at-startup  # as above, but ignore THIS project's own serve peer (SessionStart use)
 ```
+
+### Flow
+
+```mermaid
+flowchart TD
+    drift{"installed < plugin pin?"}
+    drift -- no --> done([up to date — no-op])
+    drift -- yes --> arm["arm intent: --defer --to PIN<br/>(state file; binary untouched)"]
+
+    arm --> apply
+
+    subgraph apply["apply (idempotent, runs at both boundaries)"]
+        direction TB
+        endHook["SessionEnd hook<br/>(grace-window bounded)"]
+        startHook["next SessionStart, background<br/>(--at-startup: ignore own serve peer)"]
+        endHook --> peer
+        startHook --> peer
+        peer{"another project's<br/>peer holds the lock?<br/>(wait up to 10s)"}
+        peer -- "still held" --> kept["exit 6: keep intent,<br/>retry next boundary"]
+        peer -- "clear / own peer only" --> swap["download tarball, verify SHA-256,<br/>atomic swap, smoke test"]
+        swap -- "ok" --> clear["clear intent +<br/>write 'updated to X' breadcrumb"]
+        swap -- "checksum (4) / smoke (7)" --> rollback["restore .old,<br/>clear intent (deterministic)"]
+        swap -- "network (2) / disk (5)" --> kept
+    end
+
+    kept -. "retries until lock clears" .-> peer
+    clear --> confirm([next SessionStart confirms<br/>'cartog updated to X'])
+```
+
+The two apply boundaries are the key to convergence: a SessionEnd apply cancelled by teardown is retried at the next SessionStart, where `--at-startup` lets it land despite the session's own serve peer.
 
 ### Plugin version bumps (new and existing users)
 
 When a new plugin version ships, here is what each cohort experiences:
 
 - **New user** — `cartog serve` can't start the first session (no binary yet); the SessionStart hook forks `install.sh` pinned to the plugin version (downloads the release tarball, **verifies its SHA-256**, installs). cartog tools are live from the **next** session. `/cartog-install` installs synchronously if you don't want to wait.
-- **Existing user, passive, `>= 0.20`** — at SessionEnd the hook auto-arms the pinned version on drift (`--defer --to $PLUGIN_VERSION`) and applies it once the serve lock clears; the next SessionStart confirms "cartog updated to X". No manual action required.
+- **Existing user, passive, `>= 0.20`** — at SessionEnd the hook auto-arms the pinned version on drift (`--defer --to $PLUGIN_VERSION`) and applies it once the serve lock clears; if that apply is cancelled by session teardown, the next SessionStart applies it as a background catch-up. Either way the next SessionStart confirms "cartog updated to X". No manual action required.
 - **Existing user, active** — running `/cartog-install` (or the `cartog_update` tool) mid-session arms the pin immediately; it lands at the same SessionEnd boundary.
 - **Existing user, `0.14`–`0.20`** — these binaries have `cartog self update` but predate the deferred flags (`--defer`/`--apply-pending` landed in 0.20.0). The SessionEnd hook probes capability and converges them via the bundled `install.sh` pinned to `$PLUGIN_VERSION` — the same pin-exact path as the legacy cohort. (A plain `cartog self update` would fetch the **latest** release, overshooting the pin with no `--to` to constrain it on those versions.) Without this, firing the deferred flags at them errored with clap exit `2` and looped forever as a false "transient" failure.
 - **cargo-installed user** — `cartog self update` refuses (exit `3`) because it must not clobber a cargo-managed binary. The SessionStart drift line and the SessionEnd breadcrumb both tell this cohort to run `cargo install cartog --force` (not `/cartog-install`).

@@ -98,7 +98,9 @@ if [ -f "$LAST_UPDATE_FILE" ]; then
     rm -f "$LAST_UPDATE_FILE" || true
 fi
 
-# F1c: surface (and clear) a marker left by an interrupted SessionEnd swap.
+# F1c: surface (and clear) a marker left by an interrupted swap. F1c runs before
+# B0 forks, so any marker here is from a prior session = a genuinely killed swap.
+# Both hooks use this one bare marker (B0 brackets its own apply with it later).
 if [ -f "$APPLY_MARKER_FILE" ]; then
     echo "cartog's previous update was interrupted before it finished (likely a fast session restart); it will retry automatically."
     rm -f "$APPLY_MARKER_FILE" || true
@@ -118,6 +120,44 @@ version_lt() {
         if [ "$ai" -gt "$bi" ] 2>/dev/null; then return 1; fi
     done
     return 1
+}
+
+# True iff `self update` accepts --apply-pending (>= 0.20.0); failed probe → no-op.
+supports_deferred_update() {
+    local help
+    help=$(cartog self update --help 2>&1) || return 1
+    printf '%s' "$help" | grep -q -- '--apply-pending'
+}
+
+# Catch-up apply at SessionStart: SessionEnd's apply is cancelled by the teardown
+# grace window; startup has no deadline. --at-startup ignores this project's own
+# serve peer (the swap is fd-safe under it). Runs in the disowned background
+# subshell (never blocks); idempotent in the binary, so start+end is safe.
+# Returns 0 on a real apply failure too — callers must not abort the pipeline on it.
+apply_pending_update_bg() {
+    [ -n "$PLUGIN_VERSION" ] || return 0
+    command -v cartog >/dev/null 2>&1 || return 0
+    supports_deferred_update || return 0
+    local rc=0
+    # Bracket the apply with the bare marker (same one the SessionEnd hook uses
+    # and F1c surfaces): written before the swap, removed after. A kill in
+    # between leaves it for next SessionStart's F1c to surface.
+    printf '%s\n' "${PLUGIN_VERSION}" > "$APPLY_MARKER_FILE" 2>/dev/null || true
+    cartog self update --apply-pending --quiet --at-startup || rc=$?
+    rm -f "$APPLY_MARKER_FILE" 2>/dev/null || true
+    # B0 owns LAST_ERROR_FILE for terminal failures; B1/B2 must not clobber it
+    # (APPLY_ERROR_WRITTEN guards the pipeline-tail write).
+    case "$rc" in
+        0|6) ;; # applied/no-op, or peer still up (kept, retries) — not an error
+        2|5) printf 'cartog deferred update failed (exit %d, transient); will retry. See %s.\n' "$rc" "$SESSION_LOG" > "$LAST_ERROR_FILE" 2>/dev/null && APPLY_ERROR_WRITTEN=1 ;;
+        # 4 = checksum mismatch (fails before any swap — nothing installed);
+        # 7 = smoke failure (swapped then rolled back). Distinct, both terminal.
+        4) printf 'cartog update failed checksum verification (exit 4); the tarball was rejected and nothing was installed. Will not retry. Run `cartog self update` in a terminal or /cartog-install. See %s.\n' "$SESSION_LOG" > "$LAST_ERROR_FILE" 2>/dev/null && APPLY_ERROR_WRITTEN=1 ;;
+        7) printf 'cartog update failed its smoke test (exit 7) and was rolled back to the previous binary. Will not retry. Run `cartog self update` in a terminal or /cartog-install. See %s.\n' "$SESSION_LOG" > "$LAST_ERROR_FILE" 2>/dev/null && APPLY_ERROR_WRITTEN=1 ;;
+        3) printf 'cartog was installed via cargo and cannot be auto-updated; run `cargo install cartog --force`. See %s.\n' "$SESSION_LOG" > "$LAST_ERROR_FILE" 2>/dev/null && APPLY_ERROR_WRITTEN=1 ;;
+        *) printf 'cartog deferred update failed (exit %d). See %s.\n' "$rc" "$SESSION_LOG" > "$LAST_ERROR_FILE" 2>/dev/null && APPLY_ERROR_WRITTEN=1 ;;
+    esac
+    return 0
 }
 
 # F3: passive drift warning. Warns only when the installed binary is OLDER than
@@ -172,8 +212,12 @@ warn_if_drifted() {
 # Background pipeline (steady-state): RAG setup → RAG index.
 run_background_pipeline() {
     local pipeline_rc=0
+    APPLY_ERROR_WRITTEN=0
     {
         echo "=== cartog session log $(date '+%Y-%m-%d %H:%M:%S') ==="
+        echo "--- B0: apply deferred update (if armed) ---"
+        # || true: B0 already returns 0, but guard against set -e on any edge.
+        apply_pending_update_bg || true
         echo "--- B1: rag setup (model download) ---"
         if ! cartog rag setup; then
             pipeline_rc=1
@@ -187,7 +231,9 @@ run_background_pipeline() {
         echo "=== pipeline exit $pipeline_rc ==="
     } >> "$SESSION_LOG" 2>&1
 
-    if [ "$pipeline_rc" -ne 0 ]; then
+    # Don't clobber B0's specific, actionable update-failure message with the
+    # generic pipeline summary.
+    if [ "$pipeline_rc" -ne 0 ] && [ "${APPLY_ERROR_WRITTEN:-0}" -eq 0 ]; then
         printf 'See %s for details (pipeline exit %d).\n' "$SESSION_LOG" "$pipeline_rc" > "$LAST_ERROR_FILE"
     fi
     return "$pipeline_rc"
@@ -368,7 +414,7 @@ if [ "$index_rc" -ne 0 ]; then
     printf 'cartog index . failed (exit %d). See terminal output above.\n' "$index_rc" > "$LAST_ERROR_FILE"
 fi
 
-# F3: drift warning (the SessionEnd hook does the actual update).
+# F3: drift warning (apply runs in the background pipeline below + at SessionEnd).
 warn_if_drifted
 
 # Background pipeline.
