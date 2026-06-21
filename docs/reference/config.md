@@ -184,11 +184,15 @@ The `[rag]` section controls retrieval behaviour for `cartog rag search`. Defaul
 ```toml
 [rag]
 retrieval_multiplier = 3   # over-retrieve N× results before fusion (default: 3)
+retrieval_floor = 20       # minimum candidates to retrieve regardless of limit (default: 20)
 rerank_max = 50            # max candidates sent to the cross-encoder reranker (default: 50)
+rerank_min = 8             # skip reranker if fewer than this many candidates survive RRF (default: 8)
 ```
 
 - `retrieval_multiplier` — both FTS5 and vector search retrieve `limit × retrieval_multiplier` candidates before Reciprocal Rank Fusion. Larger values improve recall at the cost of more reranker work.
+- `retrieval_floor` — minimum number of candidates to retrieve, regardless of `limit`. Prevents degenerate behaviour on very small `--limit` values.
 - `rerank_max` — caps the number of RRF-merged candidates forwarded to the cross-encoder. Lowering it speeds up reranking; raising it improves precision at the tail.
+- `rerank_min` — if fewer than this many candidates survive RRF merge, the cross-encoder is skipped entirely. Avoids model overhead when the result set is already small.
 
 ## Remote storage (`[remote]`)
 
@@ -384,5 +388,8 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 | `CARTOG_MCP_COMPACT` | `1` (on) | MCP tools strip heavy fields by default (symbol cache hashes + docstrings; `cartog_rag_search`/`cartog_trace` bodies bounded to a ~500-byte snippet; `cartog_context` keeps budgeted bodies). Set `0`/`false`/`no`/`off` to return full bodies. |
 | `CARTOG_NO_UPDATE_CHECK` | unset | Set to skip the background self-update check. |
 | `CARTOG_UPDATE_CHECK` | unset | Force an update check regardless of cadence. |
-| `CARTOG_INSTALL_DIR` | `~/.local/bin` | Install location used by `install.sh`. |
-| `CARTOG_VERSION` | latest | Pin the version `install.sh` fetches. |
+| `CARTOG_GITHUB_API_URL` | GitHub releases API | Override the GitHub API endpoint used for update checks. Useful in air-gapped environments or integration tests. |
+| `CARTOG_PLUGIN_JSON` | unset | Explicit path to the plugin manifest file, used by the MCP server to discover a deferred-update pin. |
+| `CARTOG_PROGRESS` | unset | Set to any value to force the progress spinner on non-TTY output (e.g. CI). Normally auto-gates to TTY only. |
+| `CARTOG_LOG_DIR` | `~/.cache/cartog` | Directory for the `last-update` breadcrumb written after a self-update. Respects `$XDG_CACHE_HOME` when set. |
+| `CARTOG_LSP_READY_TIMEOUT_SECS` | `20` | Seconds to wait for an LSP server to finish loading its project model before the first definition request. |
