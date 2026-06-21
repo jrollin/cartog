@@ -87,7 +87,7 @@ The database is a regenerable index — crash-recovery safety is traded for thro
 
 ### Schema overview
 
-```
+```text
 ┌──────────────────────────────────────────────────────────┐
 │ Core tables                                              │
 │                                                          │

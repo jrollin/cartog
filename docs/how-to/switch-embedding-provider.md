@@ -6,9 +6,11 @@
 
 Configure the embedding provider in `.cartog.toml`:
 
-```toml
-# Default: BGE-small-en-v1.5 quantized embedding + jina-turbo reranker (no config needed)
+These three options are mutually exclusive — use only one `[embedding]` section.
 
+**Option A — watcher auto-embed** (keep the local ONNX provider, control when embeddings run):
+
+```toml
 # Auto-embed under `serve --watch` / `watch`:
 #   omitted / unset → auto-detect: embed only if the repo already has embeddings
 #   auto_embed = true  → always auto-embed (even a never-indexed repo)
@@ -16,17 +18,22 @@ Configure the embedding provider in `.cartog.toml`:
 # Precedence: CARTOG_WATCH_RAG env > this key > --rag flag.
 [embedding]
 auto_embed = true
+```
 
-# Use Ollama instead of local ONNX
+**Option B — Ollama provider:**
+
+```toml
 [embedding]
 provider = "ollama"
 model = "nomic-embed-text"
 
 [embedding.ollama]
 base_url = "http://localhost:11434"
+```
 
-# Or any OpenAI-compatible /v1/embeddings endpoint (OpenAI, Mistral, Voyage,
-# Jina, OVHcloud, or a local server like Ollama /v1, LM Studio, vLLM)
+**Option C — OpenAI-compatible `/v1/embeddings` endpoint** (OpenAI, Mistral, Voyage, Jina, OVHcloud, or a local server like Ollama /v1, LM Studio, vLLM):
+
+```toml
 [embedding]
 provider = "openai"
 model    = "text-embedding-3-small"

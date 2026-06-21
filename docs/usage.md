@@ -53,9 +53,9 @@ servers in the file are preserved); `cartog index` is incremental.
 
 > Full configuration reference (all `.cartog.toml` keys, env vars): **[reference/config.md](reference/config.md)**
 
-For how to switch embedding providers, see **[how-to/switch-embedding-provider.md](how-to/switch-embedding-provider.md)**.
-For LSP server overrides and concurrent LSP setup, see **[how-to/configure-lsp-servers.md](how-to/configure-lsp-servers.md)**.
-For S3 push/pull setup, see **[how-to/set-up-s3-sync.md](how-to/set-up-s3-sync.md)**.
+To switch embedding providers, see **[how-to/switch-embedding-provider.md](how-to/switch-embedding-provider.md)**.
+LSP server overrides and concurrent LSP setup: **[how-to/configure-lsp-servers.md](how-to/configure-lsp-servers.md)**.
+S3 push/pull setup: **[how-to/set-up-s3-sync.md](how-to/set-up-s3-sync.md)**.
 
 ## Semantic Search
 

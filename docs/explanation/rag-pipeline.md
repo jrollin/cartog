@@ -11,7 +11,7 @@ This drives two key decisions:
 1. **Small embedding model** — BGE-small-en-v1.5 quantized (`Qdrant/bge-small-en-v1.5-onnx-Q`, default, 384 dimensions). 2-3x faster than full precision with negligible quality loss for code symbol matching. Outputs are L2-normalized, enabling L2 distance in sqlite-vec (equivalent to cosine ranking). Model and dimension are configurable via `.cartog.toml`. Trade-off: English-only model — non-English identifiers/comments get degraded embeddings.
 
 2. **AST-aware embedding text** — For code: header + signature + significant body lines (skipping blanks, comments, closing braces) up to ~200 tokens (~800 bytes):
-   ```
+   ```text
    // File: auth/tokens.py | function validate_token
    def validate_token(token: str) -> bool:
        if token.is_expired():
@@ -19,7 +19,7 @@ This drives two key decisions:
        return lookup_session(token.session_id)
    ```
    For Markdown documents: heading text in the header field + section body:
-   ```
+   ```text
    // File: docs/design.md
    // Type: document
    // Name: Authentication
@@ -37,7 +37,7 @@ This drives two key decisions:
 
 ## Search pipeline
 
-```
+```text
 Query
   │
   ├─→ FTS5 keyword search (BM25 ranking)

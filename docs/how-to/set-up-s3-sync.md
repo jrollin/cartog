@@ -52,11 +52,11 @@ Safety guarantees:
   schema (e.g. an unrelated app's DB) is refused even when its sha256
   matches; cartog cross-checks the `schema_version` row against the header.
 - **Commit provenance (report-only)** — pull prints the commit the index was
-  built at (`commit=<short>`, also `git_commit` in `--json`) and, when both
-  the `x-amz-meta-git-commit` header and the file's `last_commit` row are
-  present, refuses to install if they disagree. Pull never blocks on
-  staleness: the install always proceeds, and the caller (CI script, agent)
-  decides whether the reported commit is fresh enough.
+  built at (`commit=<short>`, also `git_commit` in `--json`). When both the
+  `x-amz-meta-git-commit` header and the file's `last_commit` row are present,
+  a mismatch is reported but never blocks installation. The install always
+  proceeds; the caller (CI script, agent) decides whether the reported commit
+  is fresh enough.
 - **Schema-version guard** — refuses to install a DB produced by a newer
   cartog, naming both the pulled and supported versions.
 - **WAL/SHM cleanup** — stale `db-wal` / `db-shm` siblings are deleted

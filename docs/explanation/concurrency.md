@@ -51,7 +51,11 @@ DB). This is the highest-leverage parallelism in cartog.
   sequential (SQLite is a single connection; see §5).
 - Scaling is bounded by core count and by the slowest single file (a huge
   generated file is one work item).
-- rayon uses its global pool — not separately tuned per command.
+- The parse phase uses a **dedicated** rayon pool sized to the `--jobs` flag,
+  `CARTOG_JOBS` env, or `[index] jobs` config key (auto-sized to CPU count when
+  unset). The pool is cached per size so worker threads and their
+  `THREAD_EXTRACTORS` cache survive across re-indexes. The cap applies on every
+  index, including under long-lived `cartog serve` / `serve --watch`.
 
 **Impact.** Scales ~linearly with cores. On the embedding-index benchmark the
 parse-heavy pass showed **~6× core parallelism** (131s of CPU time in ~22s wall).

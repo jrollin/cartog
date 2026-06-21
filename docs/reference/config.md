@@ -55,27 +55,33 @@ For a task-oriented guide to switching providers, see [../how-to/switch-embeddin
 
 Configure the embedding provider in `.cartog.toml`:
 
-```toml
-# Default: BGE-small-en-v1.5 quantized embedding + jina-turbo reranker (no config needed)
+These options are mutually exclusive — use only one `[embedding]` section per `.cartog.toml`.
 
-# Auto-embed under `serve --watch` / `watch`:
-#   omitted / unset → auto-detect: embed only if the repo already has embeddings
-#   auto_embed = true  → always auto-embed (even a never-indexed repo)
-#   auto_embed = false → never auto-embed
+**Watcher auto-embed** (keep the local ONNX provider, control when embeddings run):
+
+```toml
+# omitted / unset → auto-detect: embed only if the repo already has embeddings
+# auto_embed = true  → always auto-embed (even a never-indexed repo)
+# auto_embed = false → never auto-embed
 # Precedence: CARTOG_WATCH_RAG env > this key > --rag flag.
 [embedding]
 auto_embed = true
+```
 
-# Use Ollama instead of local ONNX
+**Ollama provider:**
+
+```toml
 [embedding]
 provider = "ollama"
 model = "nomic-embed-text"
 
 [embedding.ollama]
 base_url = "http://localhost:11434"
+```
 
-# Or any OpenAI-compatible /v1/embeddings endpoint (OpenAI, Mistral, Voyage,
-# Jina, OVHcloud, or a local server like Ollama /v1, LM Studio, vLLM)
+**OpenAI-compatible `/v1/embeddings` endpoint** (OpenAI, Mistral, Voyage, Jina, OVHcloud, or a local server like Ollama /v1, LM Studio, vLLM):
+
+```toml
 [embedding]
 provider = "openai"
 model    = "text-embedding-3-small"
@@ -171,6 +177,44 @@ cache.
 provider = "none"
 ```
 
+## Hybrid search tuning (`[rag]`)
+
+The `[rag]` section controls retrieval behaviour for `cartog rag search`. Defaults are tuned for the common case; override only when profiling reveals a bottleneck.
+
+```toml
+[rag]
+retrieval_multiplier = 3   # over-retrieve N× results before fusion (default: 3)
+rerank_max = 50            # max candidates sent to the cross-encoder reranker (default: 50)
+```
+
+- `retrieval_multiplier` — both FTS5 and vector search retrieve `limit × retrieval_multiplier` candidates before Reciprocal Rank Fusion. Larger values improve recall at the cost of more reranker work.
+- `rerank_max` — caps the number of RRF-merged candidates forwarded to the cross-encoder. Lowering it speeds up reranking; raising it improves precision at the tail.
+
+## Remote storage (`[remote]`)
+
+For a task-oriented guide to push/pull setup, see [../how-to/set-up-s3-sync.md](../how-to/set-up-s3-sync.md).
+
+Opt in to sharing a pre-built index over an S3-compatible bucket by adding a `[remote]` section. This is **off by default** — no push or pull happens until the section is configured.
+
+```toml
+[remote]
+url        = "s3://my-team-bucket/cartog/main"
+# region   = "us-east-1"        # optional when endpoint is set
+# endpoint = "https://minio.example.com"  # MinIO / Cloudflare R2 / floci
+# path_style = true             # set true for most non-AWS endpoints
+```
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `url` | required | `s3://bucket/key` target. `--remote` on push/pull overrides it. |
+| `region` | AWS-resolved | AWS region (e.g. `us-east-1`). Optional when `endpoint` is set. |
+| `endpoint` | AWS S3 | Custom endpoint for S3-compatible stores. |
+| `path_style` | `false` | Force path-style addressing. Set `true` for most non-AWS endpoints. |
+
+**Credentials are never stored in `.cartog.toml`.** They are resolved exclusively from the standard AWS environment chain (env vars, `~/.aws` profile, or IMDS). Any credential-shaped key in `[remote]` (`access_key`, `secret_key`, `aws_*`, …) is rejected at parse time so a secret can't be committed by mistake.
+
+Requires the binary to be built with the default `remote-s3` feature. `cartog doctor` verifies reachability.
+
 ## Secret redaction
 
 cartog scrubs common secret patterns from indexed symbol text and skips
@@ -200,7 +244,7 @@ built-in list misses — add repo-root-relative globs:
 
 ```toml
 [index]
-exclude = ["vendor/**", "third_party/**", "**/*.generated.*", "**/*.md"]
+exclude = ["vendor/**", "third_party/**", "**/*.generated.*"]
 ```
 
 - Globs are repo-root-relative and match both files and directories. A matched

@@ -10,7 +10,7 @@ When `cartog serve --watch` is running and a file changes (or RAG embeddings are
 
 Read tools also declare an `outputSchema` and return `structuredContent` (the typed result mirrored alongside the human-readable text block) so schema-aware clients get validated, machine-readable output. To keep responses within the caller's context window, the size cap (`CARTOG_MCP_MAX_BYTES`, default 64 KB) counts the text block plus the structured copy: `structuredContent` is dropped when the combined size would exceed the cap (and when the text block itself is truncated, which adds a truncation notice).
 
-For editor-specific recipes (Neovim keymaps, VS Code tasks, Emacs `compile`, Telescope picker, `cartog watch --json` floating buffer), see **[../editor-integration.md](../editor-integration.md)**.
+For editor-specific recipes (Neovim keymaps, VS Code tasks, Emacs `compile`, Telescope picker, `cartog watch --json` floating buffer), see **[../how-to/wire-editors.md](../how-to/wire-editors.md)**.
 
 ```bash
 cartog serve                  # basic MCP server
