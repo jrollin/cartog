@@ -1,6 +1,6 @@
 # Incremental Indexing
 
-> **This file has moved.** The canonical version is now at [../explanation/incremental-indexing.md](../explanation/incremental-indexing.md). This copy is kept so old links do not 404.
+> Architecture decisions: [architecture.md](architecture.md) | Concurrency: [concurrency.md](concurrency.md)
 
 ## 1. Why
 
@@ -97,7 +97,7 @@ Tables involved in the incremental pipeline:
 | `symbols` | 3 | `id PK`, `content_hash`, `subtree_hash` |
 | `edges` | 3 | `source_id`, `target_id`, `kind`, `resolution_state` |
 
-Column-level schema, the `resolution_state` lifecycle, and additional tables (RAG vectors, FTS5) live in [tech.md](../tech.md).
+Column-level schema, the `resolution_state` lifecycle, and additional tables (RAG vectors, FTS5) live in [architecture.md](architecture.md#schema-overview).
 
 ## 8. Failure modes & invariants
 
@@ -117,7 +117,7 @@ Column-level schema, the `resolution_state` lifecycle, and additional tables (RA
 
 ## See also
 
-- [tech.md](../tech.md) — full architecture decisions and column-level schema
-- [structure.md](../structure.md) — workspace layout and crate boundaries
+- [architecture.md](architecture.md) — full architecture decisions and column-level schema
+- [../structure.md](../structure.md) — workspace layout and crate boundaries
 - `crates/cartog-indexer/src/lib.rs` — pipeline implementation
 - `crates/cartog-db/src/lib.rs` — schema, migrations, batch helpers

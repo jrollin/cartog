@@ -162,28 +162,64 @@ The script bumps `Cargo.toml`, commits, tags `vX.Y.Z`, and pushes. The release w
 
 ## Documentation Convention
 
-All documentation lives in `docs/`. Consolidate into the canonical files below — do not add a new file when an existing one fits. `docs/README.md` is the index; keep it in sync when adding or moving a doc.
+All documentation lives in `docs/`. Organized by the [Diataxis](https://diataxis.fr) framework — do not add a new file when an existing one fits. `docs/README.md` is the index; keep it in sync when adding or moving a doc.
+
+**Tutorials** (learning-oriented, follow-along):
+
+| File | Scope |
+|------|-------|
+| `docs/tutorials/quickstart.md` | Install → init → index → first search |
+
+**How-to guides** (task-oriented, assumes prior knowledge):
+
+| File | Scope |
+|------|-------|
+| `docs/how-to/configure-lsp-servers.md` | LSP server overrides and concurrency cap |
+| `docs/how-to/switch-embedding-provider.md` | Local ONNX, Ollama, OpenAI-compatible |
+| `docs/how-to/set-up-s3-sync.md` | Remote push/pull via S3-compatible storage |
+| `docs/how-to/update-cartog.md` | Upgrade, rollback, deferred in-session updates |
+| `docs/how-to/wire-editors.md` | Index page linking `mcp-setup.md` + `editor-integration.md` |
+| `docs/mcp-setup.md` | Per-client MCP config snippets (Cursor, VS Code, Claude Desktop, …) |
+| `docs/editor-integration.md` | Non-MCP editor CLI recipes (Neovim, Emacs, …) |
+
+**Reference** (information-oriented, complete and accurate):
+
+| File | Scope |
+|------|-------|
+| `docs/reference/cli.md` | All 27 CLI commands and global flags |
+| `docs/reference/config.md` | All `.cartog.toml` keys and environment variables |
+| `docs/reference/mcp-tools.md` | 16 MCP tools, progress notifications, cancellation, logging |
+| `docs/reference/exit-codes.md` | `cartog self` exit codes, state file format, env vars |
+| `docs/updates.md` | Full `cartog self update` reference (superseded by `how-to/update-cartog.md` for procedures) |
+| `docs/structure.md` | Directory layout, module responsibilities, conventions |
+
+**Explanation** (understanding-oriented, why and how):
+
+| File | Scope |
+|------|-------|
+| `docs/explanation/architecture.md` | Design decisions table, secret redaction, SQLite tuning, MSRV |
+| `docs/explanation/rag-pipeline.md` | Hybrid search pipeline: FTS5 + vector + RRF + reranker |
+| `docs/explanation/incremental-indexing.md` | Three-layer change detection, Merkle invariants |
+| `docs/explanation/concurrency.md` | rayon / tokio / std::thread concurrency models |
+| `docs/tech.md` | Core dependencies, build profiles, test/benchmark matrix |
+
+**Navigation and overview**:
 
 | File | Scope |
 |------|-------|
 | `docs/product.md` | Product context, target users, differentiation |
-| `docs/tech.md` | Technology stack, architecture decisions, RAG design |
-| `docs/structure.md` | Directory layout, module responsibilities, conventions |
-| `docs/usage.md` | CLI commands, agent skill setup, configuration |
-| `docs/mcp-setup.md` | Per-client MCP wiring (Cursor, VS Code, Claude Desktop, …) |
-| `docs/editor-integration.md` | Non-MCP editor CLI recipes (Neovim, Emacs, …) |
-| `docs/updates.md` | `cartog self update`: exit codes, env vars, state file |
+| `docs/usage.md` | Hub: semantic search commands, plugin, agent skill, MCP server, agents |
 | `docs/troubleshooting.md` | Common errors and fixes (the single home for these) |
-| `docs/architecture/*.md` | Cross-cutting subsystem deep-dives (e.g. incremental indexing) |
+| `docs/architecture/*.md` | Redirect stubs — canonical content is in `docs/explanation/` |
 
 The MCP config JSON has one canonical copy in `docs/mcp-setup.md`; other docs link to it rather than re-embedding it. Release runbooks (e.g. `scripts/release-smoke.md`) live with the release scripts, not in `docs/`.
 
-`docs/architecture/*.md` is a **subsystem** explainer that spans features (the indexing pipeline, edge resolution). Use when the topic is too detailed for `tech.md` but not tied to one feature.
+New subsystem explainers (cross-cutting, spanning features) go in `docs/explanation/` — not `docs/architecture/` (redirect stubs only) and not `docs/tech.md`. A new `.cartog.toml` config section belongs in both `docs/reference/config.md` and the `init.rs` template comment.
 
 **The marketing site mirrors the docs and ships the same facts to users.** When you add or change a feature, command, MCP tool, language, client, config key, or count, update the site alongside the docs — it is not optional:
 
 - `site/src/pages/index.astro` — landing page (feature cards, language/agent grids, counts, comparison tables, slogan).
-- `site/src/pages/usage.astro` — the docs page that mirrors `docs/usage.md` (CLI reference, MCP tools, **every config section must have BOTH a row in the `[section]` summary table AND an explanation + example block**, e.g. embedding, remote S3, secret redaction, `[index]`). A new `.cartog.toml` key also goes in the `init.rs` template comment.
+- `site/src/pages/usage.astro` — the docs page that mirrors `docs/reference/cli.md` + `docs/reference/config.md` + `docs/reference/mcp-tools.md` (**every config section must have BOTH a row in the `[section]` summary table AND an explanation + example block**, e.g. embedding, remote S3, secret redaction, `[index]`). A new `.cartog.toml` key also goes in the `init.rs` template comment.
 
 Edit the `.astro` source (never `site/dist/`, which is gitignored and rebuilt by the Pages workflow). New brand marks go in `site/public/assets/*.svg` as `<img>`-referenced files (24×24 viewBox, white/brand fill legible on the dark theme), not inline SVG. Run `npm run build` in `site/` to verify before committing.
 
