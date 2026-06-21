@@ -52,4 +52,4 @@ Measured across 13 scenarios, 10 languages. Best gains on call chain tracing (88
 - [usage.md](usage.md) — CLI reference and configuration
 - [mcp-setup.md](mcp-setup.md) — per-editor MCP wiring
 - [tech.md](tech.md) — technology stack and architecture decisions
-- [architecture/incremental-indexing.md](architecture/incremental-indexing.md) — how the graph stays fresh
+- [explanation/incremental-indexing.md](explanation/incremental-indexing.md) — how the graph stays fresh

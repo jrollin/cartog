@@ -1,13 +1,13 @@
 # Concurrency
 
-> **This file has moved.** The canonical version is now at [../explanation/concurrency.md](../explanation/concurrency.md). This copy is kept so old links do not 404.
+> Architecture decisions: [architecture.md](architecture.md) | Incremental indexing: [incremental-indexing.md](incremental-indexing.md)
 
 ## 1. Why this doc
 
 cartog runs work concurrently in several places, using three deliberately
 separate models. This page is the single explainer for **what** runs
 concurrently, **why**, its **limitations**, and its **impact**. Decision-table
-rows in [tech.md](../tech.md) point here for the full picture.
+rows in [architecture.md](architecture.md) point here for the full picture.
 
 The three models, and the rule that keeps each one safe:
 
@@ -51,7 +51,11 @@ DB). This is the highest-leverage parallelism in cartog.
   sequential (SQLite is a single connection; see §5).
 - Scaling is bounded by core count and by the slowest single file (a huge
   generated file is one work item).
-- rayon uses its global pool — not separately tuned per command.
+- The parse phase uses a **dedicated** rayon pool sized to the `--jobs` flag,
+  `CARTOG_JOBS` env, or `[index] jobs` config key (auto-sized to CPU count when
+  unset). The pool is cached per size so worker threads and their
+  `THREAD_EXTRACTORS` cache survive across re-indexes. The cap applies on every
+  index, including under long-lived `cartog serve` / `serve --watch`.
 
 **Impact.** Scales ~linearly with cores. On the embedding-index benchmark the
 parse-heavy pass showed **~6× core parallelism** (131s of CPU time in ~22s wall).
@@ -274,6 +278,6 @@ inputs (no shared mutable state beyond an `AtomicBool` stop flag and an
 
 - [incremental-indexing.md](incremental-indexing.md) — the change-detection
   pipeline that feeds the parallel parse phase (§2).
-- [tech.md](../tech.md) — DB-mutex, WAL, and tokio decision rows (link back here).
+- [architecture.md](architecture.md) — DB-mutex, WAL, and tokio decision rows (link back here).
 - `specs/tla/` and `crates/cartog-loom-models` — formal models of the
   single-writer protocol (§5).

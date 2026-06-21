@@ -56,8 +56,15 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # enabled = true
 
 # [rag]
-# fts_weight = 0.5
-# vector_weight = 0.5
+# retrieval_multiplier = 3  # over-retrieve N× before fusion (default: 3)
+# rerank_max = 50            # max candidates sent to reranker (default: 50)
+
+# [remote]
+# Opt in to push/pull of the prebuilt index over an S3-compatible bucket.
+# Credentials are NEVER read from here — use env vars / ~/.aws profile / IMDS.
+# url        = "s3://my-team-bucket/cartog/main"
+# endpoint   = "https://minio.example.com"   # MinIO / R2 / floci
+# path_style = true                          # set true for most non-AWS endpoints
 
 # [security]
 # Redact common secret patterns (API keys, tokens, JWTs) from stored symbol
