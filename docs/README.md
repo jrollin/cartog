@@ -50,8 +50,8 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 
 The animated GIF on the README and the landing page is generated from `demo.tape` using
 [VHS](https://github.com/charmbracelet/vhs). The tape walks through:
-`cartog init` → `cartog index` → `cartog map` → `cartog search` → `cartog rag search`
-→ `cartog refs` → `cartog impact` → `cartog ide`.
+`cartog init` → `cartog index` → `cartog stats` → `cartog search` → `cartog rag setup`
+→ `cartog rag index` → `cartog rag search`.
 
 To regenerate after changing CLI output:
 
@@ -63,7 +63,7 @@ cp docs/demo.gif site/public/demo.gif   # keep site mirror in sync
 ```
 
 - [demo.tape](demo.tape) — VHS script (edit this to update the demo)
-- `demo.gif` — rendered output (gitignored; regenerate with the commands above)
+- `demo.gif` — rendered output (commit alongside the tape; keep `site/public/demo.gif` in sync)
 
 ## See also
 
