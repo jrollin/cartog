@@ -187,7 +187,9 @@ Every match should mention the new language/server.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `lsp` | on | LSP-based edge resolution. Disable at build time with `--no-default-features` (runtime equivalent: `--no-lsp`) |
-| `ollama-embedding` | off | Enables Ollama as an embedding provider for RAG |
+| `ollama-embedding` | on | Ollama embedding provider for RAG |
+| `openai-embedding` | on | OpenAI-compatible `/v1` embedding provider for RAG |
+| `remote-s3` | on | S3-compatible push/pull index sync (inert until `[remote]` is configured) |
 
 ## Regenerating the demo gif
 
@@ -233,7 +235,9 @@ This is a solo-maintained project. PRs and issues are reviewed on a best-effort 
 
 ## References
 
-- Architecture and tech decisions: [docs/tech.md](docs/tech.md)
+- Architecture decisions: [docs/explanation/architecture.md](docs/explanation/architecture.md)
+- Incremental indexing design: [docs/explanation/incremental-indexing.md](docs/explanation/incremental-indexing.md)
+- Technology stack: [docs/tech.md](docs/tech.md)
 - Product context and goals: [docs/product.md](docs/product.md)
 - CLI, MCP, and skill setup: [docs/usage.md](docs/usage.md)
 - Code of Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)

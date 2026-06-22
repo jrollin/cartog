@@ -4,7 +4,7 @@ A living list of issues that turn up on first-run or after upgrades.
 If something here is out of date or you hit a new problem,
 [open an issue](https://github.com/jrollin/cartog/issues).
 
-> Related docs: [usage.md](usage.md) for the full CLI reference, [editor-integration.md](editor-integration.md) for editor-specific setup.
+> Related docs: [reference/cli.md](reference/cli.md) for the full CLI reference, [reference/exit-codes.md](reference/exit-codes.md) for exit codes, [editor-integration.md](editor-integration.md) for editor-specific setup.
 
 ## Installation
 
@@ -29,6 +29,10 @@ A running `cartog serve` on the same database also makes `cartog index` defer
 its LSP pass to that peer's warm servers (a `note:` on stderr names the peer
 PID). Resolution then happens on the server's next `cartog_index` call — run
 `cartog index . --force` if you need a local LSP pass right now.
+
+For Ruby, cartog probes `ruby-lsp` first and falls back to `solargraph`. Install either with `gem install ruby-lsp` or `gem install solargraph`.
+
+For Go, cartog invokes `gopls`; install it with `go install golang.org/x/tools/gopls@latest`.
 
 For PHP, cartog probes `intelephense` first and falls back to `phpactor`.
 

@@ -7,16 +7,17 @@ This page documents the config files cartog writes for each supported MCP client
 All clients need `cartog` on your `PATH` first:
 
 ```bash
+# Recommended — no Rust required
+curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
+
+# Cargo (Rust 1.80+ required)
 cargo install cartog             # latest version
 cargo install cartog@<version>   # specific version (see Releases)
 ```
 
-Or use the [install script](../README.md#install) if you don't have a Rust toolchain.
-
 ## Claude Code
 
-Claude Code reads MCP servers from two places. `cartog init` writes to the
-**project** file; `cartog ide --client claude-code` writes both.
+Claude Code reads MCP servers from two places. `cartog ide --client claude-code` writes both (project + user scope). To write only the project file by hand, use the snippet below.
 
 Project-scoped — committable, recommended (`<repo>/.mcp.json`):
 

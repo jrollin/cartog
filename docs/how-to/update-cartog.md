@@ -32,7 +32,11 @@ cartog self update --check --json       # {"current":"…","latest":"…","outda
 cartog self update --check --quiet      # no output; exit code is the only signal
 ```
 
-## Deferred update (in-session)
+## Deferred update (in-session, advanced)
+
+> Most users only need `cartog self update`. This section applies when cartog is
+> running as a plugin MCP server (e.g. inside Claude Code) and the serve lock
+> prevents an in-place swap.
 
 Inside a Claude Code session the cartog plugin runs `cartog serve --watch` as the MCP server. That process holds the serve PID lock for the whole session, so a plain `cartog self update` would refuse (exit `6`) — you cannot swap the inode of a running binary. The deferred flow splits the decision from the swap:
 
@@ -99,48 +103,6 @@ Notes and edge cases:
 - **Multi-window** — a second Claude Code window holding the serve lock defers the apply (exit `6`, intent kept) until that window closes; the SessionStart drift line says so.
 - **Release timing** — `release.sh` pushes the version bump and tag before the release workflow finishes building the tarballs. In the few-minute build window the pinned tarball can 404; armed paths self-heal (network failure keeps the intent and retries next session), and the marketplace only serves new plugin files to users after the build completes in practice.
 - **A broken release** — a checksum (`4`) or smoke-test (`7`) failure clears the intent, restores the previous binary, and surfaces an actionable message rather than retry-looping. If a swap is interrupted (e.g. SIGKILL mid-rename), the previous binary is preserved at `<bin>.old` — recover with `cartog self rollback`.
-
-## Inspect the installation
-
-```bash
-cartog self version
-cartog self version --json
-```
-
-Reports the bare semver, a `describe` string (`git describe` output, e.g. `v0.29.1-2-g3e2822c` for an unreleased main build vs `v0.29.1` for a release), target triple (e.g. `aarch64-apple-darwin`), install source, and the timestamp of the last successful update check (`never` if none). The semver, not `describe`, is what `cartog self update` compares against the latest release.
-
-`install_source` is one of:
-- `release-tarball` — downloaded from a GitHub release (or installed via `install.sh`)
-- `cargo` — installed via `cargo install cartog`
-- `dev` — built locally with `cargo build`
-
-## Roll back a bad update
-
-```bash
-cartog self rollback
-```
-
-Atomically swaps the `<bin>.old` sibling back onto `<bin>`. Exits non-zero with a clear message if no `.old` is present. Forward-rollback is not supported: after a successful rollback, the `.old` is removed.
-
-## Cargo-installed binaries
-
-`cartog self update` refuses to overwrite a `cargo install cartog` binary (exit `3`) and prints the exact replacement command:
-
-```bash
-cargo install cartog --force
-```
-
-`--check`, `version`, and `rollback` still work — only the in-place upgrade is refused.
-
-## Daily background check
-
-By default, cartog runs at most one update check per 24 hours from interactive sessions. The check is non-blocking: it spawns a background thread that fetches the latest release tag, persists the result, and exits without ever holding up your command. The result surfaces as a one-line hint at the start of the *next* invocation.
-
-The check is suppressed when:
-- `stdout` is not a TTY (CI, pipes, scripts)
-- The current command is `cartog serve` or `cartog watch`
-- `CARTOG_NO_UPDATE_CHECK=1` is set
-- `CARTOG_UPDATE_CHECK=never` is set
 
 ## Troubleshooting
 
