@@ -23,7 +23,7 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 - [reference/config.md](reference/config.md) — all `.cartog.toml` keys and environment variables
 - [reference/mcp-tools.md](reference/mcp-tools.md) — 16 MCP tools, progress, cancellation, logging
 - [reference/exit-codes.md](reference/exit-codes.md) — `cartog self` exit codes and state file
-- [updates.md](updates.md) — full `cartog self update` surface (canonical reference)
+- [updates.md](updates.md) — full `cartog self update` surface (canonical reference; procedures are in [how-to/update-cartog.md](how-to/update-cartog.md))
 
 ## Explanation
 
@@ -46,9 +46,24 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 
 - [release-smoke.md](../scripts/release-smoke.md) — manual smoke checklist run before tagging
 
-## Assets
+## Demo
 
-- [demo.tape](demo.tape) — VHS script used to render `demo.gif`
+The animated GIF on the README and the landing page is generated from `demo.tape` using
+[VHS](https://github.com/charmbracelet/vhs). The tape walks through:
+`cartog init` → `cartog index` → `cartog stats` → `cartog search` → `cartog rag setup`
+→ `cartog rag index` → `cartog rag search`.
+
+To regenerate after changing CLI output:
+
+```bash
+brew install vhs                        # or: go install github.com/charmbracelet/vhs@latest
+cargo build --release
+PATH="$PWD/target/release:$PATH" vhs docs/demo.tape
+cp docs/demo.gif site/public/demo.gif   # keep site mirror in sync
+```
+
+- [demo.tape](demo.tape) — VHS script (edit this to update the demo)
+- `demo.gif` — rendered output (commit alongside the tape; keep `site/public/demo.gif` in sync)
 
 ## See also
 

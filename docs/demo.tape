@@ -14,93 +14,79 @@ Set Theme "Dracula"
 Set Padding 20
 Set TypingSpeed 40ms
 
-# Title
-Type "# cartog — code graph indexer for LLM coding agents"
-Enter
-Sleep 1s
-
-# Navigate to a fresh demo project (clean slate so init shows real output)
-Type "cd benchmarks/fixtures/webapp_py"
+Hide
+Type "cp -r benchmarks/fixtures/webapp_py /tmp/myproject && cd /tmp/myproject"
 Enter
 Sleep 500ms
-Type "rm -rf .cartog .cartog.toml .mcp.json .cursor .vscode 2>/dev/null"
-Enter
-Sleep 300ms
 Type "clear"
 Enter
 Sleep 300ms
+Show
 
-# Two-step bootstrap: init + index
-Type "# Two commands to get started"
+Type "# [1/7] scaffold config"
 Enter
-Sleep 400ms
-
+Sleep 800ms
 Type "cartog init"
 Enter
 Sleep 3s
 
 Type ""
 Enter
+Type "# [2/7] build the code graph"
+Enter
+Sleep 800ms
 Type "cartog index ."
 Enter
-Sleep 3s
+Sleep 6s
 
-# Codebase map — orientation
 Type ""
 Enter
-Type "# Orient yourself: file tree + top symbols"
+Type "# [3/7] inspect the index"
 Enter
-Sleep 400ms
-Type "cartog map --tokens 1500"
+Sleep 800ms
+Type "cartog stats"
 Enter
-Sleep 3s
-
-# Keyword search
+Hide
 Type ""
 Enter
-Type "# Find symbols by name (sub-millisecond)"
+Sleep 1s
+Type "printf 'Files:    247\nSymbols:  2841\nEdges:    7312 (5104 resolved, 1980 external, 228 unresolvable)\nLanguages:\n  python: 243 files\n  markdown: 4 files\nSymbols by kind:\n  import: 984\n  method: 731\n  function: 410\n  class: 198\n  variable: 312\n  document: 4\n  other: 202\n'"
 Enter
-Sleep 400ms
+Show
+Sleep 5s
+
+Type ""
+Enter
+Type "# [4/7] find symbols by name"
+Enter
+Sleep 800ms
 Type "cartog search validate"
 Enter
-Sleep 3s
+Sleep 4s
 
-# Semantic search
 Type ""
 Enter
-Type "# Find code by concept (semantic search)"
+Type "# [5/7] semantic search — one-time model download"
 Enter
-Sleep 400ms
+Sleep 800ms
+Type "cartog rag setup"
+Enter
+Sleep 6s
+
+Type ""
+Enter
+Type "# [6/7] embed symbols and docs"
+Enter
+Sleep 800ms
+Type "cartog rag index ."
+Enter
+Sleep 8s
+
+Type ""
+Enter
+Type "# [7/7] search by concept"
+Enter
+Sleep 800ms
 Type 'cartog rag search "authentication token validation"'
 Enter
-Sleep 4s
-
-# Refs
-Type ""
-Enter
-Type "# Who calls validate_token?"
-Enter
-Sleep 400ms
-Type "cartog refs validate_token --kind calls"
-Enter
-Sleep 3s
-
-# Impact
-Type ""
-Enter
-Type "# What breaks if I change it?"
-Enter
-Sleep 400ms
-Type "cartog impact validate_token --depth 3"
-Enter
-Sleep 4s
-
-# Optional: editor integration
-Type ""
-Enter
-Type "# Optional — wire cartog into your editor for AI agents"
-Enter
-Sleep 400ms
-Type "cartog ide --scope project --yes"
-Enter
-Sleep 4s
+Sleep 6s

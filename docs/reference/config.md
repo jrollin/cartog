@@ -241,6 +241,8 @@ redact_secrets = false
 
 ## Index exclude globs
 
+For `.gitignore` interaction and the built-in prune list, see [`.gitignore` awareness](#gitignore-awareness) below.
+
 cartog already prunes common dependency and build directories (`node_modules`,
 `target`, `vendor`, `dist`, `build`, `.dart_tool`, dot-directories, ...). To skip
 additional paths — vendored or generated trees under non-standard names that the
