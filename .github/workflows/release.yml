@@ -260,3 +260,75 @@ jobs:
               sleep 60
             fi
           done
+
+  # Publish the VS Code extension to the Visual Studio Marketplace (vsce) and
+  # Open VSX (ovsx, for Cursor / Windsurf / VSCodium). The extension bundles no
+  # binary — it spawns the user's installed `cartog serve` — so it does not
+  # depend on the `build` job's artifacts. Its version is kept in lockstep with
+  # the workspace version by scripts/release.sh, so the tag and the published
+  # extension version always match.
+  publish-vscode:
+    name: Publish VS Code extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Verify extension version matches tag
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$PKG" != "$TAG" ]; then
+            echo "FAIL: package.json version ($PKG) != tag ($TAG)" >&2
+            echo "scripts/release.sh should have bumped it — re-run the release." >&2
+            exit 1
+          fi
+          echo "extension version $PKG matches tag"
+
+      - name: Package .vsix
+        run: npx --yes @vscode/vsce package --no-dependencies -o cartog.vsix
+
+      # Each registry publishes independently: continue-on-error keeps one
+      # registry's failure (a missing secret, an outage, or an already-published
+      # version on a same-tag re-run) from skipping the other. The gate step
+      # below fails the job only if BOTH failed, so a genuine total failure
+      # still surfaces while a single-registry hiccup does not.
+      #
+      # Marketplace auth is a PAT (VSCE_PAT) for now. Azure DevOps is retiring
+      # global PATs on 2026-12-01; migrate to Entra `--azure-credential` before
+      # then (see docs/how-to/publish-vscode-extension.md).
+      - name: Publish to Visual Studio Marketplace
+        id: vsce
+        continue-on-error: true
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --yes @vscode/vsce publish --no-dependencies --packagePath cartog.vsix
+
+      - name: Publish to Open VSX
+        id: ovsx
+        continue-on-error: true
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx --yes ovsx publish cartog.vsix
+
+      - name: Require at least one registry to have published
+        if: steps.vsce.outcome != 'success' && steps.ovsx.outcome != 'success'
+        run: |
+          echo "FAIL: both Marketplace and Open VSX publishes failed" >&2
+          echo "vsce: ${{ steps.vsce.outcome }}, ovsx: ${{ steps.ovsx.outcome }}" >&2
+          exit 1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cartog-vscode-extension
+          path: editors/vscode/cartog.vsix

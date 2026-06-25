@@ -1,0 +1,12 @@
+# Keep the .vsix lean — ship the compiled JS, manifest, readme, license, and
+# changelog (the Marketplace renders CHANGELOG.md). Everything below is
+# build-time or source.
+.vscode/**
+src/**
+**/*.ts
+**/*.map
+tsconfig.json
+.gitignore
+node_modules/**
+out/**/*.test.js
+**/.DS_Store

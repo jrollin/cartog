@@ -1,0 +1,62 @@
+{
+  "name": "cartog",
+  "displayName": "cartog",
+  "description": "Code graph navigation and semantic search for AI coding agents — registers the cartog MCP server with VS Code Copilot, no config file required.",
+  "version": "0.29.4",
+  "publisher": "jrollin",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jrollin/cartog.git",
+    "directory": "editors/vscode"
+  },
+  "homepage": "https://jrollin.github.io/cartog/",
+  "bugs": {
+    "url": "https://github.com/jrollin/cartog/issues"
+  },
+  "categories": ["AI", "Machine Learning", "Other"],
+  "keywords": ["mcp", "copilot", "code graph", "semantic search", "code navigation"],
+  "engines": {
+    "vscode": "^1.101.0"
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "cartog.servers",
+        "label": "cartog"
+      }
+    ],
+    "configuration": {
+      "title": "cartog",
+      "properties": {
+        "cartog.binaryPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `cartog` binary. Leave empty to auto-detect (`$CARTOG_INSTALL_DIR`, then `PATH`, then `~/.local/bin`, then `~/.cargo/bin`)."
+        },
+        "cartog.watch": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run `cartog serve --watch` so the index auto-refreshes on file changes. Disable to run plain `cartog serve`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "tsc -p ./ && node --test out/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.101.0",
+    "@vscode/vsce": "^3.x",
+    "ovsx": "^0.10.x",
+    "typescript": "^5.x"
+  }
+}
