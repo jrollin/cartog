@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.30.0] - 2026-06-25
+
+### Bug Fixes
+
+- **deps**: Bump quinn-proto to 0.11.15 (RUSTSEC-2026-0185) ([`a424069`](https://github.com/jrollin/cartog/commit/a4240695f7981500acaa50bd079efff4ec8ef905))
+
+### Documentation
+
+- Apply Diataxis framework to docs/ ([`6ab2134`](https://github.com/jrollin/cartog/commit/6ab21343f7fc9cd75ed45b61561dd64cfe922d7e))
+- Fix review findings from PR inline comments ([`966c5a6`](https://github.com/jrollin/cartog/commit/966c5a691bd1aec99c1016d9f36ef9b9a9d3514e))
+- **config**: Complete [rag] keys and env vars table ([`604cb4d`](https://github.com/jrollin/cartog/commit/604cb4d9905f6ae725f33290dfcee1d005b47f7a))
+- Improve clarity and structure for newcomers, users, and contributors ([`dc55531`](https://github.com/jrollin/cartog/commit/dc555314f9595ffff2faf2b12b801434ddf3b6a6))
+- Sync Demo section workflow with rewritten demo.tape ([`971ffb3`](https://github.com/jrollin/cartog/commit/971ffb379fcb3ecad74b9d0e64b7a1ba7cfbaa83))
+
+### Features
+
+- **vscode**: Ship MCP-server-provider extension ([`ef8355e`](https://github.com/jrollin/cartog/commit/ef8355e23313678a1d3bf4b06c27868a619a64fb))
+
+### Miscellaneous
+
+- Remove docs/launch/ and add to .gitignore ([`28430b7`](https://github.com/jrollin/cartog/commit/28430b744ddc4e289f667e19477032da4234bdc6))
+
 ## [0.29.4] - 2026-06-19
 
 ### Bug Fixes

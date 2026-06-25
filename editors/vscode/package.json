@@ -2,7 +2,7 @@
   "name": "cartog",
   "displayName": "cartog",
   "description": "Code graph navigation and semantic search for AI coding agents — registers the cartog MCP server with VS Code Copilot, no config file required.",
-  "version": "0.29.4",
+  "version": "0.30.0",
   "publisher": "jrollin",
   "license": "MIT",
   "repository": {
