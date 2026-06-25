@@ -4,6 +4,7 @@ set -euo pipefail
 CARGO_TOML="Cargo.toml"
 PLUGIN_JSON=".claude-plugin/plugin.json"
 INSTALL_SKILL="skills/cartog-install/SKILL.md"
+VSCODE_PKG="editors/vscode/package.json"
 
 # ── helpers ──────────────────────────────────────────────────────────
 die()  { echo "error: $*" >&2; exit 1; }
@@ -108,6 +109,17 @@ if [[ -f "$PLUGIN_JSON" ]]; then
   sed "s/\"version\": \".*\"/\"version\": \"${NEW}\"/" "$PLUGIN_JSON" > "$PLUGIN_JSON.tmp" && mv "$PLUGIN_JSON.tmp" "$PLUGIN_JSON"
 fi
 
+# update the VS Code extension manifest. Only the top-level "version" key
+# matches; the engines block uses "vscode": not "version":, so 1,/.../ on the
+# first occurrence is safe and avoids touching anything else.
+if [[ -f "$VSCODE_PKG" ]]; then
+  sed "1,/\"version\":/ s/\"version\": \".*\"/\"version\": \"${NEW}\"/" \
+      "$VSCODE_PKG" > "$VSCODE_PKG.tmp" && mv "$VSCODE_PKG.tmp" "$VSCODE_PKG"
+  if ! grep -q "\"version\": \"${NEW}\"" "$VSCODE_PKG"; then
+    die "version bump did not stick in $VSCODE_PKG"
+  fi
+fi
+
 # Update the pinned PLUGIN_VERSION line inside the /cartog-install skill.
 # The skill body uses `$PLUGIN_VERSION` as a token everywhere else, so we
 # only need to maintain the single anchor line — no other version literals
@@ -164,7 +176,7 @@ else
 fi
 
 info "committing version bump"
-git add "$CARGO_TOML" Cargo.lock "$PLUGIN_JSON" "$INSTALL_SKILL" site/ CHANGELOG.md
+git add "$CARGO_TOML" Cargo.lock "$PLUGIN_JSON" "$INSTALL_SKILL" "$VSCODE_PKG" site/ CHANGELOG.md
 git commit -m "chore: bump version to ${NEW}"
 
 info "tagging $TAG"

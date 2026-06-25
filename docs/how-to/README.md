@@ -7,3 +7,4 @@ Task-oriented guides for common operations. Assumes you have already completed t
 - [switch-embedding-provider.md](switch-embedding-provider.md) — local ONNX, Ollama, OpenAI-compatible
 - [update-cartog.md](update-cartog.md) — upgrade, rollback, deferred in-session updates
 - [wire-editors.md](wire-editors.md) — `cartog ide` and manual per-editor MCP config
+- [publish-vscode-extension.md](publish-vscode-extension.md) — maintainer runbook: publish the VS Code extension to the Marketplace + Open VSX
