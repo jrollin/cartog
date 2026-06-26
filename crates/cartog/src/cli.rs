@@ -25,7 +25,7 @@ pub const LONG_VERSION: &str = concat!(
 #[command(version)]
 #[command(long_version = LONG_VERSION)]
 #[command(propagate_version = true)]
-#[command(after_help = "Docs: https://jrollin.github.io/cartog/")]
+#[command(after_help = "Docs: https://www.cartog.dev/")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

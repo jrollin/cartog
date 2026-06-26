@@ -1,25 +1,18 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-vue check-svelte check-astro check-install-script sync-install-script tla loom bench bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-vue check-svelte check-astro check-install-script tla loom bench bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
 check: check-rust check-fixtures check-skill check-install-script ## Run all integrity checks
 
-# --- Install script sync ---
+# --- Install script ---
 #
-# scripts/install.sh is the canonical copy. site/install.sh must be a
-# byte-identical mirror because that's what GitHub Pages serves at
-# https://jrollin.github.io/cartog/install.sh. We can't symlink because
-# Pages does not reliably resolve symlinks outside the published dir.
+# site/public/install.sh is the single canonical curl-target script; GitHub
+# Pages serves it at https://www.cartog.dev/install.sh.
 
-check-install-script: ## Verify site/install.sh matches scripts/install.sh
-	@echo "==> Checking install.sh mirror..."
-	@diff -q scripts/install.sh site/install.sh > /dev/null || \
-		( echo "    site/install.sh is out of date — run 'make sync-install-script'"; exit 1 )
-	@sh -n scripts/install.sh
+check-install-script: ## Syntax-check the install script
+	@echo "==> Checking install.sh..."
+	@sh -n site/public/install.sh
 	@echo "    OK"
-
-sync-install-script: ## Copy scripts/install.sh into site/install.sh (run after editing the script)
-	cp scripts/install.sh site/install.sh
 
 # --- Fixture validation helper ---
 #

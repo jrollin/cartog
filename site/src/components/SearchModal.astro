@@ -6,9 +6,10 @@
 // usage.astro carries it), so results are docs-only. We instantiate PagefindUI
 // directly (rather than the <Search> component) only to point `bundlePath` at
 // the deployment base; Pagefind already resolves result URLs against the loaded
-// bundle, so they come back base-prefixed (`/cartog/usage.html#...`).
+// bundle, so they come back base-prefixed (just `/usage.html#...` on the
+// custom domain www.cartog.dev, which has no base path).
 import "@pagefind/default-ui/css/ui.css";
-const base = import.meta.env.BASE_URL; // "/cartog/"
+const base = import.meta.env.BASE_URL; // "/" on www.cartog.dev (no base path)
 ---
 
 <div id="search-backdrop" class="search-backdrop" aria-hidden="true"></div>
@@ -45,7 +46,7 @@ const base = import.meta.env.BASE_URL; // "/cartog/"
   const closeBtn = document.getElementById("search-close");
   const openBtns = document.querySelectorAll("[data-open-search]");
 
-  // Astro's BASE_URL, e.g. "/cartog/". Normalized to a single trailing slash.
+  // Astro's BASE_URL, "/" on www.cartog.dev. Normalized to a single trailing slash.
   const base = (modal?.dataset.base ?? "/").replace(/\/+$/, "") + "/";
 
   let initialized = false;

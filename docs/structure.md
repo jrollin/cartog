@@ -13,8 +13,8 @@ cartog/
 ├── benchmarks/         # Benchmark runner, fixtures, ground truth, 13 scenarios
 ├── specs/tla/          # TLA+ models of the concurrent protocols (`make tla`)
 ├── tests/fixtures/     # Shared fixtures referenced by crate tests
-├── scripts/            # release.sh, install.sh (canonical) + site mirror
-├── site/               # Astro project for GitHub Pages (landing page + docs; install.sh mirror in public/)
+├── scripts/            # release.sh and other release/dev scripts
+├── site/               # Astro project for GitHub Pages (landing page + docs; canonical install.sh in public/, served at www.cartog.dev/install.sh)
 ├── docs/               # This documentation
 └── target/             # Cargo build output (gitignored)
 ```

@@ -117,5 +117,5 @@ nothing to do." and stop.
 - `${CLAUDE_PLUGIN_ROOT}` resolves to the directory Claude Code expanded
   the plugin into. Use it literally — do not substitute a guessed path.
 - For a totally offline / vetted install path, point the user at
-  `https://jrollin.github.io/cartog/install.sh` which they can download
+  `https://www.cartog.dev/install.sh` which they can download
   and inspect before running.

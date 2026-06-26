@@ -43,7 +43,7 @@ Measured across 13 scenarios, 10 languages. Best gains on call chain tracing (88
 
 ## Distribution
 
-- **CLI binary** — `cargo install cartog` or `curl -fsSL https://jrollin.github.io/cartog/install.sh | sh`. Bootstrap with `cartog init` + `cartog index`.
+- **CLI binary** — `cargo install cartog` or `curl -fsSL https://www.cartog.dev/install.sh | sh`. Bootstrap with `cartog init` + `cartog index`.
 - **MCP server** (`cartog serve`), wired into editors via `cartog ide`. Supports Claude Code, Claude Desktop, Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, Antigravity, Kiro, Hermes Agent.
 - **Claude Code plugin** (`/plugin install cartog@cartog-plugins`) and agent skill (`npx skills add jrollin/cartog`) for users who want the bundled install + skill + MCP setup in one step.
 

@@ -2,7 +2,7 @@
 # cartog installer
 #
 # Usage:
-#   curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
+#   curl -fsSL https://www.cartog.dev/install.sh | sh
 #
 # Detects OS + architecture, downloads the matching release tarball from
 # GitHub, verifies its SHA-256 against SHA256SUMS, and installs `cartog`

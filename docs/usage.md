@@ -10,7 +10,7 @@ Three install paths, pick whichever matches your environment:
 # 1. Install script (macOS / Linux, no Rust required) — detects platform,
 #    downloads + verifies the matching release binary, installs to
 #    /usr/local/bin or ~/.local/bin.
-curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
+curl -fsSL https://www.cartog.dev/install.sh | sh
 
 # 2. Cargo (Rust 1.80+; lets advanced users strip features, e.g. --no-default-features).
 cargo install cartog
@@ -170,7 +170,7 @@ bash skills/cartog/scripts/ensure_indexed.sh
 | File | Purpose |
 |------|---------|
 | [`SKILL.md`](../skills/cartog/SKILL.md) | Behavioral instructions, commands, and workflows |
-| [`scripts/install.sh`](../skills/cartog/scripts/install.sh) | Automated installation (pre-built binary or cargo install), accepts optional version arg |
+| [`skills/cartog/scripts/install.sh`](../skills/cartog/scripts/install.sh) | Automated installation (pre-built binary or cargo install), accepts optional version arg |
 | [`scripts/ensure_indexed.sh`](../skills/cartog/scripts/ensure_indexed.sh) | SessionStart hook: install-if-missing + foreground index + background apply-pending/rag setup/index + drift warning |
 | [`scripts/update_on_exit.sh`](../skills/cartog/scripts/update_on_exit.sh) | SessionEnd hook: applies a deferred update (`cartog self update --apply-pending`) once the serve peer exits; legacy `install.sh` upgrade for <0.14.0 |
 | [`tests/golden_examples.yaml`](../skills/cartog/tests/golden_examples.yaml) | Behavioral test scenarios (expected tool calls per query) |
