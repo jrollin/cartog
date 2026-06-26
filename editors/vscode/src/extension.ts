@@ -9,7 +9,7 @@ import { resolveBinary } from "./resolve";
 import { isInstallSupported, buildInstallCommand, buildIndexCommand } from "./install";
 
 const PROVIDER_ID = "cartog.servers";
-const DOCS_URL = "https://jrollin.github.io/cartog/usage/";
+const DOCS_URL = "https://www.cartog.dev/usage.html";
 
 function configuredBinaryPath(): string | undefined {
   return vscode.workspace.getConfiguration("cartog").get<string>("binaryPath");

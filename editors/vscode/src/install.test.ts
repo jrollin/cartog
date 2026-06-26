@@ -22,14 +22,14 @@ test("isInstallSupported is true on macOS and Linux", () => {
 test("buildInstallCommand pins the version with a shell-agnostic env prefix", () => {
   assert.equal(
     buildInstallCommand("0.30.0"),
-    "curl -fsSL https://jrollin.github.io/cartog/install.sh | env CARTOG_VERSION=0.30.0 sh",
+    "curl -fsSL https://www.cartog.dev/install.sh | env CARTOG_VERSION=0.30.0 sh",
   );
 });
 
 test("buildInstallCommand with an empty version emits a bare env var (installer coerces to latest)", () => {
   assert.equal(
     buildInstallCommand(""),
-    "curl -fsSL https://jrollin.github.io/cartog/install.sh | env CARTOG_VERSION= sh",
+    "curl -fsSL https://www.cartog.dev/install.sh | env CARTOG_VERSION= sh",
   );
 });
 

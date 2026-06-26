@@ -17,7 +17,7 @@ Cartog pre-computes a code graph — symbols, and the calls, imports, and inheri
 
 Use it from the CLI for day-to-day navigation, or as an MCP server so AI agents query the graph instead of flooding their context with raw file dumps — at a fraction of the token cost. One static binary, one SQLite file. No Python, no pip, no Docker, no cloud: 100% local by default.
 
-> **[Documentation site](https://jrollin.github.io/cartog/)**
+> **[Documentation site](https://www.cartog.dev/)**
 
 ![cartog demo](docs/demo.gif)
 
@@ -38,7 +38,7 @@ Use it from the CLI for day-to-day navigation, or as an MCP server so AI agents 
 ## Quick Start
 
 ```bash
-curl -fsSL https://jrollin.github.io/cartog/install.sh | sh   # or: cargo install cartog
+curl -fsSL https://www.cartog.dev/install.sh | sh   # or: cargo install cartog
 cd your-project
 cartog init                   # 1. scaffold .cartog.toml
 cartog index                  # 2. build the code graph
@@ -148,13 +148,13 @@ Cartog auto-detects language servers on PATH (rust-analyzer, pyright, typescript
 ### Install script (macOS / Linux, no Rust required)
 
 ```bash
-curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
+curl -fsSL https://www.cartog.dev/install.sh | sh
 ```
 
 Detects your OS + architecture, downloads the matching binary from the latest
 GitHub Release, verifies its SHA-256, and installs to `/usr/local/bin` (or
 `~/.local/bin` if non-root). Override with `CARTOG_INSTALL_DIR`; pin a
-version with `CARTOG_VERSION=<version>` (e.g. the tag from [Releases](https://github.com/jrollin/cartog/releases)). Audit the script: [`scripts/install.sh`](scripts/install.sh).
+version with `CARTOG_VERSION=<version>` (e.g. the tag from [Releases](https://github.com/jrollin/cartog/releases)). Audit the script: [`site/public/install.sh`](site/public/install.sh).
 
 ### From crates.io (Rust toolchain required)
 
@@ -223,7 +223,7 @@ Run these two commands **one at a time** in Claude Code:
 
 **Repair or upgrade**: type `/cartog-install` at any time to install the binary synchronously (e.g. to retry a failed background install), or to upgrade an existing install to match the plugin's pinned version. The skill at [`skills/cartog-install/`](skills/cartog-install/SKILL.md) handles both cases.
 
-**Offline / vetted install**: the manual fallback is the same one used by the curl one-liner at the top of this section: download [`scripts/install.sh`](scripts/install.sh) (mirrored at `https://jrollin.github.io/cartog/install.sh`), inspect it, then run it.
+**Offline / vetted install**: the manual fallback is the same one used by the curl one-liner at the top of this section: download [`site/public/install.sh`](site/public/install.sh) (served at `https://www.cartog.dev/install.sh`), inspect it, then run it.
 
 ### Agent Skill (Cursor, Copilot, others)
 
@@ -670,7 +670,7 @@ Full list with detailed fixes: **[docs/troubleshooting.md](docs/troubleshooting.
 
 Full index: [docs/README.md](docs/README.md). Highlights:
 
-- **[Documentation site](https://jrollin.github.io/cartog/)** — quick start, CLI reference, configuration, MCP setup
+- **[Documentation site](https://www.cartog.dev/)** — quick start, CLI reference, configuration, MCP setup
 - [Usage](docs/usage.md) — full CLI reference and integration guides
 - [Editor integration](docs/editor-integration.md) — Neovim, VS Code, Emacs recipes
 - [Troubleshooting](docs/troubleshooting.md) — common issues and fixes

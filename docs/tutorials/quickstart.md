@@ -7,7 +7,7 @@
 ```bash
 # Recommended — no Rust required. Detects platform, downloads + verifies the
 # matching release binary, installs to /usr/local/bin or ~/.local/bin.
-curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
+curl -fsSL https://www.cartog.dev/install.sh | sh
 
 # Cargo (Rust 1.80+ required; lets advanced users strip features).
 cargo install cartog

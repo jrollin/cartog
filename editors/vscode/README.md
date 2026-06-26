@@ -28,13 +28,13 @@ a terminal with the installer command (pinned to the extension's version) typed
 in but **not run** — review the `curl … | sh` line and press Enter to install.
 When it finishes, run **cartog: Recheck** from the Command Palette to register
 the server; it then offers to index the current repo. (On Windows, follow the
-[install instructions](https://jrollin.github.io/cartog/usage/) — download the
+[install instructions](https://www.cartog.dev/usage.html) — download the
 `.zip` from Releases.)
 
 Or install cartog yourself (no Rust required):
 
 ```bash
-curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
+curl -fsSL https://www.cartog.dev/install.sh | sh
 ```
 
 Or with Cargo:
@@ -70,8 +70,8 @@ installer placed — even when VS Code's process `PATH` is missing your shell's.
 
 ## Links
 
-- [Documentation](https://jrollin.github.io/cartog/)
-- [Usage guide](https://jrollin.github.io/cartog/usage/)
+- [Documentation](https://www.cartog.dev/)
+- [Usage guide](https://www.cartog.dev/usage.html)
 - [Source & issues](https://github.com/jrollin/cartog)
 
 ## License

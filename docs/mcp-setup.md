@@ -8,7 +8,7 @@ All clients need `cartog` on your `PATH` first:
 
 ```bash
 # Recommended — no Rust required
-curl -fsSL https://jrollin.github.io/cartog/install.sh | sh
+curl -fsSL https://www.cartog.dev/install.sh | sh
 
 # Cargo (Rust 1.80+ required)
 cargo install cartog             # latest version

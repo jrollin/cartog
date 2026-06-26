@@ -12,7 +12,7 @@ export function isInstallSupported(platform: NodeJS.Platform): boolean {
 // zsh, sh, fish, nu), and sets CARTOG_VERSION on exactly the `sh` that runs the
 // piped script. An empty version is harmless: install.sh coerces it to latest.
 export function buildInstallCommand(version: string): string {
-  return `curl -fsSL https://jrollin.github.io/cartog/install.sh | env CARTOG_VERSION=${version} sh`;
+  return `curl -fsSL https://www.cartog.dev/install.sh | env CARTOG_VERSION=${version} sh`;
 }
 
 // Single-quote a path for a POSIX shell so a space or metacharacter in the
