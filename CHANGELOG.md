@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.30.1] - 2026-06-26
+
+### Features
+
+- **vscode**: Offer in-editor cartog install when binary is missing ([`59efad7`](https://github.com/jrollin/cartog/commit/59efad7b14e1ce5f05e88e30504d94ff3c8ec9f1))
+
+### Miscellaneous
+
+- Migrate docs/scripts to www.cartog.dev and consolidate install.sh ([`080bc97`](https://github.com/jrollin/cartog/commit/080bc977e77f28e6e654e58960f047e6941fce75))
+
 ## [0.30.0] - 2026-06-25
 
 ### Bug Fixes
