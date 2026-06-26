@@ -723,6 +723,7 @@ args = ["serve"]</pre>
         <details class="mcp-client">
           <summary><strong>VS Code (Copilot)</strong> — Marketplace extension, or project <code>.vscode/mcp.json</code> + user <code>Code/User/mcp.json</code></summary>
           <p>Easiest: install the <strong>cartog</strong> extension from the VS Code Marketplace (or Open VSX, for Cursor / Windsurf / VSCodium). It registers the cartog MCP server with Copilot automatically — no config file, and it resolves the binary path itself so a GUI-launched VS Code never hits the <code>PATH</code>-spawn problem.</p>
+          <p>If the binary isn't installed, the extension offers an <strong>Install cartog</strong> action (macOS/Linux): it opens a terminal with the version-pinned installer typed in but not run, so you review the <code>curl … | sh</code> line before pressing Enter. After it finishes, run <strong>cartog: Recheck</strong> from the Command Palette to register the server — it then offers to index the repo.</p>
           <p>Or wire the config files by hand with the CLI:</p>
           <pre>cartog ide --client vscode</pre>
           <p>Writes both scopes: project <code>.vscode/mcp.json</code> and the user file under VS Code's config dir (<code>~/Library/Application Support/Code/User/mcp.json</code> on macOS, <code>~/.config/Code/User/mcp.json</code> on Linux, <code>%APPDATA%\Code\User\mcp.json</code> on Windows). Top-level key is <code>servers</code>, not <code>mcpServers</code>.</p>

@@ -21,9 +21,17 @@ It ships no binary and adds no new tools — the same `cartog` the CLI runs.
 ## Requirements
 
 The `cartog` binary must be installed. The extension auto-detects it; if it
-isn't found you'll get a one-click prompt with install instructions.
+isn't found you'll get a prompt offering to install it.
 
-Install cartog (no Rust required):
+On macOS and Linux, click **Install cartog** in that prompt: the extension opens
+a terminal with the installer command (pinned to the extension's version) typed
+in but **not run** — review the `curl … | sh` line and press Enter to install.
+When it finishes, run **cartog: Recheck** from the Command Palette to register
+the server; it then offers to index the current repo. (On Windows, follow the
+[install instructions](https://jrollin.github.io/cartog/usage/) — download the
+`.zip` from Releases.)
+
+Or install cartog yourself (no Rust required):
 
 ```bash
 curl -fsSL https://jrollin.github.io/cartog/install.sh | sh

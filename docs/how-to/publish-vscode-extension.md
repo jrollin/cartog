@@ -36,6 +36,18 @@ version, commits, tags `vX.Y.Z`, and pushes. On the tag, `release.yml` runs the
 The extension publish and the crates.io publish are **independent jobs** in the
 same workflow, so one failing does not roll back the other.
 
+### Version pinning and release ordering
+
+The extension's in-editor **Install cartog** action pins `CARTOG_VERSION` to the
+extension's own version, so the installed binary matches the extension. The
+installer fetches `releases/download/v<version>/`, so that **GitHub Release and
+its binary assets must exist before a user runs Install** for the just-published
+version — otherwise `install.sh` 404s. Both come from the same `v*` tag, but the
+release-build matrix (binary assets) and the `publish-vscode` job race. If a
+release ever publishes the extension while the binary build is still failing or
+in flight, hold or re-run the binary build before announcing: a user who runs
+Install in that window gets a 404 even though `latest` is healthy.
+
 ## Publish from your machine first
 
 Do a hand publish once before wiring CI. It validates the package and the

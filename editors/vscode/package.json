@@ -30,6 +30,26 @@
         "label": "cartog"
       }
     ],
+    "commands": [
+      {
+        "command": "cartog.install",
+        "title": "Install cartog",
+        "category": "cartog"
+      },
+      {
+        "command": "cartog.recheck",
+        "title": "Recheck",
+        "category": "cartog"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "cartog.install",
+          "when": "!isWeb"
+        }
+      ]
+    },
     "configuration": {
       "title": "cartog",
       "properties": {

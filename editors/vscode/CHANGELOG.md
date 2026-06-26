@@ -15,3 +15,8 @@ The version tracks the cartog binary release it ships against.
   `$CARTOG_INSTALL_DIR` → `PATH` → `~/.local/bin` → `~/.cargo/bin`).
 - `cartog.watch` setting to toggle the `--watch` flag.
 - Actionable prompt when the binary is missing (install instructions / set path).
+- **Install cartog** action (macOS/Linux desktop) that runs the version-pinned
+  installer in a terminal — typed but not run, so you review the `curl … | sh`
+  line before pressing Enter.
+- **cartog: Recheck** command to re-detect the binary after an install and
+  register the server; offers to index the repo when found.
