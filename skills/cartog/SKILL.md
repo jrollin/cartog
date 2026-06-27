@@ -50,7 +50,7 @@ If `cartog init` returns non-zero (rare — usually a filesystem permission issu
 Both `cartog init` and `cartog index` are safe to run via Bash during an active MCP session, but for different reasons:
 - `cartog init` is config-only — it writes `.cartog.toml`, never touches the database. No writer contention possible.
 - `cartog index .` writes to the same SQLite file the MCP server has open. SQLite WAL mode lets it queue behind any active writer, and cartog's migration writes use a busy-retry loop on `SQLITE_BUSY` — so concurrent index + serve is safe.
-- After indexing, MCP tools pick up the new symbols on the next call (no server restart needed).
+- After indexing, an MCP server **already using the on-disk DB** picks up the new symbols on its next call (no restart needed). The exception is a **degraded** server (started config-less, holding only an in-memory placeholder — see "MCP server while config-less" above): it has no on-disk DB to re-read, so it keeps serving empty results until Claude Code is relaunched, even though `cartog index` / `cartog init` already built the index on disk.
 
 If MCP runs with `--watch`, the watcher will also re-index on file changes (and re-embed when the repo already has embeddings). A manual `cartog index .` is still safe; it just shares the write-queue.
 

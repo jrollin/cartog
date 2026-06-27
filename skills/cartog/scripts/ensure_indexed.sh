@@ -360,7 +360,10 @@ _find_cartog_toml() {
     local dir; dir="$(pwd)"
     while :; do
         [ -f "$dir/.cartog.toml" ] && return 0
-        [ -d "$dir/.git" ] && return 1   # reached git root, no config
+        # Stop at the git root. `.git` is a directory in a normal repo but a
+        # FILE in a worktree or submodule, so test existence, not -d (matches
+        # the binary's local_config_path, which uses .git/exists()).
+        [ -e "$dir/.git" ] && return 1
         local parent; parent="$(dirname "$dir")"
         [ "$parent" = "$dir" ] && return 1   # filesystem root
         dir="$parent"

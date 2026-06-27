@@ -113,15 +113,15 @@ fn read_only_secondary_against_absent_db_starts_degraded_not_error() {
 }
 
 #[test]
-fn new_with_allow_create_false_starts_degraded_without_creating_dir() {
-    // The real `new` path (used by `serve`) with allow_create=false and no DB
-    // must start degraded and create no `.cartog/`. Uses the test provider via
-    // a manual replica of `new`'s decision so we avoid loading ONNX.
+fn open_existing_drives_new_degraded_decision_without_creating_dir() {
+    // `CartogServer::new(allow_create=false)` keys its degraded branch on
+    // open_existing returning NotFound (it can't run here — `new` loads ONNX;
+    // the full degraded startup is covered by
+    // `read_only_secondary_against_absent_db_starts_degraded_not_error` via the
+    // injectable provider). This pins the decision input: NotFound + no dir.
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join(".cartog").join("db.sqlite");
 
-    // open_existing returns NotFound → the degraded branch fires; assert it
-    // never created the directory (mirrors `new`'s behavior).
     assert!(matches!(
         Database::open_existing(&db_path, rag::EMBEDDING_DIM),
         Err(cartog_db::DbError::NotFound { .. })

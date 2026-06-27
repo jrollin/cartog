@@ -62,6 +62,21 @@ fn open_existing_opens_an_existing_db() {
 }
 
 #[test]
+fn open_existing_does_not_create_db_when_parent_dir_exists() {
+    // The TOCTOU case: parent dir present, main file absent. A non-creating open
+    // must error rather than materialize a fresh DB at db_path.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("db.sqlite"); // parent (tmp) already exists
+
+    let err = Database::open_existing(&db_path, DEFAULT_EMBEDDING_DIM).unwrap_err();
+    assert!(matches!(err, DbError::NotFound { .. }), "got {err:?}");
+    assert!(
+        !db_path.exists(),
+        "open_existing must NOT create the DB file even when the parent dir exists"
+    );
+}
+
+#[test]
 fn open_existing_treats_stray_wal_without_main_file_as_absent() {
     // A crash mid-first-index can leave a `-wal`/`-shm` without the main file.
     // The existence check is keyed on the main file, so this is still gated.

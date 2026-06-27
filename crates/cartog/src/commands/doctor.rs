@@ -97,11 +97,12 @@ fn check_config(config_path: Option<&Path>, rejected: bool) -> CheckResult {
     }
 }
 
-fn check_database(db_path: &Path, embedding_dim: usize, config_present: bool) -> CheckResult {
+fn check_database(db_path: &Path, embedding_dim: usize, consent: bool) -> CheckResult {
     if !db_path.exists() {
-        // No DB + no config ⇒ `cartog index` would refuse (consent gate), so
-        // point at `cartog init` (the opt-in) rather than a command that fails.
-        let hint = if config_present {
+        // `consent` mirrors the runtime gate. Without it, `cartog index` would
+        // refuse — so point at `cartog init` (the opt-in) rather than a command
+        // that fails; with it, `cartog index` works, so just suggest that.
+        let hint = if consent {
             "run 'cartog index'"
         } else {
             "run 'cartog init' then 'cartog index' (or set CARTOG_AUTO_INIT=1)"
@@ -469,10 +470,14 @@ pub fn cmd_doctor(
 ) -> Result<()> {
     // Loaded config (present + not rejected) grants consent; a rejected one does not.
     let config_present = config_path.is_some() && !config_rejected;
+    // The full runtime gate (config OR existing DB OR CARTOG_AUTO_INIT), so the
+    // "database not found" hint matches what `cartog index` will actually do —
+    // e.g. AUTO_INIT alone makes index succeed, so don't tell the user to init.
+    let consent = crate::config::allow_index_creation(db_path, config_present);
     let checks = vec![
         check_git_repo(),
         check_config(config_path, config_rejected),
-        check_database(db_path, embedding_dim, config_present),
+        check_database(db_path, embedding_dim, consent),
         check_embedding_provider(provider_config),
         check_reranker(provider_config),
         check_remote(config, config_rejected),

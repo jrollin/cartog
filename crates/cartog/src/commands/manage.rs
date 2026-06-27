@@ -341,6 +341,11 @@ pub fn cmd_changes(
 }
 
 /// Watch for file changes and auto-re-index.
+///
+/// `allow_create` is the consent gate: `cartog watch` is refused upstream when
+/// it's false, so this is always reached with consent — it is threaded into
+/// [`WatchConfig`] so the watcher (e.g. the one a degraded `serve --watch`
+/// spawns) stays consent-blocked rather than creating a `.cartog/`.
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_watch(
     db_path: &Path,

@@ -25,7 +25,7 @@ impl Database {
     }
 
     /// Open the database **only if the main file already exists**, without ever
-    /// creating the `.cartog/` parent directory.
+    /// creating the `.cartog/` parent directory or a fresh DB file.
     ///
     /// Returns [`DbError::NotFound`] when the file is absent so the write-path
     /// consent gate (and degraded `serve`) can keep an un-opted-in project free
@@ -33,32 +33,66 @@ impl Database {
     /// opted in, so this runs the same schema migrations + embedding-dimension
     /// reconcile as [`Self::open`] — steady-state index updates keep working.
     ///
-    /// A stray `-wal`/`-shm` without the main file still counts as absent (the
-    /// existence check is keyed on `db_path` itself), matching the gate's rule.
+    /// The open itself is non-creating (`SQLITE_OPEN_READ_WRITE` without
+    /// `SQLITE_OPEN_CREATE`): if the file vanishes between any pre-check and the
+    /// open, SQLite errors instead of materializing a fresh DB, so there is no
+    /// TOCTOU window that could create an index for an un-opted-in project. A
+    /// stray `-wal`/`-shm` without the main file is still `NotFound`.
     pub fn open_existing(
         path: impl AsRef<std::path::Path>,
         embedding_dim: usize,
     ) -> DbResult<Self> {
+        use rusqlite::OpenFlags;
         let db_path = path.as_ref();
-        if !db_path.exists() {
-            return Err(DbError::NotFound {
-                path: db_path.to_path_buf(),
-            });
-        }
-        Self::open_no_create_dir(db_path, embedding_dim)
+        register_sqlite_vec();
+        // No SQLITE_OPEN_CREATE: a missing file errors rather than being created.
+        let conn = Connection::open_with_flags(
+            db_path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|source| {
+            // SQLite reports a missing file as SQLITE_CANTOPEN (code 14); map it
+            // to the typed NotFound the consent gate branches on.
+            if matches!(
+                source.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::CannotOpen)
+            ) {
+                DbError::NotFound {
+                    path: db_path.to_path_buf(),
+                }
+            } else {
+                DbError::Open {
+                    path: db_path.to_path_buf(),
+                    source,
+                }
+            }
+        })?;
+        Self::setup_opened_conn(conn, db_path, embedding_dim)
     }
 
     /// Shared open+migrate body for [`Self::open`] / [`Self::open_existing`].
-    /// The caller is responsible for the parent-directory policy: `open`
-    /// materializes `.cartog/` first, `open_existing` refuses absent files
-    /// before reaching here. SQLite would create the file at `db_path` if it
-    /// did not exist, so this must only run once the directory policy is settled.
+    /// The caller is responsible for the parent-directory + open-flags policy:
+    /// `open` materializes `.cartog/` and opens with create; `open_existing`
+    /// opens non-creating so a missing file errors. SQLite would create the file
+    /// at `db_path` if it did not exist, so this must only run once the directory
+    /// policy is settled.
     fn open_no_create_dir(db_path: &std::path::Path, embedding_dim: usize) -> DbResult<Self> {
         register_sqlite_vec();
         let conn = Connection::open(db_path).map_err(|source| DbError::Open {
             path: db_path.to_path_buf(),
             source,
         })?;
+        Self::setup_opened_conn(conn, db_path, embedding_dim)
+    }
+
+    /// Apply pragmas, schema, migrations, and embedding-dimension reconcile to an
+    /// already-opened connection. Shared by the create and non-creating open
+    /// paths so the post-open setup can't drift between them.
+    fn setup_opened_conn(
+        conn: Connection,
+        db_path: &std::path::Path,
+        embedding_dim: usize,
+    ) -> DbResult<Self> {
         conn.execute_batch(&format!(
             "PRAGMA journal_mode=WAL;
              PRAGMA busy_timeout={BUSY_TIMEOUT_MS};

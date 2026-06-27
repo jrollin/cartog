@@ -93,6 +93,7 @@ impl WatchConfig {
     /// mode), `skip_migrations = false`, `allow_create = true`. Callers wanting
     /// PID-lock tracking must set BOTH `pid_lock_dir` and `pid_lock_slot` after
     /// construction — see [`WatchConfig::pid_lock_slot`].
+    #[must_use]
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,

@@ -281,13 +281,40 @@ mod tests {
 
     #[test]
     fn open_db_opens_an_existing_index() {
+        use cartog_core::FileInfo;
         let tmp = tempfile::TempDir::new().unwrap();
         let db_path = tmp.path().join(".cartog").join("db.sqlite");
-        // Materialize a real DB, then confirm open_db opens it (not the fallback).
-        Database::open(&db_path, cartog_db::DEFAULT_EMBEDDING_DIM).unwrap();
+        // Materialize a real on-disk DB with a sentinel symbol.
+        {
+            let db = Database::open(&db_path, cartog_db::DEFAULT_EMBEDDING_DIM).unwrap();
+            db.upsert_file(&FileInfo {
+                path: "a.rs".into(),
+                last_modified: 0.0,
+                hash: "h".into(),
+                language: "rust".into(),
+                num_symbols: 1,
+            })
+            .unwrap();
+            db.insert_symbols(&[Symbol::new(
+                "SentinelSym",
+                SymbolKind::Class,
+                "a.rs",
+                1,
+                2,
+                0,
+                10,
+                None,
+            )])
+            .unwrap();
+        }
+        // open_db must reopen THAT on-disk DB, not fall back to an empty
+        // in-memory one — so the sentinel is still there.
         let db = open_db(&db_path, cartog_db::DEFAULT_EMBEDDING_DIM).unwrap();
-        assert!(db.is_empty().unwrap());
-        assert!(db_path.exists());
+        let hits = db.search("SentinelSym", None, None, 5).unwrap();
+        assert!(
+            hits.iter().any(|s| s.name == "SentinelSym"),
+            "open_db must reopen the on-disk index (sentinel present), not the in-memory fallback"
+        );
     }
 
     proptest::proptest! {

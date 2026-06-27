@@ -341,6 +341,7 @@ pub const AUTO_INIT_ENV: &str = "CARTOG_AUTO_INIT";
 /// materialize a `.cartog/` for a project nobody opted into. A `Rejected`
 /// (broken) `.cartog.toml` is **not** `config_present` — the caller passes
 /// `false` and this returns `false`, so a broken config refuses too.
+#[must_use]
 pub fn allow_index_creation(db_path: &Path, config_present: bool) -> bool {
     config_present || db_path.exists() || auto_init_enabled()
 }

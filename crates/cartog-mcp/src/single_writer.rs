@@ -5,6 +5,8 @@
 
 use super::*;
 
+/// Legacy un-scoped serve PID slot (untracked mode). Scoped peers use
+/// `serve-<hash>` via `cartog::state::slot_for_db`; see [`ServerOptions::pid_lock_slot`].
 pub const SERVE_LOCK_SLOT: &str = "serve";
 
 /// Convert a serve-family slot (legacy `"serve"` or DB-scoped
@@ -146,6 +148,11 @@ pub fn acquire_serve_lock(opts: &ServerOptions) -> anyhow::Result<ServeLockOutco
 /// When `watch` is true, a background file watcher keeps the index fresh.
 /// `rag_override` controls auto-embedding (requires `watch`): `Some(true)`/
 /// `Some(false)` force on/off, `None` lets the watcher auto-detect from the DB.
+///
+/// `allow_create` is the consent gate. When `false` with no existing index the
+/// server starts **degraded** (no `.cartog/`, write tools refuse, watcher waits
+/// for consent then pre-builds for the next relaunch); when `true` it opens
+/// normally, creating the DB if needed.
 #[allow(clippy::too_many_arguments)] // order-stable server knobs threaded from main
 pub async fn run_server(
     db_path: &std::path::Path,

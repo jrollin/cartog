@@ -109,6 +109,12 @@ fn read_command_no_create_on_fresh_repo() {
         "search on a fresh repo should exit 0: stderr={}",
         stderr(&out)
     );
+    // The empty-index hint guides the user from the empty result to opting in.
+    let so = stdout(&out);
+    assert!(
+        so.contains("index is empty") && so.contains("cartog init"),
+        "search must surface the empty-index hint pointing at cartog init: {so}"
+    );
     assert!(
         !sb.has(".cartog"),
         ".cartog/ must NOT be created by a read command on a fresh repo"
