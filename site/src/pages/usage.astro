@@ -198,6 +198,7 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
           </thead>
           <tbody>
             <tr><td><code>CARTOG_DB</code></td><td>auto-detect</td><td>Database path (same as <code>--db</code>).</td></tr>
+            <tr><td><code>CARTOG_AUTO_INIT</code></td><td>unset</td><td>Opt a config-less project into indexing. Any non-empty value lets <code>cartog index</code> / <code>rag index</code> / <code>watch</code> create a <code>.cartog/</code> with defaults — <strong>no <code>.cartog.toml</code> is written</strong>. Unset, with no config and no existing index, those write paths refuse and <code>cartog serve</code> starts degraded (see <a href="#config-consent">the consent gate</a>).</td></tr>
             <tr><td><code>CARTOG_JOBS</code></td><td>CPU count</td><td>Parse worker pool size for <code>cartog index</code> (clamped <code>1..=64</code>). Overrides <code>[index] jobs</code>; the <code>--jobs</code> flag overrides it.</td></tr>
             <tr><td><code>CARTOG_LSP_MAX_SERVERS</code></td><td><code>min(langs, 4)</code></td><td>Max concurrent LSP servers in the indexer's edge pass. Overrides <code>[lsp] max_concurrent_servers</code>; <code>1</code> forces serial.</td></tr>
             <tr><td><code>CARTOG_ONNX_THREADS</code></td><td>all cores</td><td>Caps ONNX CPU threads for <code>rag index</code> + reranking. Overrides <code>[embedding.local] intra_threads</code>; <code>1</code> forces single-core.</td></tr>
@@ -212,6 +213,22 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
             <tr><td><code>CARTOG_VERSION</code></td><td>latest</td><td>Pin the version <code>install.sh</code> fetches.</td></tr>
           </tbody>
         </table>
+
+        <h3 id="config-consent">Index-creation consent gate</h3>
+        <p>cartog will not create a <code>.cartog/</code> index for a project on its own. A fresh, config-less repository stays untouched until you opt in via <strong>any one</strong> of: a present <code>.cartog.toml</code> (run <code>cartog init</code>); an existing index (an existing <code>.cartog/db.sqlite</code> is itself consent, so steady-state updates keep working); or <code>CARTOG_AUTO_INIT</code> set to any non-empty value (indexes with defaults, <strong>never</strong> writing a config file). A broken <code>.cartog.toml</code> is not consent.</p>
+        <table class="config-table">
+          <thead>
+            <tr><th>Surface</th><th>Behavior with no config and no index</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>cartog index</code> / <code>rag index</code> / <code>watch</code></td><td>Refuse (non-zero) with a hint; no <code>.cartog/</code> created.</td></tr>
+            <tr><td><code>cartog serve</code> / <code>serve --watch</code> (the MCP plugin default)</td><td>Start <strong>degraded</strong>: no <code>.cartog/</code>, read tools return empty + a hint, the 2 write tools refuse, and <code>cartog_stats</code> reports <code>"degraded": true</code>. With <code>--watch</code>, the watcher pre-builds the index the moment <code>cartog init</code> runs; the running server stays degraded until the client relaunches it.</td></tr>
+            <tr><td>Read commands (<code>search</code>, <code>map</code>, …) and read MCP tools</td><td>Return empty results + a hint; no <code>.cartog/</code> created.</td></tr>
+            <tr><td><code>init</code> / <code>config</code> / <code>doctor</code> / <code>install</code> / <code>ide</code> / <code>self *</code></td><td>Unchanged, never gated. Install + editor wiring touch only the binary and MCP config files.</td></tr>
+            <tr><td><code>cartog pull</code> / <code>push</code></td><td>Not gated — invoking them <strong>is</strong> the opt-in (an explicit user action, like <code>cartog init</code>). <code>pull</code> materializes <code>.cartog/</code> because downloading a remote index is its whole job.</td></tr>
+          </tbody>
+        </table>
+        <p>The guarantee is that cartog never creates a <code>.cartog/</code> <em>on its own</em> (a background hook, an MCP server, or a stray read). An explicit <code>cartog pull</code> you typed is consent in itself.</p>
 
         <details class="mcp-client">
           <summary><strong>Example <code>.cartog.toml</code></strong> — every section, with defaults annotated (read it, don't copy it wholesale)</summary>

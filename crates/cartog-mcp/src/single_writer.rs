@@ -155,6 +155,7 @@ pub async fn run_server(
     redact: indexer::RedactionConfig,
     lsp_overrides: std::collections::HashMap<String, Vec<String>>,
     filter: indexer::WalkFilter,
+    allow_create: bool,
     opts: ServerOptions,
 ) -> anyhow::Result<()> {
     info!("starting cartog MCP server v{}", env!("CARGO_PKG_VERSION"));
@@ -204,6 +205,10 @@ pub async fn run_server(
         config.redact = redact;
         config.walk_filter = filter.clone();
         config.stale = initial_stale.clone();
+        // Same consent gate as the server: a degraded start spawns the watcher
+        // so it can pre-build the index once `cartog init` runs, but it stays
+        // degraded (no `.cartog/`) until then.
+        config.allow_create = allow_create;
         // Claim the watcher's PID slot so a separately-running `cartog watch`
         // from a terminal correctly refuses to start against the same DB.
         config.pid_lock_dir = opts.pid_lock_dir.clone();
@@ -237,7 +242,14 @@ pub async fn run_server(
         let rag_config = rag_config.clone();
         let filter = filter.clone();
         tokio::task::spawn_blocking(move || match role {
-            Role::Primary => CartogServer::new(&db_path, rag_config, redact, lsp_overrides, filter),
+            Role::Primary => CartogServer::new(
+                &db_path,
+                rag_config,
+                redact,
+                lsp_overrides,
+                filter,
+                allow_create,
+            ),
             Role::ReadOnly => {
                 CartogServer::new_read_only(&db_path, rag_config, redact, lsp_overrides, filter)
             }

@@ -351,6 +351,7 @@ pub fn cmd_watch(
     provider_config: rag::EmbeddingProviderConfig,
     redact: indexer::RedactionConfig,
     filter: indexer::WalkFilter,
+    allow_create: bool,
     json: bool,
 ) -> Result<()> {
     let mut config = WatchConfig::new(PathBuf::from(path));
@@ -360,6 +361,7 @@ pub fn cmd_watch(
     config.rag_config = provider_config;
     config.redact = redact;
     config.walk_filter = filter;
+    config.allow_create = allow_create;
     config.json_events = json;
     // pid_lock_dir/slot must be both-or-neither: a sandboxed host with no
     // resolvable state dir falls back to untracked mode rather than hard-

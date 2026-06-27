@@ -91,6 +91,7 @@ impl CartogServer {
         let watcher_active = self
             .watcher_active
             .load(std::sync::atomic::Ordering::Relaxed);
+        let degraded = self.is_degraded();
 
         tokio::task::spawn_blocking(move || {
             debug!("stats");
@@ -110,14 +111,26 @@ impl CartogServer {
                 stats,
                 role,
                 watcher_active,
+                degraded,
             };
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(&result).ok();
             // cartog_stats bypasses tool_response_named so it must log itself
             // — otherwise MCP-side stats calls disappear from
-            // `cartog stats --savings`.
-            log_tool_query(&db, "cartog_stats");
+            // `cartog stats --savings`. Skip the write when degraded (the
+            // in-memory placeholder is discarded; logging is pointless noise).
+            if !degraded {
+                log_tool_query(&db, "cartog_stats");
+            }
+            // Lead with a plain-text degraded banner so a human reading the
+            // tool result sees the "no index yet" state, not just empty counts.
+            if degraded {
+                let banner = "no index yet — this project has no .cartog.toml and was not \
+                    indexed. Run `cartog init` to opt in (the index loads on the next Claude \
+                    Code launch), or set CARTOG_AUTO_INIT=1.\n";
+                return Ok(success_result(format!("{banner}{json}"), structured));
+            }
             Ok(success_result(json, structured))
         })
         .await

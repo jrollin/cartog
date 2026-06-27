@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::progress::{install_cancel_probe, spinner_callback, stop_spinner, Spinner};
-use super::shared::open_db;
+use super::shared::open_db_create;
 use cartog_indexer as indexer;
 
 /// Live serve peer to defer the LSP pass to, or `None` to run LSP locally.
@@ -43,7 +43,7 @@ pub fn cmd_index(
     filter: &indexer::WalkFilter,
 ) -> Result<()> {
     let root = Path::new(path);
-    let db = open_db(db_path, embedding_dim)?;
+    let db = open_db_create(db_path, embedding_dim)?;
 
     let deferred_peer = lsp_defer_peer(&db, lsp, force, crate::state::default_state_dir(), db_path);
     if let Some(peer) = &deferred_peer {

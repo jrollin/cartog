@@ -45,6 +45,12 @@ pub enum DbError {
         source: std::io::Error,
     },
 
+    /// The main database file does not exist at the resolved path. Returned by
+    /// [`Database::open_existing`] so callers can branch on "no index yet"
+    /// without materializing a `.cartog/` for an un-opted-in project.
+    #[error("no cartog index at {path}")]
+    NotFound { path: std::path::PathBuf },
+
     /// Could not apply one of the startup PRAGMAs (journal_mode, WAL, …).
     #[error("failed to set startup pragmas: {0}")]
     Pragma(#[source] rusqlite::Error),

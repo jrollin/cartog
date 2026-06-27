@@ -49,6 +49,13 @@ All three commands are idempotent. `cartog init` never overwrites an existing
 `.cartog.toml`; `cartog ide` merges entries instead of clobbering (other MCP
 servers in the file are preserved); `cartog index` is incremental.
 
+`cartog init` (step 1) is what opts the project in: cartog will not create a
+`.cartog/` index for a config-less, never-indexed repo on its own, so
+`cartog index` refuses until a `.cartog.toml` exists (or `CARTOG_AUTO_INIT=1`
+indexes with defaults, writing no config). An existing index keeps working
+without a config. See
+[reference/config.md § Index-creation consent gate](reference/config.md#index-creation-consent-gate).
+
 ## Configuration
 
 > Full configuration reference (all `.cartog.toml` keys, env vars): **[reference/config.md](reference/config.md)**

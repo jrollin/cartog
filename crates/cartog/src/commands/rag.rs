@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use super::progress::{install_cancel_probe, spinner_callback, stop_spinner, Spinner};
-use super::shared::{empty_index_hint, open_db, output};
+use super::shared::{empty_index_hint, open_db, open_db_create, output};
 use cartog_core::Compact;
 use cartog_indexer as indexer;
 use cartog_rag as rag;
@@ -71,7 +71,7 @@ pub fn cmd_rag_index(
     // first-run) embedding-model download inside create_embedding_provider.
     let cancel = install_cancel_probe();
     let mut provider = rag::create_embedding_provider(provider_config)?;
-    let db = open_db(db_path, provider.dimension())?;
+    let db = open_db_create(db_path, provider.dimension())?;
     db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
         .context("failed to reconcile embedding fingerprint")?;
 

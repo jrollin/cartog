@@ -30,6 +30,11 @@ impl CartogServer {
         Parameters(params): Parameters<IndexParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        // Consent gate before the read-only check: a degraded start has no
+        // index to write to and a tool call is not opt-in.
+        if let Some(err) = self.refuse_if_degraded("cartog_index") {
+            return Err(err);
+        }
         if let Some(err) = self.refuse_if_read_only("cartog_index") {
             return Err(err);
         }
@@ -123,6 +128,9 @@ impl CartogServer {
         Parameters(params): Parameters<RagIndexParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        if let Some(err) = self.refuse_if_degraded("cartog_rag_index") {
+            return Err(err);
+        }
         if let Some(err) = self.refuse_if_read_only("cartog_rag_index") {
             return Err(err);
         }

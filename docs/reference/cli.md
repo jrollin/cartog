@@ -29,6 +29,8 @@ Files whose language cartog doesn't support are reported, not silently dropped: 
 
 On a TTY a spinner shows the live phase with a climbing counter (`parsing M/N files`, `storing M/N files`, `resolving M/N edges with LSP`). Press **Ctrl-C** to cancel: indexing stops at the next file/edge-window boundary (including mid-LSP, the slowest phase), the whole pass rolls back so the index is left unchanged, and cartog prints `Indexing cancelled; the index was left unchanged.` Because the pass is one transaction, a re-run redoes it from scratch (it does not resume mid-pass). One caveat: a Ctrl-C while a language server is still starting up is only noticed once startup finishes (up to `CARTOG_LSP_READY_TIMEOUT_SECS`, default 20s).
 
+**Consent gate.** On a project with no `.cartog.toml` and no existing index, `cartog index` (and `cartog rag index`, `cartog watch`) refuse rather than create a `.cartog/` for a project you haven't opted into. Run `cartog init` first (then index), or set `CARTOG_AUTO_INIT=1` to index with defaults without writing a config file. An existing index, or any present `.cartog.toml`, also grants consent. See [config.md § Index-creation consent gate](config.md#index-creation-consent-gate).
+
 ### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N]`
 
 Find symbols by partial name — use this when you know roughly what you're looking for but need the exact name before calling `refs`, `callees`, or `impact`.
@@ -412,6 +414,8 @@ cartog serve --watch --rag    # force auto-embed even on a not-yet-embedded repo
 ```
 
 When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit, and (when the repo already has embeddings) refreshes RAG embeddings on a deferred timer — no `--rag` needed. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
+
+**Degraded start (consent gate).** Unlike the one-shot creators, `cartog serve` never refuses — on a project with no `.cartog.toml` and no index, it starts **degraded**: it creates no `.cartog/`, read tools return empty results, the 2 write tools refuse, and `cartog_stats` reports `"degraded": true` with a "run `cartog init`" banner. With `--watch`, the watcher pre-builds the index the moment a `.cartog.toml` appears (or an existing DB / `CARTOG_AUTO_INIT` is detected); the **running** server stays degraded until the client relaunches it, at which point the index is already built. See [config.md § Index-creation consent gate](config.md#index-creation-consent-gate).
 
 #### Multiple `cartog serve` instances on the same project
 

@@ -22,7 +22,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use tracing::{debug, info};
 
-use cartog_db::{Database, PinnedAttach};
+use cartog_db::{Database, DbError, PinnedAttach};
 use cartog_indexer as indexer;
 use cartog_rag as rag;
 use cartog_watch as watch;
@@ -871,6 +871,16 @@ pub struct CartogServer {
     /// the indexing tools. `Arc` so `#[derive(Clone)]` stays cheap (WalkFilter
     /// is not Copy).
     walk_filter: Arc<indexer::WalkFilter>,
+    /// True when this Primary started **degraded**: no `.cartog.toml`, no
+    /// existing index, and `CARTOG_AUTO_INIT` unset, so no `.cartog/` was
+    /// created. The DB is an empty in-memory placeholder — read tools return
+    /// empty + a "run `cartog init`" hint and the 2 write tools refuse with the
+    /// no-config message. A `--watch` Primary's watcher pre-builds the index
+    /// once `cartog init` runs; the running process stays degraded until the
+    /// client relaunches it (no live in-place DB swap). A read-only secondary
+    /// also starts degraded if it found no DB on disk (its primary is degraded).
+    /// Immutable for the process lifetime — set once at construction, never swapped.
+    degraded: bool,
 }
 
 /// Role of this MCP server instance under single-writer election.
@@ -926,21 +936,54 @@ impl CartogServer {
     /// indexed content, `lsp_overrides` maps a cartog language to its
     /// `[lsp.<lang>] command` argv for the warm `LspManager` (empty = default
     /// PATH-resolved servers), and `filter` is the walk filter (`[index]
-    /// exclude` globs + gitignore policy) the indexing tools apply. For the
-    /// read-only attach path see [`new_read_only`](Self::new_read_only).
+    /// exclude` globs + gitignore policy) the indexing tools apply.
+    ///
+    /// `allow_create` is the consent gate: when `false` and no index exists
+    /// yet, the server starts **degraded** — it does NOT create a `.cartog/`,
+    /// opens an empty in-memory DB instead, refuses the 2 write tools with a
+    /// "run `cartog init`" message, and surfaces the degraded state in
+    /// `cartog_stats`. When `true` (or an index already exists) it opens for
+    /// real. For the read-only attach path see
+    /// [`new_read_only`](Self::new_read_only).
     pub fn new(
         db_path: &std::path::Path,
         rag_config: rag::EmbeddingProviderConfig,
         redact: indexer::RedactionConfig,
         lsp_overrides: std::collections::HashMap<String, Vec<String>>,
         filter: indexer::WalkFilter,
+        allow_create: bool,
     ) -> anyhow::Result<Self> {
-        let db = Database::open(db_path, rag_config.resolved_dimension())
-            .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
+        // Consent gate. When creation is not allowed, open only if a DB already
+        // exists; an absent DB yields a degraded server with an empty in-memory
+        // placeholder — never a freshly-created `.cartog/`.
+        let (db, degraded) = if allow_create {
+            let db = Database::open(db_path, rag_config.resolved_dimension())
+                .map_err(|e| anyhow::anyhow!("failed to open database: {e}"))?;
+            (db, false)
+        } else {
+            match Database::open_existing(db_path, rag_config.resolved_dimension()) {
+                Ok(db) => (db, false),
+                Err(DbError::NotFound { .. }) => {
+                    info!(
+                        "no .cartog.toml and no index yet — starting MCP server degraded \
+                         (no .cartog/ created). Run `cartog init` to opt in; the index \
+                         loads on the next Claude Code launch."
+                    );
+                    let db = Database::open_memory()
+                        .map_err(|e| anyhow::anyhow!("failed to open in-memory database: {e}"))?;
+                    (db, true)
+                }
+                Err(e) => return Err(anyhow::anyhow!("failed to open database: {e}")),
+            }
+        };
         let provider = rag::create_embedding_provider(&rag_config)
             .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
-        db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
-            .map_err(|e| anyhow::anyhow!("failed to reconcile embedding fingerprint: {e}"))?;
+        // Only reconcile against a real on-disk DB; an in-memory degraded
+        // placeholder has nothing to reconcile and is discarded on relaunch.
+        if !degraded {
+            db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
+                .map_err(|e| anyhow::anyhow!("failed to reconcile embedding fingerprint: {e}"))?;
+        }
         let reranker = rag::create_reranker_provider(
             &rag_config.reranker_provider,
             rag_config.reranker_model.as_deref(),
@@ -954,6 +997,7 @@ impl CartogServer {
             lsp_overrides,
             filter,
             Role::Primary,
+            degraded,
         )
     }
 
@@ -963,6 +1007,12 @@ impl CartogServer {
     /// owns both); the 2 DB-write tools return a clear error at dispatch
     /// time. The other 12 tools (11 read + `cartog_update`, which arms a
     /// machine-level deferred update, not a DB write) work normally.
+    ///
+    /// Absent on-disk DB ⇒ the lock-holding primary is itself degraded
+    /// (config-less, un-indexed). This secondary then starts degraded too
+    /// instead of failing a read-only open of a missing file, so the
+    /// serve-for-all-clients flow never leaves a second client without an MCP
+    /// server. Picks up the index on relaunch, like the degraded primary.
     pub fn new_read_only(
         db_path: &std::path::Path,
         rag_config: rag::EmbeddingProviderConfig,
@@ -970,6 +1020,36 @@ impl CartogServer {
         lsp_overrides: std::collections::HashMap<String, Vec<String>>,
         filter: indexer::WalkFilter,
     ) -> anyhow::Result<Self> {
+        // Absent DB ⇒ mirror the degraded primary rather than erroring on a
+        // read-only open of a missing file.
+        if !db_path.exists() {
+            info!(
+                "no index on disk and another cartog process holds the serve lock \
+                 (a degraded primary) — starting this secondary degraded too; it \
+                 loads the index on the next Claude Code launch."
+            );
+            let db = Database::open_memory()
+                .map_err(|e| anyhow::anyhow!("failed to open in-memory database: {e}"))?;
+            let provider = rag::create_embedding_provider(&rag_config)
+                .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
+            let reranker = rag::create_reranker_provider(
+                &rag_config.reranker_provider,
+                rag_config.reranker_model.as_deref(),
+                rag_config.intra_threads,
+            );
+            // Primary role keeps a degraded server (no DB, refuses writes) out of
+            // the ReadOnly promotion path; degraded=true gates the write tools.
+            return Self::from_parts(
+                db,
+                provider,
+                reranker,
+                redact,
+                lsp_overrides,
+                filter,
+                Role::Primary,
+                true,
+            );
+        }
         let db = Database::open_readonly(db_path)
             .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?;
         let provider = rag::create_embedding_provider(&rag_config)
@@ -987,6 +1067,7 @@ impl CartogServer {
             lsp_overrides,
             filter,
             Role::ReadOnly,
+            false, // an existing DB was found on disk
         )
     }
 
@@ -998,6 +1079,12 @@ impl CartogServer {
     /// when no live watcher publishes it (no `--watch`, read-only peer, or a
     /// degraded primary). Read with a brief lock — never held across `.await`.
     fn stale_snapshot(&self) -> Option<StaleSnapshot> {
+        // Degraded: results come from the empty in-memory placeholder, so a
+        // "results may be stale" banner over zero hits would be misleading — the
+        // cartog_stats degraded banner already says "no index yet".
+        if self.is_degraded() {
+            return None;
+        }
         if !self
             .watcher_active
             .load(std::sync::atomic::Ordering::Acquire)
@@ -1010,6 +1097,7 @@ impl CartogServer {
             .and_then(|cell| cell.as_ref().map(|s| s.snapshot()))
     }
 
+    #[allow(clippy::too_many_arguments)] // single field-wiring point
     fn from_parts(
         db: Database,
         provider: Box<dyn rag::provider::EmbeddingProvider>,
@@ -1018,6 +1106,7 @@ impl CartogServer {
         lsp_overrides: std::collections::HashMap<String, Vec<String>>,
         filter: indexer::WalkFilter,
         role: Role,
+        degraded: bool,
     ) -> anyhow::Result<Self> {
         let cwd = Self::cwd()?;
         // Consumed only by the `lsp` feature's warm manager; keep the param
@@ -1043,6 +1132,7 @@ impl CartogServer {
             stale: Arc::new(Mutex::new(None)),
             redact,
             walk_filter: Arc::new(filter),
+            degraded,
         })
     }
 
@@ -1060,6 +1150,9 @@ impl CartogServer {
         filter: indexer::WalkFilter,
         role: Role,
     ) -> anyhow::Result<Self> {
+        // Mirror production: a ReadOnly attach against an absent DB degrades
+        // (its primary is degraded) instead of failing open_readonly.
+        let mut degraded = false;
         let db = match role {
             Role::Primary => {
                 let db = Database::open(db_path, provider.dimension())
@@ -1069,6 +1162,11 @@ impl CartogServer {
                         anyhow::anyhow!("failed to reconcile embedding fingerprint: {e}")
                     })?;
                 db
+            }
+            Role::ReadOnly if !db_path.exists() => {
+                degraded = true;
+                Database::open_memory()
+                    .map_err(|e| anyhow::anyhow!("failed to open in-memory database: {e}"))?
             }
             Role::ReadOnly => Database::open_readonly(db_path)
                 .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?,
@@ -1081,6 +1179,30 @@ impl CartogServer {
             std::collections::HashMap::new(),
             filter,
             role,
+            degraded,
+        )
+    }
+
+    /// Test-only constructor for the **degraded** primary: an empty in-memory
+    /// DB and `degraded = true`, with no on-disk file. Mirrors what `new`
+    /// produces when consent is absent and no index exists.
+    #[cfg(test)]
+    fn new_degraded_for_tests(
+        provider: Box<dyn rag::provider::EmbeddingProvider>,
+        redact: indexer::RedactionConfig,
+        filter: indexer::WalkFilter,
+    ) -> anyhow::Result<Self> {
+        let db = Database::open_memory()
+            .map_err(|e| anyhow::anyhow!("failed to open in-memory database: {e}"))?;
+        Self::from_parts(
+            db,
+            provider,
+            None,
+            redact,
+            std::collections::HashMap::new(),
+            filter,
+            Role::Primary,
+            true,
         )
     }
 
@@ -1095,6 +1217,29 @@ impl CartogServer {
     /// when the promoter takes over from a dead primary (Phase 5).
     pub fn role(&self) -> Role {
         self.role.load()
+    }
+
+    /// True when this server started degraded (no consent + no existing index).
+    fn is_degraded(&self) -> bool {
+        self.degraded
+    }
+
+    /// If we started degraded (no `.cartog.toml`, no index, no
+    /// `CARTOG_AUTO_INIT`), return an `McpError` telling the user to opt in.
+    /// A tool call is **not** approval — distinct from the read-only-secondary
+    /// refusal, which fires only against an existing DB owned by a peer. `None`
+    /// when the server has a real index and the write should proceed.
+    fn refuse_if_degraded(&self, tool: &str) -> Option<McpError> {
+        if self.is_degraded() {
+            Some(mcp_err(format!(
+                "`{tool}` is unavailable: this project has no .cartog.toml and no index yet, \
+                 so cartog will not create one automatically. Run `cartog init` to opt in \
+                 (the index builds in the background and loads on the next Claude Code launch), \
+                 or set CARTOG_AUTO_INIT=1 to index with defaults without writing a config file."
+            )))
+        } else {
+            None
+        }
     }
 
     /// If we're a read-only secondary, return an `McpError` explaining why

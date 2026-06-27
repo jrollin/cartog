@@ -297,3 +297,89 @@ fn read_config_rejects_unknown_lsp_language() {
     fs::write(&cfg_path, "[lsp.pytho]\ncommand = [\"x\"]\n").unwrap();
     assert!(read_config(&cfg_path).is_none());
 }
+
+// ── Consent gate predicate ──
+
+#[test]
+#[serial]
+fn allow_index_creation_refuses_fresh_repo() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let absent = dir.path().join(".cartog").join("db.sqlite");
+    let _guard = scopeguard(AUTO_INIT_ENV);
+    std::env::remove_var(AUTO_INIT_ENV);
+    assert!(
+        !allow_index_creation(&absent, false),
+        "no config + no DB + no env must refuse"
+    );
+}
+
+#[test]
+fn allow_index_creation_allows_with_config_present() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let absent = dir.path().join(".cartog").join("db.sqlite");
+    assert!(allow_index_creation(&absent, true));
+}
+
+#[test]
+fn allow_index_creation_allows_with_existing_db() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = dir.path().join("db.sqlite");
+    std::fs::write(&db, b"").unwrap();
+    assert!(allow_index_creation(&db, false));
+}
+
+#[test]
+#[serial]
+fn allow_index_creation_stray_wal_without_main_file_is_gated() {
+    // Keyed on the main DB file; a stray -wal alone is still "fresh".
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = dir.path().join("db.sqlite");
+    std::fs::write(dir.path().join("db.sqlite-wal"), b"").unwrap();
+    let _guard = scopeguard(AUTO_INIT_ENV);
+    std::env::remove_var(AUTO_INIT_ENV);
+    assert!(!allow_index_creation(&db, false));
+}
+
+#[test]
+#[serial]
+fn allow_index_creation_allows_with_auto_init_env() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let absent = dir.path().join(".cartog").join("db.sqlite");
+    let _guard = scopeguard(AUTO_INIT_ENV);
+    std::env::set_var(AUTO_INIT_ENV, "1");
+    assert!(allow_index_creation(&absent, false));
+}
+
+#[test]
+#[serial]
+fn allow_index_creation_ignores_empty_auto_init_env() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let absent = dir.path().join(".cartog").join("db.sqlite");
+    let _guard = scopeguard(AUTO_INIT_ENV);
+    std::env::set_var(AUTO_INIT_ENV, "");
+    assert!(
+        !allow_index_creation(&absent, false),
+        "an empty CARTOG_AUTO_INIT must not count as opt-in"
+    );
+}
+
+/// Restore an env var to its pre-test value on drop, so a `set_var`/`remove_var`
+/// in one `#[serial]` test can't leak into another.
+fn scopeguard(key: &'static str) -> impl Drop {
+    struct Restore {
+        key: &'static str,
+        prev: Option<String>,
+    }
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+    Restore {
+        key,
+        prev: std::env::var(key).ok(),
+    }
+}

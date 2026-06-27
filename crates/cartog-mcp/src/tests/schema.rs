@@ -261,6 +261,7 @@ fn stats_result_flattens_index_stats() {
         stats,
         role: Role::ReadOnly,
         watcher_active: false,
+        degraded: false,
     };
     let value = serde_json::to_value(&result).expect("serialize");
     let obj = value.as_object().expect("object");
@@ -272,4 +273,9 @@ fn stats_result_flattens_index_stats() {
         Some(false)
     );
     assert!(!obj.contains_key("stats"), "stats is flattened, not nested");
+    // `degraded: false` is skipped, so non-degraded `--json` output is unchanged.
+    assert!(
+        !obj.contains_key("degraded"),
+        "degraded must be omitted when false"
+    );
 }

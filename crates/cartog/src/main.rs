@@ -45,6 +45,15 @@ fn indexes_with_config(cmd: &Command) -> bool {
     )
 }
 
+/// Explicit one-shot index creators gated by the consent rule: with no config
+/// and no existing index, these refuse rather than materialize a `.cartog/`.
+/// Defined as the `indexes_with_config` set minus `Serve` (which starts
+/// degraded instead of refusing) — so a future index command added there is
+/// gated automatically, not silently bypassed.
+fn is_gated_write_command(cmd: &Command) -> bool {
+    indexes_with_config(cmd) && !matches!(cmd, Command::Serve { .. })
+}
+
 /// Long-lived commands (`serve`, `watch`) skip the auto-check — they run
 /// for hours and the user never sees a hint printed at the *start* anyway.
 fn classify_command(cmd: &Command) -> CommandKind {
@@ -123,6 +132,10 @@ fn main() -> Result<()> {
     }
 
     let config_rejected = config_load.is_rejected();
+    // Consent signal #1: a successfully-loaded `.cartog.toml`. A `Rejected`
+    // (broken) config is NOT consent — captured here before `config_or_default`
+    // collapses the enum to a plain config.
+    let config_present = matches!(config_load, config::ConfigLoad::Loaded { .. });
     let config_path = config_load.path().map(|p| p.to_path_buf());
     // A rejected config silently falls back to defaults, so an indexing command
     // would ignore `[index] exclude`, `[security]`, and `[lsp.<lang>]` without
@@ -140,6 +153,20 @@ fn main() -> Result<()> {
     let cartog_config = config_load.config_or_default();
 
     let db_path = config::resolve_db_path(cli.db.clone(), &cartog_config);
+    // Consent gate: may we create a fresh `.cartog/` for this project? True when
+    // a config is present, the DB already exists, or `CARTOG_AUTO_INIT` is set.
+    // The explicit one-shot creators (`index` / `rag index` / `watch`) refuse
+    // up front when this is false; `serve` instead starts degraded (threaded in
+    // below), and read commands fall back to an empty in-memory DB (see
+    // `commands::shared::open_db`).
+    let allow_create = config::allow_index_creation(&db_path, config_present);
+    if !allow_create && is_gated_write_command(&cli.command) {
+        anyhow::bail!(
+            "no .cartog.toml in this project and no existing index — refusing to \
+             create one. Run `cartog init` to opt in (then `cartog index .`), or set \
+             CARTOG_AUTO_INIT=1 to index with defaults without writing a config file."
+        );
+    }
     let provider_config = config::to_provider_config(&cartog_config);
     let redact = config::to_redaction_config(&cartog_config);
     // read_config already validated this, so it only re-builds a known-good
@@ -368,6 +395,7 @@ fn main() -> Result<()> {
             provider_config,
             redact,
             walk_filter,
+            allow_create,
             cli.json,
         ),
         Command::Init { dry_run } => commands::init::cmd_init(dry_run, cli.json),
@@ -411,6 +439,7 @@ fn main() -> Result<()> {
                 redact,
                 lsp_overrides,
                 walk_filter,
+                allow_create,
                 opts,
             ))
         }

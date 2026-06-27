@@ -353,15 +353,34 @@ fork_background() {
 
 # --- Foreground execution starts here ---
 
-# Evaluate the no-toml gate first so we can decide whether the missing-binary
+# Walk up from cwd looking for .cartog.toml, stopping at the git root — mirrors
+# the binary's local_config_path so an intermediate-dir config (monorepo) is
+# seen by both. Returns 0 if found.
+_find_cartog_toml() {
+    local dir; dir="$(pwd)"
+    while :; do
+        [ -f "$dir/.cartog.toml" ] && return 0
+        [ -d "$dir/.git" ] && return 1   # reached git root, no config
+        local parent; parent="$(dirname "$dir")"
+        [ "$parent" = "$dir" ] && return 1   # filesystem root
+        dir="$parent"
+    done
+}
+
+# Evaluate the consent gate first so we can decide whether the missing-binary
 # background pipeline should also index (it should NOT auto-index a project
-# the user hasn't opted into). Check both cwd and the git root — matches
-# the DB resolver's search order above.
+# the user hasn't opted into). Consent is granted by ANY of three signals,
+# mirroring the binary's `allow_index_creation`:
+#   1. CARTOG_AUTO_INIT set (index with defaults),
+#   2. a `.cartog.toml` at cwd or any ancestor up to the git root,
+#   3. the resolved main DB file already exists (Branch 1 — once an index
+#      exists the project is de-facto opted in; auto-updates keep working even
+#      if the original signal, e.g. CARTOG_AUTO_INIT, is later unset).
 _toml_root="${GIT_ROOT:-.}"
 _has_toml=0
 if [ -n "${CARTOG_AUTO_INIT:-}" ] \
-   || [ -f "./.cartog.toml" ] \
-   || { [ -n "$GIT_ROOT" ] && [ -f "${GIT_ROOT}/.cartog.toml" ]; }; then
+   || _find_cartog_toml \
+   || [ -f "$DB_FILE" ]; then
     _has_toml=1
 fi
 

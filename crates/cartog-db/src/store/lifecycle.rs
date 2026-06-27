@@ -11,7 +11,6 @@ impl Database {
     /// If the stored dimension differs from the requested one, the vector index
     /// is cleared and recreated (a re-index via `cartog rag index` is needed).
     pub fn open(path: impl AsRef<std::path::Path>, embedding_dim: usize) -> DbResult<Self> {
-        register_sqlite_vec();
         let db_path = path.as_ref();
         // SQLite::open fails on a missing parent tree, so materialize `.cartog/`.
         if let Some(parent) = db_path.parent() {
@@ -22,6 +21,40 @@ impl Database {
                 })?;
             }
         }
+        Self::open_no_create_dir(db_path, embedding_dim)
+    }
+
+    /// Open the database **only if the main file already exists**, without ever
+    /// creating the `.cartog/` parent directory.
+    ///
+    /// Returns [`DbError::NotFound`] when the file is absent so the write-path
+    /// consent gate (and degraded `serve`) can keep an un-opted-in project free
+    /// of a stray `.cartog/`. When the file is present the project is de-facto
+    /// opted in, so this runs the same schema migrations + embedding-dimension
+    /// reconcile as [`Self::open`] — steady-state index updates keep working.
+    ///
+    /// A stray `-wal`/`-shm` without the main file still counts as absent (the
+    /// existence check is keyed on `db_path` itself), matching the gate's rule.
+    pub fn open_existing(
+        path: impl AsRef<std::path::Path>,
+        embedding_dim: usize,
+    ) -> DbResult<Self> {
+        let db_path = path.as_ref();
+        if !db_path.exists() {
+            return Err(DbError::NotFound {
+                path: db_path.to_path_buf(),
+            });
+        }
+        Self::open_no_create_dir(db_path, embedding_dim)
+    }
+
+    /// Shared open+migrate body for [`Self::open`] / [`Self::open_existing`].
+    /// The caller is responsible for the parent-directory policy: `open`
+    /// materializes `.cartog/` first, `open_existing` refuses absent files
+    /// before reaching here. SQLite would create the file at `db_path` if it
+    /// did not exist, so this must only run once the directory policy is settled.
+    fn open_no_create_dir(db_path: &std::path::Path, embedding_dim: usize) -> DbResult<Self> {
+        register_sqlite_vec();
         let conn = Connection::open(db_path).map_err(|source| DbError::Open {
             path: db_path.to_path_buf(),
             source,

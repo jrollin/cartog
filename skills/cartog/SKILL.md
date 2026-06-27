@@ -24,21 +24,26 @@ Three states a repo can be in. Detect which one the user is in, then act.
 
 | State | Signal | What the user should run |
 |---|---|---|
-| Fresh repo, no cartog yet | No `.cartog.toml` at the git root | Ask the user first, then `cartog init` then `cartog index` (see "Fresh-repo handling" below) |
-| Indexed but no editor MCP | `.cartog.toml` exists, no `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` | `cartog index` (refresh) — only suggest `cartog ide` if the user mentions Claude Code / Cursor / VS Code / Codex / Gemini / Windsurf / Zed / Claude Desktop / OpenCode |
+| Fresh repo, no cartog yet | No `.cartog.toml` **and** no `.cartog/db.sqlite` at the git root | Ask the user first, then `cartog init` then `cartog index` (see "Fresh-repo handling" below) |
+| Indexed but no editor MCP | `.cartog.toml` or `.cartog/db.sqlite` exists, no `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` | `cartog index` (refresh) — only suggest `cartog ide` if the user mentions Claude Code / Cursor / VS Code / Codex / Gemini / Windsurf / Zed / Claude Desktop / OpenCode |
 | Fully wired | `.cartog.toml` + editor MCP files present | Just query: `cartog map`, `cartog rag search`, etc. |
 
 ### Fresh-repo handling (the most common pitfall)
 
-When `.cartog.toml` is missing on a git repo, the agent must:
+cartog will **not** create a `.cartog/` index for a config-less project on its
+own — `cartog index` / `rag index` / `watch` refuse until the user opts in
+(consent = a present `.cartog.toml`, an existing index, or `CARTOG_AUTO_INIT`).
+So when `.cartog.toml` is missing **and** no `.cartog/db.sqlite` exists yet:
 
 1. **ASK the user** before running `cartog init`. Do not run it automatically — it writes a `.cartog.toml` file in the user's repo.
-2. On user **YES**: run `cartog init` via Bash, check the exit code, then run `cartog index .`. Both commands are safe to chain in a single session.
-3. On user **NO** (or "skip"): run `cartog index .` directly. Cartog will use default config and the index lands at `<git-root>/.cartog/db.sqlite`. The user can run `cartog init` later if they want a customized config.
+2. On user **YES**: run `cartog init` via Bash, check the exit code, then run `cartog index .`. Both commands are safe to chain in a single session. (Alternatively, `CARTOG_AUTO_INIT=1 cartog index .` indexes with defaults and writes **no** config file.)
+3. On user **NO** (or "skip"): **do not** run `cartog index` — it would refuse, since the user declined to opt in, and nothing is created. Leave the repo untouched. The user can run `cartog init` (or set `CARTOG_AUTO_INIT=1`) later if they change their mind.
 
 If `cartog init` returns non-zero (rare — usually a filesystem permission issue), surface the error to the user and **do not proceed** to `cartog index`.
 
-**Non-interactive sessions** (CI, piped): cartog's SessionStart hook exits silently when no `.cartog.toml` is present. Setting `CARTOG_AUTO_INIT=1` bypasses the gate and indexes with defaults.
+**MCP server while config-less.** The plugin runs `cartog serve --watch`, which never refuses — on a config-less, un-indexed repo it starts **degraded**: no `.cartog/` is created, read tools return empty, and the write tools refuse with a "run `cartog init`" message. `cartog_stats` shows `"degraded": true`. If a tool reports the degraded state, tell the user to run `cartog init` (after asking). Once they do, the watcher **pre-builds** the index, but the **running** MCP server stays degraded until Claude Code is relaunched — at which point the freshly-built index loads. There is no live in-place upgrade.
+
+**Non-interactive sessions** (CI, piped): cartog's SessionStart hook exits silently when no `.cartog.toml` is present (and no index exists). Setting `CARTOG_AUTO_INIT=1` bypasses the gate and indexes with defaults.
 
 ### Running cartog commands while MCP is alive
 
@@ -126,8 +131,8 @@ If the project uses a remote embedding provider (`.cartog.toml` has `[embedding]
 The plugin's SessionStart hook handles install + indexing automatically:
 
 - **Missing binary**: install runs in the background; MCP tools become available on the next session. The user can type `/cartog-install` to install synchronously, or to retry on failure.
-- **Binary present, no `.cartog.toml`**: on an interactive session, the hook prints a hint pointing at `cartog init`. On a non-interactive session it exits silently. See "Fresh-repo handling" above for the agent flow.
-- **Binary present, `.cartog.toml` present**: the hook runs `cartog index .` (foreground, typically <1s incremental) then forks `cartog rag setup` + `cartog rag index` in the background.
+- **Binary present, no `.cartog.toml` and no existing index**: on an interactive session, the hook prints a hint pointing at `cartog init`. On a non-interactive session it exits silently. It does **not** index — the consent gate keeps a config-less, never-indexed repo untouched. See "Fresh-repo handling" above for the agent flow.
+- **Binary present, `.cartog.toml` OR an existing `.cartog/db.sqlite`**: the hook runs `cartog index .` (foreground, typically <1s incremental) then forks `cartog rag setup` + `cartog rag index` in the background. An existing index is itself consent, so re-indexing keeps working even without a config.
 
 If `cartog --version` fails (binary missing, broken install, wrong architecture), tell the user to run `/cartog-install` and explain it installs the cartog binary that matches the plugin version.
 
