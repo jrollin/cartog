@@ -75,15 +75,25 @@ pub struct WatchConfig {
     /// Shared staleness state for the MCP server to read. `None` (the default,
     /// e.g. standalone `cartog watch`) disables staleness publishing.
     pub stale: Option<Arc<StaleState>>,
+    /// Consent gate: may the watcher create a fresh `.cartog/` on its first
+    /// index? `true` (the default) preserves the historical behavior. When
+    /// `false` (a `cartog serve --watch` started degraded on a config-less,
+    /// un-indexed repo), the watcher stays degraded and keeps watching the root
+    /// for a `.cartog.toml` to appear — then it pre-builds the index so the
+    /// next MCP relaunch finds it ready. Re-evaluated against the live config +
+    /// DB each pass, so an existing DB or a newly-set `CARTOG_AUTO_INIT` also
+    /// flips it.
+    pub allow_create: bool,
 }
 
 impl WatchConfig {
     /// Build a [`WatchConfig`] rooted at `root` with these defaults:
     /// `debounce = 5s`, `rag_override = None` (auto-detect), `rag_delay = 30s`,
     /// `json_events = false`, both `pid_lock_*` = `None` (untracked
-    /// mode), `skip_migrations = false`. Callers wanting PID-lock
-    /// tracking must set BOTH `pid_lock_dir` and `pid_lock_slot` after
+    /// mode), `skip_migrations = false`, `allow_create = true`. Callers wanting
+    /// PID-lock tracking must set BOTH `pid_lock_dir` and `pid_lock_slot` after
     /// construction — see [`WatchConfig::pid_lock_slot`].
+    #[must_use]
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
@@ -101,6 +111,10 @@ impl WatchConfig {
             pid_lock_slot: None,
             skip_migrations: false,
             stale: None,
+            // Default permissive: standalone `cartog watch` is consent-gated by
+            // the CLI before it reaches here; the degraded `serve --watch` path
+            // sets this to false explicitly.
+            allow_create: true,
         }
     }
 }
@@ -359,6 +373,24 @@ fn watch_loop(
             },
             _ => None,
         };
+
+    // Consent gate: when the watcher may NOT create a fresh `.cartog/` and none
+    // exists yet (a `cartog serve --watch` started degraded on a config-less,
+    // un-indexed repo), stay degraded — watch the root for a `.cartog.toml` to
+    // appear (or an existing DB / `CARTOG_AUTO_INIT`) before opening the DB.
+    // Returns `true` once consent is granted, `false` if shutdown fired first.
+    if !watcher_consents(&config, root, db_path) {
+        info!(
+            path = %root.display(),
+            "watcher degraded: no .cartog.toml and no index yet — watching for `cartog init` \
+             (run it to opt in; the index pre-builds and loads on the next Claude Code launch)"
+        );
+        if !wait_for_consent(&config, db_path, root, shutdown)? {
+            info!("watch stopped before consent was granted");
+            return Ok(());
+        }
+        info!("consent granted (config or index appeared); building the initial index");
+    }
 
     let db = if config.skip_migrations {
         Database::open_existing_rw(db_path)
@@ -716,6 +748,115 @@ fn watch_loop(
         emit_event(&WatchEvent::Shutdown);
     }
     Ok(())
+}
+
+/// Environment variable that opts a config-less project into indexing with
+/// defaults. Must match the binary's `CARTOG_AUTO_INIT` (the watcher crate
+/// can't import the binary's config module). Re-checked live so a var set
+/// after the watcher started still flips consent.
+const AUTO_INIT_ENV: &str = "CARTOG_AUTO_INIT";
+
+/// True when the watcher may build/refresh the index. Consent is granted by
+/// the threaded `allow_create` flag (config present / DB existed / AUTO_INIT at
+/// startup) OR — re-evaluated live each pass — a `.cartog.toml` now exists at or
+/// above the watched `root` (the `cartog init` mid-session signal) OR the main
+/// DB file now exists OR `CARTOG_AUTO_INIT` is now set. Keyed on the main DB
+/// file, so a stray `-wal`/`-shm` without it does not count.
+fn watcher_consents(config: &WatchConfig, root: &Path, db_path: &str) -> bool {
+    config.allow_create
+        || cartog_toml_at_or_above(root)
+        || Path::new(db_path).exists()
+        || std::env::var(AUTO_INIT_ENV)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+}
+
+/// True when a `.cartog.toml` exists at `root` or any ancestor up to (and
+/// including) the git root. Mirrors the binary's `local_config_path` walk-up so
+/// a `cartog serve --watch` launched from a subdirectory still sees a `.cartog.toml`
+/// written at the git root by `cartog init` — without this, the watcher (rooted
+/// at the subdir) would miss it and only the next relaunch would un-degrade.
+fn cartog_toml_at_or_above(root: &Path) -> bool {
+    let mut dir = root;
+    loop {
+        if dir.join(".cartog.toml").exists() {
+            return true;
+        }
+        // Stop at the git root: don't escape the project into ancestors / $HOME.
+        if dir.join(".git").exists() {
+            return false;
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => return false,
+        }
+    }
+}
+
+/// Install a best-effort non-recursive watcher on `root` for the degraded
+/// consent wait. Returns `None` (caller falls back to polling) if the
+/// debouncer or the `.watch()` call fails. The returned debouncer must be held
+/// alive by the caller; dropping it stops watching.
+fn install_root_watcher(
+    tx: std::sync::mpsc::Sender<notify_debouncer_mini::DebounceEventResult>,
+    root: &Path,
+) -> Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>> {
+    let mut debouncer = match new_debouncer(Duration::from_millis(500), tx) {
+        Ok(d) => d,
+        Err(e) => {
+            warn!(error = %e, "consent-wait watcher failed to start; polling only");
+            return None;
+        }
+    };
+    if let Err(e) = debouncer
+        .watcher()
+        .watch(root, notify::RecursiveMode::NonRecursive)
+    {
+        warn!(error = %e, "consent-wait watcher failed to install; polling only");
+        return None;
+    }
+    Some(debouncer)
+}
+
+/// Degraded-watch loop: block until [`watcher_consents`] turns true or
+/// `shutdown` is set. Watches the repo root so a `.cartog.toml` create event
+/// wakes us promptly; a 1s poll covers shutdown, a DB appearing out-of-band,
+/// `CARTOG_AUTO_INIT` being exported mid-session, and a `.cartog.toml` written
+/// at a git-root *above* the watched root (which the non-recursive root watcher
+/// won't event on, but the walk-up in [`watcher_consents`] catches on the next
+/// poll). Opens no DB and creates no `.cartog/`. Returns `Ok(true)` when consent
+/// is granted, `Ok(false)` when shutdown fired first.
+fn wait_for_consent(
+    config: &WatchConfig,
+    db_path: &str,
+    root: &Path,
+    shutdown: &AtomicBool,
+) -> Result<bool> {
+    // A best-effort watcher on the root: any filesystem event (notably a
+    // `.cartog.toml` create) wakes the recv early so we re-check consent
+    // without waiting out the full poll interval. Held for its Drop (which
+    // stops watching). If it fails to install we fall back to pure polling —
+    // correctness doesn't depend on the events, only latency.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _debouncer = install_root_watcher(tx, root);
+
+    loop {
+        if shutdown.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        if watcher_consents(config, root, db_path) {
+            return Ok(true);
+        }
+        // Block up to 1s for an event; the timeout doubles as the poll interval
+        // (covers shutdown, an out-of-band DB, and AUTO_INIT set mid-session).
+        // A disconnected channel just means no live watcher — keep polling.
+        match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
 }
 
 /// Check if a path is relevant for indexing: supported language + not in ignored directory.
@@ -1463,5 +1604,222 @@ mod tests {
         };
         handle.stop(); // Should set flag AND join thread
         assert!(shutdown.load(Ordering::SeqCst));
+    }
+
+    // ── consent gate (allow_create) ──
+
+    /// Restore CARTOG_AUTO_INIT on drop so a set/remove in one test can't leak.
+    fn auto_init_guard() -> impl Drop {
+        struct Restore(Option<String>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(v) => std::env::set_var(AUTO_INIT_ENV, v),
+                    None => std::env::remove_var(AUTO_INIT_ENV),
+                }
+            }
+        }
+        Restore(std::env::var(AUTO_INIT_ENV).ok())
+    }
+
+    #[test]
+    fn watcher_consents_when_allow_create() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = WatchConfig::new(tmp.path().to_path_buf());
+        config.allow_create = true;
+        assert!(watcher_consents(&config, tmp.path(), "/no/such/db.sqlite"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn watcher_consents_when_cartog_toml_appears() {
+        // The `cartog init` mid-session signal: a `.cartog.toml` at the watched
+        // root grants consent even with allow_create=false and no DB.
+        let _g = auto_init_guard();
+        std::env::remove_var(AUTO_INIT_ENV);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join(".cartog").join("db.sqlite");
+        let mut config = WatchConfig::new(tmp.path().to_path_buf());
+        config.allow_create = false;
+        assert!(
+            !watcher_consents(&config, tmp.path(), db.to_str().unwrap()),
+            "no config yet → no consent"
+        );
+        std::fs::write(tmp.path().join(".cartog.toml"), b"[database]\n").unwrap();
+        assert!(
+            watcher_consents(&config, tmp.path(), db.to_str().unwrap()),
+            "a .cartog.toml appearing at the root grants consent"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn watcher_consents_when_cartog_toml_at_git_root_above_watch_root() {
+        // serve --watch launched from a subdir: the watched root is the subdir,
+        // but `cartog init` may write .cartog.toml at the git root above it. The
+        // walk-up must find it (stopping at the git root, not escaping further).
+        let _g = auto_init_guard();
+        std::env::remove_var(AUTO_INIT_ENV);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let git_root = tmp.path();
+        std::fs::create_dir(git_root.join(".git")).unwrap();
+        let subdir = git_root.join("crates").join("inner");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let db = git_root.join(".cartog").join("db.sqlite");
+
+        let mut config = WatchConfig::new(subdir.clone());
+        config.allow_create = false;
+        assert!(
+            !watcher_consents(&config, &subdir, db.to_str().unwrap()),
+            "no config anywhere up to git root → no consent"
+        );
+        // init writes at the git root, above the subdir watch root.
+        std::fs::write(git_root.join(".cartog.toml"), b"[database]\n").unwrap();
+        assert!(
+            watcher_consents(&config, &subdir, db.to_str().unwrap()),
+            "a git-root .cartog.toml above the watch root grants consent (walk-up)"
+        );
+    }
+
+    #[test]
+    fn cartog_toml_walk_up_stops_at_git_root() {
+        // A .cartog.toml ABOVE the git root must NOT count — the walk-up stops
+        // at the git boundary so it can't escape into an ancestor or $HOME.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outer = tmp.path();
+        std::fs::write(outer.join(".cartog.toml"), b"[database]\n").unwrap();
+        let git_root = outer.join("project");
+        std::fs::create_dir_all(git_root.join(".git")).unwrap();
+        let subdir = git_root.join("src");
+        std::fs::create_dir_all(&subdir).unwrap();
+        assert!(
+            !cartog_toml_at_or_above(&subdir),
+            "walk-up must stop at the git root, not reach the outer .cartog.toml"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn watcher_consents_when_db_exists() {
+        let _g = auto_init_guard();
+        std::env::remove_var(AUTO_INIT_ENV);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join("db.sqlite");
+        std::fs::write(&db, b"").unwrap();
+        let mut config = WatchConfig::new(tmp.path().to_path_buf());
+        config.allow_create = false;
+        assert!(watcher_consents(&config, tmp.path(), db.to_str().unwrap()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn watcher_refuses_without_any_signal() {
+        let _g = auto_init_guard();
+        std::env::remove_var(AUTO_INIT_ENV);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join(".cartog").join("db.sqlite");
+        let mut config = WatchConfig::new(tmp.path().to_path_buf());
+        config.allow_create = false;
+        assert!(
+            !watcher_consents(&config, tmp.path(), db.to_str().unwrap()),
+            "no allow_create, no config, no DB, no AUTO_INIT → no consent"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn watcher_consents_with_auto_init_env() {
+        let _g = auto_init_guard();
+        std::env::set_var(AUTO_INIT_ENV, "1");
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db = tmp.path().join(".cartog").join("db.sqlite");
+        let mut config = WatchConfig::new(tmp.path().to_path_buf());
+        config.allow_create = false;
+        assert!(watcher_consents(&config, tmp.path(), db.to_str().unwrap()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn degraded_watch_loop_creates_nothing_then_stops() {
+        // allow_create=false + no DB: the loop stays in the degraded wait,
+        // creating no `.cartog/`. Setting shutdown returns it cleanly.
+        let _g = auto_init_guard();
+        std::env::remove_var(AUTO_INIT_ENV);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let db_path = root.join(".cartog").join("db.sqlite");
+
+        let mut config = WatchConfig::new(root.clone());
+        config.allow_create = false;
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = Arc::clone(&shutdown);
+        let db_str = db_path.to_string_lossy().into_owned();
+        let root_for_thread = root.clone();
+        let handle = std::thread::spawn(move || {
+            watch_loop(config, &root_for_thread, &db_str, &shutdown_clone)
+        });
+
+        // Give the degraded wait a moment, then confirm nothing was created.
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !db_path.parent().unwrap().exists(),
+            "degraded watcher must not create .cartog/ while waiting for consent"
+        );
+
+        shutdown.store(true, Ordering::SeqCst);
+        let result = handle.join().expect("watch thread joins");
+        assert!(result.is_ok(), "degraded watch_loop exits Ok on shutdown");
+        assert!(
+            !db_path.parent().unwrap().exists(),
+            "no .cartog/ after a shutdown-before-consent run"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn watcher_builds_index_once_db_appears() {
+        // Consent granted out-of-band (DB created): the watcher leaves the
+        // degraded wait and indexes the root, populating the DB.
+        let _g = auto_init_guard();
+        std::env::remove_var(AUTO_INIT_ENV);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        std::fs::write(root.join("a.py"), "def f():\n    return 1\n").unwrap();
+        let db_path = root.join(".cartog").join("db.sqlite");
+
+        let mut config = WatchConfig::new(root.clone());
+        config.allow_create = false;
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_clone = Arc::clone(&shutdown);
+        let db_str = db_path.to_string_lossy().into_owned();
+        let root_for_thread = root.clone();
+        let handle = std::thread::spawn(move || {
+            watch_loop(config, &root_for_thread, &db_str, &shutdown_clone)
+        });
+
+        // Grant consent: create the DB the way `cartog index` would, so the
+        // degraded loop's `db_path.exists()` check flips true.
+        std::thread::sleep(Duration::from_millis(200));
+        Database::open(&db_path, cartog_db::DEFAULT_EMBEDDING_DIM).expect("create DB out of band");
+
+        // Wait for the watcher to perform its initial index against the DB.
+        let mut indexed = false;
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(100));
+            if let Ok(db) = Database::open_existing_rw(&db_path) {
+                if !db.is_empty().unwrap_or(true) {
+                    indexed = true;
+                    break;
+                }
+            }
+        }
+        shutdown.store(true, Ordering::SeqCst);
+        let _ = handle.join();
+        assert!(
+            indexed,
+            "watcher must build the index once consent (an existing DB) appears"
+        );
     }
 }

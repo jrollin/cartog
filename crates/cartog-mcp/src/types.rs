@@ -208,6 +208,12 @@ pub(crate) struct StatsResult {
     pub(crate) stats: cartog_db::IndexStats,
     pub(crate) role: Role,
     pub(crate) watcher_active: bool,
+    /// True when the server started degraded: no `.cartog.toml`, no index, and
+    /// `CARTOG_AUTO_INIT` unset, so no `.cartog/` was created. Distinct from an
+    /// empty index (which exists on disk) and from a read-only secondary. Only
+    /// serialized when true, so non-degraded `--json` output is unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) degraded: bool,
 }
 
 /// Result of `cartog_update` (arm a deferred self-update).

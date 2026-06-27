@@ -321,6 +321,38 @@ fn validate_endpoint(endpoint: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+/// Environment variable that opts a config-less project into indexing with
+/// in-memory defaults. Set to any non-empty value to bypass the consent gate;
+/// **no `.cartog.toml` is written** — only `cartog init` writes a config file.
+pub const AUTO_INIT_ENV: &str = "CARTOG_AUTO_INIT";
+
+/// True when an index/DB may be created for this project — i.e. the user has
+/// opted in by at least one of three signals:
+///
+/// 1. a present `.cartog.toml` (`config_present`);
+/// 2. the resolved main DB file already exists (Branch 1 — once an index
+///    exists the project is de-facto opted in, and steady-state updates must
+///    keep working). A stray `-wal`/`-shm` without the main file does NOT
+///    count: the check is keyed on `db_path` itself;
+/// 3. `CARTOG_AUTO_INIT` is set (indexes with defaults, writes no config).
+///
+/// When none hold, the write paths (`cartog index` / `rag index` / `watch`,
+/// the MCP write tools, the watcher's first index) must refuse rather than
+/// materialize a `.cartog/` for a project nobody opted into. A `Rejected`
+/// (broken) `.cartog.toml` is **not** `config_present` — the caller passes
+/// `false` and this returns `false`, so a broken config refuses too.
+#[must_use]
+pub fn allow_index_creation(db_path: &Path, config_present: bool) -> bool {
+    config_present || db_path.exists() || auto_init_enabled()
+}
+
+/// Read `CARTOG_AUTO_INIT`: any non-empty value enables the bypass.
+fn auto_init_enabled() -> bool {
+    std::env::var(AUTO_INIT_ENV)
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+}
+
 /// Resolve the database path using the following priority:
 ///
 /// 1. `explicit` — from `--db` flag or `CARTOG_DB` env var (already merged by clap)

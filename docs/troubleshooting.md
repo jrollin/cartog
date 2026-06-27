@@ -57,6 +57,33 @@ handles `textDocument/definition` used by cartog.
 
 ## First index
 
+### `cartog index` refuses with "no .cartog.toml … refusing to create one"
+
+cartog will not create a `.cartog/` index for a project you haven't opted into.
+On a fresh, config-less repository the write commands (`index`, `rag index`,
+`watch`) refuse instead of materializing a `.cartog/`. Opt in with **one** of:
+
+- `cartog init` to scaffold a `.cartog.toml`, then `cartog index .`; or
+- `CARTOG_AUTO_INIT=1 cartog index .` to index with defaults (writes **no**
+  config file); or
+- nothing further if an index already exists — an existing `.cartog/db.sqlite`
+  is itself consent, so steady-state re-indexes keep working without a config.
+
+Read commands (`search`, `map`, …) never refuse — they return empty results
+with a hint and create nothing. The MCP server (`cartog serve`) starts
+**degraded** rather than refusing: `cartog_stats` shows `"degraded": true` and
+the write tools point you at `cartog init`. See
+[reference/config.md § Index-creation consent gate](reference/config.md#index-creation-consent-gate).
+
+### A `.cartog/` index appeared without me running `cartog init`
+
+If an index exists with no `.cartog.toml`, it was created by one of the consent
+signals: `cartog init` was run earlier, `CARTOG_AUTO_INIT` was set at some
+point, or you ran `cartog index .` after a config existed. cartog never creates
+an index on its own for a config-less repo (the SessionStart hook and the binary
+both honor the same gate). To stop indexing this project, remove the `.cartog/`
+directory and the `.cartog.toml` (if any), and leave `CARTOG_AUTO_INIT` unset.
+
 ### `cartog index .` appears to hang
 
 Indexing a 50k-LOC repo cold takes a few seconds, sometimes longer if

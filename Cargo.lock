@@ -485,6 +485,7 @@ dependencies = [
  "notify-debouncer-mini",
  "serde",
  "serde_json",
+ "serial_test",
  "tempfile",
  "tracing",
 ]

@@ -49,6 +49,40 @@ cartog --db /tmp/x.db stats
 cartog --db /tmp/x.db map
 ```
 
+## Index-creation consent gate
+
+cartog will not create a `.cartog/` index for a project on its own. A fresh,
+config-less repository stays untouched until you opt in. Consent is granted by
+**any one** of:
+
+1. a present `.cartog.toml` (run `cartog init` to scaffold one);
+2. an existing index — once `.cartog/db.sqlite` (or the legacy `.cartog.db`)
+   exists, the project is opted in and steady-state updates keep working, even
+   with no config and no env var;
+3. `CARTOG_AUTO_INIT` set to any non-empty value — indexes with in-memory
+   defaults and **never writes a `.cartog.toml`**.
+
+A broken (`Rejected`) `.cartog.toml` is **not** consent: the parse error is
+printed and write paths refuse.
+
+Behavior when none of the three hold:
+
+| Surface | Behavior with no config and no index |
+|---------|--------------------------------------|
+| `cartog index` / `cartog rag index` / `cartog watch` | Refuse (non-zero) with a hint; no `.cartog/` created. |
+| `cartog serve` / `cartog serve --watch` (the MCP plugin default) | Start **degraded**: no `.cartog/`, read tools return empty + a hint, the 2 write tools (`cartog_index`/`cartog_rag_index`) refuse, and `cartog_stats` reports the degraded state. With `--watch`, the watcher pre-builds the index the moment `cartog init` runs; the running server stays degraded until the client relaunches it. |
+| Read commands (`search`, `map`, `refs`, …) and read MCP tools | Return empty results + a hint; no `.cartog/` created. |
+| `cartog init` / `config` / `doctor` / `completions` / `manpage` / `self *` | Unchanged, never gated. |
+| `cartog pull` / `push` | Not gated — invoking them **is** the opt-in (an explicit user action, like `cartog init`). `pull` materializes `.cartog/` because downloading a remote index is its whole job. |
+
+The guarantee is that cartog never creates a `.cartog/` *on its own* (a
+background hook, an MCP server, or a stray read). An explicit `cartog pull` you
+typed is consent in itself, so it is allowed to create the index it fetches.
+
+Installation and editor wiring (`cartog install` / `cartog ide`, the plugin's
+MCP entry) are independent of this gate — they only touch the binary and MCP
+config files, never the index.
+
 ## Embedding provider configuration
 
 For a task-oriented guide to switching providers, see [../how-to/switch-embedding-provider.md](../how-to/switch-embedding-provider.md).
@@ -380,6 +414,7 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `CARTOG_DB` | auto-detect | Database path (same as `--db`). |
+| `CARTOG_AUTO_INIT` | unset | Opt a config-less project into indexing. Set to any non-empty value to let `cartog index` / `rag index` / `watch` (and the MCP write tools + watcher) create a `.cartog/` with in-memory defaults — **no `.cartog.toml` is written**. Unset and with no `.cartog.toml` and no existing index, those write paths refuse and `cartog serve` starts degraded (see [the consent gate](#index-creation-consent-gate)). |
 | `CARTOG_JOBS` | CPU count | Parse worker pool size for `cartog index` (clamped `1..=64`). Overrides `[index] jobs`; the `--jobs` flag overrides it. |
 | `CARTOG_LSP_MAX_SERVERS` | `min(langs, 4)` | Max concurrent LSP servers in the indexer's edge pass. Overrides `[lsp] max_concurrent_servers`; `1` forces serial. |
 | `CARTOG_ONNX_THREADS` | all cores | Caps ONNX CPU threads for `rag index` + reranking. Overrides `[embedding.local] intra_threads`. `1` forces single-core. |

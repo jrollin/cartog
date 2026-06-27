@@ -2,6 +2,7 @@
 
 use crate::*;
 
+mod degraded;
 mod handlers;
 mod lsp_gate;
 mod read_tools;

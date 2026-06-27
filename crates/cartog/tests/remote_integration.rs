@@ -240,6 +240,9 @@ fn build_minimal_index(repo_dir: &Path, db_path: &Path) {
             &repo_dir.to_string_lossy(),
         ])
         .env_remove("CARTOG_DB")
+        // This throwaway fixture has no .cartog.toml; AUTO_INIT is the documented
+        // opt-in to index a config-less repo (the consent gate refuses otherwise).
+        .env("CARTOG_AUTO_INIT", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()

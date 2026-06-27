@@ -9,9 +9,33 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
-use cartog_db::Database;
+use cartog_db::{Database, DbError};
 
+/// Open the DB for a **read** command without ever creating a `.cartog/`.
+///
+/// If the main DB file is absent (a config-less, un-indexed repo), this returns
+/// an empty in-memory `Database` so the ~13 read command bodies are unchanged:
+/// every query just comes back empty and [`empty_index_hint`] fires, pointing
+/// the user at `cartog init` / `cartog index`. Write commands must use
+/// [`open_db_create`] instead — they are gated on consent *above* `main`'s
+/// dispatch, so they never reach this fallback.
 pub(crate) fn open_db(path: &Path, embedding_dim: usize) -> Result<Database> {
+    match Database::open_existing(path, embedding_dim) {
+        Ok(db) => Ok(db),
+        // No index yet → empty in-memory DB; the command returns empty + hint
+        // and, crucially, no `.cartog/` is materialized for an un-opted repo.
+        Err(DbError::NotFound { .. }) => {
+            Database::open_memory().map_err(|e| open_db_error(path, e.into()))
+        }
+        Err(e) => Err(open_db_error(path, e.into())),
+    }
+}
+
+/// Open the DB for a **write** command (`index` / `rag index`), creating the
+/// `.cartog/` directory + file if needed. Used only after the consent gate in
+/// `main` has confirmed the project is opted in — so this materializing the
+/// `.cartog/` is intended, not a surprise.
+pub(crate) fn open_db_create(path: &Path, embedding_dim: usize) -> Result<Database> {
     Database::open(path, embedding_dim).map_err(|e| open_db_error(path, e.into()))
 }
 
@@ -88,7 +112,7 @@ pub(crate) fn output<T: Serialize>(
 /// Returns `""` when the index has symbols (the common case).
 pub(crate) fn empty_index_hint(db: &Database) -> &'static str {
     match db.is_empty() {
-        Ok(true) => " (index is empty — run 'cartog index .' first)",
+        Ok(true) => " (index is empty — run 'cartog init' then 'cartog index .' first)",
         _ => "",
     }
 }
@@ -232,6 +256,65 @@ mod tests {
         // Non-empty case is covered by cartog-db's is_empty_reflects_symbol_presence.
         let db = Database::open_memory().unwrap();
         assert!(empty_index_hint(&db).contains("cartog index"));
+    }
+
+    #[test]
+    fn empty_index_hint_mentions_init() {
+        let db = Database::open_memory().unwrap();
+        assert!(empty_index_hint(&db).contains("cartog init"));
+    }
+
+    #[test]
+    fn open_db_falls_back_to_memory_without_creating_dir() {
+        // A read command on a fresh, un-indexed repo must NOT materialize
+        // `.cartog/` — it gets an empty in-memory DB and the empty-index hint.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join(".cartog").join("db.sqlite");
+
+        let db = open_db(&db_path, cartog_db::DEFAULT_EMBEDDING_DIM).unwrap();
+        assert!(db.is_empty().unwrap(), "fallback DB must be empty");
+        assert!(
+            !db_path.parent().unwrap().exists(),
+            "open_db must NOT create .cartog/ for a read on a fresh repo"
+        );
+    }
+
+    #[test]
+    fn open_db_opens_an_existing_index() {
+        use cartog_core::FileInfo;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join(".cartog").join("db.sqlite");
+        // Materialize a real on-disk DB with a sentinel symbol.
+        {
+            let db = Database::open(&db_path, cartog_db::DEFAULT_EMBEDDING_DIM).unwrap();
+            db.upsert_file(&FileInfo {
+                path: "a.rs".into(),
+                last_modified: 0.0,
+                hash: "h".into(),
+                language: "rust".into(),
+                num_symbols: 1,
+            })
+            .unwrap();
+            db.insert_symbols(&[Symbol::new(
+                "SentinelSym",
+                SymbolKind::Class,
+                "a.rs",
+                1,
+                2,
+                0,
+                10,
+                None,
+            )])
+            .unwrap();
+        }
+        // open_db must reopen THAT on-disk DB, not fall back to an empty
+        // in-memory one — so the sentinel is still there.
+        let db = open_db(&db_path, cartog_db::DEFAULT_EMBEDDING_DIM).unwrap();
+        let hits = db.search("SentinelSym", None, None, 5).unwrap();
+        assert!(
+            hits.iter().any(|s| s.name == "SentinelSym"),
+            "open_db must reopen the on-disk index (sentinel present), not the in-memory fallback"
+        );
     }
 
     proptest::proptest! {

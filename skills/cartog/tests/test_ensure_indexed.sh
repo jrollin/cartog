@@ -1439,6 +1439,83 @@ MOCK
     teardown
 }
 
+test_no_toml_but_existing_db_indexes() {
+    echo "TEST: no .cartog.toml but existing .cartog/db.sqlite -> indexes (db-exists branch)"
+    setup
+    create_mock_cartog "0.14.1"
+    local workdir="$TEST_DIR/workdir"
+    mkdir -p "$workdir/.cartog"
+    # No config — but an index already exists, so the project is opted in
+    # (Branch 1). The gate must pass on db-exists alone.
+    rm -f "$workdir/.cartog.toml"
+    touch "$workdir/.cartog/db.sqlite"
+
+    cat > "$TEST_DIR/bin/git" <<MOCK
+#!/usr/bin/env bash
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--show-toplevel" ]; then
+    echo "$workdir"; exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    local output
+    output=$(run_ensure_indexed)
+    wait_for_rag_index
+    assert_contains "indexes when DB exists without config" "cartog index ready" "$output"
+    if echo "$output" | grep -q "Run \`cartog init\`"; then
+        echo "  FAIL: deferral hint fired even though an index already exists" >&2
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: existing index opts the project in (no deferral)"
+        PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
+test_intermediate_dir_toml_walk_up() {
+    echo "TEST: .cartog.toml in an intermediate dir (monorepo) -> walk-up finds it, indexes"
+    setup
+    create_mock_cartog "0.14.1"
+    local workdir="$TEST_DIR/workdir"
+    # git root = workdir; config at an INTERMEDIATE package dir; run from deeper.
+    local pkg="$workdir/pkg"
+    local inner="$pkg/inner"
+    mkdir -p "$inner"
+    echo "# package config" > "$pkg/.cartog.toml"
+    rm -f "$workdir/.cartog.toml"
+
+    cat > "$TEST_DIR/bin/git" <<MOCK
+#!/usr/bin/env bash
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--show-toplevel" ]; then
+    echo "$workdir"; exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_DIR/bin/git"
+
+    # Run from the deepest dir; the binary's gate walks cwd -> git root, so the
+    # hook must too. CARTOG_DB pins the DB so the run is self-contained.
+    local output
+    output=$(
+        export PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export HOME="$TEST_DIR/home"; mkdir -p "$HOME"
+        export CARTOG_DB="$pkg/.cartog/db.sqlite"
+        cd "$inner"
+        bash "$ENSURE_SCRIPT" 2>&1 </dev/null
+    )
+    wait_for_rag_index
+    assert_contains "indexes when intermediate-dir toml present" "cartog index ready" "$output"
+    if echo "$output" | grep -q "Run \`cartog init\`"; then
+        echo "  FAIL: deferral hint fired despite an intermediate-dir .cartog.toml" >&2
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: walk-up found the intermediate-dir config (no deferral)"
+        PASS=$((PASS + 1))
+    fi
+    teardown
+}
+
 # --- tests: stress / edge cases (audit follow-up) ---
 
 # 1. Two concurrent ensure_indexed invocations in the same project must not
@@ -1967,6 +2044,10 @@ echo ""
 test_no_toml_auto_init_env_proceeds_with_index
 echo ""
 test_toml_present_indexes_normally
+echo ""
+test_no_toml_but_existing_db_indexes
+echo ""
+test_intermediate_dir_toml_walk_up
 echo ""
 test_concurrent_ensure_indexed_invocations
 echo ""

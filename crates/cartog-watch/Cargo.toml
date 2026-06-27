@@ -27,6 +27,8 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Serializes the consent-gate tests that mutate CARTOG_AUTO_INIT (process-global).
+serial_test = { workspace = true }
 
 [lints]
 workspace = true

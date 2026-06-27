@@ -97,15 +97,20 @@ fn check_config(config_path: Option<&Path>, rejected: bool) -> CheckResult {
     }
 }
 
-fn check_database(db_path: &Path, embedding_dim: usize) -> CheckResult {
+fn check_database(db_path: &Path, embedding_dim: usize, consent: bool) -> CheckResult {
     if !db_path.exists() {
+        // `consent` mirrors the runtime gate. Without it, `cartog index` would
+        // refuse — so point at `cartog init` (the opt-in) rather than a command
+        // that fails; with it, `cartog index` works, so just suggest that.
+        let hint = if consent {
+            "run 'cartog index'"
+        } else {
+            "run 'cartog init' then 'cartog index' (or set CARTOG_AUTO_INIT=1)"
+        };
         return CheckResult {
             name: "database".into(),
             status: CheckStatus::Warn,
-            message: format!(
-                "database not found at {}, run 'cartog index'",
-                db_path.display()
-            ),
+            message: format!("database not found at {}, {hint}", db_path.display()),
         };
     }
     match Database::open(db_path, embedding_dim) {
@@ -463,10 +468,16 @@ pub fn cmd_doctor(
     embedding_dim: usize,
     provider_config: &rag::EmbeddingProviderConfig,
 ) -> Result<()> {
+    // Loaded config (present + not rejected) grants consent; a rejected one does not.
+    let config_present = config_path.is_some() && !config_rejected;
+    // The full runtime gate (config OR existing DB OR CARTOG_AUTO_INIT), so the
+    // "database not found" hint matches what `cartog index` will actually do —
+    // e.g. AUTO_INIT alone makes index succeed, so don't tell the user to init.
+    let consent = crate::config::allow_index_creation(db_path, config_present);
     let checks = vec![
         check_git_repo(),
         check_config(config_path, config_rejected),
-        check_database(db_path, embedding_dim),
+        check_database(db_path, embedding_dim, consent),
         check_embedding_provider(provider_config),
         check_reranker(provider_config),
         check_remote(config, config_rejected),
@@ -542,10 +553,25 @@ mod tests {
     }
 
     #[test]
-    fn test_check_database_missing() {
-        let result = check_database(Path::new("/nonexistent/path.db"), 384);
+    fn test_check_database_missing_with_config_suggests_index() {
+        let result = check_database(Path::new("/nonexistent/path.db"), 384, true);
         assert_eq!(result.status, CheckStatus::Warn);
         assert!(result.message.contains("not found"));
+        assert!(result.message.contains("cartog index"));
+        assert!(!result.message.contains("cartog init"));
+    }
+
+    #[test]
+    fn test_check_database_missing_without_config_suggests_init() {
+        // Consent gate: `cartog index` would refuse, so doctor must point at init.
+        let result = check_database(Path::new("/nonexistent/path.db"), 384, false);
+        assert_eq!(result.status, CheckStatus::Warn);
+        assert!(result.message.contains("not found"));
+        assert!(
+            result.message.contains("cartog init"),
+            "got: {}",
+            result.message
+        );
     }
 
     #[test]
@@ -553,7 +579,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         let _db = Database::open(&db_path, 384).unwrap();
-        let result = check_database(&db_path, 384);
+        let result = check_database(&db_path, 384, true);
         assert_eq!(result.status, CheckStatus::Warn);
         assert!(result.message.contains("empty"));
     }
@@ -880,7 +906,7 @@ mod tests {
         .unwrap();
         drop(db);
 
-        let result = check_database(&db_path, 384);
+        let result = check_database(&db_path, 384, true);
         assert_eq!(result.status, CheckStatus::Ok);
         assert!(result.message.contains("1 files"));
     }
