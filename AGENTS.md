@@ -47,7 +47,11 @@ Each `check-fixtures` language target uses the native toolchain when present, el
 falls back to a pinned official Docker image, else fails. `check-ts` is now part of
 `make check`.
 
-Run `make check` before committing. Run `make eval-skill` after changing skill SKILL.md or search routing. Run `make eval-agents` after changing agent definitions.
+```bash
+claude plugin validate .   # validate the Claude plugin manifest (.claude-plugin/) — run after every plugin update
+```
+
+Run `make check` before committing. Run `make eval-skill` after changing skill SKILL.md or search routing. Run `make eval-agents` after changing agent definitions. Run `claude plugin validate .` every time the Claude plugin is updated.
 
 ## Code Conventions
 
