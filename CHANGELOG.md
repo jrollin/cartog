@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.30.2] - 2026-06-29
+
+### Bug Fixes
+
+- **consent-gate**: Address review findings + CI regression ([`b3f9740`](https://github.com/jrollin/cartog/commit/b3f9740ec30dfebc5963c13b9789e8137d1e3b2c))
+
+### Documentation
+
+- **agents**: Document claude plugin validate command ([`8ff6e65`](https://github.com/jrollin/cartog/commit/8ff6e65164f6d5c24a61dce36b5170d99f1e5138))
+
+### Features
+
+- Gate index/DB creation on consent (no .cartog.toml ⇒ no .cartog/) ([`d78d148`](https://github.com/jrollin/cartog/commit/d78d14854de53e2990de1991202f228e984eccaf))
+
 ## [0.30.1] - 2026-06-26
 
 ### Features

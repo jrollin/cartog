@@ -291,7 +291,7 @@ checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 
 [[package]]
 name = "cartog"
-version = "0.30.1"
+version = "0.30.2"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -333,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-core"
-version = "0.30.1"
+version = "0.30.2"
 dependencies = [
  "anyhow",
  "proptest",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-db"
-version = "0.30.1"
+version = "0.30.2"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-indexer"
-version = "0.30.1"
+version = "0.30.2"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-languages"
-version = "0.30.1"
+version = "0.30.2"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -406,14 +406,14 @@ dependencies = [
 
 [[package]]
 name = "cartog-loom-models"
-version = "0.30.1"
+version = "0.30.2"
 dependencies = [
  "loom",
 ]
 
 [[package]]
 name = "cartog-lsp"
-version = "0.30.1"
+version = "0.30.2"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -427,7 +427,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-mcp"
-version = "0.30.1"
+version = "0.30.2"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -448,7 +448,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-process-lock"
-version = "0.30.1"
+version = "0.30.2"
 dependencies = [
  "libc",
  "tempfile",
@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-rag"
-version = "0.30.1"
+version = "0.30.2"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-watch"
-version = "0.30.1"
+version = "0.30.2"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -3920,9 +3920,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.26.9"
+version = "0.26.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dab76d0b724ba557954125188cf0633a1ca43199ced82d95c7b9c32cc3de1f3"
+checksum = "3c343ed63e3f5c64d1acdecb5d2c13d4e169cb5fde0052106ebaa6c6f27f9e55"
 dependencies = [
  "cc",
  "regex",
