@@ -121,6 +121,14 @@ via `CARTOG_LSP_READY_TIMEOUT_SECS`). The server's own stderr is piped to
 `<tmp>/cartog-lsp/<language>.log` (a `[lsp.<lang>]` command override) — check
 there first for a real error.
 
+A server that starts but never answers definition requests (for example
+`vue-language-server` / Volar 3 pointed at a Vue 2 project it can't parse) is
+detected automatically: after three consecutive request windows time out
+(~30 s), cartog logs `… LSP server is unresponsive … remaining <lang> edges
+resolved via heuristics only` and finishes that language with heuristics,
+keeping the edges it already resolved. To skip LSP entirely on the next run,
+pass `--no-lsp`.
+
 ### My `[lsp.<lang>]` command override isn't being used
 
 - The override only fires during the LSP edge-resolution pass — run

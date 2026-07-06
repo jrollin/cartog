@@ -202,6 +202,10 @@ in-flight memory and stdin backpressure.
 - The window size (64) is a fixed constant, not adaptive.
 - Each batch shares one deadline; a slow/hung server is bounded by a timeout,
   and out-of-order or stale replies are matched by request id and dropped.
+- A server that stays alive but answers nothing is abandoned after three
+  consecutive all-timeout windows (~30 s): the language falls back to
+  heuristics, keeping edges already resolved, instead of burning one deadline
+  per file.
 - This crate is **not** tokio — it is plain `std::thread` + channels.
 
 **Impact.** ~33% faster edge resolution on large repos (≈5:12 → 3:29 on a 98k-edge
