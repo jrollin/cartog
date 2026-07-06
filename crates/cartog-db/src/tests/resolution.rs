@@ -772,3 +772,272 @@ fn test_compute_in_degrees_scoped_resets_target_that_lost_edge() {
     let results = db.search("foo", None, None, 10).unwrap();
     assert_eq!(results[0].in_degree, 1);
 }
+
+// ── `::`-qualified target reduction (Rust path separator) ──
+// The resolver tries the full target_name (split only on `.`/`\`) first, then a
+// `::`-reduced name through the locality tiers (1–4) only. So `Pool::new` gains a
+// tier-1..4 match on `new` (Rust stores callees bare), a namespaced Ruby symbol
+// stored under its full `Baz::Quux` name still matches on the full-name pass, and
+// a fully-qualified external call `std::mem::swap` stays unresolved (reduced `swap`
+// is never offered to the global tier-5). The `.`/`\` splits are unchanged (see
+// test_resolve_edges_same_file_priority for `.` and
+// test_resolve_edges_php_fqcn_target_same_file for `\`).
+
+fn call_edge_target(refs: &[(Edge, Option<Symbol>)]) -> &Edge {
+    &refs
+        .iter()
+        .find(|(e, _)| e.kind == EdgeKind::Calls)
+        .expect("expected a Calls edge")
+        .0
+}
+
+#[test]
+fn scoped_call_resolves_via_colon_split() {
+    let db = Database::open_memory().unwrap();
+
+    // Rust: `Pool::new(...)` is emitted as target_name "Pool::new"; the callee's
+    // own name is `new`, defined in the same file (tier 1, via the reduced name).
+    let caller = test_symbol("connect", SymbolKind::Function, "src/db.rs", 10);
+    let new_method = test_symbol("new", SymbolKind::Method, "src/db.rs", 1);
+    db.insert_symbols(&[caller.clone(), new_method.clone()])
+        .unwrap();
+
+    db.insert_edge(&Edge::new(
+        &caller.id,
+        "Pool::new",
+        EdgeKind::Calls,
+        "src/db.rs",
+        12,
+    ))
+    .unwrap();
+
+    let resolved = db.resolve_edges().unwrap();
+    assert_eq!(resolved, 1);
+
+    let refs = db.refs("Pool::new", None).unwrap();
+    let call = call_edge_target(&refs);
+    assert_eq!(call.target_id.as_ref().unwrap(), &new_method.id);
+    assert_eq!(call.provenance, Some(EdgeProvenance::SameFile));
+}
+
+#[test]
+fn scoped_call_resolves_unique_global() {
+    let db = Database::open_memory().unwrap();
+
+    // A single project-wide `load` outside the caller's dir subtree (so tiers 1–4
+    // miss the reduced name): with the full name `Config::load` unmatched, resolution
+    // stays unresolved — the reduced `load` is deliberately NOT offered to tier 5.
+    // Contrast scoped_call_resolves_via_colon_split, where locality lets it resolve.
+    let caller = test_symbol("main", SymbolKind::Function, "app/main.rs", 1);
+    let load = test_symbol("load", SymbolKind::Method, "config/mod.rs", 20);
+    db.insert_symbols(&[caller.clone(), load.clone()]).unwrap();
+
+    db.insert_edge(&Edge::new(
+        &caller.id,
+        "Config::load",
+        EdgeKind::Calls,
+        "app/main.rs",
+        5,
+    ))
+    .unwrap();
+
+    // No locality and no full-name global match → unresolved (guards against a
+    // reduced-name false positive at the global tier, i.e. finding-2).
+    assert_eq!(db.resolve_edges().unwrap(), 0);
+}
+
+#[test]
+fn scoped_call_resolves_unique_global_by_full_name() {
+    let db = Database::open_memory().unwrap();
+
+    // A Ruby-style symbol stored under its FULL `::`-qualified name resolves via the
+    // unchanged full-name global tier (5). No locality, single global match.
+    let caller = test_symbol("main", SymbolKind::Function, "app/main.rs", 1);
+    let helper = test_symbol("Mod::Helper", SymbolKind::Class, "lib/mod/helper.rb", 1);
+    db.insert_symbols(&[caller.clone(), helper.clone()])
+        .unwrap();
+
+    db.insert_edge(&Edge::new(
+        &caller.id,
+        "Mod::Helper",
+        EdgeKind::References,
+        "app/main.rs",
+        5,
+    ))
+    .unwrap();
+
+    assert_eq!(db.resolve_edges().unwrap(), 1);
+
+    let refs = db.refs("Mod::Helper", None).unwrap();
+    let reference = refs
+        .iter()
+        .find(|(e, _)| e.kind == EdgeKind::References)
+        .unwrap();
+    assert_eq!(reference.0.target_id.as_ref().unwrap(), &helper.id);
+    assert_eq!(reference.0.provenance, Some(EdgeProvenance::UniqueGlobal));
+}
+
+#[test]
+fn ruby_namespaced_inherits_resolves_via_full_name() {
+    let db = Database::open_memory().unwrap();
+
+    // Ruby stores `class Foo::Bar < Baz::Quux` with symbol names `Foo::Bar` /
+    // `Baz::Quux` and an Inherits edge target_name "Baz::Quux" (ruby.rs
+    // extract_constant_name keeps the whole scope_resolution). Full-name-first
+    // resolution must match the symbol literally named `Baz::Quux`; reducing to
+    // `Quux` (the pre-fix regression) would miss it entirely.
+    let child = test_symbol("Foo::Bar", SymbolKind::Class, "app/models/foo/bar.rb", 1);
+    let parent = test_symbol("Baz::Quux", SymbolKind::Class, "app/models/baz/quux.rb", 1);
+    db.insert_symbols(&[child.clone(), parent.clone()]).unwrap();
+
+    db.insert_edge(&Edge::new(
+        &child.id,
+        "Baz::Quux",
+        EdgeKind::Inherits,
+        "app/models/foo/bar.rb",
+        1,
+    ))
+    .unwrap();
+
+    assert_eq!(db.resolve_edges().unwrap(), 1);
+
+    let refs = db.refs("Baz::Quux", None).unwrap();
+    let inherits = refs
+        .iter()
+        .find(|(e, _)| e.kind == EdgeKind::Inherits)
+        .unwrap();
+    assert_eq!(inherits.0.target_id.as_ref().unwrap(), &parent.id);
+}
+
+#[test]
+fn fully_qualified_external_call_stays_unresolved() {
+    let db = Database::open_memory().unwrap();
+
+    // `std::mem::swap(...)` is emitted verbatim as target_name "std::mem::swap".
+    // A lone unrelated `swap` exists project-wide but NOT local to the caller.
+    // Reducing to `swap` and resolving via global tier-5 would fabricate a call
+    // edge into the wrong symbol; the reduced name must not reach the global tier.
+    let caller = test_symbol("run", SymbolKind::Function, "app/game.rs", 1);
+    let unrelated = test_symbol("swap", SymbolKind::Method, "lib/board/mod.rs", 10);
+    db.insert_symbols(&[caller.clone(), unrelated]).unwrap();
+
+    db.insert_edge(&Edge::new(
+        &caller.id,
+        "std::mem::swap",
+        EdgeKind::Calls,
+        "app/game.rs",
+        5,
+    ))
+    .unwrap();
+
+    // Full name "std::mem::swap" matches nothing; reduced "swap" is only tried at
+    // locality tiers (none match here), never at the global tier → unresolved.
+    assert_eq!(db.resolve_edges().unwrap(), 0);
+}
+
+#[test]
+fn common_scoped_name_stays_unresolved_when_ambiguous() {
+    let db = Database::open_memory().unwrap();
+
+    // Three `new` symbols, each in its own directory distinct from the caller's
+    // (no locality): `Vec::new`'s reduced `new` is only offered to tiers 1–4 (all
+    // miss), never to the global tier, so it stays unresolved — no false-positive
+    // edge from the reduction.
+    let caller = test_symbol("run", SymbolKind::Function, "app/main.rs", 1);
+    let n1 = test_symbol("new", SymbolKind::Method, "pkg_a/mod.rs", 1);
+    let n2 = test_symbol("new", SymbolKind::Method, "pkg_b/mod.rs", 1);
+    let n3 = test_symbol("new", SymbolKind::Method, "pkg_c/mod.rs", 1);
+    db.insert_symbols(&[caller.clone(), n1, n2, n3]).unwrap();
+
+    let edge = Edge::new(&caller.id, "Vec::new", EdgeKind::Calls, "app/main.rs", 5);
+    db.insert_edge(&edge).unwrap();
+
+    assert_eq!(db.resolve_edges().unwrap(), 0);
+}
+
+#[test]
+fn scoped_reduced_name_prefers_same_file_over_other_dir() {
+    let db = Database::open_memory().unwrap();
+
+    // Two `render` methods: one same-file with the caller, one elsewhere. The
+    // reduced name from `View::render` must resolve via the caller's own file
+    // (tier 1), not mis-attribute to the unrelated same-named method — locking the
+    // guardless tier-1 path against reduced-name over-matching (finding-4).
+    let caller = test_symbol("show", SymbolKind::Function, "ui/page.rs", 10);
+    let same_file = test_symbol("render", SymbolKind::Method, "ui/page.rs", 1);
+    let other = test_symbol("render", SymbolKind::Method, "gfx/canvas.rs", 1);
+    db.insert_symbols(&[caller.clone(), same_file.clone(), other])
+        .unwrap();
+
+    db.insert_edge(&Edge::new(
+        &caller.id,
+        "View::render",
+        EdgeKind::Calls,
+        "ui/page.rs",
+        12,
+    ))
+    .unwrap();
+
+    assert_eq!(db.resolve_edges().unwrap(), 1);
+
+    let refs = db.refs("View::render", None).unwrap();
+    let call = call_edge_target(&refs);
+    assert_eq!(call.target_id.as_ref().unwrap(), &same_file.id);
+    assert_eq!(call.provenance, Some(EdgeProvenance::SameFile));
+}
+
+#[test]
+fn nested_path_reduces_to_final_segment() {
+    let db = Database::open_memory().unwrap();
+
+    // Multi-segment `::` path with no `.`: only the `::` reduction isolates `build`.
+    // On main the `.`/`\` split leaves "a::b::build" whole (unresolved), so this
+    // fails without the fix. Resolves via the reduced name at tier 1.
+    let caller = test_symbol("driver", SymbolKind::Function, "src/lib.rs", 10);
+    let build = test_symbol("build", SymbolKind::Method, "src/lib.rs", 1);
+    db.insert_symbols(&[caller.clone(), build.clone()]).unwrap();
+
+    db.insert_edge(&Edge::new(
+        &caller.id,
+        "a::b::build",
+        EdgeKind::Calls,
+        "src/lib.rs",
+        12,
+    ))
+    .unwrap();
+
+    let resolved = db.resolve_edges().unwrap();
+    assert_eq!(resolved, 1);
+
+    let refs = db.refs("a::b::build", None).unwrap();
+    let call = call_edge_target(&refs);
+    assert_eq!(call.target_id.as_ref().unwrap(), &build.id);
+}
+
+#[test]
+fn dot_then_colon_reduce_to_final_segment() {
+    let db = Database::open_memory().unwrap();
+
+    // "a.b::method": full_name splits on `.` → "b::method" (unresolved on main),
+    // then the `::` reduction yields `method`, which resolves at tier 1.
+    let caller = test_symbol("caller", SymbolKind::Function, "src/svc.rs", 10);
+    let method = test_symbol("method", SymbolKind::Method, "src/svc.rs", 1);
+    db.insert_symbols(&[caller.clone(), method.clone()])
+        .unwrap();
+
+    db.insert_edge(&Edge::new(
+        &caller.id,
+        "a.b::method",
+        EdgeKind::Calls,
+        "src/svc.rs",
+        12,
+    ))
+    .unwrap();
+
+    let resolved = db.resolve_edges().unwrap();
+    assert_eq!(resolved, 1);
+
+    let refs = db.refs("a.b::method", None).unwrap();
+    let call = call_edge_target(&refs);
+    assert_eq!(call.target_id.as_ref().unwrap(), &method.id);
+}
