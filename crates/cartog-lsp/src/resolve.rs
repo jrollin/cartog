@@ -13,8 +13,9 @@ use anyhow::Result;
 use cartog_core::PROGRESS_STRIDE;
 use cartog_db::{Database, UnresolvedEdge};
 
+use crate::client::is_request_timeout;
 use crate::find_column_in_line;
-use crate::manager::{DefinitionLocation, DefinitionOutcome, LspManager};
+use crate::manager::{DefinitionLocation, DefinitionOutcome, LspManager, DEFINITION_BATCH_WINDOW};
 use crate::{LspCancel, LspProgress, LspResolveStats};
 
 /// One language's drained LSP outcomes, before any DB write.
@@ -26,9 +27,18 @@ pub(crate) struct LangOutcomes {
     pub pending_unresolvable: Vec<i64>,
     /// Target outside the indexed root (stdlib/deps).
     pub pending_external: Vec<i64>,
-    /// Server died mid-drain — suppresses all marking for this language.
+    /// Process died mid-drain — answers may be corrupt, so `apply` marks nothing
+    /// beyond the in-root successes drained before the death.
     pub server_died: bool,
+    /// Mute-server abort — the drained answers are trustworthy and get committed;
+    /// only the un-queried tail is skipped. Unlike `server_died`, which distrusts all.
+    pub stopped_early: bool,
 }
+
+/// Consecutive timed-out request windows (each = one 10s batch deadline) before
+/// a live-but-mute server is abandoned. Windows not files: the bound stays
+/// ~`LIMIT × 10s` however the edges distribute.
+const UNRESPONSIVE_WINDOW_LIMIT: usize = 3;
 
 /// Apply one language's outcomes to the DB, preserving the health gates.
 /// Returns `(resolved, marked_unresolvable, marked_external)`.
@@ -82,7 +92,8 @@ pub(crate) fn apply_lang_outcomes(
     }
 
     // External: a half-loaded server can't fabricate a concrete out-of-root URI,
-    // so no resolved-gate — commit whenever the server stayed alive.
+    // so no resolved-gate — commit whenever the process stayed alive (a mute
+    // stop mid-drain still leaves the drained answers trustworthy).
     if !outcomes.server_died {
         for edge_id in &outcomes.pending_external {
             if let Err(e) = db.mark_edge_external(*edge_id) {
@@ -216,6 +227,12 @@ pub(crate) fn drain_language(
         by_file.len()
     );
 
+    // Sort so the mute-abort decision is deterministic run-to-run (by_file is a
+    // HashMap; consecutive-window counting would otherwise depend on hash order).
+    let mut by_file: Vec<(&str, Vec<&UnresolvedEdge>)> = by_file.into_iter().collect();
+    by_file.sort_by_key(|(path, _)| *path);
+
+    let mut consecutive_timeout_windows = 0usize;
     for (file_path, file_edges) in by_file {
         check_cancel()?;
         let abs_path = root.join(file_path);
@@ -276,35 +293,73 @@ pub(crate) fn drain_language(
             }
         };
 
-        for ((edge, _pos), outcome) in batch.iter().zip(outcomes) {
-            let done = sink.tick();
-            if done % PROGRESS_STRIDE == 0 {
-                sink.emit(done);
+        // Outcomes are position-ordered, so chunking by window size rebuilds the
+        // batch windows; an all-timeout window burned its full deadline. Enough
+        // consecutive ones (across files) = mute server → abort, keep the rest.
+        for (window, batch_slice) in outcomes
+            .chunks(DEFINITION_BATCH_WINDOW)
+            .zip(batch.chunks(DEFINITION_BATCH_WINDOW))
+        {
+            if window
+                .iter()
+                .all(|o| matches!(o, Err(e) if is_request_timeout(e)))
+            {
+                consecutive_timeout_windows += 1;
+            } else {
+                consecutive_timeout_windows = 0;
             }
-            match outcome {
-                Ok(Some(DefinitionOutcome::InRoot(loc))) => out.in_root.push((edge.edge_id, loc)),
-                Ok(Some(DefinitionOutcome::External)) => out.pending_external.push(edge.edge_id),
-                Ok(None) => out.pending_unresolvable.push(edge.edge_id),
-                Err(e) => {
-                    tracing::debug!(
-                        "definition failed for {} at {file_path}:{}: {e:#}",
-                        edge.target_name,
-                        edge.line
-                    );
-                    if !manager.is_alive(language) {
-                        tracing::warn!(
-                            "{language} LSP server died — remaining {language} edges resolved \
-                             via heuristics only. Rerun with --no-lsp to skip LSP entirely."
+
+            for ((edge, _pos), outcome) in batch_slice.iter().zip(window) {
+                let done = sink.tick();
+                if done % PROGRESS_STRIDE == 0 {
+                    sink.emit(done);
+                }
+                match outcome {
+                    Ok(Some(DefinitionOutcome::InRoot(loc))) => out.in_root.push((
+                        edge.edge_id,
+                        DefinitionLocation {
+                            file_path: loc.file_path.clone(),
+                            line: loc.line,
+                        },
+                    )),
+                    Ok(Some(DefinitionOutcome::External)) => {
+                        out.pending_external.push(edge.edge_id)
+                    }
+                    Ok(None) => out.pending_unresolvable.push(edge.edge_id),
+                    Err(e) => {
+                        tracing::debug!(
+                            "definition failed for {} at {file_path}:{}: {e:#}",
+                            edge.target_name,
+                            edge.line
                         );
-                        out.server_died = true;
-                        break;
+                        if !manager.is_alive(language) {
+                            tracing::warn!(
+                                "{language} LSP server died — remaining {language} edges \
+                                 resolved via heuristics only. Rerun with --no-lsp to skip \
+                                 LSP entirely."
+                            );
+                            out.server_died = true;
+                            break;
+                        }
                     }
                 }
+            }
+            if out.server_died {
+                break;
+            }
+            if consecutive_timeout_windows >= UNRESPONSIVE_WINDOW_LIMIT {
+                tracing::warn!(
+                    "{language} LSP server is unresponsive ({UNRESPONSIVE_WINDOW_LIMIT} \
+                     consecutive request windows timed out) — remaining {language} edges \
+                     resolved via heuristics only. Rerun with --no-lsp to skip LSP entirely."
+                );
+                out.stopped_early = true;
+                break;
             }
         }
 
         let _ = manager.close_file(language, file_path);
-        if out.server_died {
+        if out.server_died || out.stopped_early {
             break;
         }
     }
@@ -585,6 +640,7 @@ mod tests {
             pending_unresolvable: vec![ids[1]],
             pending_external: vec![ids[2]],
             server_died: true,
+            ..Default::default()
         };
         let (resolved, marked_u, marked_x) = apply_lang_outcomes(&db, "python", &outcomes).unwrap();
         assert_eq!((resolved, marked_u, marked_x), (1, 0, 0));
@@ -597,6 +653,32 @@ mod tests {
             db.edge_resolution_state(ids[2]).unwrap(),
             0,
             "unmarked on death"
+        );
+    }
+
+    #[test]
+    fn stopped_early_still_commits_drained_answers() {
+        // A mute-server early stop (unlike a process death) keeps the answers
+        // drained from responsive files: external/unresolvable are committed.
+        let (db, ids) = db_with_edges(3);
+        let outcomes = LangOutcomes {
+            in_root: vec![in_root_at(ids[0], 10)],
+            pending_unresolvable: vec![ids[1]],
+            pending_external: vec![ids[2]],
+            stopped_early: true,
+            ..Default::default()
+        };
+        let (resolved, marked_u, marked_x) = apply_lang_outcomes(&db, "python", &outcomes).unwrap();
+        assert_eq!((resolved, marked_u, marked_x), (1, 1, 1));
+        assert_eq!(
+            db.edge_resolution_state(ids[1]).unwrap(),
+            2,
+            "unresolvable kept"
+        );
+        assert_eq!(
+            db.edge_resolution_state(ids[2]).unwrap(),
+            3,
+            "external kept"
         );
     }
 
@@ -751,5 +833,77 @@ mod tests {
 
     fn parallel_lock() -> std::sync::MutexGuard<'static, ()> {
         PARALLEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A root with `n` one-edge files (each containing the target name on line
+    /// 1) plus the matching [`UnresolvedEdge`]s, for drain_language tests.
+    #[cfg(unix)]
+    fn root_with_edge_files(n: usize) -> (tempfile::TempDir, Vec<UnresolvedEdge>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let edges = (0..n)
+            .map(|i| {
+                let name = format!("f{i}.py");
+                std::fs::write(tmp.path().join(&name), "target_fn()\n").unwrap();
+                UnresolvedEdge {
+                    edge_id: 1000 + i as i64,
+                    target_name: "target_fn".to_string(),
+                    file_path: name,
+                    line: 1,
+                }
+            })
+            .collect();
+        (tmp, edges)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mute_server_stops_early_after_consecutive_timeout_windows() {
+        use crate::manager::test_support::silent_fake_server;
+
+        let _guard = parallel_lock(); // drain_language reads the global panic hook
+                                      // One edge per file → one window per file, so the window limit is hit
+                                      // after UNRESPONSIVE_WINDOW_LIMIT files.
+        let n = UNRESPONSIVE_WINDOW_LIMIT + 2;
+        let (tmp, edges) = root_with_edge_files(n);
+        let mut mgr = LspManager::new(tmp.path());
+        mgr.insert_client_for_test("python", silent_fake_server());
+        mgr.set_definition_timeout_for_test("python", std::time::Duration::from_millis(200));
+
+        let sink = ProgressSink::new(n as u32, None);
+        let res = drain_language(tmp.path(), &mut mgr, "python", &edges, &sink, None).unwrap();
+
+        assert!(res.outcomes.stopped_early, "a mute server must stop early");
+        assert!(
+            !res.outcomes.server_died,
+            "a mute-but-alive server is not a death"
+        );
+        assert!(res.outcomes.in_root.is_empty());
+        assert_eq!(
+            sink.processed(),
+            UNRESPONSIVE_WINDOW_LIMIT as u32,
+            "drain must stop after the window limit, not visit all {n} files"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replying_server_is_never_flagged_unresponsive() {
+        use crate::manager::test_support::{null_result_frames, scripted_fake_server};
+
+        let _guard = parallel_lock(); // drain_language reads the global panic hook
+        let n = UNRESPONSIVE_WINDOW_LIMIT + 2;
+        let (tmp, edges) = root_with_edge_files(n);
+        // Ids run 1..=n (one request per file). Default 10s deadline on purpose:
+        // a short one races fake-server startup under load (late reply = stale).
+        let ids: Vec<i64> = (1..=n as i64).collect();
+        let mut mgr = LspManager::new(tmp.path());
+        mgr.insert_client_for_test("python", scripted_fake_server(&null_result_frames(&ids)));
+
+        let sink = ProgressSink::new(n as u32, None);
+        let res = drain_language(tmp.path(), &mut mgr, "python", &edges, &sink, None).unwrap();
+
+        assert!(!res.outcomes.stopped_early && !res.outcomes.server_died);
+        assert_eq!(res.outcomes.pending_unresolvable.len(), n);
+        assert_eq!(sink.processed(), n as u32);
     }
 }

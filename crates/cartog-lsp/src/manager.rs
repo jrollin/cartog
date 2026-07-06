@@ -15,8 +15,9 @@ const DEFAULT_READY_TIMEOUT_SECS: u64 = 20;
 
 /// How many `textDocument/definition` requests `definitions_batch` keeps in
 /// flight at once. Caps in-flight memory and stdin backpressure while still
-/// overlapping round-trips; large files resolve in windows of this size.
-const DEFINITION_BATCH_WINDOW: usize = 64;
+/// overlapping round-trips; large files resolve in windows of this size. Each
+/// window shares one batch deadline, so the drain treats it as one timeout unit.
+pub(crate) const DEFINITION_BATCH_WINDOW: usize = 64;
 
 /// Read the ready-timeout from env, falling back to the default.
 fn ready_timeout_secs() -> u64 {
@@ -628,41 +629,74 @@ fn parse_definition_response(result: &Value, root: &Path) -> Result<Option<Defin
     })))
 }
 
+/// Test-only fakes and accessors shared by the `manager` and `resolve` tests.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
     use std::time::Duration;
 
     /// Insert a pre-built client so tests can drive `definitions_batch` without
     /// a real language server on PATH.
     impl LspManager {
-        fn insert_client_for_test(&mut self, language: &str, client: LspClient) {
+        pub(crate) fn insert_client_for_test(&mut self, language: &str, client: LspClient) {
             self.clients
                 .insert(language.to_string(), (client, "python"));
         }
 
-        fn set_definition_timeout_for_test(&mut self, language: &str, timeout: Duration) {
+        pub(crate) fn set_definition_timeout_for_test(
+            &mut self,
+            language: &str,
+            timeout: Duration,
+        ) {
             if let Some((client, _)) = self.clients.get_mut(language) {
                 client.set_timeout(timeout);
             }
         }
     }
 
-    /// Fake server that stays alive but never replies, so each window's requests
-    /// time out (returning per-slot `Err`s) without the process exiting — the
-    /// `definitions_batch` cancel check between windows is what we exercise.
+    /// Fake server: emits `frames` verbatim, then stays alive without replying.
+    /// `exec` replaces sh so Drop's kill+reap leaves nothing orphaned.
     #[cfg(unix)]
-    fn silent_fake_server() -> LspClient {
+    pub(crate) fn scripted_fake_server(frames: &str) -> LspClient {
         use std::process::{Command, Stdio};
+        // POSIX single-quote escaping so `frames` (JSON, quotes, CR/LF) can't
+        // break out of the printf argument.
+        let quoted = format!("'{}'", frames.replace('\'', r"'\''"));
+        let script = format!("printf '%s' {quoted}; exec sleep 600");
         let child = Command::new("sh")
             .arg("-c")
-            .arg("exec sleep 600")
+            .arg(script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .expect("spawn fake server");
         LspClient::new(child).expect("client over fake server")
     }
+
+    /// Fake server that never replies: every request times out, process stays up.
+    #[cfg(unix)]
+    pub(crate) fn silent_fake_server() -> LspClient {
+        scripted_fake_server("")
+    }
+
+    /// One `result: null` LSP response frame per id, for [`scripted_fake_server`].
+    #[cfg(unix)]
+    pub(crate) fn null_result_frames(ids: &[i64]) -> String {
+        ids.iter()
+            .map(|id| {
+                let body = format!(r#"{{"jsonrpc":"2.0","id":{id},"result":null}}"#);
+                format!("Content-Length: {}\r\n\r\n{body}", body.len())
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    use super::test_support::silent_fake_server;
+    use super::*;
+    use std::time::Duration;
 
     #[cfg(unix)]
     #[test]

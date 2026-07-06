@@ -243,12 +243,7 @@ impl LspClient {
         out.into_iter()
             .enumerate()
             .map(|(i, entry)| {
-                entry.unwrap_or_else(|| {
-                    Err(anyhow::anyhow!(
-                        "timeout waiting for response to request {}",
-                        ids[i]
-                    ))
-                })
+                entry.unwrap_or_else(|| Err(anyhow::anyhow!("{REQUEST_TIMEOUT_PREFIX} {}", ids[i])))
             })
             .collect()
     }
@@ -257,6 +252,18 @@ impl LspClient {
     fn auto_respond(&mut self, request: &Value) -> Result<()> {
         self.write_message(&build_auto_response(request))
     }
+}
+
+/// Batch-deadline timeout message; matched by [`is_request_timeout`] (same
+/// message-based pattern as `cartog_core::is_cancelled`).
+const REQUEST_TIMEOUT_PREFIX: &str = "timeout waiting for response to request";
+
+/// True when `err` is a batch-deadline timeout (no reply at all — unlike an
+/// LSP error response, which proves the server is responsive).
+pub(crate) fn is_request_timeout(err: &anyhow::Error) -> bool {
+    err.root_cause()
+        .to_string()
+        .starts_with(REQUEST_TIMEOUT_PREFIX)
 }
 
 /// Build the auto-response to a server-initiated request: echo its `id` with a
