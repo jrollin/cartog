@@ -1,0 +1,23 @@
+{
+  "_meta": {
+    "commit": "69e1280",
+    "date": "2026-07-06",
+    "reranker": "active (jina-reranker-v1-turbo-en)",
+    "harness_inmem": "cargo test --test rag_relevancy",
+    "harness_shell": "benchmarks/scenarios/13_rag_search.sh (embedding: stub in-mem test; real ONNX in shell)",
+    "note": "In-mem relevancy test uses a zero-vector StubEmbeddingProvider, so scores reflect FTS5 + reranker only (no vector recall lane). Shell scenario 13 uses the real local ONNX embeddings."
+  },
+  "inmem_python_mean": { "p_at_k": 52.3, "r_at_k": 55.8, "ndcg_at_k": 0.615 },
+  "inmem_java_mean":   { "p_at_k": 72.2, "r_at_k": 61.1, "ndcg_at_k": 0.804 },
+  "scenario13": [
+    {"lang":"webapp_py","cartog_tokens":625,"cartog_recall":50.0,"naive_tokens":4424,"naive_recall":87.5},
+    {"lang":"webapp_ts","cartog_tokens":647,"cartog_recall":50.0,"naive_tokens":3822,"naive_recall":75.0},
+    {"lang":"webapp_go","cartog_tokens":634,"cartog_recall":42.9,"naive_tokens":2354,"naive_recall":85.7},
+    {"lang":"webapp_rs","cartog_tokens":663,"cartog_recall":75.0,"naive_tokens":175082,"naive_recall":100.0},
+    {"lang":"webapp_rb","cartog_tokens":523,"cartog_recall":71.4,"naive_tokens":2672,"naive_recall":85.7},
+    {"lang":"webapp_java","cartog_tokens":639,"cartog_recall":57.1,"naive_tokens":2466,"naive_recall":85.7},
+    {"lang":"webapp_php","cartog_tokens":524,"cartog_recall":57.1,"naive_tokens":1543,"naive_recall":85.7},
+    {"lang":"webapp_swift","cartog_tokens":620,"cartog_recall":66.7,"naive_tokens":10843,"naive_recall":100.0},
+    {"lang":"webapp_kt","cartog_tokens":627,"cartog_recall":66.7,"naive_tokens":996,"naive_recall":100.0}
+  ]
+}
