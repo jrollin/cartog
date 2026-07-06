@@ -111,81 +111,96 @@ impl Database {
         )?;
 
         for (edge_id, target_name, edge_file, source_id) in unresolved {
-            // `\` is PHP's namespace separator (App\Auth\BaseService).
-            let simple_name = target_name
+            // Two candidate names, tried in this order:
+            //   full_name    — target_name split only on `.`/`\` (a method chain `self.db.find`
+            //                  or PHP namespace `App\Auth\Foo`). This is the name a symbol is
+            //                  *stored* under when the language qualifies with `::` (Ruby stores
+            //                  `class Foo::Bar` as name `Foo::Bar`), so it must be tried first.
+            //   reduced_name — full_name further reduced past Rust's `::` path separator
+            //                  (`Pool::new` → `new`), for languages that store the callee bare.
+            //                  Some(..) only when it actually differs (i.e. `::` was present).
+            let full_name = target_name
                 .rsplit(['.', '\\'])
                 .next()
                 .unwrap_or(target_name);
+            let reduced = full_name.rsplit("::").next().unwrap_or(full_name);
+            let reduced_name = (reduced != full_name).then_some(reduced);
 
-            // 1) Same file
-            let target_id: Option<String> = same_file_stmt
-                .query_row(params![simple_name, edge_file], |row| row.get(0))
-                .optional()?;
-
-            if let Some(tid) = target_id {
-                update_stmt.execute(params![tid, EdgeProvenance::SameFile.as_str(), edge_id])?;
-                resolved += 1;
-                continue;
-            }
-
-            // 2) Import-path resolution
-            let target_id: Option<String> = import_resolve_stmt
-                .query_row(params![simple_name, edge_file], |row| row.get(0))
-                .optional()?;
-
-            if let Some(tid) = target_id {
-                update_stmt.execute(params![tid, EdgeProvenance::ImportPath.as_str(), edge_id])?;
-                resolved += 1;
-                continue;
-            }
-
-            // 3) Same directory
-            let dir = edge_file
-                .rsplit_once('/')
-                .map(|(d, _)| format!("{d}/%"))
-                .unwrap_or_default();
-
-            if !dir.is_empty() {
-                let target_id: Option<String> = same_dir_stmt
-                    .query_row(params![simple_name, dir], |row| row.get(0))
-                    .optional()?;
-
-                if let Some(tid) = target_id {
-                    update_stmt.execute(params![tid, EdgeProvenance::SameDir.as_str(), edge_id])?;
-                    resolved += 1;
-                    continue;
+            // Locality tiers (1–4) key on the caller's file/dir/scope, so a reduced-name
+            // fallback can only match a symbol already reachable from the caller — safe.
+            // full_name first preserves qualified-name storage (Ruby); reduced_name second
+            // gains Rust path calls. `reduced_name` is NOT tried at the global tier (5+6):
+            // a fully-qualified external call like `std::mem::swap` must stay unresolved
+            // rather than reduce to `swap` and false-positive onto a lone project symbol.
+            let mut resolution: Option<(String, EdgeProvenance)> = None;
+            for name in std::iter::once(full_name).chain(reduced_name) {
+                // 1) Same file
+                if let Some(tid) = same_file_stmt
+                    .query_row(params![name, edge_file], |row| row.get::<_, String>(0))
+                    .optional()?
+                {
+                    resolution = Some((tid, EdgeProvenance::SameFile));
+                    break;
                 }
-            }
 
-            // 4) Parent scope preference
-            let target_id: Option<String> = parent_scope_stmt
-                .query_row(params![simple_name, source_id], |row| row.get(0))
-                .optional()?;
+                // 2) Import-path resolution
+                if let Some(tid) = import_resolve_stmt
+                    .query_row(params![name, edge_file], |row| row.get::<_, String>(0))
+                    .optional()?
+                {
+                    resolution = Some((tid, EdgeProvenance::ImportPath));
+                    break;
+                }
 
-            if let Some(tid) = target_id {
-                update_stmt.execute(params![tid, EdgeProvenance::ParentScope.as_str(), edge_id])?;
-                resolved += 1;
-                continue;
-            }
+                // 3) Same directory
+                let dir = edge_file
+                    .rsplit_once('/')
+                    .map(|(d, _)| format!("{d}/%"))
+                    .unwrap_or_default();
 
-            // 5+6) Project-wide: unique match, or class-over-constructor disambiguation
-            let mut rows = anywhere_stmt.query(params![simple_name])?;
-            let mut matches: Vec<(String, String)> = Vec::new();
-            while let Some(row) = rows.next()? {
-                matches.push((row.get(0)?, row.get(1)?));
-                if matches.len() == 3 {
+                if !dir.is_empty() {
+                    if let Some(tid) = same_dir_stmt
+                        .query_row(params![name, dir], |row| row.get::<_, String>(0))
+                        .optional()?
+                    {
+                        resolution = Some((tid, EdgeProvenance::SameDir));
+                        break;
+                    }
+                }
+
+                // 4) Parent scope preference
+                if let Some(tid) = parent_scope_stmt
+                    .query_row(params![name, source_id], |row| row.get::<_, String>(0))
+                    .optional()?
+                {
+                    resolution = Some((tid, EdgeProvenance::ParentScope));
                     break;
                 }
             }
-            drop(rows);
 
-            // Tier and target are decided together so the provenance label can
-            // never drift from the branch that picked the id.
-            let resolution = match matches.as_slice() {
-                [(id, _)] => Some((id, EdgeProvenance::UniqueGlobal)),
-                [a, b] => disambiguate_two(a, b).map(|id| (id, EdgeProvenance::KindDisambig)),
-                _ => None,
-            };
+            // 5+6) Project-wide: unique match, or class-over-constructor disambiguation.
+            // full_name only — see the note above on why reduced_name is excluded here.
+            if resolution.is_none() {
+                let mut rows = anywhere_stmt.query(params![full_name])?;
+                let mut matches: Vec<(String, String)> = Vec::new();
+                while let Some(row) = rows.next()? {
+                    matches.push((row.get(0)?, row.get(1)?));
+                    if matches.len() == 3 {
+                        break;
+                    }
+                }
+                drop(rows);
+
+                // Tier and target are decided together so the provenance label can
+                // never drift from the branch that picked the id.
+                resolution = match matches.as_slice() {
+                    [(id, _)] => Some((id.clone(), EdgeProvenance::UniqueGlobal)),
+                    [a, b] => {
+                        disambiguate_two(a, b).map(|id| (id.clone(), EdgeProvenance::KindDisambig))
+                    }
+                    _ => None,
+                };
+            }
 
             if let Some((tid, prov)) = resolution {
                 update_stmt.execute(params![tid, prov.as_str(), edge_id])?;
