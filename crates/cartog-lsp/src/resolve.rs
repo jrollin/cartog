@@ -246,6 +246,19 @@ pub(crate) fn drain_language(
 
         if let Err(e) = manager.open_file(language, file_path, &content) {
             tracing::debug!("didOpen failed for {file_path}: {e:#}");
+            // Server stopped reading stdin: alive but stuck (is_alive true), so
+            // stop early — drained answers stay trusted, like the mute-server path.
+            // Drop the client so a warm manager can't reuse a wedged one.
+            if crate::client::is_write_timeout(&e) {
+                tracing::warn!(
+                    "{language} LSP server stopped reading stdin (didOpen write timed out) — \
+                     remaining {language} edges resolved via heuristics only. Rerun with \
+                     --no-lsp to skip LSP entirely."
+                );
+                out.stopped_early = true;
+                manager.drop_client(language);
+                break;
+            }
             if !manager.is_alive(language) {
                 tracing::warn!(
                     "{language} LSP server died during didOpen — remaining {language} edges \
@@ -278,6 +291,19 @@ pub(crate) fn drain_language(
             }
             Err(e) => {
                 tracing::debug!("definition batch failed for {file_path}: {e:#}");
+                // Server stopped reading stdin (see the open_file arm). Skip
+                // close_file: the write is wedged, so a didClose would only queue
+                // behind the parked job. Drop the client instead (kill unblocks it).
+                if crate::client::is_write_timeout(&e) {
+                    tracing::warn!(
+                        "{language} LSP server stopped reading stdin (definition write timed \
+                         out) — remaining {language} edges resolved via heuristics only. Rerun \
+                         with --no-lsp to skip LSP entirely."
+                    );
+                    out.stopped_early = true;
+                    manager.drop_client(language);
+                    break;
+                }
                 if !manager.is_alive(language) {
                     tracing::warn!(
                         "{language} LSP server died — remaining {language} edges resolved \
@@ -882,6 +908,52 @@ mod tests {
             sink.processed(),
             UNRESPONSIVE_WINDOW_LIMIT as u32,
             "drain must stop after the window limit, not visit all {n} files"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drain_language_stops_early_on_write_timeout() {
+        use crate::manager::test_support::silent_fake_server;
+
+        let _guard = parallel_lock(); // drain_language reads the global panic hook
+
+        // One file whose content exceeds the ~64KB pipe buffer, so didOpen's write
+        // wedges against a server that never reads stdin.
+        let tmp = tempfile::tempdir().unwrap();
+        let big = format!("target_fn()\n{}", "x".repeat(200_000));
+        std::fs::write(tmp.path().join("f.py"), &big).unwrap();
+        let edges = vec![UnresolvedEdge {
+            edge_id: 1,
+            target_name: "target_fn".to_string(),
+            file_path: "f.py".to_string(),
+            line: 1,
+        }];
+
+        let mut mgr = LspManager::new(tmp.path());
+        mgr.insert_client_for_test("python", silent_fake_server());
+        mgr.set_write_timeout_for_test("python", std::time::Duration::from_millis(300));
+
+        let sink = ProgressSink::new(1, None);
+        let started = std::time::Instant::now();
+        let res = drain_language(tmp.path(), &mut mgr, "python", &edges, &sink, None).unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(
+            res.outcomes.stopped_early,
+            "a server that stops reading stdin must stop the drain early"
+        );
+        assert!(!res.outcomes.server_died, "stuck-but-alive is not a death");
+        // Bounded, not the 10s default deadline: the write timeout drove the stop.
+        assert!(
+            elapsed < std::time::Duration::from_secs(3),
+            "took {elapsed:?}"
+        );
+        // The wedged client must be dropped so a warm manager can't reuse it and
+        // re-block on the next pass.
+        assert!(
+            !mgr.has_client_for_test("python"),
+            "a wedged client must be dropped, not left for start() to reuse"
         );
     }
 

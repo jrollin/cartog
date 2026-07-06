@@ -184,19 +184,24 @@ consumer that can't keep up cannot stall the producer.
 
 ---
 
-## 7. LSP client — reader thread + 64-request pipelining
+## 7. LSP client — reader thread + writer thread + 64-request pipelining
 
-**Where:** `crates/cartog-lsp/src/client.rs` (reader thread),
+**Where:** `crates/cartog-lsp/src/client.rs` (reader thread, writer thread),
 `crates/cartog-lsp/src/manager.rs` (`DEFINITION_BATCH_WINDOW = 64`).
 
 **Usage.** Each LSP server is a child process. A background `std::thread` reads
-JSON-RPC frames from the server's stdout into an mpsc channel. During edge
-resolution the main thread writes `textDocument/definition` requests in
-**windows of 64**, then collects all 64 replies before the next window.
+JSON-RPC frames from the server's stdout into an mpsc channel; a second
+background thread **owns `ChildStdin`** and performs every write, acking each
+one back to the caller. During edge resolution the main thread writes
+`textDocument/definition` requests in **windows of 64**, then collects all 64
+replies before the next window.
 
 **Why.** Sending requests one-at-a-time and blocking on each reply wastes the
 round-trip latency. Pipelining a window overlaps those round-trips while capping
-in-flight memory and stdin backpressure.
+in-flight memory and stdin backpressure. The writer thread bounds the **write**
+side the same way the read side is bounded: a blocking `write_all` on a server
+that stopped draining its stdin would otherwise fill the ~64KB pipe buffer and
+hang the whole index (there are read deadlines but, without this, no write one).
 
 **Limitations.**
 - The window size (64) is a fixed constant, not adaptive.
@@ -206,11 +211,25 @@ in-flight memory and stdin backpressure.
   consecutive all-timeout windows (~30 s): the language falls back to
   heuristics, keeping edges already resolved, instead of burning one deadline
   per file.
+- A server that stays alive but **stops reading its stdin** is caught by the
+  writer thread: the caller waits on the per-write ack with a deadline
+  (`write_timeout`, 10 s default), and a timeout abandons the language early
+  (keeping already-drained answers), rather than blocking forever. On timeout the
+  client is latched wedged (later writes fast-fail, not re-blocked) and dropped
+  so a warm manager never reuses it.
+- The per-write ack round-trip costs ~6 µs (two thread wakeups) vs a direct
+  `write_all`, measured against a stdin-draining server. Immaterial here: writes
+  are pipelined 64 at a time and each hides behind a 1–50 ms server round-trip,
+  so ~100k writes add ~0.6 s to a ~3.5 min resolution pass (~0.3 %). The ack
+  channel is reused per client, not allocated per call, to keep it off the
+  per-edge allocation path.
 - This crate is **not** tokio — it is plain `std::thread` + channels.
 
 **Impact.** ~33% faster edge resolution on large repos (≈5:12 → 3:29 on a 98k-edge
-run). Safety: the reader thread exits cleanly on stdout EOF; the child LSP
-process is reaped on `Drop`.
+run); the writer-thread ack cost above does not dent that. Safety: the reader
+thread exits cleanly on stdout EOF; the writer thread exits when the channel
+closes or the pipe breaks; the child LSP process is reaped on `Drop` (which also
+unblocks a writer parked on a non-reading server).
 
 ---
 
@@ -274,7 +293,7 @@ inputs (no shared mutable state beyond an `AtomicBool` stop flag and an
 | 4 | MCP tool handlers | tokio `spawn_blocking` | Don't stall the async runtime | Concurrent tool calls; no lock across await |
 | 5 | Single-writer promoter | tokio `spawn` | Auto-failover on primary death | ~10 s, TLA+/Loom verified |
 | 6 | Progress forwarder | tokio `spawn` + bounded mpsc | Live progress, decoupled | Best-effort, never backpressures |
-| 7 | LSP client | `std::thread` + 64-window | Overlap request round-trips | ~33% faster edge resolution |
+| 7 | LSP client | `std::thread` (reader + writer) + 64-window | Overlap round-trips; bound both read & write | ~33% faster edge resolution |
 | 8 | File watcher | `std::thread` + debouncer | Responsive background re-index | Editor-save latency hidden |
 | 9 | Update check / spinner | detached `std::thread` | No latency on the main path | Cosmetic / best-effort |
 

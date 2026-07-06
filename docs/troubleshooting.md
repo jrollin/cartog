@@ -129,6 +129,12 @@ resolved via heuristics only` and finishes that language with heuristics,
 keeping the edges it already resolved. To skip LSP entirely on the next run,
 pass `--no-lsp`.
 
+A server that stops **reading** its stdin (rarer, but the write of a whole file
+during `didOpen` can fill the OS pipe buffer against such a server) is caught
+the same way: each write has a 10 s deadline, and cartog logs `… LSP server
+stopped reading stdin …` and falls back to heuristics for that language instead
+of hanging.
+
 ### My `[lsp.<lang>]` command override isn't being used
 
 - The override only fires during the LSP edge-resolution pass — run
