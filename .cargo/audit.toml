@@ -1,0 +1,12 @@
+# cargo-audit config. Ignore list must stay in sync with deny.toml [advisories].ignore.
+#
+# 2026-07-06: quick-xml DoS advisories, transitive-only via self_update (0.37)
+# and rust-s3/aws-creds (0.38). Fix is quick-xml >=0.41, but both dependents
+# pin <0.41 so no upgrade or [patch] applies. Exposure is narrow: XML parsed is
+# GitHub release metadata (self_update) and S3 responses (rust-s3), not
+# attacker-controlled input. Remove once self_update/rust-s3 pull quick-xml >=0.41.
+[advisories]
+ignore = [
+  "RUSTSEC-2026-0194", # quick-xml: quadratic run time on duplicate attribute names
+  "RUSTSEC-2026-0195", # quick-xml: unbounded namespace-declaration allocation (memory DoS)
+]
