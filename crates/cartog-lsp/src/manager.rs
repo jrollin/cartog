@@ -319,6 +319,16 @@ impl LspManager {
             .is_some_and(|(c, _)| c.is_alive())
     }
 
+    /// Discard the client for a language: remove it so `start()` won't reuse it,
+    /// and drop it so its `Drop` kills + reaps the child (which also unblocks a
+    /// writer thread parked on a wedged pipe). Used when a write timed out — the
+    /// client can no longer be written to, and a warm manager must not keep it.
+    pub fn drop_client(&mut self, language: &str) {
+        if self.clients.remove(language).is_some() {
+            tracing::debug!("LSP: dropped wedged/unusable {language} client");
+        }
+    }
+
     /// Gracefully shut down all servers via the `shutdown`/`exit` handshake.
     /// Reaping is left to [`LspClient`]'s `Drop` as each client leaves scope.
     pub fn shutdown_all(&mut self) {
@@ -652,6 +662,20 @@ pub(crate) mod test_support {
                 client.set_timeout(timeout);
             }
         }
+
+        pub(crate) fn set_write_timeout_for_test(&mut self, language: &str, timeout: Duration) {
+            if let Some((client, _)) = self.clients.get_mut(language) {
+                client.set_write_timeout(timeout);
+            }
+        }
+
+        pub(crate) fn has_client_for_test(&self, language: &str) -> bool {
+            self.clients.contains_key(language)
+        }
+
+        pub(crate) fn child_pid_for_test(&self, language: &str) -> Option<u32> {
+            self.clients.get(language).map(|(c, _)| c.child.id())
+        }
     }
 
     /// Fake server: emits `frames` verbatim, then stays alive without replying.
@@ -723,6 +747,35 @@ mod tests {
             .definitions_batch("python", "a.py", &positions, Some(&cancel))
             .expect_err("cancel between windows must abort the batch");
         assert!(err.to_string().contains("cancelled"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drop_client_removes_and_reaps_so_start_wont_reuse_a_wedged_server() {
+        // A wedged client left in `clients` would be reused by start()'s
+        // contains_key short-circuit and re-block every warm pass. drop_client
+        // must remove it (so start re-spawns) and reap the child (Drop).
+        let tmp = tempfile::tempdir().unwrap();
+        let mut mgr = LspManager::new(tmp.path());
+        mgr.insert_client_for_test("python", silent_fake_server());
+        let pid = mgr.child_pid_for_test("python").expect("client present");
+        assert!(mgr.has_client_for_test("python"));
+
+        mgr.drop_client("python");
+
+        assert!(
+            !mgr.has_client_for_test("python"),
+            "start() would reuse a client left in the map"
+        );
+        // Give Drop's kill+reap a moment, then confirm the child is gone.
+        std::thread::sleep(Duration::from_millis(100));
+        let still_alive = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(!still_alive, "drop_client must reap the child (pid {pid})");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -11,20 +12,47 @@ use serde_json::Value;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Framed bytes for the writer thread. The writer acks each on a **persistent**
+/// per-client channel (not one allocated per call) — writes are strictly serial
+/// (one owner, blocks on the ack before the next), so a single channel suffices
+/// and keeps this off the per-edge allocation path.
+type WriteJob = Vec<u8>;
+
 /// Minimal synchronous LSP client over stdio pipes.
 ///
-/// Uses a background reader thread to avoid blocking on IO when waiting
-/// for progress notifications during server initialization.
+/// A background reader thread avoids blocking on IO while waiting for progress
+/// notifications during init; a background writer thread owns `ChildStdin` so a
+/// server that stops draining its stdin surfaces as a bounded ack timeout on the
+/// owner, not a wedged `write_all` that hangs the index (see `WRITE_TIMEOUT_PREFIX`).
 ///
 /// Handles server-initiated requests (e.g., `window/workDoneProgress/create`)
 /// by auto-responding with `null` result, as required by the LSP spec.
+///
+/// No Loom model: owner↔writer talk over one FIFO `mpsc` + per-call ack channel,
+/// no shared atomic, so there is no memory-ordering interleaving to explore.
 pub struct LspClient {
     pub child: Child,
-    stdin: ChildStdin,
+    writer_tx: mpsc::Sender<WriteJob>,
+    /// Persistent ack channel (see [`WriteJob`]); the writer sends one result per
+    /// job here and `write_message` waits on it.
+    write_ack: mpsc::Receiver<io::Result<()>>,
+    _writer_handle: JoinHandle<()>,
     receiver: mpsc::Receiver<Value>,
     _reader_handle: JoinHandle<()>,
     next_id: i64,
     timeout: Duration,
+    /// Deadline for one framed write to be acked. A server that stops reading
+    /// fills the ~64KB pipe buffer and parks the writer's `write_all`; this
+    /// bounds how long the owner waits before bailing (writer is reaped on `Drop`).
+    /// Set generously (10s): a healthy server draining a huge `didOpen` (>64KB
+    /// minified file) must not trip it, or that language falls back to heuristics.
+    write_timeout: Duration,
+    /// Latched once a write ack times out. The writer thread stays parked on the
+    /// wedged pipe (FIFO), so every later write would also queue behind it and
+    /// burn a full `write_timeout`; once wedged, writes fast-fail instead. The
+    /// only cure is dropping the client (kill → `BrokenPipe`), so callers must
+    /// discard a wedged client rather than reuse it.
+    write_wedged: AtomicBool,
     /// Notifications buffered during a synchronous `send_request` for later
     /// consumption by `recv_until` (used only during the initialize handshake).
     buffered_notifications: VecDeque<Value>,
@@ -36,17 +64,32 @@ impl LspClient {
         let stdout = child.stdout.take().context("no stdout on child process")?;
 
         let (tx, rx) = mpsc::channel();
-        let handle = std::thread::spawn(move || reader_thread(stdout, tx));
+        let reader_handle = std::thread::spawn(move || reader_thread(stdout, tx));
+
+        let (writer_tx, write_rx) = mpsc::channel();
+        let (ack_tx, write_ack) = mpsc::channel();
+        let writer_handle = std::thread::spawn(move || writer_thread(stdin, write_rx, ack_tx));
 
         Ok(Self {
             child,
-            stdin,
+            writer_tx,
+            write_ack,
+            _writer_handle: writer_handle,
             receiver: rx,
-            _reader_handle: handle,
+            _reader_handle: reader_handle,
             next_id: 1,
             timeout: DEFAULT_TIMEOUT,
+            write_timeout: DEFAULT_TIMEOUT,
+            write_wedged: AtomicBool::new(false),
             buffered_notifications: VecDeque::new(),
         })
+    }
+
+    /// True once a write timed out: the writer thread is parked on a pipe the
+    /// server stopped reading, so this client can no longer be written to and
+    /// should be discarded (see [`LspManager::drop_client`](crate::manager::LspManager)).
+    pub fn is_write_wedged(&self) -> bool {
+        self.write_wedged.load(Ordering::Relaxed)
     }
 
     /// Send a JSON-RPC request and wait for the matching response. Used for the
@@ -99,6 +142,13 @@ impl LspClient {
     #[cfg(test)]
     pub(crate) fn set_timeout(&mut self, timeout: Duration) {
         self.timeout = timeout;
+    }
+
+    /// Shorten the per-write ack timeout (tests only) so a server that stops
+    /// reading stdin surfaces a write timeout fast, not after the 10s default.
+    #[cfg(test)]
+    pub(crate) fn set_write_timeout(&mut self, timeout: Duration) {
+        self.write_timeout = timeout;
     }
 
     /// Send a JSON-RPC notification (no response expected).
@@ -157,13 +207,39 @@ impl LspClient {
         }
     }
 
+    /// Frame `msg` into one `Vec` (header + body = one atomic unit), hand it to
+    /// the writer thread, and wait for the ack on the persistent channel. A stuck
+    /// stdin shows up as an ack `Timeout` (bounded by `write_timeout`) so the
+    /// owner can bail.
+    ///
+    /// Once a prior write wedged, fast-fail: the writer is still parked on the
+    /// dead pipe (FIFO), so a fresh job would only queue behind it and burn
+    /// another full `write_timeout`. Returns the same [`WRITE_TIMEOUT_PREFIX`]
+    /// error so callers classify it identically. This latch also means no ack
+    /// from a wedged write can ever leak into a later call: once wedged we never
+    /// send again, so the reused ack channel stays in lockstep with the sends.
     fn write_message(&mut self, msg: &Value) -> Result<()> {
+        if self.write_wedged.load(Ordering::Relaxed) {
+            bail!("{WRITE_TIMEOUT_PREFIX} (client already wedged)");
+        }
+
         let body = serde_json::to_string(msg)?;
-        let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        self.stdin.write_all(header.as_bytes())?;
-        self.stdin.write_all(body.as_bytes())?;
-        self.stdin.flush()?;
-        Ok(())
+        let mut bytes = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
+        bytes.extend_from_slice(body.as_bytes());
+
+        self.writer_tx
+            .send(bytes)
+            .map_err(|_| anyhow::anyhow!("LSP writer thread gone"))?;
+
+        match self.write_ack.recv_timeout(self.write_timeout) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e).context("writing LSP message to server stdin"),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.write_wedged.store(true, Ordering::Relaxed);
+                bail!("{WRITE_TIMEOUT_PREFIX} after {:?}", self.write_timeout)
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => bail!("LSP writer thread gone"),
+        }
     }
 
     /// Read replies for `ids` (already sent) under one shared `deadline`,
@@ -266,6 +342,19 @@ pub(crate) fn is_request_timeout(err: &anyhow::Error) -> bool {
         .starts_with(REQUEST_TIMEOUT_PREFIX)
 }
 
+/// Write-ack timeout message; matched by [`is_write_timeout`]. Kept distinct from
+/// [`REQUEST_TIMEOUT_PREFIX`] so the read-side all-timeout-window counter (a
+/// mute-but-reading server) is unaffected by this write-side stall.
+const WRITE_TIMEOUT_PREFIX: &str = "timeout writing to LSP server stdin";
+
+/// True when `err` is a write-ack timeout: the server stopped draining its stdin
+/// (alive but stuck), so the drain should stop early rather than re-block.
+pub(crate) fn is_write_timeout(err: &anyhow::Error) -> bool {
+    err.root_cause()
+        .to_string()
+        .starts_with(WRITE_TIMEOUT_PREFIX)
+}
+
 /// Build the auto-response to a server-initiated request: echo its `id` with a
 /// null result, as the LSP spec requires.
 fn build_auto_response(request: &Value) -> Value {
@@ -280,6 +369,9 @@ fn build_auto_response(request: &Value) -> Value {
 impl Drop for LspClient {
     /// Reap the child: `std::process::Child` does not kill/wait on drop, so a
     /// client dropped before `shutdown_all` (e.g. failed init) would orphan it.
+    /// The body runs before fields drop, so `kill()` closes the server's stdin
+    /// read-end while `_writer_handle` still holds the write end — a writer parked
+    /// on a non-reading server then gets `BrokenPipe` and exits (never joined).
     fn drop(&mut self) {
         if matches!(self.child.try_wait(), Ok(None)) {
             let _ = self.child.kill();
@@ -296,6 +388,25 @@ fn is_server_request(msg: &Value) -> bool {
 /// A notification has `method` but no `id`.
 fn is_notification(msg: &Value) -> bool {
     msg.get("method").is_some() && msg.get("id").is_none()
+}
+
+/// Owns `ChildStdin` and performs every write, one framed job at a time, acking
+/// each result on the persistent `ack` channel. Exits when `writer_tx` drops (on
+/// `LspClient::drop`) or the owner is gone (ack send fails). A server that stops
+/// reading parks the `write_all` here; `Drop` kills the child, so the pipe breaks
+/// and the parked write returns `BrokenPipe` and this thread ends.
+fn writer_thread(
+    mut stdin: ChildStdin,
+    rx: mpsc::Receiver<WriteJob>,
+    ack: mpsc::Sender<io::Result<()>>,
+) {
+    for bytes in rx {
+        let result = stdin.write_all(&bytes).and_then(|()| stdin.flush());
+        // Owner gone (client dropped): nothing left to serve — stop.
+        if ack.send(result).is_err() {
+            break;
+        }
+    }
 }
 
 /// Background thread that reads LSP messages and sends them to the channel.
@@ -366,6 +477,19 @@ mod tests {
         let resp = serde_json::json!({"id": 1, "result": null});
         assert!(!is_server_request(&resp));
         assert!(!is_notification(&resp));
+    }
+
+    #[test]
+    fn is_write_timeout_matches_only_the_write_prefix() {
+        let write = anyhow::anyhow!("{WRITE_TIMEOUT_PREFIX} after 300ms");
+        assert!(is_write_timeout(&write));
+        assert!(!is_request_timeout(&write));
+
+        let request = anyhow::anyhow!("{REQUEST_TIMEOUT_PREFIX} 7");
+        assert!(!is_write_timeout(&request));
+
+        let lsp_error = anyhow::anyhow!("LSP error: boom");
+        assert!(!is_write_timeout(&lsp_error));
     }
 
     #[test]
@@ -636,5 +760,89 @@ mod tests {
         assert_eq!(replies.len(), 2);
         assert_eq!(replies[0].as_ref().unwrap()["v"], 1);
         assert_eq!(replies[1].as_ref().unwrap()["v"], 2);
+    }
+
+    /// A didOpen frame larger than the ~64KB pipe buffer, so a server that never
+    /// drains its stdin wedges the write. `silent_fake_server` (`exec sleep`)
+    /// never reads stdin, so this reproduces the hang on current `main` and the
+    /// bounded write-ack timeout after the fix.
+    #[cfg(unix)]
+    fn big_didopen(text_len: usize) -> Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": { "textDocument": { "uri": "file:///x.py", "text": "x".repeat(text_len) } },
+        })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_message_times_out_when_child_never_reads_stdin() {
+        use crate::manager::test_support::silent_fake_server;
+
+        let mut client = silent_fake_server();
+        client.set_write_timeout(Duration::from_millis(300));
+
+        let started = Instant::now();
+        let err = client
+            .write_message(&big_didopen(200_000))
+            .expect_err("a non-reading server must make the write time out");
+        let elapsed = started.elapsed();
+
+        assert!(is_write_timeout(&err), "got: {err}");
+        // Classification, not exact timing (cf. the wall-clock deadline flake):
+        // a loose bound just proves it returned instead of hanging forever.
+        assert!(elapsed < client.write_timeout * 4, "took {elapsed:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_timeout_does_not_hang_drop() {
+        use crate::manager::test_support::silent_fake_server;
+
+        let mut client = silent_fake_server();
+        client.set_write_timeout(Duration::from_millis(300));
+        let pid = client.child.id();
+        let _ = client.write_message(&big_didopen(200_000));
+
+        drop(client); // kill unblocks the parked writer; must return promptly
+
+        let still_alive = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(!still_alive, "Drop must kill+reap the child (pid {pid})");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn second_write_fast_fails_after_a_wedge_instead_of_blocking_again() {
+        // The writer thread is a serial FIFO parked on the wedged pipe, so a
+        // naive second write would queue behind it and burn another full
+        // write_timeout. Once wedged, writes must fast-fail (near-instant).
+        use crate::manager::test_support::silent_fake_server;
+
+        let mut client = silent_fake_server();
+        client.set_write_timeout(Duration::from_millis(300));
+
+        let first = client
+            .write_message(&big_didopen(200_000))
+            .expect_err("first write wedges");
+        assert!(is_write_timeout(&first), "got: {first}");
+        assert!(client.is_write_wedged());
+
+        let started = Instant::now();
+        let second = client
+            .write_message(&big_didopen(10))
+            .expect_err("second write must fast-fail, not block again");
+        let elapsed = started.elapsed();
+        assert!(is_write_timeout(&second), "got: {second}");
+        // Well under one write_timeout: it did not queue behind the parked job.
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "second write should be near-instant, took {elapsed:?}"
+        );
     }
 }
