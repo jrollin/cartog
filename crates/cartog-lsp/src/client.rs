@@ -845,4 +845,60 @@ mod tests {
             "second write should be near-instant, took {elapsed:?}"
         );
     }
+
+    /// Spawn a fake server that exits immediately (its stdin read-end closes).
+    /// A write against it hits a broken pipe, unlike `silent_fake_server` which
+    /// stays alive and wedges the write until the ack timeout.
+    #[cfg(unix)]
+    fn dead_fake_server() -> LspClient {
+        use std::process::{Command, Stdio};
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn dead fake server");
+        LspClient::new(child).expect("client over dead fake server")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_to_a_dead_server_fails_fast_via_broken_pipe_not_write_timeout() {
+        // The server_died seam: once the child is reaped its stdin read-end is
+        // closed, so a didClose write returns BrokenPipe via the Ok(Err(_)) ack
+        // arm — promptly, never after the full write_timeout. A regression here
+        // (e.g. classifying the broken pipe as a wedge) would reintroduce a 10s
+        // stall on the dead-server path.
+        let mut client = dead_fake_server();
+        // A long write_timeout: if the write blocked on it, the elapsed check
+        // below would fail. A broken pipe must not wait on it at all.
+        client.set_write_timeout(Duration::from_secs(30));
+
+        // Ensure the child has exited (and is reaped) before we write, so the
+        // write deterministically hits a closed pipe rather than a live buffer.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while client.is_alive() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!client.is_alive(), "fake server should have exited");
+
+        let started = Instant::now();
+        let err = client
+            .send_notification("textDocument/didClose", serde_json::json!({}))
+            .expect_err("a write to a dead server must fail");
+        let elapsed = started.elapsed();
+
+        // Classification, not exact timing (cf. the wall-clock deadline flake):
+        // it is NOT a write-timeout wedge, and it returned well under the 30s
+        // write_timeout — proving the BrokenPipe short-circuit, not a block.
+        assert!(
+            !is_write_timeout(&err),
+            "dead-server write is a broken pipe, not a write-ack timeout: {err}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "a broken pipe must return promptly, not wait out write_timeout; took {elapsed:?}"
+        );
+    }
 }
