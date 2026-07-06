@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.30.3] - 2026-07-06
+
+### Bug Fixes
+
+- **lsp**: Abort drain when a live server never replies ([`e54b2af`](https://github.com/jrollin/cartog/commit/e54b2af20b46828907d973f609e7bbfe3d7544aa))
+- **lsp**: Bound the client write path against a server that stops reading stdin ([`63f471d`](https://github.com/jrollin/cartog/commit/63f471d7ee5bd56ee52262629f3e5cb29688583b))
+- **lsp**: Mark column-unlocatable edges unresolvable to stop zombie re-walks ([`c3f9e09`](https://github.com/jrollin/cartog/commit/c3f9e098a8472e500bd0618d34b6260378b8805c))
+- **db**: Resolve ::-qualified call targets without breaking namespaced-name storage ([`6828077`](https://github.com/jrollin/cartog/commit/682807756b048b014de3cd713a2ad737511762d1))
+
+### Build
+
+- **deps**: Ignore quick-xml DoS advisories with no upstream fix ([`a1c5644`](https://github.com/jrollin/cartog/commit/a1c5644820c68cf6908103a3a63f6db2d13606e4))
+
+### Miscellaneous
+
+- Gitignore local .claude/ directory ([`cfa51ae`](https://github.com/jrollin/cartog/commit/cfa51ae384233fd6d95c03929c14b4aad2bc9ef9))
+- **bench**: Add RAG relevancy baseline snapshot (2026-07-06) ([`bb54427`](https://github.com/jrollin/cartog/commit/bb544278ae448b1f60917ccebe09c06ef3f66274))
+
 ## [0.30.2] - 2026-06-29
 
 ### Bug Fixes
