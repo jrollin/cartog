@@ -25,6 +25,11 @@ pub(crate) struct LangOutcomes {
     pub in_root: Vec<(i64, DefinitionLocation)>,
     /// Definitive "no definition"; marked unresolvable only if ≥1 edge resolved.
     pub pending_unresolvable: Vec<i64>,
+    /// Edge column not found on its line — cartog can't form an LSP query for it,
+    /// so it's unresolvable-by-LSP. Distinct from `pending_unresolvable` (server
+    /// said "no def"): this is a deterministic cartog-side fact, marked whenever
+    /// the server stayed alive (no resolved-gate).
+    pub pending_unlocatable: Vec<i64>,
     /// Target outside the indexed root (stdlib/deps).
     pub pending_external: Vec<i64>,
     /// Process died mid-drain — answers may be corrupt, so `apply` marks nothing
@@ -89,6 +94,24 @@ pub(crate) fn apply_lang_outcomes(
                  not marking (server may be half-loaded or unhealthy)"
             );
         }
+    }
+
+    // Unlocatable: a deterministic cartog-side fact (column not found on the
+    // line), independent of server health, so no resolved-gate like external —
+    // commit whenever the process stayed alive.
+    if !outcomes.server_died {
+        let mut n = 0u32;
+        for edge_id in &outcomes.pending_unlocatable {
+            if let Err(e) = db.mark_edge_unresolvable(*edge_id) {
+                tracing::debug!("failed to mark unlocatable edge {edge_id} unresolvable: {e:#}");
+                continue;
+            }
+            n += 1;
+        }
+        if n > 0 {
+            tracing::debug!("LSP: {language} marked {n} unlocatable edges unresolvable");
+        }
+        marked_unresolvable += n;
     }
 
     // External: a half-loaded server can't fabricate a concrete out-of-root URI,
@@ -274,13 +297,18 @@ pub(crate) fn drain_language(
 
         // Pair each edge whose target column we can locate with its LSP position
         // in ONE vec so the edge↔position↔outcome correspondence can't drift.
-        let batch: Vec<(&UnresolvedEdge, (u32, u32))> = file_edges
-            .iter()
-            .filter_map(|&edge| {
-                find_column_in_line(&lines, edge.line, &edge.target_name)
-                    .map(|col| (edge, (edge.line.saturating_sub(1), col)))
-            })
-            .collect();
+        // An edge whose target_name doesn't appear as a locatable word on its
+        // recorded line (a whole-expression or multi-line target) has no column,
+        // so it can never be queried: bucket it as unresolvable-by-LSP instead of
+        // silently dropping it, or reopen_heuristic_exhausted re-walks it
+        // fruitlessly on every pass.
+        let mut batch: Vec<(&UnresolvedEdge, (u32, u32))> = Vec::with_capacity(file_edges.len());
+        for &edge in &file_edges {
+            match find_column_in_line(&lines, edge.line, &edge.target_name) {
+                Some(col) => batch.push((edge, (edge.line.saturating_sub(1), col))),
+                None => out.pending_unlocatable.push(edge.edge_id),
+            }
+        }
         let positions: Vec<(u32, u32)> = batch.iter().map(|&(_, pos)| pos).collect();
 
         let outcomes = match manager.definitions_batch(language, file_path, &positions, cancel) {
@@ -625,6 +653,55 @@ mod tests {
     }
 
     #[test]
+    fn unlocatable_edges_are_marked_unresolvable() {
+        // An edge whose column couldn't be found is unresolvable-by-LSP; its
+        // count folds into marked_unresolvable alongside a real success.
+        let (db, ids) = db_with_edges(2);
+        let outcomes = LangOutcomes {
+            in_root: vec![in_root_at(ids[0], 10)],
+            pending_unlocatable: vec![ids[1]],
+            ..Default::default()
+        };
+        let (resolved, marked_u, marked_x) = apply_lang_outcomes(&db, "python", &outcomes).unwrap();
+        assert_eq!((resolved, marked_u, marked_x), (1, 1, 0));
+        assert_eq!(db.edge_resolution_state(ids[0]).unwrap(), 1, "resolved");
+        assert_eq!(
+            db.edge_resolution_state(ids[1]).unwrap(),
+            2,
+            "unlocatable → state=2"
+        );
+    }
+
+    #[test]
+    fn unlocatable_marked_even_with_zero_resolved() {
+        // Unlike pending_unresolvable, unlocatable has no resolved-gate: it's a
+        // deterministic cartog-side fact, marked whenever the server stayed alive.
+        // server_died still suppresses it (untrusted pass).
+        let (db, ids) = db_with_edges(1);
+        let outcomes = LangOutcomes {
+            pending_unlocatable: vec![ids[0]],
+            ..Default::default()
+        };
+        let (resolved, marked_u, _) = apply_lang_outcomes(&db, "python", &outcomes).unwrap();
+        assert_eq!((resolved, marked_u), (0, 1), "no gate on resolved");
+        assert_eq!(db.edge_resolution_state(ids[0]).unwrap(), 2);
+
+        let (db2, ids2) = db_with_edges(1);
+        let dead = LangOutcomes {
+            pending_unlocatable: vec![ids2[0]],
+            server_died: true,
+            ..Default::default()
+        };
+        let (_, marked_dead, _) = apply_lang_outcomes(&db2, "python", &dead).unwrap();
+        assert_eq!(marked_dead, 0, "server death suppresses unlocatable marks");
+        assert_eq!(
+            db2.edge_resolution_state(ids2[0]).unwrap(),
+            0,
+            "stays state=0 on death"
+        );
+    }
+
+    #[test]
     fn in_root_with_no_symbol_at_line_is_unresolvable_not_external() {
         // A located line with no covering symbol falls to unresolvable (gated on
         // the sibling success), never external.
@@ -954,6 +1031,59 @@ mod tests {
         assert!(
             !mgr.has_client_for_test("python"),
             "a wedged client must be dropped, not left for start() to reuse"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unlocatable_edges_are_bucketed_and_not_queried() {
+        use crate::manager::test_support::{null_result_frames, scripted_fake_server};
+
+        let _guard = parallel_lock(); // drain_language reads the global panic hook
+
+        // One file, two edges: `findable` sits on its line; the second edge's
+        // target `Pool::new` never appears on its line (line 2 is a different
+        // expression), so no column can be computed — it lands in
+        // pending_unlocatable and is never queried. Only the findable edge
+        // reaches the server.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("f.py"), "findable()\nfoo.bar().baz()\n").unwrap();
+        let edges = vec![
+            UnresolvedEdge {
+                edge_id: 1,
+                target_name: "findable".to_string(),
+                file_path: "f.py".to_string(),
+                line: 1,
+            },
+            UnresolvedEdge {
+                edge_id: 2,
+                target_name: "Pool::new".to_string(),
+                file_path: "f.py".to_string(),
+                line: 2,
+            },
+        ];
+
+        // The server answers exactly one request (id 1) — the one findable edge.
+        let mut mgr = LspManager::new(tmp.path());
+        mgr.insert_client_for_test("python", scripted_fake_server(&null_result_frames(&[1])));
+
+        let sink = ProgressSink::new(2, None);
+        let res = drain_language(tmp.path(), &mut mgr, "python", &edges, &sink, None).unwrap();
+
+        assert_eq!(
+            res.outcomes.pending_unlocatable,
+            vec![2],
+            "the unfindable edge is bucketed as unlocatable"
+        );
+        assert_eq!(
+            res.outcomes.pending_unresolvable,
+            vec![1],
+            "only the findable edge was queried (server said no def)"
+        );
+        assert_eq!(
+            sink.processed(),
+            1,
+            "only the findable edge is queried — the unlocatable one never is"
         );
     }
 

@@ -135,6 +135,17 @@ the same way: each write has a 10 s deadline, and cartog logs `… LSP server
 stopped reading stdin …` and falls back to heuristics for that language instead
 of hanging.
 
+### Some edges never resolve no matter how many times I reindex
+
+If an edge's target name can't be located as a word on its recorded source line
+— because the extractor emitted a whole expression or a multi-line target that
+doesn't appear verbatim on that one line — cartog can't compute a column, so it
+can't form an LSP definition query for it. Those edges are now sealed as
+`unresolvable` (state 2) — surfaced as `provenance: lsp_unresolvable` in `--json`
+— instead of being re-attempted on every reindex. To reopen them, run
+`cartog index --force` (a name-keyed reopen won't fire: the stored target name is
+a compound expression that never matches a plain added symbol name).
+
 ### My `[lsp.<lang>]` command override isn't being used
 
 - The override only fires during the LSP edge-resolution pass — run

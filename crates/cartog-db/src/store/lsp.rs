@@ -189,14 +189,21 @@ impl Database {
         Ok(n as u32)
     }
 
-    /// Mark a single edge as `resolution_state = 2` (LSP definitively gave up).
+    /// Mark a single edge as `resolution_state = 2` (LSP definitively gave up,
+    /// or cartog could not form a query for it at all).
     ///
-    /// Callers MUST only invoke this after a definitive negative answer from
-    /// the language server. Never call from a transient-error branch (server
-    /// crash, didOpen failure, half-loaded warmup) — the marker is sticky
-    /// across runs until [`Self::reset_unresolvable_for_names`] reopens it
-    /// (on a matching new symbol) or [`Self::reset_all_unresolvable`] runs
-    /// (`--force`).
+    /// Callers MUST only invoke this on a definitive result, one of:
+    /// - a definitive negative answer from the language server (`Ok(None)`), or
+    /// - a deterministic cartog-side fact that the edge is unqueryable — its
+    ///   target column can't be located on its recorded line, so no LSP
+    ///   `definition` request can be sent (see `pending_unlocatable`).
+    ///
+    /// Never call from a transient-error branch (server crash, didOpen failure,
+    /// half-loaded warmup) — the marker is sticky across runs until
+    /// [`Self::reset_unresolvable_for_names`] reopens it (on a matching new
+    /// symbol) or [`Self::reset_all_unresolvable`] runs (`--force`). An
+    /// unlocatable edge's target name is typically a compound expression, so the
+    /// name-keyed reopen won't match it; `--force` is its only reopen path.
     ///
     /// The `WHERE resolution_state = 0` guard preserves the invariant that
     /// state {2, 3} rows have `target_id IS NULL` — without it an accidental
