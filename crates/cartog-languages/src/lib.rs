@@ -4,10 +4,11 @@
 //! Each language implements the [`Extractor`] trait with compiled S-expression
 //! queries for declarative AST pattern matching.
 //!
-//! Supported languages: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, Vue, Svelte, Astro, Markdown.
+//! Supported languages: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, C#, PHP, Dart, Swift, Kotlin, Vue, Svelte, Astro, Markdown.
 #![doc = ""]
 #![doc = include_str!("../README.md")]
 
+pub mod csharp;
 pub mod dart;
 pub mod go;
 pub mod java;
@@ -106,6 +107,7 @@ pub fn get_extractor(language: &str) -> Option<Box<dyn Extractor>> {
         "go" => Some(Box::new(go::GoExtractor::new())),
         "ruby" => Some(Box::new(ruby::RubyExtractor::new())),
         "java" => Some(Box::new(java::JavaExtractor::new())),
+        "csharp" => Some(Box::new(csharp::CSharpExtractor::new())),
         "php" => Some(Box::new(php::PhpExtractor::new())),
         "dart" => Some(Box::new(dart::DartExtractor::new())),
         "swift" => Some(Box::new(swift::SwiftExtractor::new())),
@@ -132,6 +134,7 @@ mod tests {
         assert!(get_extractor("go").is_some());
         assert!(get_extractor("ruby").is_some());
         assert!(get_extractor("java").is_some());
+        assert!(get_extractor("csharp").is_some());
         assert!(get_extractor("php").is_some());
         assert!(get_extractor("dart").is_some());
         assert!(get_extractor("swift").is_some());
@@ -143,7 +146,7 @@ mod tests {
         assert!(get_extractor("unknown").is_none());
     }
 
-    const ALL_LANGS: [&str; 16] = [
+    const ALL_LANGS: [&str; 17] = [
         "python",
         "typescript",
         "tsx",
@@ -152,6 +155,7 @@ mod tests {
         "go",
         "ruby",
         "java",
+        "csharp",
         "php",
         "dart",
         "swift",
@@ -168,8 +172,8 @@ mod tests {
         /// chars, and unbalanced delimiters via the regex generator.
         ///
         /// Extractors are built once per thread and reused across cases (the
-        /// trait takes `&mut self` for exactly this); building all 13 per case
-        /// would recompile every tree-sitter query thousands of times.
+        /// trait takes `&mut self` for exactly this); building all of them per
+        /// case would recompile every tree-sitter query thousands of times.
         #[test]
         fn extractors_never_panic_on_arbitrary_source(src in ".{0,400}") {
             thread_local! {

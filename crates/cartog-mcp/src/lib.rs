@@ -1292,7 +1292,7 @@ impl ServerHandler for CartogServer {
                  tool's description tells you when to use it and what it returns. \
                  Default entry points: cartog_map (orient in a new repo), \
                  cartog_rag_search (find code by concept), cartog_search (look up an exact symbol name). \
-                 Languages: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, Vue, Svelte, Astro, Markdown. \
+                 Languages: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, C#, Vue, Svelte, Astro, Markdown. \
                  Frameworks: React, Vue, Svelte, Astro — JSX/SFC component-usage edges.",
             )
     }

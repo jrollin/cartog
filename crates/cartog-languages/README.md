@@ -36,7 +36,7 @@ Named captures (`@callee`, `@exception_type`, etc.) identify the matched nodes f
 
 ### Supported languages
 
-**Code**: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin.
+**Code**: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, C#, PHP, Dart, Swift, Kotlin.
 
 **Frontend SFCs**: Vue (`.vue`), Svelte (`.svelte`), Astro (`.astro`) — the `<script>` / frontmatter block is sliced out, parsed by the JS/TS extractor, and its byte/line offsets are remapped back to the full file.
 
@@ -54,7 +54,7 @@ A crate-internal `js_shared` module holds extraction logic shared between the Ja
 | `ExtractionResult` | Symbols + edges extracted from a file |
 | `get_extractor()` | Factory: language name → `Box<dyn Extractor>` |
 | `detect_language()` | Re-export from `cartog-core` |
-| `python`, `go`, `java`, `javascript`, `typescript`, `ruby`, `php`, `dart`, `swift`, `kotlin`, `rust_lang` | Per-language extractor modules (note Rust's module is `rust_lang`) |
+| `python`, `go`, `java`, `csharp`, `javascript`, `typescript`, `ruby`, `php`, `dart`, `swift`, `kotlin`, `rust_lang` | Per-language extractor modules (note Rust's module is `rust_lang`) |
 | `sfc` | Vue/Svelte/Astro single-file-component extractors (`VueExtractor`, `SvelteExtractor`, `AstroExtractor`) |
 | `markdown` | Markdown document extractor (heading-based chunking) |
 

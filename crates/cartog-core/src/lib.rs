@@ -423,6 +423,7 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
         "go" => Some("go"),
         "rb" => Some("ruby"),
         "java" => Some("java"),
+        "cs" => Some("csharp"),
         "php" => Some("php"),
         "dart" => Some("dart"),
         "swift" => Some("swift"),
@@ -706,6 +707,7 @@ mod tests {
         assert_eq!(detect_language(Path::new("README.md")), Some("markdown"));
         assert_eq!(detect_language(Path::new("Makefile")), None);
         assert_eq!(detect_language(Path::new("Main.java")), Some("java"));
+        assert_eq!(detect_language(Path::new("Program.cs")), Some("csharp"));
         assert_eq!(detect_language(Path::new("Service.php")), Some("php"));
         assert_eq!(detect_language(Path::new("main.dart")), Some("dart"));
         assert_eq!(detect_language(Path::new("App.swift")), Some("swift"));

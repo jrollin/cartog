@@ -1,6 +1,6 @@
 # Supported Languages
 
-## Currently Supported (15 languages + 4 frameworks)
+## Currently Supported (16 languages + 4 frameworks)
 
 ### Python (.py, .pyi)
 - Functions, classes, methods
@@ -91,6 +91,20 @@
 - Nested named classes at any depth (anonymous classes skipped)
 - Javadoc (`/** ... */`) and line comment (`//`) docstrings
 - Visibility: `public`, `private`, `protected`; package-private (no modifier) → `Public`
+
+### C# (.cs)
+- Classes, structs, records (all as class symbols), interfaces, enums (with members as variable symbols), delegates (as function symbols)
+- Methods, constructors (as method symbols), properties (as variable symbols), fields, record positional parameters
+- Namespaces (file-scoped `namespace Foo;` and block `namespace Foo { }`) — used to qualify symbol names, not emitted as symbols
+- Using directives (`using`, `global using`, `using static`, `using Alias = ...`) → `Imports` edges
+- Method calls (including receiver: `obj.Method()`) and top-level statements (implicit entry point)
+- `new` expressions → `References` edges
+- Base list: interfaces → `Inherits`; classes/structs/records → `Implements` for every entry (the grammar cannot distinguish a base class from an interface — "extends" is recovered from the resolved target's kind). Consequence: C# class inheritance shows up in `cartog hierarchy` but not in `refs <base> --kind inherits` (it's stored as an `implements` edge); use `hierarchy` for C# inheritance trees.
+- Type references in method/property signatures (parameter types, return types, generic type arguments)
+- Nested types at any depth; partial classes as separate per-file symbols
+- Async methods (`async` modifier)
+- XML-doc comments (`/// <summary>...`) as docstrings (tags stripped)
+- Visibility: `public`, `private`, `protected`; `internal`/no modifier → `Public`
 
 ### PHP (.php)
 - Classes, interfaces, traits
