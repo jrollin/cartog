@@ -135,8 +135,8 @@ fn extract_node(
                                 func,
                                 source,
                                 file_path,
-                                parent_id.unwrap_or(""),
-                                parent_qname.unwrap_or(""),
+                                parent_id,
+                                parent_qname,
                                 symbols,
                                 edges,
                             );
@@ -501,8 +501,8 @@ fn extract_type_body(
                     child,
                     source,
                     file_path,
-                    parent_id,
-                    parent_qname,
+                    Some(parent_id),
+                    Some(parent_qname),
                     symbols,
                     edges,
                 );
@@ -596,8 +596,8 @@ fn extract_method(
     node: Node,
     source: &str,
     file_path: &str,
-    parent_id: &str,
-    parent_qname: &str,
+    parent_id: Option<&str>,
+    parent_qname: Option<&str>,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -613,7 +613,10 @@ fn extract_method(
     let signature = extract_method_signature(node, source);
     let docstring = extract_doc_comment(node, source);
 
-    let sym_id = symbol_id(file_path, SymbolKind::Method, &name, Some(parent_qname));
+    // parent_qname/id are None for a top-level local function (no enclosing
+    // type) — pass through so the symbol_id has no leading `.` and the parent
+    // stays NULL rather than an empty string.
+    let sym_id = symbol_id(file_path, SymbolKind::Method, &name, parent_qname);
     let mut sym = Symbol::new(
         name,
         SymbolKind::Method,
@@ -622,9 +625,9 @@ fn extract_method(
         end_line,
         node.start_byte() as u32,
         node.end_byte() as u32,
-        Some(parent_qname),
+        parent_qname,
     )
-    .with_parent(Some(parent_id))
+    .with_parent(parent_id)
     .with_signature(signature)
     .with_docstring(docstring)
     .with_async(is_async);
@@ -1832,6 +1835,16 @@ void Helper() { DoWork(); }
             .iter()
             .find(|s| s.name == "Helper")
             .expect("a top-level local function must be its own symbol");
+        // No enclosing type → no leading `.` in the id, and a NULL parent (not "").
+        assert_eq!(
+            helper.id, "Test.cs:method:Helper",
+            "top-level local function id must have no leading `.`"
+        );
+        assert!(
+            helper.parent_id.is_none(),
+            "top-level local function must have no parent, got {:?}",
+            helper.parent_id
+        );
         // DoWork is called from Helper, not the synthetic Main.
         let dowork = result
             .edges

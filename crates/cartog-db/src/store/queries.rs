@@ -296,9 +296,10 @@ impl Database {
              FROM edges e
              JOIN symbols s ON e.source_id = s.id
              LEFT JOIN symbols sym2 ON e.target_id = sym2.id
+             LEFT JOIN files f ON f.path = e.file_path
              WHERE (e.kind = 'inherits'
                     OR (e.kind = 'implements'
-                        AND (SELECT language FROM files WHERE path = e.file_path) = 'csharp'
+                        AND f.language = 'csharp'
                         AND (sym2.id IS NULL OR sym2.kind = 'class')))
                AND (s.name = ?1 OR e.target_name = ?1 OR sym2.name = ?1)",
             )
