@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt check-vue check-svelte check-astro check-install-script tla loom bench bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-csharp check-kt check-vue check-svelte check-astro check-install-script tla loom bench bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -45,7 +45,7 @@ check-rust: ## cargo fmt + clippy + test
 
 # --- Fixture syntax/build checks ---
 
-check-fixtures: check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-kt ## Validate all fixture codebases
+check-fixtures: check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-csharp check-kt ## Validate all fixture codebases
 
 check-fixtures-docker: ## Validate all fixture codebases via Docker (reproducible)
 	@$(MAKE) check-fixtures FORCE_DOCKER=1
@@ -103,6 +103,12 @@ check-swift: ## Validate Swift fixtures (swift build, falls back to Docker)
 	$(call check_lang,swift,swift:6.1,\
 		cd benchmarks/fixtures/webapp_swift && swift build,\
 		cd webapp_swift && HOME=/tmp swift build --cache-path /tmp/swiftpm --scratch-path /tmp/swiftbuild)
+
+check-csharp: ## Validate C# fixtures (dotnet build, falls back to Docker)
+	@echo "==> Checking C# fixtures..."
+	$(call check_lang,dotnet,mcr.microsoft.com/dotnet/sdk:9.0.316,\
+		cd benchmarks/fixtures/webapp_csharp && dotnet build --nologo -v q,\
+		cd webapp_csharp && DOTNET_CLI_HOME=/tmp DOTNET_CLI_TELEMETRY_OPTOUT=1 NUGET_PACKAGES=/tmp/nuget dotnet build --nologo -v q)
 
 # Kotlin has no maintained official compiler image (the old zenika/kotlin tag is
 # gone — it never published a 1.9 tag). The Docker fallback uses a project-pinned

@@ -81,6 +81,7 @@ run_scenario "webapp_go" "HandleLogin" "Authenticate" "Login" "GenerateToken" "E
 run_scenario "webapp_rs" "handle_login" "authenticate" "login" "generate_token" "execute_query" "get_connection"
 run_scenario "webapp_rb" "handle_login" "authenticate" "login" "generate_token" "execute_query" "get_connection"
 run_scenario "webapp_java" "handleLogin" "authenticate" "login" "generateToken" "executeQuery" "getConnection"
+run_scenario "webapp_csharp" "HandleLogin" "Authenticate" "Login" "GenerateToken" "ExecuteQuery" "GetConnection"
 run_scenario "webapp_php" "handle_login" "authenticate" "login" "generate_token" "executeQuery" "getConnection"
 run_scenario "webapp_swift" "handleLogin" "authenticate" "login" "generateToken" "executeQuery" "getConnection"
 run_scenario "webapp_kt" "handleLogin" "authenticate" "login" "generateToken" "executeQuery" "getConnection"
