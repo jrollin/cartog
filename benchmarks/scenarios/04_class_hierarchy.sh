@@ -63,6 +63,10 @@ run_scenario "webapp_rb" "BaseService" "class.*BaseService\|class.*<.*BaseServic
 run_scenario "webapp_java" "BaseService" "class.*BaseService\|class.*extends.*BaseService\|class.*extends.*AuthService"
 run_scenario "webapp_swift" "BaseService" "class.*BaseService\|class.*:.*BaseService\|class.*:.*AuthService"
 run_scenario "webapp_kt" "BaseService" "class.*BaseService\|class.*:.*BaseService\|class.*:.*AuthService"
+# C#: class inheritance surfaces via Implements-to-Class edges (flat base_list,
+# D1); cartog's hierarchy() treats a resolved Class target as extends (D1a). The
+# ground-truth children set legitimately differs in shape from Java's.
+run_scenario "webapp_csharp" "BaseService" "class.*BaseService\|class.*:.*BaseService\|class.*:.*AuthService"
 
 # PHP has `extends BaseService` subclasses in source, but cartog only partially
 # resolves PHP inheritance: the error tree (e.g. TokenError -> App\AppError)

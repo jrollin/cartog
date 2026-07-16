@@ -1,0 +1,306 @@
+{
+  "01_find_callers": {
+    "description": "Who calls ValidateToken?",
+    "query": "refs ValidateToken --kind calls",
+    "expected": [
+      {
+        "source": "Authenticate",
+        "file": "Middleware/AuthMiddleware.cs"
+      },
+      {
+        "source": "RefreshToken",
+        "file": "Auth/TokenService.cs"
+      },
+      {
+        "source": "GetCurrentUser",
+        "file": "Auth/AuthService.cs"
+      }
+    ]
+  },
+  "02_file_structure": {
+    "description": "What's in Auth/TokenService.cs?",
+    "query": "outline Auth/TokenService.cs",
+    "expected": [
+      {
+        "name": "Log",
+        "kind": "variable"
+      },
+      {
+        "name": "TokenExpiry",
+        "kind": "variable"
+      },
+      {
+        "name": "TokenService",
+        "kind": "class"
+      },
+      {
+        "name": "GenerateToken",
+        "kind": "method"
+      },
+      {
+        "name": "ValidateToken",
+        "kind": "method"
+      },
+      {
+        "name": "RefreshToken",
+        "kind": "method"
+      },
+      {
+        "name": "RevokeToken",
+        "kind": "method"
+      }
+    ]
+  },
+  "03_refactor_impact": {
+    "description": "Impact of changing AuthService",
+    "query": "impact AuthService --depth 3",
+    "expected_refs": [
+      "AdminService",
+      "Auth/AuthService.cs",
+      "Services/AuthenticationService.cs",
+      "Routes/AuthRoutes.cs",
+      "Api/V1/AuthController.cs",
+      "Api/V2/AuthController.cs",
+      "HandleLogin"
+    ]
+  },
+  "04_class_hierarchy": {
+    "description": "Hierarchy of BaseService (C# class inheritance surfaces via Implements-to-Class, D1/D1a)",
+    "query": "hierarchy BaseService",
+    "expected": [
+      {
+        "child": "UserService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "SessionService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "AuthenticationService",
+        "parent": "BaseService"
+      }
+    ]
+  },
+  "05_trace_call_chain": {
+    "description": "Trace HandleLogin call chain",
+    "query_sequence": [
+      "callees HandleLogin",
+      "callees Login",
+      "callees GenerateToken"
+    ],
+    "expected_chain": [
+      {
+        "caller": "HandleLogin",
+        "callee": "_validator.Validate"
+      },
+      {
+        "caller": "HandleLogin",
+        "callee": "_routes.LoginHandler"
+      },
+      {
+        "caller": "Login",
+        "callee": "_tokenService.GenerateToken"
+      },
+      {
+        "caller": "GenerateToken",
+        "callee": "Log.Info"
+      },
+      {
+        "caller": "GenerateToken",
+        "callee": "Log.Debug"
+      }
+    ]
+  },
+  "06_file_deps": {
+    "description": "What does Routes/AuthRoutes.cs import?",
+    "query": "deps Routes/AuthRoutes.cs",
+    "expected": [
+      "Database",
+      "Services",
+      "Util"
+    ]
+  },
+  "07_type_references": {
+    "description": "Type references to TokenException",
+    "query": "refs TokenException",
+    "expected": [
+      {
+        "source": "ValidateToken",
+        "file": "Auth/TokenService.cs",
+        "kind": "references"
+      },
+      {
+        "source": "RevokeToken",
+        "file": "Auth/TokenService.cs",
+        "kind": "references"
+      },
+      {
+        "source": "ExpiredTokenException",
+        "file": "Errors/Exceptions.cs",
+        "kind": "implements"
+      }
+    ]
+  },
+  "08_symbol_search": {
+    "description": "Find all Token-related symbols",
+    "query": "search Token",
+    "expected": [
+      {
+        "name": "TokenService"
+      },
+      {
+        "name": "TokenException"
+      },
+      {
+        "name": "TokenClaims"
+      },
+      {
+        "name": "ExpiredTokenException"
+      },
+      {
+        "name": "TokenExpiry"
+      },
+      {
+        "name": "GenerateToken"
+      },
+      {
+        "name": "ValidateToken"
+      },
+      {
+        "name": "RefreshToken"
+      },
+      {
+        "name": "RevokeToken"
+      }
+    ]
+  },
+  "09_ambiguous_symbol": {
+    "description": "Where is 'Validate' defined?",
+    "query": "search Validate",
+    "expected": [
+      {
+        "name": "Validate",
+        "file": "Validators/UserValidator.cs"
+      },
+      {
+        "name": "Validate",
+        "file": "Validators/PaymentValidator.cs"
+      },
+      {
+        "name": "Validate",
+        "file": "Models/User.cs"
+      },
+      {
+        "name": "Validate",
+        "file": "Models/Payment.cs"
+      }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "What inherits from AppException?",
+    "query": "refs AppException",
+    "expected": [
+      {
+        "name": "ValidationException",
+        "file": "Errors/Exceptions.cs"
+      },
+      {
+        "name": "AuthenticationException",
+        "file": "Errors/Exceptions.cs"
+      },
+      {
+        "name": "TokenException",
+        "file": "Errors/Exceptions.cs"
+      }
+    ]
+  },
+  "11_deep_call_chain": {
+    "description": "Deep call chain from HandleLogin (5+ hops)",
+    "query_sequence": [
+      "callees HandleLogin",
+      "callees Authenticate",
+      "callees Login",
+      "callees GenerateToken",
+      "callees ExecuteQuery",
+      "callees GetConnection"
+    ],
+    "expected_chain": [
+      {
+        "caller": "HandleLogin",
+        "callee": "_validator.Validate"
+      },
+      {
+        "caller": "HandleLogin",
+        "callee": "_routes.LoginHandler"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "RequireInitialized"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "_authService.Login"
+      },
+      {
+        "caller": "Authenticate",
+        "callee": "_db.Insert"
+      },
+      {
+        "caller": "Login",
+        "callee": "_tokenService.GenerateToken"
+      },
+      {
+        "caller": "GenerateToken",
+        "callee": "Log.Info"
+      },
+      {
+        "caller": "ExecuteQuery",
+        "callee": "_pool.GetConnection"
+      },
+      {
+        "caller": "ExecuteQuery",
+        "callee": "_pool.ReleaseConnection"
+      },
+      {
+        "caller": "GetConnection",
+        "callee": "Log.Info"
+      }
+    ]
+  },
+  "12_deep_impact": {
+    "description": "Deep impact of DatabaseConnection (depth 3)",
+    "query": "impact DatabaseConnection --depth 3",
+    "expected_refs": [
+      "Database/DatabaseConnection.cs",
+      "Routes/AuthRoutes.cs",
+      "Services/UserService.cs",
+      "Services/SessionService.cs",
+      "Services/AuthenticationService.cs",
+      "Api/V1/AuthController.cs",
+      "Api/V2/AuthController.cs",
+      "HandleLogin"
+    ]
+  },
+  "13_rag_search": {
+    "description": "Semantic search: validate token",
+    "query": "rag search \"validate token\"",
+    "expected": [
+      {
+        "name": "ValidateToken"
+      },
+      {
+        "name": "RefreshToken"
+      },
+      {
+        "name": "TokenService"
+      },
+      {
+        "name": "AuthService"
+      },
+      {
+        "name": "GenerateToken"
+      }
+    ]
+  }
+}

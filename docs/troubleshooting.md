@@ -21,9 +21,9 @@ LSP is enabled by default. If you installed with `--no-default-features`, the
 `cartog-lsp` dependency was omitted — reinstall with plain `cargo install
 cartog`. Otherwise, confirm a language server is on `PATH` (e.g.
 `rust-analyzer`, `pyright`, `typescript-language-server`, `gopls`,
-`intelephense`, `dart`, `sourcekit-lsp`, `kotlin-language-server`,
-`vue-language-server`, `svelteserver`, `astro-ls`) and that you
-haven't passed `--no-lsp` at runtime.
+`jdtls`, `csharp-ls`, `intelephense`, `dart`, `sourcekit-lsp`,
+`kotlin-language-server`, `vue-language-server`, `svelteserver`,
+`astro-ls`) and that you haven't passed `--no-lsp` at runtime.
 
 A running `cartog serve` on the same database also makes `cartog index` defer
 its LSP pass to that peer's warm servers (a `note:` on stderr names the peer
@@ -45,6 +45,12 @@ and Xcode.
 For Kotlin, cartog invokes `kotlin-language-server`; install it from
 <https://github.com/fwcd/kotlin-language-server> (it does not ship on a common
 PATH by default).
+
+For C#, cartog invokes `csharp-ls`; install it with `dotnet tool install
+--global csharp-ls` (needs the .NET SDK, and `~/.dotnet/tools` on `PATH`). It
+auto-discovers the nearest `.sln`/`.csproj`. A Dockerized server via
+`[lsp.csharp] command = [...]` (see `benchmarks/lsp-images/csharp.Dockerfile`)
+avoids a host SDK install.
 
 For Vue/Svelte/Astro single-file components, cartog invokes the framework's own
 LSP server — `vue-language-server` (`npm i -g @vue/language-server`),

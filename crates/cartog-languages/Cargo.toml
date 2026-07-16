@@ -28,6 +28,7 @@ tree-sitter-php = { workspace = true }
 tree-sitter-dart = { workspace = true }
 tree-sitter-swift = { workspace = true }
 tree-sitter-kotlin-sg = { workspace = true }
+tree-sitter-c-sharp = { workspace = true }
 tree-sitter-vue-updated = { workspace = true }
 tree-sitter-svelte-ng = { workspace = true }
 tree-sitter-astro-next = { workspace = true }

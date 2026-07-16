@@ -14,6 +14,7 @@
 #   ./benchmarks/token_savings.sh --fixture rs     # Run only Rust fixtures
 #   ./benchmarks/token_savings.sh --fixture rb     # Run only Ruby fixtures
 #   ./benchmarks/token_savings.sh --fixture java   # Run only Java fixtures
+#   ./benchmarks/token_savings.sh --fixture csharp # Run only C# fixtures
 #   ./benchmarks/token_savings.sh --fixture php    # Run only PHP fixtures
 #   ./benchmarks/token_savings.sh --fixture dart   # Run only Dart fixtures
 #   ./benchmarks/token_savings.sh --fixture swift  # Run only Swift fixtures
@@ -44,7 +45,7 @@ while [[ $# -gt 0 ]]; do
             [ $# -ge 2 ] || { echo "error: --fixture needs a value" >&2; exit 2; }
             FIXTURE_FILTER="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb|java|php|dart|swift|kt]"
+            echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb|java|csharp|php|dart|swift|kt]"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -93,7 +94,10 @@ for fixture_dir in "$BENCH_DIR"/fixtures/*/; do
     should_skip_fixture "$fixture_name" && continue
 
     echo -n "  $fixture_name: "
-    (cd "$fixture_dir" && CARTOG_DB="$(fixture_db_path "$fixture_dir")" $CARTOG index . --force 2>&1 | head -1)
+    # CARTOG_AUTO_INIT lets a brand-new fixture (no committed .cartog.toml, no
+    # pre-existing .indexes/ DB) cold-start past the index-creation consent gate;
+    # it writes no config into the fixture tree.
+    (cd "$fixture_dir" && CARTOG_AUTO_INIT=1 CARTOG_DB="$(fixture_db_path "$fixture_dir")" $CARTOG index . --force 2>&1 | head -1)
 done
 echo ""
 

@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# Keep CodeRabbit reviews focused on source and under its per-PR file-count
+# limit: a single new-language PR adds a whole webapp_<lang>/ fixture tree plus
+# derived ground truth, which is generated/derived data, not code to review.
+language: en
+
+reviews:
+  path_filters:
+    # Fixture codebases + their hand-derived ground truth are generated data.
+    - "!benchmarks/fixtures/**"
+    - "!benchmarks/ground_truth/**"
+    # Lockfile: mechanical, not reviewable prose.
+    - "!Cargo.lock"
+    # Site build output (gitignored) and brand-mark assets.
+    - "!site/dist/**"
+    - "!site/public/assets/**"
