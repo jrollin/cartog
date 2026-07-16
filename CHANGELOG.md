@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.31.0] - 2026-07-16
+
+### Bug Fixes
+
+- **lang**: Address Copilot review on C# extractor and hierarchy query ([`6b7128e`](https://github.com/jrollin/cartog/commit/6b7128e6b4fc8630a5159b7d79ddb046c964a0c0))
+
+### Features
+
+- **lang**: Add C# extractor and detection ([`06e87cf`](https://github.com/jrollin/cartog/commit/06e87cf774f12a0c6e6142225870b5245ce5f9ee))
+- **lang**: Add csharp-ls LSP server spec and Docker image ([`36d5510`](https://github.com/jrollin/cartog/commit/36d551032befcb34e9244dd81d379c04b3fa130c))
+
+### Miscellaneous
+
+- **plugin**: Enrich Claude plugin manifest metadata ([`43aa5f4`](https://github.com/jrollin/cartog/commit/43aa5f46905dd93a3609345d849e95e937ac1941))
+- Unblock CI — bump crossbeam-epoch, fix clippy 1.97 lint ([`e509e16`](https://github.com/jrollin/cartog/commit/e509e166318031d4358e95c56d0bd9d97c10a8c5))
+- Add .coderabbit.yaml to exclude generated data from review ([`75afcde`](https://github.com/jrollin/cartog/commit/75afcdeadc3d35f7e76b2f9f7538fd6fc99b2ff5))
+- **site**: Use the official C# logo for the brand-mark chip ([`aef96a8`](https://github.com/jrollin/cartog/commit/aef96a8beeeb501657223fa3c9b6dc2aa9e7b989))
+
+### Testing
+
+- **bench**: Add webapp_csharp fixture, ground truth, and scenario wiring ([`1708c08`](https://github.com/jrollin/cartog/commit/1708c0814aa754b2a89bd5a124c0c38f140bb07e))
+
 ## [0.30.3] - 2026-07-06
 
 ### Bug Fixes
