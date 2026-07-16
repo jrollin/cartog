@@ -273,6 +273,20 @@ impl Database {
     /// qualified `target_name`s (PHP `App\Auth\BaseService`) never equal the
     /// class's short name, so children would otherwise be invisible. The
     /// parent column reports the resolved short name when available.
+    ///
+    /// Counts an `implements` edge as extends **only** for C# edges (the edge's
+    /// file has `language = 'csharp'`): C#'s flat `base_list` cannot distinguish
+    /// a base class from an interface at parse time, so class inheritance
+    /// surfaces as `implements` (see the C# extractor / D1). Other languages'
+    /// `implements` means genuine interface conformance — even to a concrete
+    /// class (e.g. Dart `class Foo implements AbstractBar`, where Dart has no
+    /// Interface kind) — and must stay out of the hierarchy.
+    ///
+    /// For a C# `implements` edge, extends is recovered from the resolved
+    /// target's kind: a resolved target that is a `class` counts; a resolved
+    /// interface does not. An **unresolved** C# edge (`target_id` NULL) still
+    /// counts via `target_name`, matching the `inherits` fallback so a base
+    /// class defined outside the indexed tree is not silently dropped.
     pub fn hierarchy(&self, class_name: &str) -> Result<Vec<(String, String)>> {
         // Returns (child, parent) pairs
         let mut stmt = self
@@ -282,7 +296,10 @@ impl Database {
              FROM edges e
              JOIN symbols s ON e.source_id = s.id
              LEFT JOIN symbols sym2 ON e.target_id = sym2.id
-             WHERE e.kind = 'inherits'
+             WHERE (e.kind = 'inherits'
+                    OR (e.kind = 'implements'
+                        AND (SELECT language FROM files WHERE path = e.file_path) = 'csharp'
+                        AND (sym2.id IS NULL OR sym2.kind = 'class')))
                AND (s.name = ?1 OR e.target_name = ?1 OR sym2.name = ?1)",
             )
             .with_context(|| format!("Failed to prepare hierarchy query for {class_name}"))?;

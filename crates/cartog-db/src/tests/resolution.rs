@@ -181,6 +181,166 @@ fn test_hierarchy_finds_children_of_fqcn_resolved_target() {
     );
 }
 
+/// Register a file's language so hierarchy()'s C#-gated implements arm can see it.
+fn register_file(db: &Database, path: &str, language: &str) {
+    db.upsert_file(&FileInfo {
+        path: path.to_string(),
+        last_modified: 0.0,
+        hash: String::new(),
+        language: language.to_string(),
+        num_symbols: 0,
+    })
+    .unwrap();
+}
+
+#[test]
+fn test_hierarchy_treats_csharp_implements_to_class_as_extends() {
+    // C#'s flat base_list emits Implements for a base class (D1); once resolved
+    // to a Class symbol, hierarchy() must surface it as extends.
+    let db = Database::open_memory().unwrap();
+    register_file(&db, "Services/AuthService.cs", "csharp");
+
+    let base = test_symbol(
+        "BaseService",
+        SymbolKind::Class,
+        "Services/BaseService.cs",
+        1,
+    );
+    let child = test_symbol(
+        "AuthService",
+        SymbolKind::Class,
+        "Services/AuthService.cs",
+        3,
+    );
+    db.insert_symbols(&[base.clone(), child.clone()]).unwrap();
+
+    db.insert_edge(&Edge::new(
+        &child.id,
+        "BaseService",
+        EdgeKind::Implements,
+        "Services/AuthService.cs",
+        3,
+    ))
+    .unwrap();
+    db.resolve_edges().unwrap();
+
+    let pairs = db.hierarchy("BaseService").unwrap();
+    assert_eq!(
+        pairs,
+        vec![("AuthService".to_string(), "BaseService".to_string())]
+    );
+}
+
+#[test]
+fn test_hierarchy_ignores_csharp_implements_to_interface() {
+    // A C# Implements edge whose resolved target is an Interface is NOT extends —
+    // it must stay out of the hierarchy (only Class targets count).
+    let db = Database::open_memory().unwrap();
+    register_file(&db, "Services/AuthService.cs", "csharp");
+
+    let iface = test_symbol(
+        "IAuthProvider",
+        SymbolKind::Interface,
+        "Services/IAuthProvider.cs",
+        1,
+    );
+    let child = test_symbol(
+        "AuthService",
+        SymbolKind::Class,
+        "Services/AuthService.cs",
+        3,
+    );
+    db.insert_symbols(&[iface.clone(), child.clone()]).unwrap();
+
+    db.insert_edge(&Edge::new(
+        &child.id,
+        "IAuthProvider",
+        EdgeKind::Implements,
+        "Services/AuthService.cs",
+        3,
+    ))
+    .unwrap();
+    db.resolve_edges().unwrap();
+
+    let pairs = db.hierarchy("IAuthProvider").unwrap();
+    assert!(
+        pairs.is_empty(),
+        "implements-to-interface must not appear in the hierarchy, got {pairs:?}"
+    );
+}
+
+#[test]
+fn test_hierarchy_ignores_non_csharp_implements_to_class() {
+    // Regression for the D1a Dart bug: in a non-C# language, `implements` means
+    // interface conformance even when the target is a concrete class (Dart has
+    // no Interface kind, so `class Foo implements AbstractBar` resolves to a
+    // Class). This must NOT be reinterpreted as subclassing — only C# encodes
+    // inheritance as `implements`.
+    let db = Database::open_memory().unwrap();
+    register_file(&db, "lib/models/user.dart", "dart");
+
+    let base = test_symbol(
+        "Repository",
+        SymbolKind::Class,
+        "lib/models/repository.dart",
+        1,
+    );
+    let child = test_symbol(
+        "UserRepository",
+        SymbolKind::Class,
+        "lib/models/user.dart",
+        5,
+    );
+    db.insert_symbols(&[base.clone(), child.clone()]).unwrap();
+
+    db.insert_edge(&Edge::new(
+        &child.id,
+        "Repository",
+        EdgeKind::Implements,
+        "lib/models/user.dart",
+        5,
+    ))
+    .unwrap();
+    db.resolve_edges().unwrap();
+
+    let pairs = db.hierarchy("Repository").unwrap();
+    assert!(
+        pairs.is_empty(),
+        "a Dart implements-to-class must not be reported as extends, got {pairs:?}"
+    );
+}
+
+#[test]
+fn test_hierarchy_shows_unresolved_csharp_base_class() {
+    // A C# base class defined outside the indexed tree yields an unresolved
+    // Implements edge (target_id NULL). It must still appear in the hierarchy
+    // via target_name, matching the `inherits` fallback — otherwise C# class
+    // inheritance vanishes whenever the base isn't resolved to a Class.
+    let db = Database::open_memory().unwrap();
+    register_file(&db, "Services/Foo.cs", "csharp");
+
+    let child = test_symbol("Foo", SymbolKind::Class, "Services/Foo.cs", 1);
+    db.insert_symbols(std::slice::from_ref(&child)).unwrap();
+
+    // No symbol for ExternalBase → edge stays unresolved (target_id NULL).
+    db.insert_edge(&Edge::new(
+        &child.id,
+        "ExternalBase",
+        EdgeKind::Implements,
+        "Services/Foo.cs",
+        1,
+    ))
+    .unwrap();
+    db.resolve_edges().unwrap();
+
+    let pairs = db.hierarchy("ExternalBase").unwrap();
+    assert_eq!(
+        pairs,
+        vec![("Foo".to_string(), "ExternalBase".to_string())],
+        "an unresolved C# base class must still show in the hierarchy"
+    );
+}
+
 #[test]
 fn test_resolve_edges_class_over_constructor() {
     let db = Database::open_memory().unwrap();

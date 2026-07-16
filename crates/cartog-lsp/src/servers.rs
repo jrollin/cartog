@@ -136,6 +136,13 @@ pub const SERVERS: &[ServerSpec] = &[
         language_id: "astro",
         install_hint: "npm i -g @astrojs/language-server",
     },
+    ServerSpec {
+        language: "csharp",
+        binary: "csharp-ls",
+        args: &[],
+        language_id: "csharp",
+        install_hint: "dotnet tool install --global csharp-ls (needs .NET SDK)",
+    },
 ];
 
 /// Find all server specs for a cartog language name, in priority order.
@@ -261,6 +268,14 @@ mod tests {
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].binary, "astro-ls");
         assert_eq!(specs[0].language_id, "astro");
+    }
+
+    #[test]
+    fn test_find_servers_csharp() {
+        let specs = find_servers("csharp");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].binary, "csharp-ls");
+        assert_eq!(specs[0].language_id, "csharp");
     }
 
     #[test]
