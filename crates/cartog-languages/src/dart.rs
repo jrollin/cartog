@@ -359,10 +359,9 @@ fn method_name_kind(node: Node, source: &str) -> Option<(String, SymbolKind, boo
                 .collect();
             let name = if ids.len() >= 2 {
                 node_text(ids[1], source).to_string()
-            } else if let Some(id) = ids.first() {
-                node_text(*id, source).to_string()
             } else {
-                return None;
+                let id = ids.first()?;
+                node_text(*id, source).to_string()
             };
             (name, SymbolKind::Method)
         }
