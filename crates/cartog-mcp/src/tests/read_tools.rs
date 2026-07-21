@@ -163,6 +163,16 @@ async fn refs_unknown_name_suggests_near_matches() {
         text.contains("Did you mean") && text.contains("helper"),
         "near-miss should suggest helper, got: {text}"
     );
+    // The empty-[] did-you-mean branch still returns structuredContent — it is
+    // a distinct early-return path in tool_response_named, and a schema-bearing
+    // tool must carry structuredContent even when the result is empty.
+    assert!(
+        result
+            .structured_content
+            .as_ref()
+            .is_some_and(serde_json::Value::is_object),
+        "did-you-mean response keeps object-typed structuredContent"
+    );
 }
 
 #[tokio::test]
@@ -454,6 +464,150 @@ async fn map_returns_files_and_top_symbols() {
     assert!(
         text.contains("lib.py"),
         "map should list the indexed file: {text}"
+    );
+}
+
+/// Every read tool declares an `output_schema`, so the MCP spec requires it
+/// to return `structuredContent` on a successful call. A prior bug dropped
+/// `structuredContent`, which strict clients (e.g. opencode) reject. Drive
+/// every read handler over a real indexed DB and assert each attaches
+/// object-typed `structuredContent`.
+///
+/// This covers the presence invariant on normal (under-cap) results; the
+/// oversized/trimmed path is covered by
+/// `schema::oversized_result_bounds_text_and_structured_together`.
+#[tokio::test]
+async fn every_read_tool_returns_structured_content() {
+    let (_dir, server) = indexed_server();
+
+    fn assert_object_structured(tool: &str, result: &CallToolResult) {
+        let structured = result
+            .structured_content
+            .as_ref()
+            .unwrap_or_else(|| panic!("{tool} must return structuredContent"));
+        assert!(
+            structured.is_object(),
+            "{tool} structuredContent must be a JSON object, got: {structured}"
+        );
+    }
+
+    assert_object_structured(
+        "cartog_outline",
+        &server
+            .cartog_outline(Parameters(OutlineParams {
+                file: "lib.py".to_string(),
+            }))
+            .await
+            .expect("outline"),
+    );
+    assert_object_structured(
+        "cartog_refs",
+        &server
+            .cartog_refs(Parameters(RefsParams {
+                name: "helper".to_string(),
+                kind: None,
+            }))
+            .await
+            .expect("refs"),
+    );
+    assert_object_structured(
+        "cartog_callees",
+        &server
+            .cartog_callees(Parameters(CalleesParams {
+                name: "main".to_string(),
+            }))
+            .await
+            .expect("callees"),
+    );
+    assert_object_structured(
+        "cartog_impact",
+        &server
+            .cartog_impact(Parameters(ImpactParams {
+                name: "helper".to_string(),
+                depth: None,
+            }))
+            .await
+            .expect("impact"),
+    );
+    assert_object_structured(
+        "cartog_trace",
+        &server
+            .cartog_trace(Parameters(TraceParams {
+                from: "speak".to_string(),
+                to: "helper".to_string(),
+                depth: None,
+            }))
+            .await
+            .expect("trace"),
+    );
+    assert_object_structured(
+        "cartog_hierarchy",
+        &server
+            .cartog_hierarchy(Parameters(HierarchyParams {
+                name: "Dog".to_string(),
+            }))
+            .await
+            .expect("hierarchy"),
+    );
+    assert_object_structured(
+        "cartog_deps",
+        &server
+            .cartog_deps(Parameters(DepsParams {
+                file: "lib.py".to_string(),
+            }))
+            .await
+            .expect("deps"),
+    );
+    assert_object_structured(
+        "cartog_search",
+        &server
+            .cartog_search(Parameters(SearchParams {
+                query: "Animal".to_string(),
+                kind: None,
+                file: None,
+                limit: None,
+            }))
+            .await
+            .expect("search"),
+    );
+    assert_object_structured(
+        "cartog_map",
+        &server
+            .cartog_map(Parameters(MapParams { limit: Some(10) }))
+            .await
+            .expect("map"),
+    );
+    assert_object_structured(
+        "cartog_changes",
+        &server
+            .cartog_changes(Parameters(ChangesParams {
+                commits: None,
+                kind: None,
+            }))
+            .await
+            .expect("changes"),
+    );
+    assert_object_structured("cartog_stats", &server.cartog_stats().await.expect("stats"));
+    assert_object_structured(
+        "cartog_rag_search",
+        &server
+            .cartog_rag_search(Parameters(RagSearchParams {
+                query: "helper".to_string(),
+                kind: None,
+                limit: Some(5),
+            }))
+            .await
+            .expect("rag search"),
+    );
+    assert_object_structured(
+        "cartog_context",
+        &server
+            .cartog_context(Parameters(ContextParams {
+                task: "speak".to_string(),
+                tokens: Some(6000),
+            }))
+            .await
+            .expect("context"),
     );
 }
 

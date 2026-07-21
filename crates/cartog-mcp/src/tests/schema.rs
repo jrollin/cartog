@@ -136,7 +136,7 @@ fn tool_response_attaches_structured_content_under_budget() {
     let json = serde_json::to_string_pretty(&symbols).expect("json");
     let structured = serde_json::to_value(SymbolList { results: symbols }).ok();
 
-    let result = tool_response(&db, json, structured, "cartog_search", None).expect("response");
+    let result = tool_response(&db, json, structured, "cartog_search", 0, None).expect("response");
 
     let structured = result
         .structured_content
@@ -148,34 +148,84 @@ fn tool_response_attaches_structured_content_under_budget() {
     assert_eq!(result.content.len(), 1, "text block retained");
 }
 
-/// An over-budget response drops `structuredContent` so an oversized payload
-/// can't bypass the size cap, and the text block carries a truncation notice.
+/// `fit_to_budget` keeps a whole list that already fits, and drops trailing
+/// items (reporting the count) when the serialized form exceeds the budget.
+/// This is the element-level bound that keeps both the text block and the
+/// structured wrapper under the cap while staying schema-valid.
 #[test]
-fn tool_response_drops_structured_content_when_truncated() {
-    let db = populated_memory_db();
-    // Exceed the default 64KB cap deterministically (no env mutation).
-    let big = "x".repeat(mcp_max_bytes() + 1024);
-    let json = format!("[\"{big}\"]");
-    let structured = Some(serde_json::json!({ "results": [] }));
+fn fit_to_budget_trims_list_to_fit() {
+    let items: Vec<String> = (0..100).map(|i| format!("item-{i:04}")).collect();
 
-    let result = tool_response(&db, json, structured, "cartog_search", None).expect("response");
+    // A budget that comfortably holds all items keeps them untouched.
+    let full = serde_json::to_string_pretty(&items).expect("json").len();
+    let (kept, omitted) = fit_to_budget(items.clone(), full);
+    assert_eq!(omitted, 0, "nothing dropped when the whole list fits");
+    assert_eq!(kept.len(), 100, "all items kept");
 
+    // A tight budget drops trailing items; what remains must actually fit.
+    let (kept, omitted) = fit_to_budget(items.clone(), 200);
+    assert!(omitted > 0, "some items dropped under a tight budget");
+    assert_eq!(kept.len() + omitted, 100, "omitted count is exact");
     assert!(
-        result.structured_content.is_none(),
-        "structured content dropped on truncation"
+        serde_json::to_string_pretty(&kept).expect("json").len() <= 200,
+        "kept slice fits the budget"
+    );
+}
+
+/// The regression this whole change fixes: a large result is bounded at the
+/// element level, so `structuredContent` is present (MCP spec) AND the whole
+/// response — text plus the structured mirror — stays under the cap. Sizes the
+/// list against `mcp_list_budget()` (the reserved headroom the handlers use),
+/// then builds both text and structured from the same trimmed slice, and
+/// asserts the structured wrapper stays under the *full* cap even with the
+/// wrapper + banner + notice overhead the list wasn't sized against.
+#[test]
+fn oversized_result_bounds_text_and_structured_together() {
+    let db = populated_memory_db();
+    let cap = mcp_max_bytes();
+    // Far more symbol-sized items than fit: each row is ~1KB, so hundreds
+    // overflow the 64KB cap and must be trimmed.
+    let rows: Vec<String> = (0..500)
+        .map(|i| format!("{i:04}-{}", "z".repeat(1024)))
+        .collect();
+
+    // Handlers size the bare list against the reduced budget, leaving headroom.
+    let (kept, omitted) = fit_to_budget(rows, mcp_list_budget());
+    assert!(omitted > 0, "the oversized list was trimmed");
+
+    // Build both text and structured from the same trimmed slice, as the
+    // handlers do.
+    let json = serde_json::to_string_pretty(&kept).expect("json");
+    let structured = Some(serde_json::json!({ "results": kept }));
+
+    let result =
+        tool_response(&db, json, structured, "cartog_search", omitted, None).expect("response");
+
+    let structured = result
+        .structured_content
+        .expect("structuredContent kept — required for a schema-bearing tool");
+    let structured_bytes = serde_json::to_string(&structured).expect("json").len();
+    assert!(
+        structured_bytes <= cap,
+        "structured mirror is bounded, not shipped in full: {structured_bytes} > {cap}"
     );
     let text = match &result.content.first().expect("content").raw {
         RawContent::Text(t) => &t.text,
         _ => panic!("expected text content"),
     };
     assert!(
-        text.contains("Response truncated"),
-        "truncation notice present"
+        text.len() <= cap,
+        "text block bounded: {} > {cap}",
+        text.len()
+    );
+    assert!(
+        text.contains(&format!("{omitted} result(s) omitted")),
+        "honest omitted-count notice: {text}"
     );
 }
 
-/// A staleness banner must not push a truncated response over the cap: the
-/// banner's bytes are reserved before truncation, so banner + body ≤ cap.
+/// A staleness banner must not push a response over the cap: the final clamp
+/// trims the text so banner + body ≤ cap even for an oversized body.
 #[test]
 fn tool_response_with_banner_stays_under_cap() {
     let db = populated_memory_db();
@@ -183,7 +233,7 @@ fn tool_response_with_banner_stays_under_cap() {
     let json = format!("[\"{big}\"]");
     // rag_pending on a rag tool fires the longest banner.
     let stale = Some(snap(9, 0, 0));
-    let result = tool_response(&db, json, None, "cartog_rag_search", stale).expect("response");
+    let result = tool_response(&db, json, None, "cartog_rag_search", 0, stale).expect("response");
     let text = match &result.content.first().expect("content").raw {
         RawContent::Text(t) => &t.text,
         _ => panic!("expected text content"),
@@ -198,8 +248,8 @@ fn tool_response_with_banner_stays_under_cap() {
 }
 
 /// The final clamp also covers the NON-truncated path: a body just under the
-/// banner-adjusted budget, plus a banner and an appended suggestion, must
-/// still end up ≤ the cap (suffixes aren't individually budgeted).
+/// cap, plus a banner and an appended suggestion, must still end up ≤ the cap
+/// (suffixes aren't individually budgeted).
 #[test]
 fn tool_response_banner_plus_suffix_stays_under_cap() {
     let db = populated_memory_db();
@@ -209,7 +259,7 @@ fn tool_response_banner_plus_suffix_stays_under_cap() {
     let payload = "y".repeat(cap - 200);
     let json = format!("[\"{payload}\"]");
     let stale = Some(snap(3, 0, 0));
-    let result = tool_response(&db, json, None, "cartog_rag_search", stale).expect("response");
+    let result = tool_response(&db, json, None, "cartog_rag_search", 0, stale).expect("response");
     let text = match &result.content.first().expect("content").raw {
         RawContent::Text(t) => &t.text,
         _ => panic!("expected text content"),
@@ -218,36 +268,6 @@ fn tool_response_banner_plus_suffix_stays_under_cap() {
         text.len() <= cap,
         "banner + body + suffix must stay under {cap}, got {}",
         text.len()
-    );
-}
-
-/// The size cap counts the structured copy too: when the text fits on its own
-/// but text + structuredContent would exceed the budget, structured is dropped
-/// (the text block is kept intact, not truncated).
-#[test]
-fn tool_response_drops_structured_when_combined_exceeds_cap() {
-    let db = populated_memory_db();
-    // Text alone is just under the cap; the structured mirror pushes the
-    // combined size over it.
-    let budget = mcp_max_bytes();
-    let payload = "y".repeat(budget * 3 / 4);
-    let json = format!("[\"{payload}\"]");
-    let structured = Some(serde_json::json!({ "results": [payload.clone()] }));
-
-    assert!(json.len() <= budget, "text alone fits the cap");
-    let result = tool_response(&db, json, structured, "cartog_search", None).expect("response");
-
-    assert!(
-        result.structured_content.is_none(),
-        "structured dropped when combined size exceeds cap"
-    );
-    let text = match &result.content.first().expect("content").raw {
-        RawContent::Text(t) => &t.text,
-        _ => panic!("expected text content"),
-    };
-    assert!(
-        !text.contains("Response truncated"),
-        "text block fits on its own, so it is not truncated"
     );
 }
 

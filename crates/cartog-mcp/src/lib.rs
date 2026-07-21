@@ -402,6 +402,17 @@ fn mcp_max_bytes() -> usize {
         .unwrap_or(DEFAULT_MCP_MAX_BYTES)
 }
 
+/// Byte budget for the *result list* passed to [`fit_to_budget`], reserving
+/// headroom under [`mcp_max_bytes`] for everything the list isn't sized
+/// against: the structured wrapper (`{"results": …}`) and sibling fields
+/// (`MapResult.files`, `ChangesResult.changed_files`), the staleness banner,
+/// and the truncation notice. Sizing the bare array against the full cap would
+/// let those push `structuredContent` (which, unlike the text block, has no
+/// final clamp) past the cap.
+fn mcp_list_budget() -> usize {
+    mcp_max_bytes().saturating_sub(1024)
+}
+
 /// Whether MCP tools strip heavy fields from their JSON output.
 ///
 /// Agents are the only MCP consumer and the server already assumes token
@@ -473,12 +484,54 @@ fn strip_int_formats(value: &mut serde_json::Value) {
 }
 
 /// Build a successful result carrying both a text block and structured content.
-/// `structuredContent` is attached only when present (callers omit it for
-/// truncated responses, so an oversized payload can't bypass the size cap).
+/// `structuredContent` is attached only when present (callers that return no
+/// structured data pass `None`).
 fn success_result(text: String, structured: Option<serde_json::Value>) -> CallToolResult {
     let mut result = CallToolResult::success(vec![Content::text(text)]);
     result.structured_content = structured;
     result
+}
+
+/// Trim a result list so its serialized (bare-array) form fits `budget` bytes,
+/// returning the kept items and the count dropped.
+///
+/// A tool with an `output_schema` must return `structuredContent` per the MCP
+/// spec, so we can't byte-truncate the serialized JSON (that yields invalid,
+/// non-conforming JSON) and we can't drop it entirely. Instead we bound the
+/// payload at the *element* level — dropping trailing items keeps both the
+/// text block and the structured wrapper valid and mutually consistent, since
+/// the caller builds both from the returned slice. Every list wrapper's array
+/// field is unconstrained (no `minItems`), so an empty result stays schema-valid.
+///
+/// Uses binary search on the kept-count so a huge list doesn't re-serialize
+/// per dropped element. Falls back to keeping zero items if even one element
+/// serializes larger than the budget (the notice then reports every item
+/// omitted, and the final byte-clamp in [`tool_response_named`] guards the
+/// text block).
+#[must_use]
+fn fit_to_budget<T: Serialize>(items: Vec<T>, budget: usize) -> (Vec<T>, usize) {
+    let serialized_len = |n: usize| {
+        serde_json::to_string_pretty(&items[..n])
+            .map(|s| s.len())
+            .unwrap_or(usize::MAX)
+    };
+    if serialized_len(items.len()) <= budget {
+        return (items, 0);
+    }
+    // Largest prefix length whose serialized form fits the budget.
+    let (mut lo, mut hi) = (0usize, items.len());
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if serialized_len(mid) <= budget {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let omitted = items.len() - lo;
+    let mut kept = items;
+    kept.truncate(lo);
+    (kept, omitted)
 }
 
 /// Discover the plugin's pinned version so `cartog_update` can arm the PIN
@@ -617,22 +670,26 @@ fn parse_arm_output(output: &std::process::Output) -> UpdateResult {
 /// Build a JSON text response with next-tool suggestions appended.
 ///
 /// `structured` is the object-shaped payload mirrored into `structuredContent`
-/// for schema-aware clients; it is dropped when the response is truncated so an
-/// oversized payload can't slip past the size cap. The text block always keeps
-/// the original (possibly bare-array) JSON shape.
+/// for schema-aware clients — tools with `output_schema` must return
+/// `structuredContent` per the MCP spec, so it is always kept when present.
+/// The text block keeps the original (possibly bare-array) JSON shape.
 ///
-/// Caps total response size at `mcp_max_bytes()` so individual tool calls
-/// don't blow the caller's context window. On overflow the payload is cut
-/// at a safe char boundary and an overflow notice pointing at a narrower
-/// tool is appended.
+/// `omitted` is the count of result items the caller already dropped (via
+/// [`fit_to_budget`]) to keep the response under `mcp_max_bytes()`. Callers
+/// bound the payload at the element level *before* building both `json` and
+/// `structured` from the same trimmed slice, so text and structured stay
+/// mutually consistent and both fit the cap. When `omitted > 0` an honest
+/// "N result(s) omitted" notice pointing at a narrower tool is appended. A
+/// non-list tool that can't overflow passes `0`.
 fn tool_response(
     db: &Database,
     json: String,
     structured: Option<serde_json::Value>,
     tool: &str,
+    omitted: usize,
     stale: Option<StaleSnapshot>,
 ) -> Result<CallToolResult, McpError> {
-    tool_response_named(db, json, structured, tool, None, stale)
+    tool_response_named(db, json, structured, tool, omitted, None, stale)
 }
 
 /// Build a staleness banner for `tool`, or `None` when nothing is stale or the
@@ -718,6 +775,7 @@ fn tool_response_named(
     json: String,
     structured: Option<serde_json::Value>,
     tool: &str,
+    omitted: usize,
     queried_name: Option<&str>,
     stale: Option<StaleSnapshot>,
 ) -> Result<CallToolResult, McpError> {
@@ -744,55 +802,26 @@ fn tool_response_named(
                 if let Some(suffix) = did_you_mean_suffix(name, &candidates) {
                     let mut text = format!("{banner}{json}");
                     text.push_str(&suffix);
-                    // No structured content: the empty `[]` result plus a prose
-                    // hint has no useful typed form.
-                    return Ok(CallToolResult::success(vec![Content::text(text)]));
+                    return Ok(success_result(text, structured));
                 }
             }
         }
     }
 
-    // Reserve the banner's bytes up front so the final `banner + text [+
-    // structured]` stays under the cap (the banner is prepended at the end).
-    let budget = mcp_max_bytes().saturating_sub(banner.len());
-    let (mut text, truncated_bytes) = if json.len() > budget {
-        // Leave room for the truncation notice.
-        let notice_cap = 256;
-        let target = budget.saturating_sub(notice_cap);
-        // UTF-8 chars are at most 4 bytes; step back to a char boundary.
-        let cut = (target.saturating_sub(3)..=target)
-            .rev()
-            .find(|&i| json.is_char_boundary(i))
-            .unwrap_or(0);
-        let removed = json.len() - cut;
-        (json[..cut].to_string(), removed)
-    } else {
-        (json, 0)
-    };
+    let mut text = json;
 
-    // Structured content is kept only for full (untruncated) responses, so an
-    // oversized payload can't bypass the size cap via `structuredContent`. The
-    // structured copy roughly doubles the payload, so it counts toward the cap:
-    // drop it when text + structured would exceed the budget (the text block
-    // already fits on its own).
-    let mut structured = match structured {
-        Some(value) if truncated_bytes == 0 => {
-            let structured_bytes = serde_json::to_string(&value).map(|s| s.len()).unwrap_or(0);
-            (text.len() + structured_bytes <= budget).then_some(value)
-        }
-        _ => None,
-    };
-
-    if truncated_bytes > 0 {
+    // Callers trim the result list to the byte budget before building both
+    // `json` and `structured`, so an honest count of dropped items is known
+    // up front (no byte-level guessing, and text/structured agree).
+    if omitted > 0 {
         text.push_str(&format!(
-            "\n\n(Response truncated: {truncated_bytes} bytes omitted to stay under the \
+            "\n\n(Response truncated: {omitted} result(s) omitted to stay under the \
              {cap}-byte cap. {hint})",
             cap = mcp_max_bytes(),
             hint = narrowing_hint_for(tool),
         ));
     } else if is_empty {
         text.push_str("\n\n(Index is empty. Run cartog_index first to build the code graph.)");
-        structured = None;
     } else if let Some(hint) = suggestions_for(tool) {
         text.push_str("\n\n");
         text.push_str(hint);

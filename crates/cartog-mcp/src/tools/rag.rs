@@ -77,10 +77,12 @@ impl CartogServer {
                 result.snippet_in_place();
             }
 
+            let (results, omitted) = fit_to_budget(result.results, mcp_list_budget());
+            result.results = results;
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(&result).ok();
-            tool_response(&db, json, structured, "cartog_rag_search", stale)
+            tool_response(&db, json, structured, "cartog_rag_search", omitted, stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -154,10 +156,12 @@ impl CartogServer {
                 result.compact_in_place();
             }
 
+            let (entries, omitted) = fit_to_budget(result.entries, mcp_list_budget());
+            result.entries = entries;
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(&result).ok();
-            tool_response(&db, json, structured, "cartog_context", stale)
+            tool_response(&db, json, structured, "cartog_context", omitted, stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
