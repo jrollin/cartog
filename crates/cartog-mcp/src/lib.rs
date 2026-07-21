@@ -402,6 +402,17 @@ fn mcp_max_bytes() -> usize {
         .unwrap_or(DEFAULT_MCP_MAX_BYTES)
 }
 
+/// Byte budget for the *result list* passed to [`fit_to_budget`], reserving
+/// headroom under [`mcp_max_bytes`] for everything the list isn't sized
+/// against: the structured wrapper (`{"results": …}`) and sibling fields
+/// (`MapResult.files`, `ChangesResult.changed_files`), the staleness banner,
+/// and the truncation notice. Sizing the bare array against the full cap would
+/// let those push `structuredContent` (which, unlike the text block, has no
+/// final clamp) past the cap.
+fn mcp_list_budget() -> usize {
+    mcp_max_bytes().saturating_sub(1024)
+}
+
 /// Whether MCP tools strip heavy fields from their JSON output.
 ///
 /// Agents are the only MCP consumer and the server already assumes token
@@ -497,6 +508,7 @@ fn success_result(text: String, structured: Option<serde_json::Value>) -> CallTo
 /// serializes larger than the budget (the notice then reports every item
 /// omitted, and the final byte-clamp in [`tool_response_named`] guards the
 /// text block).
+#[must_use]
 fn fit_to_budget<T: Serialize>(items: Vec<T>, budget: usize) -> (Vec<T>, usize) {
     let serialized_len = |n: usize| {
         serde_json::to_string_pretty(&items[..n])

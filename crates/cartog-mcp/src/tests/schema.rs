@@ -174,10 +174,11 @@ fn fit_to_budget_trims_list_to_fit() {
 
 /// The regression this whole change fixes: a large result is bounded at the
 /// element level, so `structuredContent` is present (MCP spec) AND the whole
-/// response — text plus the structured mirror — stays under the cap. Builds
-/// both from the same trimmed slice via `fit_to_budget`, exactly as the
-/// handlers do, and asserts the serialized structured payload is capped (not
-/// shipped in full).
+/// response — text plus the structured mirror — stays under the cap. Sizes the
+/// list against `mcp_list_budget()` (the reserved headroom the handlers use),
+/// then builds both text and structured from the same trimmed slice, and
+/// asserts the structured wrapper stays under the *full* cap even with the
+/// wrapper + banner + notice overhead the list wasn't sized against.
 #[test]
 fn oversized_result_bounds_text_and_structured_together() {
     let db = populated_memory_db();
@@ -188,7 +189,8 @@ fn oversized_result_bounds_text_and_structured_together() {
         .map(|i| format!("{i:04}-{}", "z".repeat(1024)))
         .collect();
 
-    let (kept, omitted) = fit_to_budget(rows, cap);
+    // Handlers size the bare list against the reduced budget, leaving headroom.
+    let (kept, omitted) = fit_to_budget(rows, mcp_list_budget());
     assert!(omitted > 0, "the oversized list was trimmed");
 
     // Build both text and structured from the same trimmed slice, as the

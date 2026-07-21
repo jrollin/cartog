@@ -39,7 +39,7 @@ impl CartogServer {
                 symbols.compact_in_place();
             }
 
-            let (symbols, omitted) = fit_to_budget(symbols, mcp_max_bytes());
+            let (symbols, omitted) = fit_to_budget(symbols, mcp_list_budget());
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(SymbolList { results: symbols }).ok();
@@ -102,7 +102,7 @@ impl CartogServer {
                 })
                 .collect();
 
-            let (entries, omitted) = fit_to_budget(entries, mcp_max_bytes());
+            let (entries, omitted) = fit_to_budget(entries, mcp_list_budget());
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(RefList { results: entries }).ok();
@@ -147,7 +147,7 @@ impl CartogServer {
                 .callees(&name)
                 .map_err(|e| mcp_err(format!("callees query failed: {e}")))?;
 
-            let (edges, omitted) = fit_to_budget(edges, mcp_max_bytes());
+            let (edges, omitted) = fit_to_budget(edges, mcp_list_budget());
             let json = serde_json::to_string_pretty(&edges)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(EdgeList { results: edges }).ok();
@@ -198,7 +198,7 @@ impl CartogServer {
                 .map(|(edge, d)| ImpactEntry { edge, depth: d })
                 .collect();
 
-            let (entries, omitted) = fit_to_budget(entries, mcp_max_bytes());
+            let (entries, omitted) = fit_to_budget(entries, mcp_list_budget());
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(ImpactList { results: entries }).ok();
@@ -268,7 +268,7 @@ impl CartogServer {
                 })
                 .collect();
 
-            let (hops, omitted) = fit_to_budget(hops, mcp_max_bytes());
+            let (hops, omitted) = fit_to_budget(hops, mcp_list_budget());
             let result = TraceList {
                 found: path.is_some(),
                 hops,
@@ -322,7 +322,7 @@ impl CartogServer {
                 .map(|(child, parent)| HierarchyEntry { child, parent })
                 .collect();
 
-            let (entries, omitted) = fit_to_budget(entries, mcp_max_bytes());
+            let (entries, omitted) = fit_to_budget(entries, mcp_list_budget());
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(HierarchyList { results: entries }).ok();
@@ -367,7 +367,7 @@ impl CartogServer {
                 .file_deps(&file)
                 .map_err(|e| mcp_err(format!("deps query failed: {e}")))?;
 
-            let (edges, omitted) = fit_to_budget(edges, mcp_max_bytes());
+            let (edges, omitted) = fit_to_budget(edges, mcp_list_budget());
             let json = serde_json::to_string_pretty(&edges)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(EdgeList { results: edges }).ok();

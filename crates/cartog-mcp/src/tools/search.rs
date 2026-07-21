@@ -70,7 +70,7 @@ impl CartogServer {
                 symbols.compact_in_place();
             }
 
-            let (symbols, omitted) = fit_to_budget(symbols, mcp_max_bytes());
+            let (symbols, omitted) = fit_to_budget(symbols, mcp_list_budget());
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(SymbolList { results: symbols }).ok();
@@ -167,7 +167,7 @@ impl CartogServer {
                 top_symbols.compact_in_place();
             }
 
-            let (top_symbols, omitted) = fit_to_budget(top_symbols, mcp_max_bytes());
+            let (top_symbols, omitted) = fit_to_budget(top_symbols, mcp_list_budget());
             let result = MapResult { files, top_symbols };
 
             let json = serde_json::to_string_pretty(&result)
@@ -226,7 +226,7 @@ impl CartogServer {
                 symbols.compact_in_place();
             }
 
-            let (symbols, omitted) = fit_to_budget(symbols, mcp_max_bytes());
+            let (symbols, omitted) = fit_to_budget(symbols, mcp_list_budget());
             let result = cartog_core::ChangesResult {
                 changed_files,
                 symbols,

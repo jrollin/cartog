@@ -77,7 +77,7 @@ impl CartogServer {
                 result.snippet_in_place();
             }
 
-            let (results, omitted) = fit_to_budget(result.results, mcp_max_bytes());
+            let (results, omitted) = fit_to_budget(result.results, mcp_list_budget());
             result.results = results;
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
@@ -156,7 +156,7 @@ impl CartogServer {
                 result.compact_in_place();
             }
 
-            let (entries, omitted) = fit_to_budget(result.entries, mcp_max_bytes());
+            let (entries, omitted) = fit_to_budget(result.entries, mcp_list_budget());
             result.entries = entries;
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
