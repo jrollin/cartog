@@ -70,10 +70,11 @@ impl CartogServer {
                 symbols.compact_in_place();
             }
 
+            let (symbols, omitted) = fit_to_budget(symbols, mcp_max_bytes());
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(SymbolList { results: symbols }).ok();
-            tool_response(&db, json, structured, "cartog_search", stale)
+            tool_response(&db, json, structured, "cartog_search", omitted, stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -166,12 +167,13 @@ impl CartogServer {
                 top_symbols.compact_in_place();
             }
 
+            let (top_symbols, omitted) = fit_to_budget(top_symbols, mcp_max_bytes());
             let result = MapResult { files, top_symbols };
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(&result).ok();
-            tool_response(&db, json, structured, "cartog_map", stale)
+            tool_response(&db, json, structured, "cartog_map", omitted, stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -224,6 +226,7 @@ impl CartogServer {
                 symbols.compact_in_place();
             }
 
+            let (symbols, omitted) = fit_to_budget(symbols, mcp_max_bytes());
             let result = cartog_core::ChangesResult {
                 changed_files,
                 symbols,
@@ -232,7 +235,7 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(&result).ok();
-            tool_response(&db, json, structured, "cartog_changes", stale)
+            tool_response(&db, json, structured, "cartog_changes", omitted, stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?

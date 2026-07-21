@@ -39,10 +39,11 @@ impl CartogServer {
                 symbols.compact_in_place();
             }
 
+            let (symbols, omitted) = fit_to_budget(symbols, mcp_max_bytes());
             let json = serde_json::to_string_pretty(&symbols)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(SymbolList { results: symbols }).ok();
-            tool_response(&db, json, structured, "cartog_outline", stale)
+            tool_response(&db, json, structured, "cartog_outline", omitted, stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -101,10 +102,19 @@ impl CartogServer {
                 })
                 .collect();
 
+            let (entries, omitted) = fit_to_budget(entries, mcp_max_bytes());
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(RefList { results: entries }).ok();
-            tool_response_named(&db, json, structured, "cartog_refs", Some(&name), stale)
+            tool_response_named(
+                &db,
+                json,
+                structured,
+                "cartog_refs",
+                omitted,
+                Some(&name),
+                stale,
+            )
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -137,10 +147,19 @@ impl CartogServer {
                 .callees(&name)
                 .map_err(|e| mcp_err(format!("callees query failed: {e}")))?;
 
+            let (edges, omitted) = fit_to_budget(edges, mcp_max_bytes());
             let json = serde_json::to_string_pretty(&edges)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(EdgeList { results: edges }).ok();
-            tool_response_named(&db, json, structured, "cartog_callees", Some(&name), stale)
+            tool_response_named(
+                &db,
+                json,
+                structured,
+                "cartog_callees",
+                omitted,
+                Some(&name),
+                stale,
+            )
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -179,10 +198,19 @@ impl CartogServer {
                 .map(|(edge, d)| ImpactEntry { edge, depth: d })
                 .collect();
 
+            let (entries, omitted) = fit_to_budget(entries, mcp_max_bytes());
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(ImpactList { results: entries }).ok();
-            tool_response_named(&db, json, structured, "cartog_impact", Some(&name), stale)
+            tool_response_named(
+                &db,
+                json,
+                structured,
+                "cartog_impact",
+                omitted,
+                Some(&name),
+                stale,
+            )
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -240,6 +268,7 @@ impl CartogServer {
                 })
                 .collect();
 
+            let (hops, omitted) = fit_to_budget(hops, mcp_max_bytes());
             let result = TraceList {
                 found: path.is_some(),
                 hops,
@@ -247,7 +276,15 @@ impl CartogServer {
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(&result).ok();
-            tool_response_named(&db, json, structured, "cartog_trace", Some(&from), stale)
+            tool_response_named(
+                &db,
+                json,
+                structured,
+                "cartog_trace",
+                omitted,
+                Some(&from),
+                stale,
+            )
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
@@ -285,6 +322,7 @@ impl CartogServer {
                 .map(|(child, parent)| HierarchyEntry { child, parent })
                 .collect();
 
+            let (entries, omitted) = fit_to_budget(entries, mcp_max_bytes());
             let json = serde_json::to_string_pretty(&entries)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(HierarchyList { results: entries }).ok();
@@ -293,6 +331,7 @@ impl CartogServer {
                 json,
                 structured,
                 "cartog_hierarchy",
+                omitted,
                 Some(&name),
                 stale,
             )
@@ -328,10 +367,11 @@ impl CartogServer {
                 .file_deps(&file)
                 .map_err(|e| mcp_err(format!("deps query failed: {e}")))?;
 
+            let (edges, omitted) = fit_to_budget(edges, mcp_max_bytes());
             let json = serde_json::to_string_pretty(&edges)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
             let structured = serde_json::to_value(EdgeList { results: edges }).ok();
-            tool_response(&db, json, structured, "cartog_deps", stale)
+            tool_response(&db, json, structured, "cartog_deps", omitted, stale)
         })
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
