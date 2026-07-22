@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.1] - 2026-07-22
+
+### Bug Fixes
+
+- **mcp**: Bound tool responses at the element level, keep structuredContent ([`226a075`](https://github.com/jrollin/cartog/commit/226a0757e5c835af6d4058f53f4b1ce33d1960d2))
+- **mcp**: Reserve headroom so structuredContent stays under the cap ([`bb38778`](https://github.com/jrollin/cartog/commit/bb3877866c6995c4aa2943f1e69cda2362a84be5))
+
 ## [0.31.0] - 2026-07-16
 
 ### Bug Fixes
