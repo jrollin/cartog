@@ -21,7 +21,7 @@ Code is a graph of relationships (calls, imports, inherits, type references). ca
 | Query latency | multi-step | 8–450 µs |
 | Transitive analysis | impossible | `impact --depth 3` |
 
-Measured across 13 scenarios, 10 languages. Best gains on call chain tracing (88% token reduction) and caller lookup (95% reduction).
+Measured across 13 scenarios, 12 languages. Best gains on call chain tracing (88% token reduction) and caller lookup (95% reduction).
 
 > **Recall caveat:** The 97% figure requires a matching language server on `PATH` (the default build ships LSP support). Without a server (or with `--no-lsp`), edge resolution falls to ~25–37% depending on language; with LSP it reaches 44–81%. See [README — Benchmark notes](../README.md#benchmark-notes) for methodology.
 
@@ -35,7 +35,7 @@ Measured across 13 scenarios, 10 languages. Best gains on call chain tracing (88
 
 **vs grep/cat/find:** pre-computed graph eliminates multi-step discovery. One `refs` call replaces grep + filter + read. Transitive analysis (`impact`) is impossible with grep alone.
 
-**vs language servers (LSP):** no startup time, no per-language server, no config. Single binary covers 16 languages (15 code languages + Markdown) plus 4 frontend frameworks (React, Vue, Svelte, Astro). Trade-off: ~90% name resolution accuracy vs LSP's full semantic analysis. LSP can be enabled as an optional precision layer.
+**vs language servers (LSP):** no startup time, no per-language server, no config. Single binary covers 18 languages (17 code languages + Markdown) plus 4 frontend frameworks (React, Vue, Svelte, Astro). Trade-off: ~90% name resolution accuracy vs LSP's full semantic analysis. LSP can be enabled as an optional precision layer.
 
 **vs Serena MCP / codanna / Aider repo-map:** single binary, no LSP requirement, pre-computed graph (not per-query), full query interface over SQLite.
 

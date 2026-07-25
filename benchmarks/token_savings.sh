@@ -14,6 +14,8 @@
 #   ./benchmarks/token_savings.sh --fixture rs     # Run only Rust fixtures
 #   ./benchmarks/token_savings.sh --fixture rb     # Run only Ruby fixtures
 #   ./benchmarks/token_savings.sh --fixture java   # Run only Java fixtures
+#   ./benchmarks/token_savings.sh --fixture c      # Run only C fixtures
+#   ./benchmarks/token_savings.sh --fixture cpp    # Run only C++ fixtures
 #   ./benchmarks/token_savings.sh --fixture csharp # Run only C# fixtures
 #   ./benchmarks/token_savings.sh --fixture php    # Run only PHP fixtures
 #   ./benchmarks/token_savings.sh --fixture dart   # Run only Dart fixtures
@@ -45,7 +47,7 @@ while [[ $# -gt 0 ]]; do
             [ $# -ge 2 ] || { echo "error: --fixture needs a value" >&2; exit 2; }
             FIXTURE_FILTER="$2"; shift 2 ;;
         -h|--help)
-            echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb|java|csharp|php|dart|swift|kt]"
+            echo "Usage: $0 [--scenario NN] [--fixture py|ts|go|rs|rb|java|c|cpp|csharp|php|dart|swift|kt|vue|svelte|astro]"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;

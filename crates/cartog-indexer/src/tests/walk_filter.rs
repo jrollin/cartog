@@ -483,9 +483,10 @@ fn unsupported_files_are_counted_not_silently_dropped() {
     let dir = tmp.path().join("proj");
     std::fs::create_dir(&dir).unwrap();
     std::fs::write(dir.join("a.rs"), "fn main() {}\n").unwrap();
-    std::fs::write(dir.join("b.cpp"), "int main() {}\n").unwrap();
-    std::fs::write(dir.join("c.cpp"), "int f() {}\n").unwrap();
-    std::fs::write(dir.join("d.c"), "int main() {}\n").unwrap();
+    // Extensions cartog has no extractor for (.c/.cpp are supported languages now).
+    std::fs::write(dir.join("b.scala"), "object B\n").unwrap();
+    std::fs::write(dir.join("c.scala"), "object C\n").unwrap();
+    std::fs::write(dir.join("d.ex"), "defmodule D do end\n").unwrap();
     // cartog's own DB sidecars must NOT count as unsupported languages.
     std::fs::write(dir.join(".cartog.db"), "x").unwrap();
     std::fs::write(dir.join(".cartog.db-wal"), "x").unwrap();
@@ -505,11 +506,14 @@ fn unsupported_files_are_counted_not_silently_dropped() {
     .unwrap();
 
     assert_eq!(r.files_indexed, 1, "only a.rs is supported");
-    assert_eq!(r.files_unsupported, 3, "2 cpp + 1 c, db sidecars excluded");
+    assert_eq!(
+        r.files_unsupported, 3,
+        "2 scala + 1 ex, db sidecars excluded"
+    );
     // Descending by count, ties broken alphabetically.
     assert_eq!(
         r.unsupported_by_ext,
-        vec![("cpp".to_string(), 2), ("c".to_string(), 1)]
+        vec![("scala".to_string(), 2), ("ex".to_string(), 1)]
     );
 }
 

@@ -26,7 +26,7 @@ Individual targets:
 
 ```bash
 make check-rust            # cargo fmt --check + clippy -D warnings + cargo test
-make check-fixtures        # validate all language fixture codebases (py, ts, go, rs, rb, java, php, dart, swift)
+make check-fixtures        # validate all language fixture codebases (py, ts, go, rs, rb, java, c, cpp, csharp, php, dart, swift, kt)
 make check-fixtures-docker # same, forcing the Docker fallback for every language
 make check-skill           # bash unit tests for the agent skill
 ```

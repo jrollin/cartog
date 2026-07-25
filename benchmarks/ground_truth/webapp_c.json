@@ -1,0 +1,316 @@
+{
+  "01_find_callers": {
+    "description": "Who calls validate_token?",
+    "query": "refs validate_token --kind calls",
+    "expected": [
+      {
+        "source": "auth_middleware_handle",
+        "file": "middleware/auth_middleware.c"
+      },
+      {
+        "source": "get_current_user",
+        "file": "auth/auth_service.c"
+      },
+      {
+        "source": "refresh_token",
+        "file": "auth/token_service.c"
+      }
+    ]
+  },
+  "02_file_structure": {
+    "description": "What's in auth/token_service.c?",
+    "query": "outline auth/token_service.c",
+    "expected": [
+      {
+        "name": "token_service_new",
+        "kind": "function"
+      },
+      {
+        "name": "generate_token",
+        "kind": "function"
+      },
+      {
+        "name": "validate_token",
+        "kind": "function"
+      },
+      {
+        "name": "refresh_token",
+        "kind": "function"
+      },
+      {
+        "name": "revoke_token",
+        "kind": "function"
+      }
+    ]
+  },
+  "03_refactor_impact": {
+    "description": "Impact of changing AuthService (C: transitive references through struct members and function-pointer vtables)",
+    "query": "impact AuthService --depth 3",
+    "expected_refs": [
+      "AdminService",
+      "AuthenticationService",
+      "RoleChecker",
+      "auth/auth_service.h",
+      "auth/auth_service.c",
+      "services/authentication_service.h",
+      "services/admin_service.h",
+      "routes/auth_routes.c",
+      "login_handler"
+    ]
+  },
+  "04_class_hierarchy": {
+    "description": "C has no inheritance (struct embedding + function-pointer vtable), so this scenario is skipped for webapp_c; cartog's hierarchy() returns nothing for BaseService",
+    "query": "hierarchy BaseService",
+    "expected": []
+  },
+  "05_trace_call_chain": {
+    "description": "Trace handle_login call chain",
+    "query_sequence": [
+      "callees handle_login",
+      "callees login",
+      "callees generate_token"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handle_login",
+        "callee": "user_validator_validate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "login_handler"
+      },
+      {
+        "caller": "login",
+        "callee": "generate_token"
+      },
+      {
+        "caller": "login",
+        "callee": "authentication_error_new"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "execute_query"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "logger_debug"
+      }
+    ]
+  },
+  "06_file_deps": {
+    "description": "What does routes/auth_routes.c include?",
+    "query": "deps routes/auth_routes.c",
+    "expected": [
+      "auth_routes.h",
+      "database_connection.h",
+      "authentication_service.h",
+      "logger.h"
+    ]
+  },
+  "07_type_references": {
+    "description": "Type references to TokenError (C has no inheritance/exceptions, so TokenError is referenced only via signatures and constructors)",
+    "query": "refs TokenError",
+    "expected": [
+      {
+        "source": "ExpiredTokenError",
+        "file": "errors/errors.h",
+        "kind": "references"
+      },
+      {
+        "source": "token_error_new",
+        "file": "errors/errors.c",
+        "kind": "references"
+      }
+    ]
+  },
+  "08_symbol_search": {
+    "description": "Find all Token-related symbols",
+    "query": "search Token",
+    "expected": [
+      {
+        "name": "TokenService"
+      },
+      {
+        "name": "TokenClaims"
+      },
+      {
+        "name": "TokenError"
+      },
+      {
+        "name": "ExpiredTokenError"
+      },
+      {
+        "name": "token_service_new"
+      },
+      {
+        "name": "token_claims_new"
+      },
+      {
+        "name": "token_error_new"
+      },
+      {
+        "name": "generate_token"
+      },
+      {
+        "name": "validate_token"
+      },
+      {
+        "name": "refresh_token"
+      },
+      {
+        "name": "revoke_token"
+      }
+    ]
+  },
+  "09_ambiguous_symbol": {
+    "description": "Where is 'validate' defined?",
+    "query": "search validate",
+    "expected": [
+      {
+        "name": "validate",
+        "file": "validators/user_validator.c"
+      },
+      {
+        "name": "validate",
+        "file": "validators/payment_validator.c"
+      },
+      {
+        "name": "validate",
+        "file": "models/user.c"
+      },
+      {
+        "name": "validate",
+        "file": "models/payment.c"
+      }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "Who calls get_logger? (C's highest-fan-out symbol — no exception hierarchy to query instead)",
+    "query": "refs get_logger",
+    "expected": [
+      {
+        "name": "auth_middleware_handle",
+        "file": "middleware/auth_middleware.c"
+      },
+      {
+        "name": "execute_query",
+        "file": "database/database_connection.c"
+      },
+      {
+        "name": "get_connection",
+        "file": "database/connection_pool.c"
+      },
+      {
+        "name": "login",
+        "file": "auth/auth_service.c"
+      },
+      {
+        "name": "generate_token",
+        "file": "auth/token_service.c"
+      },
+      {
+        "name": "handle_login",
+        "file": "api/v1/auth_controller.c"
+      },
+      {
+        "name": "user_validator_validate",
+        "file": "validators/user_validator.c"
+      },
+      {
+        "name": "require_initialized",
+        "file": "services/base_service.c"
+      }
+    ]
+  },
+  "11_deep_call_chain": {
+    "description": "Deep call chain from handle_login (6 hops)",
+    "query_sequence": [
+      "callees handle_login",
+      "callees authenticate",
+      "callees login",
+      "callees generate_token",
+      "callees execute_query",
+      "callees get_connection"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handle_login",
+        "callee": "user_validator_validate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "login_handler"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "require_initialized"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "login"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "insert"
+      },
+      {
+        "caller": "login",
+        "callee": "generate_token"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "execute_query"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "get_connection"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "release_connection"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "logger_debug"
+      }
+    ]
+  },
+  "12_deep_impact": {
+    "description": "Deep impact of DatabaseConnection (depth 5)",
+    "query": "impact DatabaseConnection --depth 5",
+    "expected_refs": [
+      "database/database_connection.c",
+      "auth/token_service.h",
+      "auth/auth_service.h",
+      "middleware/auth_middleware.h",
+      "services/session_service.h",
+      "services/user_service.h",
+      "services/authentication_service.h",
+      "routes/auth_routes.c",
+      "TokenService",
+      "AuthenticationService",
+      "handle_login"
+    ]
+  },
+  "13_rag_search": {
+    "description": "Semantic search: validate token",
+    "query": "rag search \"validate token\"",
+    "expected": [
+      {
+        "name": "validate_token"
+      },
+      {
+        "name": "refresh_token"
+      },
+      {
+        "name": "get_current_user"
+      },
+      {
+        "name": "auth_middleware_handle"
+      },
+      {
+        "name": "revoke_token"
+      }
+    ]
+  }
+}

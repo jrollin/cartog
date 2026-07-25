@@ -4,10 +4,12 @@
 //! Each language implements the [`Extractor`] trait with compiled S-expression
 //! queries for declarative AST pattern matching.
 //!
-//! Supported languages: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, C#, PHP, Dart, Swift, Kotlin, Vue, Svelte, Astro, Markdown.
+//! Supported languages: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, C, C++, C#, PHP, Dart, Swift, Kotlin, Vue, Svelte, Astro, Markdown.
 #![doc = ""]
 #![doc = include_str!("../README.md")]
 
+pub mod c;
+pub mod cpp;
 pub mod csharp;
 pub mod dart;
 pub mod go;
@@ -107,6 +109,8 @@ pub fn get_extractor(language: &str) -> Option<Box<dyn Extractor>> {
         "go" => Some(Box::new(go::GoExtractor::new())),
         "ruby" => Some(Box::new(ruby::RubyExtractor::new())),
         "java" => Some(Box::new(java::JavaExtractor::new())),
+        "c" => Some(Box::new(c::CExtractor::new())),
+        "cpp" => Some(Box::new(cpp::CppExtractor::new())),
         "csharp" => Some(Box::new(csharp::CSharpExtractor::new())),
         "php" => Some(Box::new(php::PhpExtractor::new())),
         "dart" => Some(Box::new(dart::DartExtractor::new())),
@@ -134,6 +138,8 @@ mod tests {
         assert!(get_extractor("go").is_some());
         assert!(get_extractor("ruby").is_some());
         assert!(get_extractor("java").is_some());
+        assert!(get_extractor("c").is_some());
+        assert!(get_extractor("cpp").is_some());
         assert!(get_extractor("csharp").is_some());
         assert!(get_extractor("php").is_some());
         assert!(get_extractor("dart").is_some());
@@ -146,7 +152,7 @@ mod tests {
         assert!(get_extractor("unknown").is_none());
     }
 
-    const ALL_LANGS: [&str; 17] = [
+    const ALL_LANGS: [&str; 19] = [
         "python",
         "typescript",
         "tsx",
@@ -155,6 +161,8 @@ mod tests {
         "go",
         "ruby",
         "java",
+        "c",
+        "cpp",
         "csharp",
         "php",
         "dart",

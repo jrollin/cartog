@@ -183,12 +183,13 @@ pinned image instead, so the LSP numbers reproduce across machines:
 Building the images and running the benchmark are two independent steps:
 
 ```bash
-make lsp-images                 # 1. build the 10 cartog-lsp-<lang>:stable images
+make lsp-images                 # 1. build the 16 cartog-lsp-<lang>:stable images
 make bench-resolution-docker    # 2. run --lsp --docker-lsp (errors if an image is missing)
 ```
 
 `benchmarks/lsp-images/<lang>.Dockerfile` holds one pinned recipe per language
-(rust, python, typescript, go, ruby, java, php, dart, swift, kotlin). Under
+(rust, python, typescript, go, ruby, java, c, cpp, csharp, php, dart, swift,
+kotlin, vue, svelte, astro). Under
 `--docker-lsp` the script generates a `[lsp.<lang>]` Docker override (`docker run
 -i -v ${ROOT}:${ROOT} -w ${ROOT} <image>`) and records `lsp_source=docker:<image>`.
 It is **strict**: a missing `cartog-lsp-<lang>:stable` image is an explicit error
@@ -201,9 +202,9 @@ works (path mirroring is mandatory). Per-image caveats (gopls deps,
 jdtls/sourcekit startup time, ruby-lsp bundle compose) are noted in each
 Dockerfile header.
 
-All 10 containerized servers resolve **identically to host** (same `lsp`-tier
+All 16 containerized servers resolve **identically to host** (same `lsp`-tier
 edge count). `python` and `typescript` use the upstream `lspcontainers` images
-(pinned by digest); the other 8 self-build on a pinned official base. cartog
+(pinned by digest); the other 14 self-build on a pinned official base. cartog
 sends `processId: null` to a command-override server because its host PID is
 absent from a container's PID namespace — without that, pyright and
 typescript-language-server honor the LSP parent-liveness check and exit at
