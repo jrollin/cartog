@@ -28,11 +28,13 @@ should_skip_fixture() {
     if [ -z "${FIXTURE_FILTER:-}" ]; then
         return 1
     fi
-    # Match by the `_<tag>` suffix in the fixture directory name. Keep this list
-    # in sync with the languages that have fixtures under benchmarks/fixtures/.
+    # Match the `_<tag>` suffix EXACTLY (anchored, no trailing glob): `c` is a
+    # prefix of `cpp`/`csharp`, so a substring match would make `--fixture c`
+    # also select webapp_cpp and webapp_csharp. Keep this list in sync with the
+    # languages that have fixtures under benchmarks/fixtures/.
     case "$FIXTURE_FILTER" in
-        py|ts|go|rs|rb|java|csharp|php|dart|swift|kt|vue|svelte|astro)
-            [[ "$fixture_name" != *"_${FIXTURE_FILTER}"* ]] && return 0 || return 1 ;;
+        py|ts|go|rs|rb|java|c|cpp|csharp|php|dart|swift|kt|vue|svelte|astro)
+            [[ "$fixture_name" != *"_${FIXTURE_FILTER}" ]] && return 0 || return 1 ;;
         *) return 1 ;;
     esac
 }

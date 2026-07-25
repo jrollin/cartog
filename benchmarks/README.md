@@ -183,12 +183,13 @@ pinned image instead, so the LSP numbers reproduce across machines:
 Building the images and running the benchmark are two independent steps:
 
 ```bash
-make lsp-images                 # 1. build the 10 cartog-lsp-<lang>:stable images
+make lsp-images                 # 1. build the 16 cartog-lsp-<lang>:stable images
 make bench-resolution-docker    # 2. run --lsp --docker-lsp (errors if an image is missing)
 ```
 
 `benchmarks/lsp-images/<lang>.Dockerfile` holds one pinned recipe per language
-(rust, python, typescript, go, ruby, java, php, dart, swift, kotlin). Under
+(rust, python, typescript, go, ruby, java, c, cpp, csharp, php, dart, swift,
+kotlin, vue, svelte, astro). Under
 `--docker-lsp` the script generates a `[lsp.<lang>]` Docker override (`docker run
 -i -v ${ROOT}:${ROOT} -w ${ROOT} <image>`) and records `lsp_source=docker:<image>`.
 It is **strict**: a missing `cartog-lsp-<lang>:stable` image is an explicit error

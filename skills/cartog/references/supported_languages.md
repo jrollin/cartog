@@ -1,6 +1,6 @@
 # Supported Languages
 
-## Currently Supported (16 languages + 4 frameworks)
+## Currently Supported (18 languages + 4 frameworks)
 
 ### Python (.py, .pyi)
 - Functions, classes, methods
@@ -155,6 +155,37 @@
 - KDoc comments (`/** */` blocks)
 - Visibility: `private` → private; `internal`/`protected`/`public` (default) → public
 - Annotations (`@Deprecated`, `@Override`) are not emitted as type references
+
+### C (.c)
+- Functions (definitions only), structs, unions (as classes), enums + enumerators, typedefs (as type aliases)
+- Struct/union fields, including function-pointer members (the C vtable idiom)
+- Local includes (`#include "path.h"`) → import symbol + `Imports` edge; `<system>` includes skipped as stdlib noise
+- Function calls: bare `f()`, `s.fp()` / `p->fp()` (function-pointer members), `(*fp)()`
+- Type references from parameter and return types (keyword/stdlib types filtered out)
+- Doc comments (`///` lines and `/** */` blocks)
+- Visibility: `static` → private (file-local linkage); otherwise public
+- **Bodiless prototypes emit no symbol** — only the definition does, so one function is one symbol and a header/impl pair stays unambiguous (two same-kind candidates would make every cross-file call ambiguous).
+  - **What to expect:** `outline` on a `.h` lists its types, struct fields, and includes, but **not** its function prototypes — those rows live in the `.c` that defines them. Query the definition site for functions; use the header for the type surface. `search`/`refs`/`callees` are unaffected: they resolve to the single definition symbol.
+- No inheritance (C has none); the `BaseService`-style idiom is struct embedding + a function-pointer vtable
+- `#ifdef`-guarded code is extracted as written — no preprocessor evaluation, so a symbol behind a false branch still appears
+
+### C++ (.cpp, .cc, .cxx, .hpp, .hh, .hxx, .h)
+- Functions, classes, structs, unions (as classes), enums (incl. `enum class`) + enumerators
+- Methods (inline in-class definitions and out-of-line `int A::m() {}` → attached to class `A`), constructors, destructors (`~A`), operators
+- `typedef` and `using X = Y` (as type aliases), data members, nested types
+- Namespaces fold into the qualified-name prefix (no symbol of their own), so `namespace app { class Foo {}; }` yields `app.Foo`
+- Templates: `template<...>` wrappers are unwrapped, so the class/function inside is extracted
+- Local includes (`#include "path.h"`) → import symbol + `Imports` edge; `<system>` includes skipped as stdlib noise
+- Function calls: bare `f()`, `obj.m()` / `ptr->m()`, `Klass::m()`, `(*fp)()`
+- Inheritance (`class D : public Base` → `Inherits`, one edge per base, multiple inheritance included)
+- Type references from parameter and return types (templates/qualified names unwrapped; keyword and `std` scalar types filtered out)
+- Doc comments (`///` lines and `/** */` blocks)
+- Visibility: tracked through `public:`/`protected:`/`private:` access specifiers; `class` members default to private, `struct`/`union` to public; a `static` free function is private
+- **Bodiless prototypes and in-class method declarations emit no symbol** — only definitions do, so a header/impl pair yields one symbol per function
+  - **What to expect:** `outline` on a `.h`/`.hpp` lists its classes, data members, nested types, and includes, but **not** the method declarations inside a class body — those rows live in the `.cpp` that defines them (an out-of-line `int A::m() {}` is a `Method` attached to `A`, so `hierarchy A` and `refs m` still work). An inline in-class definition (`int m() { ... }`) DOES yield a symbol in the header, since it is a definition.
+- `.h` is parsed with the C++ grammar: it is a superset that parses C headers identically, while the C grammar silently misparses C++ (no `has_error`, so the damage would be invisible)
+  - **Objective-C headers are also `.h`.** Objective-C is not supported, so an ObjC header (`@interface` / `@property`) yields **zero symbols** rather than wrong ones — it degrades quietly, is still counted as an indexed file, and never emits garbage. `.m`/`.mm` are not indexed at all. Extension mapping is a pure extension match by design; cartog does not sniff file content to disambiguate `.h`.
+- `#ifdef`-guarded code is extracted as written — no preprocessor evaluation
 
 ### Vue (.vue)
 - Symbols + edges from every `<script>` / `<script setup>` block (one file may have several)

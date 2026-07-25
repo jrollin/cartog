@@ -1,0 +1,308 @@
+{
+  "01_find_callers": {
+    "description": "Who calls validate_token?",
+    "query": "refs validate_token --kind calls",
+    "expected": [
+      {
+        "source": "authenticate",
+        "file": "middleware/auth_middleware.cpp"
+      },
+      {
+        "source": "get_current_user",
+        "file": "auth/auth_service.cpp"
+      },
+      {
+        "source": "refresh_token",
+        "file": "auth/token_service.cpp"
+      }
+    ]
+  },
+  "02_file_structure": {
+    "description": "What's in auth/token_service.cpp?",
+    "query": "outline auth/token_service.cpp",
+    "expected": [
+      {
+        "name": "TokenService",
+        "kind": "method"
+      },
+      {
+        "name": "generate_token",
+        "kind": "method"
+      },
+      {
+        "name": "validate_token",
+        "kind": "method"
+      },
+      {
+        "name": "refresh_token",
+        "kind": "method"
+      },
+      {
+        "name": "revoke_token",
+        "kind": "method"
+      },
+      {
+        "name": "token_expiry",
+        "kind": "method"
+      }
+    ]
+  },
+  "03_refactor_impact": {
+    "description": "Impact of changing AuthService (C++ transitive references through the base/member graph)",
+    "query": "impact AuthService --depth 3",
+    "expected_refs": [
+      "AdminService",
+      "AuthenticationService",
+      "auth/auth_service.h",
+      "auth/auth_service.cpp",
+      "services/authentication_service.h"
+    ]
+  },
+  "04_class_hierarchy": {
+    "description": "Hierarchy of BaseService (C++ public base clause)",
+    "query": "hierarchy BaseService",
+    "expected": [
+      {
+        "child": "AdminService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "SessionService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "AuthenticationService",
+        "parent": "BaseService"
+      },
+      {
+        "child": "UserService",
+        "parent": "BaseService"
+      }
+    ]
+  },
+  "05_trace_call_chain": {
+    "description": "Trace handle_login call chain",
+    "query_sequence": [
+      "callees handle_login",
+      "callees login",
+      "callees generate_token"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handle_login",
+        "callee": "validator_.validate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "routes_.login_handler"
+      },
+      {
+        "caller": "login",
+        "callee": "token_service_.generate_token"
+      },
+      {
+        "caller": "login",
+        "callee": "user.validate"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "db_.execute_query"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "log_.debug"
+      }
+    ]
+  },
+  "06_file_deps": {
+    "description": "What does routes/auth_routes.cpp include?",
+    "query": "deps routes/auth_routes.cpp",
+    "expected": [
+      "auth_routes.h",
+      "database_connection.h",
+      "authentication_service.h",
+      "logger.h"
+    ]
+  },
+  "07_type_references": {
+    "description": "Type references to TokenError (C++ base clause; only ExpiredTokenError derives from it)",
+    "query": "refs TokenError",
+    "expected": [
+      {
+        "source": "ExpiredTokenError",
+        "file": "errors/exceptions.h",
+        "kind": "inherits"
+      }
+    ]
+  },
+  "08_symbol_search": {
+    "description": "Find all Token-related symbols",
+    "query": "search Token",
+    "expected": [
+      {
+        "name": "TokenService"
+      },
+      {
+        "name": "TokenClaims"
+      },
+      {
+        "name": "TokenError"
+      },
+      {
+        "name": "ExpiredTokenError"
+      },
+      {
+        "name": "generate_token"
+      },
+      {
+        "name": "validate_token"
+      },
+      {
+        "name": "refresh_token"
+      },
+      {
+        "name": "revoke_token"
+      },
+      {
+        "name": "token_expiry"
+      },
+      {
+        "name": "extract_token"
+      }
+    ]
+  },
+  "09_ambiguous_symbol": {
+    "description": "Where is 'validate' defined?",
+    "query": "search validate",
+    "expected": [
+      {
+        "name": "validate",
+        "file": "validators/user_validator.cpp"
+      },
+      {
+        "name": "validate",
+        "file": "validators/payment_validator.cpp"
+      },
+      {
+        "name": "validate",
+        "file": "models/user.cpp"
+      },
+      {
+        "name": "validate",
+        "file": "models/payment.cpp"
+      }
+    ]
+  },
+  "10_high_fanout": {
+    "description": "What inherits from AppException?",
+    "query": "refs AppException",
+    "expected": [
+      {
+        "name": "ValidationError",
+        "file": "errors/exceptions.h"
+      },
+      {
+        "name": "AuthenticationError",
+        "file": "errors/exceptions.h"
+      },
+      {
+        "name": "TokenError",
+        "file": "errors/exceptions.h"
+      }
+    ]
+  },
+  "11_deep_call_chain": {
+    "description": "Deep call chain from handle_login (6 hops)",
+    "query_sequence": [
+      "callees handle_login",
+      "callees authenticate",
+      "callees login",
+      "callees generate_token",
+      "callees execute_query",
+      "callees get_connection"
+    ],
+    "expected_chain": [
+      {
+        "caller": "handle_login",
+        "callee": "validator_.validate"
+      },
+      {
+        "caller": "handle_login",
+        "callee": "routes_.login_handler"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "token_service_.validate_token"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "require_initialized"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "auth_service_.login"
+      },
+      {
+        "caller": "authenticate",
+        "callee": "db_.insert"
+      },
+      {
+        "caller": "login",
+        "callee": "token_service_.generate_token"
+      },
+      {
+        "caller": "generate_token",
+        "callee": "db_.execute_query"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "pool_.get_connection"
+      },
+      {
+        "caller": "execute_query",
+        "callee": "pool_.release_connection"
+      },
+      {
+        "caller": "get_connection",
+        "callee": "handle.mark_used"
+      }
+    ]
+  },
+  "12_deep_impact": {
+    "description": "Deep impact of DatabaseConnection (depth 5)",
+    "query": "impact DatabaseConnection --depth 5",
+    "expected_refs": [
+      "database/database_connection.h",
+      "auth/token_service.h",
+      "auth/auth_service.h",
+      "middleware/auth_middleware.h",
+      "services/session_service.h",
+      "services/user_service.h",
+      "services/authentication_service.h",
+      "TokenService",
+      "AuthenticationService",
+      "AdminService"
+    ]
+  },
+  "13_rag_search": {
+    "description": "Semantic search: validate token",
+    "query": "rag search \"validate token\"",
+    "expected": [
+      {
+        "name": "validate_token"
+      },
+      {
+        "name": "TokenService"
+      },
+      {
+        "name": "authenticate"
+      },
+      {
+        "name": "refresh_token"
+      },
+      {
+        "name": "get_current_user"
+      }
+    ]
+  }
+}

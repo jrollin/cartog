@@ -36,7 +36,7 @@ Named captures (`@callee`, `@exception_type`, etc.) identify the matched nodes f
 
 ### Supported languages
 
-**Code**: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, C#, PHP, Dart, Swift, Kotlin.
+**Code**: Python, TypeScript, TSX, JavaScript, Rust, Go, Ruby, Java, C, C++, C#, PHP, Dart, Swift, Kotlin.
 
 **Frontend SFCs**: Vue (`.vue`), Svelte (`.svelte`), Astro (`.astro`) — the `<script>` / frontmatter block is sliced out, parsed by the JS/TS extractor, and its byte/line offsets are remapped back to the full file.
 

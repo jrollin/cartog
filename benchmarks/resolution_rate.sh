@@ -41,7 +41,7 @@ Usage:
   resolution_rate.sh                 # heuristic, all langs, save snapshot
   resolution_rate.sh --lsp           # add LSP pass (uses host-installed servers)
   resolution_rate.sh --lsp --docker-lsp  # LSP via Docker images (build them first; no host fallback)
-  resolution_rate.sh --fixture rs    # one language (py ts rs go rb java php dart swift kt vue svelte astro)
+  resolution_rate.sh --fixture rs    # one language (py ts rs go rb java c cpp csharp php dart swift kt vue svelte astro)
   resolution_rate.sh --baseline      # diff vs last saved snapshot (does not overwrite it)
   resolution_rate.sh --no-save       # don't write the snapshot
   CARTOG=target/debug/cartog resolution_rate.sh   # pick a binary
@@ -74,12 +74,13 @@ export FIXTURE_FILTER=""
 # Language tags. Keep in sync with benchmarks/fixtures/webapp_*.
 # macOS ships bash 3.2 (no associative arrays), so lookups use case like the
 # rest of the suite (see benchmarks/lib/common.sh).
-LANGS=(py ts rs go rb java php dart swift kt vue svelte astro)
+LANGS=(py ts rs go rb java c cpp csharp php dart swift kt vue svelte astro)
 
 lang_name() {
   case "$1" in
     py) echo Python ;; ts) echo TypeScript/JS ;; rs) echo Rust ;;
     go) echo Go ;; rb) echo Ruby ;; java) echo Java ;; php) echo PHP ;;
+    c) echo C ;; cpp) echo C++ ;; csharp) echo 'C#' ;;
     dart) echo Dart ;; swift) echo Swift ;; kt) echo Kotlin ;;
     vue) echo Vue ;; svelte) echo Svelte ;; astro) echo Astro ;;
     *) echo "$1" ;;
@@ -92,6 +93,7 @@ lsp_bin() {
     py) echo pyright-langserver ;; ts) echo typescript-language-server ;;
     rs) echo rust-analyzer ;; go) echo gopls ;; rb) echo ruby-lsp ;;
     java) echo jdtls ;; php) echo intelephense ;; dart) echo dart ;;
+    c) echo clangd ;; cpp) echo clangd ;; csharp) echo csharp-ls ;;
     swift) echo sourcekit-lsp ;; kt) echo kotlin-language-server ;;
     vue) echo vue-language-server ;; svelte) echo svelteserver ;;
     astro) echo astro-ls ;;

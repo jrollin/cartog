@@ -68,6 +68,10 @@ run_scenario "webapp_kt" "BaseService" "class.*BaseService\|class.*:.*BaseServic
 # ground-truth children set legitimately differs in shape from Java's.
 run_scenario "webapp_csharp" "BaseService" "class.*BaseService\|class.*:.*BaseService\|class.*:.*AuthService"
 
+# C++: `class Derived : public BaseService` is real single/multiple inheritance,
+# so base_class_clause -> Inherits resolves like Java's extends.
+run_scenario "webapp_cpp" "BaseService" "class.*BaseService\|class.*:.*public BaseService\|class.*:.*BaseService"
+
 # PHP has `extends BaseService` subclasses in source, but cartog only partially
 # resolves PHP inheritance: the error tree (e.g. TokenError -> App\AppError)
 # resolves while service-class extends do not, so this row currently
@@ -81,3 +85,4 @@ run_scenario "webapp_php" "BaseService" "class.*BaseService\|class.*extends.*Bas
 # "Known cartog gaps" in benchmarks/README.md.
 echo -e "  ${YELLOW}[webapp_rs] skipped: Rust uses traits, not class inheritance${NC}" >&2
 echo -e "  ${YELLOW}[webapp_go] skipped: Go uses struct embedding, not class inheritance${NC}" >&2
+echo -e "  ${YELLOW}[webapp_c] skipped: C has no inheritance (struct embedding + function-pointer vtable)${NC}" >&2

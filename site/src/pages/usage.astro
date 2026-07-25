@@ -861,7 +861,7 @@ cartog index . --no-lsp     <span class="comment"># heuristic-only (~1-4s)</span
   1 files in unsupported languages not indexed (1 .toml)</pre>
         <p>Incremental by default — skips unchanged files (git + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. The LSP pass skips edges already classified as unresolvable (typo, dyn dispatch, macro) or external (stdlib, deps, node_modules); both auto-retry when a matching symbol is added in-tree. <code>--force</code> resets those markers for a clean retry.</p>
         <p>When a <code>cartog serve</code> for the same database is running (e.g. an active agent session's MCP server), <code>cartog index</code> skips its own LSP pass — avoiding the language-server cold start — and defers resolution to the peer's warm servers, which catch up on the server's next <code>cartog_index</code> call. A <code>note:</code> on stderr names the peer (<code>lsp_deferred_to_peer: true</code> under <code>--json</code>); a first-ever index never defers, and <code>--force</code> always runs LSP locally.</p>
-        <p>Files in unsupported languages are reported, not silently dropped: on a mixed repo the summary adds a line like <code>12 files in unsupported languages not indexed (8 .dart, 4 .swift)</code> (also as <code>files_unsupported</code> / <code>unsupported_by_ext</code> under <code>--json</code>).</p>
+        <p>Files in unsupported languages are reported, not silently dropped: on a mixed repo the summary adds a line like <code>12 files in unsupported languages not indexed (8 .scala, 4 .ex)</code> (also as <code>files_unsupported</code> / <code>unsupported_by_ext</code> under <code>--json</code>).</p>
 
         <h2 id="cmd-search"><code>cartog search &lt;query&gt;</code></h2>
         <p>Find symbols by partial name. Results ranked: exact match → prefix → substring.</p>
@@ -1273,6 +1273,8 @@ cartog --tokens 200 outline src/db.rs</pre>
             <tr><td>Go</td><td>.go</td><td>functions, structs, interfaces, imports</td><td>calls, imports, type refs</td></tr>
             <tr><td>Ruby</td><td>.rb</td><td>functions, classes, modules, imports</td><td>calls, imports, inherits, raises, rescue types</td></tr>
             <tr><td>Java</td><td>.java</td><td>classes, interfaces, enums, methods, imports</td><td>calls, imports, inherits, raises, type refs, new</td></tr>
+            <tr><td>C</td><td>.c</td><td>functions, structs, unions, enums, typedefs, struct fields, includes</td><td>calls, imports, type refs</td></tr>
+            <tr><td>C++</td><td>.cpp, .cc, .cxx, .hpp, .hh, .hxx, .h</td><td>functions, classes, structs, unions, enums, methods, typedefs/aliases, fields, includes</td><td>calls, imports, inherits, type refs</td></tr>
             <tr><td>C#</td><td>.cs</td><td>classes, structs, records, interfaces, enums, delegates, methods, properties, imports</td><td>calls, imports, inherits, implements, type refs, new</td></tr>
             <tr><td>PHP</td><td>.php</td><td>classes, interfaces, traits, enums, methods, functions, imports</td><td>calls, imports, inherits, implements, references (traits, new)</td></tr>
             <tr><td>Dart</td><td>.dart</td><td>classes, mixins, extensions, enums, methods, functions, typedefs, imports</td><td>calls, imports, inherits, implements, type refs</td></tr>

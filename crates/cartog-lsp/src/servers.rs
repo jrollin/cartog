@@ -143,6 +143,23 @@ pub const SERVERS: &[ServerSpec] = &[
         language_id: "csharp",
         install_hint: "dotnet tool install --global csharp-ls (needs .NET SDK)",
     },
+    // clangd serves both C and C++; it needs a compile database
+    // (compile_commands.json or compile_flags.txt) at the project root to
+    // resolve includes — without one it falls back to a bare-flags guess.
+    ServerSpec {
+        language: "c",
+        binary: "clangd",
+        args: &[],
+        language_id: "c",
+        install_hint: "apt install clangd / brew install llvm (needs a compile database)",
+    },
+    ServerSpec {
+        language: "cpp",
+        binary: "clangd",
+        args: &[],
+        language_id: "cpp",
+        install_hint: "apt install clangd / brew install llvm (needs a compile database)",
+    },
 ];
 
 /// Find all server specs for a cartog language name, in priority order.
@@ -276,6 +293,22 @@ mod tests {
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].binary, "csharp-ls");
         assert_eq!(specs[0].language_id, "csharp");
+    }
+
+    #[test]
+    fn test_find_servers_c() {
+        let specs = find_servers("c");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].binary, "clangd");
+        assert_eq!(specs[0].language_id, "c");
+    }
+
+    #[test]
+    fn test_find_servers_cpp() {
+        let specs = find_servers("cpp");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].binary, "clangd");
+        assert_eq!(specs[0].language_id, "cpp");
     }
 
     #[test]

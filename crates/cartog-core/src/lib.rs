@@ -423,6 +423,10 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
         "go" => Some("go"),
         "rb" => Some("ruby"),
         "java" => Some("java"),
+        "c" => Some("c"),
+        // The C++ grammar is a superset that parses C headers identically, while
+        // the C grammar silently MISparses C++ (no has_error) — so `.h` goes to C++.
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" | "h" => Some("cpp"),
         "cs" => Some("csharp"),
         "php" => Some("php"),
         "dart" => Some("dart"),
@@ -708,6 +712,15 @@ mod tests {
         assert_eq!(detect_language(Path::new("Makefile")), None);
         assert_eq!(detect_language(Path::new("Main.java")), Some("java"));
         assert_eq!(detect_language(Path::new("Program.cs")), Some("csharp"));
+        assert_eq!(detect_language(Path::new("main.c")), Some("c"));
+        assert_eq!(detect_language(Path::new("service.cpp")), Some("cpp"));
+        assert_eq!(detect_language(Path::new("service.cc")), Some("cpp"));
+        assert_eq!(detect_language(Path::new("service.cxx")), Some("cpp"));
+        assert_eq!(detect_language(Path::new("service.hpp")), Some("cpp"));
+        assert_eq!(detect_language(Path::new("service.hh")), Some("cpp"));
+        assert_eq!(detect_language(Path::new("service.hxx")), Some("cpp"));
+        // `.h` routes to the C++ extractor by design (superset grammar).
+        assert_eq!(detect_language(Path::new("service.h")), Some("cpp"));
         assert_eq!(detect_language(Path::new("Service.php")), Some("php"));
         assert_eq!(detect_language(Path::new("main.dart")), Some("dart"));
         assert_eq!(detect_language(Path::new("App.swift")), Some("swift"));

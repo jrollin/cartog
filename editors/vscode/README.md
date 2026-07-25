@@ -6,7 +6,7 @@ This extension registers [cartog](https://github.com/jrollin/cartog) as an MCP
 server with GitHub Copilot. Copilot's agent can then call cartog's 16 tools —
 symbol search, semantic search, references, call-path tracing, impact analysis,
 and more — across Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP,
-Dart, Swift, Kotlin, Vue, Svelte, Astro, and Markdown.
+C, C++, Dart, Swift, Kotlin, Vue, Svelte, Astro, and Markdown.
 
 ## What it does
 

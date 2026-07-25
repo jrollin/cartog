@@ -819,9 +819,9 @@ pub mod bench_support {
     /// `benchmarks/fixtures/webapp_<tag>` directory name. Each exercises a
     /// distinct tree-sitter grammar + extractor, which is where indexing cost
     /// actually varies by language.
-    pub const FIXTURE_LANGS: [&str; 14] = [
-        "py", "ts", "go", "rs", "rb", "java", "csharp", "php", "dart", "swift", "kt", "vue",
-        "svelte", "astro",
+    pub const FIXTURE_LANGS: [&str; 16] = [
+        "py", "ts", "go", "rs", "rb", "java", "c", "cpp", "csharp", "php", "dart", "swift", "kt",
+        "vue", "svelte", "astro",
     ];
 
     /// Absolute path to `benchmarks/fixtures`, relative to either bench crate.
