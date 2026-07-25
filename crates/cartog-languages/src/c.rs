@@ -238,20 +238,22 @@ fn extract_fields(
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
             "field_declaration" => {
-                // A nested struct/union arrives wrapped as this declaration's
+                // A nested struct/union/enum arrives wrapped as this declaration's
                 // `type`. Anonymous: its members belong to the parent record.
-                // Named: it is its own record symbol.
+                // Named: it is its own symbol. Either way the SAME declaration may
+                // also declare a field (`enum Mode { .. } m;`), so extract the type
+                // here and fall through to the declarator rather than skipping it.
                 if let Some(nested) = nested_record(child) {
-                    match nested.child_by_field_name("name") {
-                        Some(_) => extract_record(
-                            nested,
-                            source,
-                            file_path,
-                            ParentScope::nested(parent_id, parent_qname),
-                            symbols,
-                            edges,
-                        ),
-                        None => {
+                    let inner = ParentScope::nested(parent_id, parent_qname);
+                    match (nested.kind(), nested.child_by_field_name("name")) {
+                        ("enum_specifier", _) => {
+                            extract_enum(nested, source, file_path, inner, symbols)
+                        }
+                        (_, Some(_)) => {
+                            extract_record(nested, source, file_path, inner, symbols, edges)
+                        }
+                        (_, None) => {
+                            // Anonymous struct/union: its members belong to the parent.
                             if let Some(body) = nested.child_by_field_name("body") {
                                 extract_fields(
                                     body,
@@ -265,7 +267,6 @@ fn extract_fields(
                             }
                         }
                     }
-                    continue;
                 }
                 let Some(decl) = child.child_by_field_name("declarator") else {
                     continue;
@@ -316,8 +317,10 @@ fn extract_fields(
 /// actually defines a record (has a body), so `struct Foo f;` stays a data field.
 fn nested_record(node: Node) -> Option<Node> {
     let ty = node.child_by_field_name("type")?;
-    let defines_record = matches!(ty.kind(), "struct_specifier" | "union_specifier")
-        && ty.child_by_field_name("body").is_some();
+    let defines_record = matches!(
+        ty.kind(),
+        "struct_specifier" | "union_specifier" | "enum_specifier"
+    ) && ty.child_by_field_name("body").is_some();
     defines_record.then_some(ty)
 }
 
@@ -999,6 +1002,21 @@ mod tests {
 
     // A named nested struct is its own record; regression for nested types
     // being dropped because they arrive wrapped in a `field_declaration`.
+    // Regression: a nested enum in a record body was dropped — `nested_record`
+    // matched only struct/union, so neither the enum nor its enumerators landed.
+    #[test]
+    fn test_nested_enum_in_struct_is_extracted() {
+        let result = extract("struct S { enum Mode { FAST, SLOW } m; };");
+        let e = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "Mode" && s.kind == SymbolKind::Enum)
+            .unwrap();
+        assert!(e.id.ends_with("S.Mode"));
+        assert!(result.symbols.iter().any(|s| s.name == "FAST"));
+        assert!(result.symbols.iter().any(|s| s.name == "m"));
+    }
+
     #[test]
     fn test_named_nested_struct_is_its_own_record() {
         let result = extract("struct Outer { struct Inner { int v; }; };");

@@ -3,8 +3,16 @@
 # Build (from repo root):  docker build -t cartog-lsp-cpp:stable -f benchmarks/lsp-images/cpp.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml (ServerSpec args are empty; the bare launcher reads stdio):
 #   [lsp.cpp]
-#   command = ["docker", "run", "--rm", "-i",
+#   command = ["docker", "run", "--rm", "-i", "--user", "1000:1000",
 #              "-v", "${ROOT}:${ROOT}", "-w", "${ROOT}", "cartog-lsp-cpp:stable"]
+#
+# `--user <uid>:<gid>` (your own `id -u`/`id -g`) drops root and keeps the
+# bind-mounted repo readable. Verified byte-identical resolution to a root run.
+# It is passed at launch rather than baked in as `USER`, because a fixed uid in
+# the image cannot also match an arbitrary host uid on the bind mount — the same
+# reason the Makefile's `check_lang` uses `--user $(id -u):$(id -g)`. clangd
+# needs no write access to the tree (it creates no `.cache/clangd` here, as the
+# repo ships a `compile_flags.txt` and background indexing stays off).
 #
 # `-i` (never `-t`): clangd speaks LSP over stdio, so stdin must be attached but
 # no TTY is allocated. A command-override server is launched with

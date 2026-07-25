@@ -3,8 +3,16 @@
 # Build (from repo root):  docker build -t cartog-lsp-c:stable -f benchmarks/lsp-images/c.Dockerfile benchmarks/lsp-images
 # Use via .cartog.toml (ServerSpec args are empty; the bare launcher reads stdio):
 #   [lsp.c]
-#   command = ["docker", "run", "--rm", "-i",
+#   command = ["docker", "run", "--rm", "-i", "--user", "1000:1000",
 #              "-v", "${ROOT}:${ROOT}", "-w", "${ROOT}", "cartog-lsp-c:stable"]
+#
+# `--user <uid>:<gid>` (your own `id -u`/`id -g`) drops root and keeps the
+# bind-mounted repo readable. Verified byte-identical resolution to a root run.
+# It is passed at launch rather than baked in as `USER`, because a fixed uid in
+# the image cannot also match an arbitrary host uid on the bind mount — the same
+# reason the Makefile's `check_lang` uses `--user $(id -u):$(id -g)`. clangd
+# needs no write access to the tree (it creates no `.cache/clangd` here, as the
+# repo ships a `compile_flags.txt` and background indexing stays off).
 #
 # Same server binary as cpp.Dockerfile (clangd serves both languages); kept as a
 # separate image so each `ServerSpec` language has its own `cartog-lsp-<lang>:stable`

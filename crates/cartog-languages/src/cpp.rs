@@ -507,13 +507,22 @@ fn extract_field_declaration(
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
+    // A function-pointer DATA member (`int (*login)(Service*);`) also parses as a
+    // `function_declarator`, but its own declarator is a parenthesized pointer —
+    // it is a field, not a method declaration, so fall through and emit a
+    // Variable. (`.h` routes here, so C vtable structs depend on this.)
     if let Some(declarator) = find_function_declarator(node) {
-        // Method declaration: no symbol, but its parameter/return types are real
-        // references from the enclosing class.
-        if let Some(id) = scope.id {
-            collect_param_and_return_refs(node, declarator, source, file_path, id, edges);
+        let is_fn_pointer_field = declarator
+            .child_by_field_name("declarator")
+            .is_some_and(|d| d.kind() == "parenthesized_declarator");
+        if !is_fn_pointer_field {
+            // Method declaration: no symbol (D2), but its parameter/return types
+            // are real references from the enclosing class.
+            if let Some(id) = scope.id {
+                collect_param_and_return_refs(node, declarator, source, file_path, id, edges);
+            }
+            return;
         }
-        return;
     }
 
     let name_node = match node.child_by_field_name("declarator") {
@@ -1120,6 +1129,20 @@ mod tests {
         let sym = result.symbols.iter().find(|s| s.name == "m").unwrap();
         assert_eq!(sym.kind, SymbolKind::Method);
         assert!(sym.id.ends_with("A.m"));
+    }
+
+    // Regression: a function-pointer data member parses as a `function_declarator`
+    // and was skipped as if it were a method declaration. `.h` routes here, so C
+    // vtable structs in headers were losing every member.
+    #[test]
+    fn test_function_pointer_member_is_variable() {
+        let result = extract_as(
+            "struct Service { int (*login)(struct Service*, const char*); };",
+            "service.h",
+        );
+        let sym = result.symbols.iter().find(|s| s.name == "login").unwrap();
+        assert_eq!(sym.kind, SymbolKind::Variable);
+        assert!(sym.id.ends_with("Service.login"));
     }
 
     #[test]
