@@ -65,6 +65,9 @@ fn extract_node(
         "enum_specifier" => extract_enum(node, source, file_path, scope, symbols),
         "type_definition" => extract_typedef(node, source, file_path, scope, symbols, edges),
         "preproc_include" => extract_include(node, source, file_path, scope, symbols, edges),
+        "preproc_def" | "preproc_function_def" => {
+            extract_macro(node, source, file_path, scope, symbols);
+        }
         // A bodiless prototype (`declaration` + `function_declarator`) emits no
         // symbol (D2): one symbol per function keeps the resolver's UniqueGlobal
         // tier working, since its `disambiguate_two` returns None for two
@@ -394,7 +397,7 @@ fn extract_enum(
         symbols.push(
             Symbol::new(
                 node_text(mn, source),
-                SymbolKind::Variable,
+                SymbolKind::EnumMember,
                 file_path,
                 m_line,
                 m_line,
@@ -510,6 +513,46 @@ fn extract_include(
         file_path,
         line,
     ));
+}
+
+// ── Macros ──
+
+// Identical to `extract_macro` in cpp.rs — the two C-family extractors are
+// deliberately independent (one file per language), so fix bugs in both.
+/// `#define MAX 10` / `#define SQ(x) ((x)*(x))` → a Macro symbol. A function-like
+/// macro's parameter list becomes its signature; an object macro gets none.
+fn extract_macro(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    scope: ParentScope,
+    symbols: &mut Vec<Symbol>,
+) {
+    let Some(name_node) = node.child_by_field_name("name") else {
+        return;
+    };
+    let name = node_text(name_node, source).to_string();
+    if name.is_empty() {
+        return;
+    }
+
+    let line = node.start_position().row as u32 + 1;
+    let mut sym = Symbol::new(
+        name,
+        SymbolKind::Macro,
+        file_path,
+        line,
+        node.end_position().row as u32 + 1,
+        node.start_byte() as u32,
+        node.end_byte() as u32,
+        scope.qname,
+    )
+    .with_parent(scope.id)
+    .with_docstring(extract_doc_comment(node, source));
+    if let Some(params) = node.child_by_field_name("parameters") {
+        sym = sym.with_signature(Some(node_text(params, source).to_string()));
+    }
+    symbols.push(sym);
 }
 
 // ── Calls ──
@@ -1040,5 +1083,34 @@ mod tests {
     fn test_preprocessor_guarded_code_is_extracted() {
         let result = extract("#ifndef H\n#define H\nint guarded(void) { return 1; }\n#endif\n");
         assert!(result.symbols.iter().any(|s| s.name == "guarded"));
+    }
+
+    #[test]
+    fn test_object_macro_is_extracted() {
+        let result = extract("#define MAX 10\n");
+        let sym = result.symbols.iter().find(|s| s.name == "MAX").unwrap();
+        assert_eq!(sym.kind, SymbolKind::Macro);
+    }
+
+    #[test]
+    fn test_function_like_macro_is_extracted() {
+        let result = extract("#define SQ(x) ((x)*(x))\n");
+        let sym = result.symbols.iter().find(|s| s.name == "SQ").unwrap();
+        assert_eq!(sym.kind, SymbolKind::Macro);
+        assert_eq!(sym.signature.as_deref(), Some("(x)"));
+    }
+
+    #[test]
+    fn test_enumerator_is_enum_member() {
+        let result = extract("enum TokenError { EXPIRED, INVALID };");
+        let m = result.symbols.iter().find(|s| s.name == "EXPIRED").unwrap();
+        assert_eq!(m.kind, SymbolKind::EnumMember);
+    }
+
+    #[test]
+    fn test_struct_field_is_still_variable() {
+        let result = extract("struct Point { int x; };");
+        let sym = result.symbols.iter().find(|s| s.name == "x").unwrap();
+        assert_eq!(sym.kind, SymbolKind::Variable);
     }
 }

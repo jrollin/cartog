@@ -264,7 +264,7 @@ cartog search parse --limit 10               # cap results
 ```
 Returns symbols ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
 
-Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`, `document`, plus `all` (code + docs).
+Valid `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `enum-member`, `type-alias`, `trait`, `module`, `document`, `macro`, plus `all` (code + docs).
 
 ### RAG Search (hybrid keyword + semantic)
 ```bash

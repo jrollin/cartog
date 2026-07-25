@@ -431,7 +431,7 @@ fn extract_property(
     }
 }
 
-/// enum entries — one Variable per `enum_entry`.
+/// enum entries — one EnumMember per `enum_entry`.
 fn extract_enum_entry(
     node: Node,
     source: &str,
@@ -449,7 +449,7 @@ fn extract_enum_entry(
     symbols.push(
         Symbol::new(
             name,
-            SymbolKind::Variable,
+            SymbolKind::EnumMember,
             file_path,
             node.start_position().row as u32 + 1,
             node.end_position().row as u32 + 1,
@@ -1105,9 +1105,16 @@ mod tests {
         assert_eq!(sym(&r, "LogLevel").kind, SymbolKind::Enum);
         for entry in ["DEBUG", "INFO", "WARN"] {
             let e = sym(&r, entry);
-            assert_eq!(e.kind, SymbolKind::Variable);
+            assert_eq!(e.kind, SymbolKind::EnumMember);
             assert_eq!(e.parent_id.as_deref(), Some("test.kt:enum:LogLevel"));
         }
+    }
+
+    #[test]
+    fn class_property_stays_variable_kind() {
+        // Regression guard: enum-member re-kinding must not leak into properties.
+        let r = extract("class C { val name: String = \"\" }");
+        assert_eq!(sym(&r, "name").kind, SymbolKind::Variable);
     }
 
     #[test]

@@ -65,6 +65,7 @@ fn extract_node(
                 file_path,
                 parent_id,
                 parent_qname,
+                false,
                 symbols,
                 edges,
             );
@@ -125,6 +126,9 @@ fn extract_node(
         "type_item" => {
             extract_type_alias(node, source, file_path, parent_id, parent_qname, symbols);
         }
+        "macro_definition" => {
+            extract_macro_definition(node, source, file_path, parent_id, parent_qname, symbols);
+        }
         "attribute_item" | "inner_attribute_item" => {
             // Skip attributes, but process the next sibling
         }
@@ -146,12 +150,14 @@ fn extract_node(
 
 // ── Functions ──
 
+#[allow(clippy::too_many_arguments)]
 fn extract_function(
     node: Node,
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
     parent_qname: Option<&str>,
+    is_method: bool,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -160,7 +166,6 @@ fn extract_function(
         None => return,
     };
 
-    let is_method = parent_id.is_some();
     let kind = if is_method {
         SymbolKind::Method
     } else {
@@ -221,9 +226,10 @@ fn extract_struct(
     let visibility = rust_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
 
+    let sym_id = symbol_id(file_path, SymbolKind::Class, &name, parent_qname);
     symbols.push(
         Symbol::new(
-            name,
+            name.clone(),
             SymbolKind::Class,
             file_path,
             start_line,
@@ -235,6 +241,58 @@ fn extract_struct(
         .with_parent(parent_id)
         .with_visibility(visibility)
         .with_docstring(docstring),
+    );
+
+    let struct_qname = match parent_qname {
+        Some(pq) => format!("{pq}.{name}"),
+        None => name,
+    };
+
+    // Tuple-struct fields are positional (`field_declaration_list` absent) — no useful name to emit.
+    if let Some(body) = node.child_by_field_name("body") {
+        if body.kind() == "field_declaration_list" {
+            for field in body.named_children(&mut body.walk()) {
+                if field.kind() == "field_declaration" {
+                    extract_struct_field(field, source, file_path, &sym_id, &struct_qname, symbols);
+                }
+            }
+        }
+    }
+}
+
+fn extract_struct_field(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    parent_id: &str,
+    parent_qname: &str,
+    symbols: &mut Vec<Symbol>,
+) {
+    let name = match node.child_by_field_name("name") {
+        Some(n) => node_text(n, source).to_string(),
+        None => return,
+    };
+
+    let start_line = node.start_position().row as u32 + 1;
+    let visibility = rust_visibility(node, source);
+    let signature = node
+        .child_by_field_name("type")
+        .map(|t| node_text(t, source).to_string());
+
+    symbols.push(
+        Symbol::new(
+            name,
+            SymbolKind::Variable,
+            file_path,
+            start_line,
+            node.end_position().row as u32 + 1,
+            node.start_byte() as u32,
+            node.end_byte() as u32,
+            Some(parent_qname),
+        )
+        .with_parent(Some(parent_id))
+        .with_signature(signature)
+        .with_visibility(visibility),
     );
 }
 
@@ -257,9 +315,10 @@ fn extract_enum(
     let visibility = rust_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
 
+    let sym_id = symbol_id(file_path, SymbolKind::Enum, &name, parent_qname);
     symbols.push(
         Symbol::new(
-            name,
+            name.clone(),
             SymbolKind::Enum,
             file_path,
             start_line,
@@ -269,6 +328,53 @@ fn extract_enum(
             parent_qname,
         )
         .with_parent(parent_id)
+        .with_visibility(visibility)
+        .with_docstring(docstring),
+    );
+
+    let enum_qname = match parent_qname {
+        Some(pq) => format!("{pq}.{name}"),
+        None => name,
+    };
+
+    if let Some(body) = node.child_by_field_name("body") {
+        for variant in body.named_children(&mut body.walk()) {
+            if variant.kind() == "enum_variant" {
+                extract_enum_variant(variant, source, file_path, &sym_id, &enum_qname, symbols);
+            }
+        }
+    }
+}
+
+fn extract_enum_variant(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    parent_id: &str,
+    parent_qname: &str,
+    symbols: &mut Vec<Symbol>,
+) {
+    let name = match node.child_by_field_name("name") {
+        Some(n) => node_text(n, source).to_string(),
+        None => return,
+    };
+
+    let start_line = node.start_position().row as u32 + 1;
+    let visibility = rust_visibility(node, source);
+    let docstring = extract_doc_comment(node, source);
+
+    symbols.push(
+        Symbol::new(
+            name,
+            SymbolKind::EnumMember,
+            file_path,
+            start_line,
+            node.end_position().row as u32 + 1,
+            node.start_byte() as u32,
+            node.end_byte() as u32,
+            Some(parent_qname),
+        )
+        .with_parent(Some(parent_id))
         .with_visibility(visibility)
         .with_docstring(docstring),
     );
@@ -398,6 +504,7 @@ fn extract_impl(
                     file_path,
                     Some(&impl_parent_id),
                     Some(&impl_qname),
+                    true,
                     symbols,
                     edges,
                 );
@@ -646,6 +753,42 @@ fn extract_const(
     if let Some(value) = node.child_by_field_name("value") {
         walk_for_calls(value, source, file_path, &sym_id, edges);
     }
+}
+
+// ── Macro definitions ──
+
+fn extract_macro_definition(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    parent_id: Option<&str>,
+    parent_qname: Option<&str>,
+    symbols: &mut Vec<Symbol>,
+) {
+    let name = match node.child_by_field_name("name") {
+        Some(n) => node_text(n, source).to_string(),
+        None => return,
+    };
+
+    let start_line = node.start_position().row as u32 + 1;
+    let visibility = rust_visibility(node, source);
+    let docstring = extract_doc_comment(node, source);
+
+    symbols.push(
+        Symbol::new(
+            name,
+            SymbolKind::Macro,
+            file_path,
+            start_line,
+            node.end_position().row as u32 + 1,
+            node.start_byte() as u32,
+            node.end_byte() as u32,
+            parent_qname,
+        )
+        .with_parent(parent_id)
+        .with_visibility(visibility)
+        .with_docstring(docstring),
+    );
 }
 
 // ── Type aliases ──
@@ -1427,5 +1570,161 @@ fn connect(cfg: &crate::Config) -> io::Result<Connection> {
     fn test_syntax_error_partial_parse() {
         let result = extract("fn broken( { }");
         let _ = result.symbols.len();
+    }
+
+    #[test]
+    fn test_enum_variants() {
+        let result = extract(
+            r#"
+pub enum Shape {
+    Unit,
+    Circle(f64),
+    Rectangle { width: f64, height: f64 },
+}
+"#,
+        );
+
+        let e = result.symbols.iter().find(|s| s.name == "Shape").unwrap();
+        assert_eq!(e.kind, SymbolKind::Enum);
+
+        let variants: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::EnumMember)
+            .collect();
+        assert_eq!(variants.len(), 3);
+        for variant in &variants {
+            assert_eq!(variant.parent_id.as_deref(), Some(e.id.as_str()));
+        }
+
+        let names: Vec<&str> = variants.iter().map(|v| v.name.as_str()).collect();
+        assert!(names.contains(&"Unit"));
+        assert!(names.contains(&"Circle"));
+        assert!(names.contains(&"Rectangle"));
+
+        // Inner fields of a struct-like variant are not emitted as their own symbols.
+        assert!(!result.symbols.iter().any(|s| s.name == "width"));
+    }
+
+    #[test]
+    fn test_struct_named_fields() {
+        let result = extract(
+            r#"
+pub struct User {
+    pub name: String,
+    age: u32,
+}
+"#,
+        );
+
+        let user = result.symbols.iter().find(|s| s.name == "User").unwrap();
+        assert_eq!(user.kind, SymbolKind::Class);
+
+        let fields: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Variable)
+            .collect();
+        assert_eq!(fields.len(), 2);
+
+        let name_field = fields.iter().find(|f| f.name == "name").unwrap();
+        assert_eq!(name_field.parent_id.as_deref(), Some(user.id.as_str()));
+        assert_eq!(name_field.visibility, Visibility::Public);
+        assert_eq!(name_field.signature.as_deref(), Some("String"));
+
+        let age_field = fields.iter().find(|f| f.name == "age").unwrap();
+        assert_eq!(age_field.visibility, Visibility::Private);
+        assert_eq!(age_field.signature.as_deref(), Some("u32"));
+    }
+
+    #[test]
+    fn test_tuple_struct_has_no_field_symbols() {
+        let result = extract("pub struct Point(f32, f32);");
+
+        let point = result.symbols.iter().find(|s| s.name == "Point").unwrap();
+        assert_eq!(point.kind, SymbolKind::Class);
+
+        let fields: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Variable)
+            .collect();
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn test_macro_rules_definition() {
+        let result = extract(
+            r#"
+#[macro_export]
+macro_rules! foo {
+    () => {};
+}
+"#,
+        );
+
+        let mac = result.symbols.iter().find(|s| s.name == "foo").unwrap();
+        assert_eq!(mac.kind, SymbolKind::Macro);
+    }
+
+    #[test]
+    fn test_fn_inside_mod_is_function_not_method() {
+        let result = extract(
+            r#"
+mod tests {
+    fn helper() {}
+}
+"#,
+        );
+
+        let module = result.symbols.iter().find(|s| s.name == "tests").unwrap();
+        let helper = result.symbols.iter().find(|s| s.name == "helper").unwrap();
+        assert_eq!(helper.kind, SymbolKind::Function);
+        assert_eq!(helper.parent_id.as_deref(), Some(module.id.as_str()));
+    }
+
+    #[test]
+    fn test_fn_inside_impl_is_method() {
+        let result = extract(
+            r#"
+struct Foo;
+
+impl Foo {
+    fn bar() {}
+}
+"#,
+        );
+
+        let bar = result.symbols.iter().find(|s| s.name == "bar").unwrap();
+        assert_eq!(bar.kind, SymbolKind::Method);
+    }
+
+    #[test]
+    fn test_top_level_fn_is_function() {
+        let result = extract("fn standalone() {}");
+
+        let f = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "standalone")
+            .unwrap();
+        assert_eq!(f.kind, SymbolKind::Function);
+    }
+
+    #[test]
+    fn test_fn_inside_nested_mod_is_function() {
+        let result = extract(
+            r#"
+mod outer {
+    mod inner {
+        fn deep() {}
+    }
+}
+"#,
+        );
+
+        let deep = result.symbols.iter().find(|s| s.name == "deep").unwrap();
+        assert_eq!(deep.kind, SymbolKind::Function);
+        assert!(deep.parent_id.is_some());
     }
 }

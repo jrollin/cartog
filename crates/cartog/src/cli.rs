@@ -58,10 +58,12 @@ pub enum SymbolKindFilter {
     Import,
     Interface,
     Enum,
+    EnumMember,
     TypeAlias,
     Trait,
     Module,
     Document,
+    Macro,
     /// Include all symbol kinds (code + documents).
     All,
 }
@@ -76,10 +78,12 @@ impl From<SymbolKindFilter> for SymbolKind {
             SymbolKindFilter::Import => SymbolKind::Import,
             SymbolKindFilter::Interface => SymbolKind::Interface,
             SymbolKindFilter::Enum => SymbolKind::Enum,
+            SymbolKindFilter::EnumMember => SymbolKind::EnumMember,
             SymbolKindFilter::TypeAlias => SymbolKind::TypeAlias,
             SymbolKindFilter::Trait => SymbolKind::Trait,
             SymbolKindFilter::Module => SymbolKind::Module,
             SymbolKindFilter::Document => SymbolKind::Document,
+            SymbolKindFilter::Macro => SymbolKind::Macro,
             SymbolKindFilter::All => unreachable!("All is not a single SymbolKind"),
         }
     }
@@ -576,4 +580,39 @@ pub enum SelfCommand {
         #[arg(long)]
         dry_run: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::ValueEnum;
+
+    /// `SymbolKindFilter` mirrors `SymbolKind` by hand, so a variant added to core
+    /// compiles fine here while silently missing from `--kind`. Comparing wire
+    /// strings catches the drift.
+    #[test]
+    fn kind_filter_covers_every_core_symbol_kind() {
+        let exposed: std::collections::HashSet<String> = SymbolKindFilter::value_variants()
+            .iter()
+            .filter(|f| !matches!(f, SymbolKindFilter::All))
+            .map(|f| SymbolKind::from(*f).as_str().to_string())
+            .collect();
+
+        for kind in cartog_core::ALL_SYMBOL_KINDS {
+            assert!(
+                exposed.contains(kind.as_str()),
+                "SymbolKind::{kind:?} is missing from --kind (add it to SymbolKindFilter)"
+            );
+        }
+    }
+
+    /// `All` must stay filtered out before `From` runs, or the conversion panics.
+    #[test]
+    fn every_non_all_filter_converts_without_panicking() {
+        for f in SymbolKindFilter::value_variants() {
+            if !matches!(f, SymbolKindFilter::All) {
+                let _ = SymbolKind::from(*f);
+            }
+        }
+    }
 }

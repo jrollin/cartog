@@ -485,7 +485,16 @@ fn extract_declaration(
                         .find(|c| c.kind() == "identifier");
                     if let Some(id) = id {
                         let name = node_text(id, source).to_string();
-                        push_variable(id, source, file_path, parent, line, end_line, symbols);
+                        push_variable(
+                            id,
+                            source,
+                            file_path,
+                            parent,
+                            line,
+                            end_line,
+                            SymbolKind::Variable,
+                            symbols,
+                        );
                         let ctx = symbol_id(file_path, SymbolKind::Variable, &name, parent.qname);
                         walk_for_calls(spec, source, file_path, &ctx, edges);
                     }
@@ -525,6 +534,9 @@ fn decl_signature_name(node: Node, source: &str) -> Option<String> {
     None
 }
 
+/// `kind` is explicit because fields, top-level vars, and enum constants all land
+/// here but only the last is an [`SymbolKind::EnumMember`].
+#[allow(clippy::too_many_arguments)]
 fn push_variable(
     id_node: Node,
     source: &str,
@@ -532,6 +544,7 @@ fn push_variable(
     parent: ParentScope<'_>,
     line: u32,
     end_line: u32,
+    kind: SymbolKind,
     symbols: &mut Vec<Symbol>,
 ) {
     let name = node_text(id_node, source).to_string();
@@ -541,7 +554,7 @@ fn push_variable(
     let visibility = dart_visibility(&name);
     let mut sym = Symbol::new(
         name,
-        SymbolKind::Variable,
+        kind,
         file_path,
         line,
         end_line,
@@ -690,6 +703,7 @@ fn extract_enum(
                             ParentScope::nested(&sym_id, &qname),
                             child.start_position().row as u32 + 1,
                             child.end_position().row as u32 + 1,
+                            SymbolKind::EnumMember,
                             symbols,
                         );
                     }
@@ -879,7 +893,16 @@ fn extract_top_level_var(
                         .find(|c| c.kind() == "identifier");
                     if let Some(id) = id {
                         let name = node_text(id, source).to_string();
-                        push_variable(id, source, file_path, parent, line, end_line, symbols);
+                        push_variable(
+                            id,
+                            source,
+                            file_path,
+                            parent,
+                            line,
+                            end_line,
+                            SymbolKind::Variable,
+                            symbols,
+                        );
                         // Walk only this spec's initializer for Calls, so multi-
                         // declarator decls (`var a = f1(), b = f2();`) attribute
                         // each call to its own variable.
@@ -1040,6 +1063,10 @@ fn walk_for_nested_decls(
         }
     }
 }
+
+// ── Test-DSL blocks (package:test / flutter_test) ──
+
+/// Callee names that introduce a test block.
 
 // ── Type references ──
 
@@ -1375,12 +1402,38 @@ enum Color { red, green, blue }
         let consts: Vec<&str> = result
             .symbols
             .iter()
-            .filter(|s| s.kind == SymbolKind::Variable)
+            .filter(|s| s.kind == SymbolKind::EnumMember)
             .map(|s| s.name.as_str())
             .collect();
         assert!(consts.contains(&"red"));
         assert!(consts.contains(&"green"));
         assert!(consts.contains(&"blue"));
+    }
+
+    #[test]
+    fn test_enum_member_parented_to_enum() {
+        let result = extract("enum Color { red }");
+        let red = result.symbols.iter().find(|s| s.name == "red").unwrap();
+        assert_eq!(red.kind, SymbolKind::EnumMember);
+        assert!(red.parent_id.as_ref().unwrap().contains("Color"));
+    }
+
+    #[test]
+    fn test_class_field_and_top_level_var_stay_variable_kind() {
+        // Regression guard: enum-member re-kinding must not leak into the
+        // shared push_variable helper's other callers (fields, top-level vars).
+        let result = extract(
+            r#"
+class Dog {
+  final String name;
+}
+var counter = 0;
+"#,
+        );
+        let field = result.symbols.iter().find(|s| s.name == "name").unwrap();
+        assert_eq!(field.kind, SymbolKind::Variable);
+        let top_level = result.symbols.iter().find(|s| s.name == "counter").unwrap();
+        assert_eq!(top_level.kind, SymbolKind::Variable);
     }
 
     #[test]

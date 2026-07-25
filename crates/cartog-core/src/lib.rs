@@ -168,13 +168,60 @@ pub enum SymbolKind {
     Import,
     Interface,
     Enum,
+    /// A single member of an enum (Rust variant, C/C++ enumerator, Java/C# constant,
+    /// Kotlin/Swift/Dart case). Distinct from [`SymbolKind::Variable`] so an agent can
+    /// tell a closed-set member from a mutable binding.
+    EnumMember,
     TypeAlias,
     Trait,
     Module,
     Document,
+    /// A preprocessor or macro definition (C/C++ `#define`, Rust `macro_rules!`).
+    Macro,
 }
 
+/// Every [`SymbolKind`] variant. Kept complete by the wildcard-free match in
+/// `SymbolKind::is_listed`, so adding a variant fails to compile until it is listed.
+pub const ALL_SYMBOL_KINDS: [SymbolKind; 13] = [
+    SymbolKind::Function,
+    SymbolKind::Class,
+    SymbolKind::Method,
+    SymbolKind::Variable,
+    SymbolKind::Import,
+    SymbolKind::Interface,
+    SymbolKind::Enum,
+    SymbolKind::EnumMember,
+    SymbolKind::TypeAlias,
+    SymbolKind::Trait,
+    SymbolKind::Module,
+    SymbolKind::Document,
+    SymbolKind::Macro,
+];
+
 impl SymbolKind {
+    /// Compile-time completeness guard for [`ALL_SYMBOL_KINDS`]: the match has no
+    /// wildcard arm, so a new variant breaks the build until it is added to the list.
+    #[cfg(test)]
+    #[must_use]
+    fn is_listed(self) -> bool {
+        let listed = |want: SymbolKind| ALL_SYMBOL_KINDS.contains(&want);
+        match self {
+            Self::Function => listed(Self::Function),
+            Self::Class => listed(Self::Class),
+            Self::Method => listed(Self::Method),
+            Self::Variable => listed(Self::Variable),
+            Self::Import => listed(Self::Import),
+            Self::Interface => listed(Self::Interface),
+            Self::Enum => listed(Self::Enum),
+            Self::EnumMember => listed(Self::EnumMember),
+            Self::TypeAlias => listed(Self::TypeAlias),
+            Self::Trait => listed(Self::Trait),
+            Self::Module => listed(Self::Module),
+            Self::Document => listed(Self::Document),
+            Self::Macro => listed(Self::Macro),
+        }
+    }
+
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -185,10 +232,12 @@ impl SymbolKind {
             Self::Import => "import",
             Self::Interface => "interface",
             Self::Enum => "enum",
+            Self::EnumMember => "enum_member",
             Self::TypeAlias => "type_alias",
             Self::Trait => "trait",
             Self::Module => "module",
             Self::Document => "document",
+            Self::Macro => "macro",
         }
     }
 }
@@ -205,10 +254,12 @@ impl std::str::FromStr for SymbolKind {
             "import" => Ok(Self::Import),
             "interface" => Ok(Self::Interface),
             "enum" => Ok(Self::Enum),
+            "enum_member" => Ok(Self::EnumMember),
             "type_alias" => Ok(Self::TypeAlias),
             "trait" => Ok(Self::Trait),
             "module" => Ok(Self::Module),
             "document" => Ok(Self::Document),
+            "macro" => Ok(Self::Macro),
             _ => Err(anyhow::anyhow!("unknown symbol kind: '{s}'")),
         }
     }
@@ -577,40 +628,14 @@ mod tests {
 
     use proptest::prelude::*;
 
-    /// Every [`SymbolKind`] variant. The exhaustive (wildcard-free) match in
-    /// `kind_is_listed` makes the compiler reject this list going stale when a
-    /// variant is added.
-    const ALL_KINDS: [SymbolKind; 11] = [
-        SymbolKind::Function,
-        SymbolKind::Class,
-        SymbolKind::Method,
-        SymbolKind::Variable,
-        SymbolKind::Import,
-        SymbolKind::Interface,
-        SymbolKind::Enum,
-        SymbolKind::TypeAlias,
-        SymbolKind::Trait,
-        SymbolKind::Module,
-        SymbolKind::Document,
-    ];
+    /// Every [`SymbolKind`] variant, shared with the rest of the workspace.
+    const ALL_KINDS: [SymbolKind; 13] = ALL_SYMBOL_KINDS;
 
-    /// Compile-time guard: every variant must be present in [`ALL_KINDS`]. A new
-    /// variant added to the enum fails this non-wildcard match until listed.
-    #[allow(dead_code)]
-    fn kind_is_listed(k: SymbolKind) -> bool {
-        let present = |want| ALL_KINDS.contains(&want);
-        match k {
-            SymbolKind::Function => present(SymbolKind::Function),
-            SymbolKind::Class => present(SymbolKind::Class),
-            SymbolKind::Method => present(SymbolKind::Method),
-            SymbolKind::Variable => present(SymbolKind::Variable),
-            SymbolKind::Import => present(SymbolKind::Import),
-            SymbolKind::Interface => present(SymbolKind::Interface),
-            SymbolKind::Enum => present(SymbolKind::Enum),
-            SymbolKind::TypeAlias => present(SymbolKind::TypeAlias),
-            SymbolKind::Trait => present(SymbolKind::Trait),
-            SymbolKind::Module => present(SymbolKind::Module),
-            SymbolKind::Document => present(SymbolKind::Document),
+    /// Exercises the wildcard-free guard that keeps [`ALL_SYMBOL_KINDS`] complete.
+    #[test]
+    fn all_symbol_kinds_lists_every_variant() {
+        for kind in ALL_SYMBOL_KINDS {
+            assert!(kind.is_listed(), "{kind:?} missing from ALL_SYMBOL_KINDS");
         }
     }
 
@@ -653,6 +678,33 @@ mod tests {
             let merged = format!("{parent}.{name}");
             let id_b = symbol_id(&file, kind, &merged, None);
             prop_assert_ne!(id_a, id_b);
+        }
+    }
+
+    /// `FromStr` has a `_ =>` arm, so a variant missing from it compiles but never
+    /// decodes back from the DB (silently defaulting to `variable`). `ALL_KINDS` is
+    /// compiler-checked complete, so iterating it catches the omission here.
+    #[test]
+    fn every_kind_round_trips_through_its_wire_string() {
+        for kind in ALL_KINDS {
+            let wire = kind.as_str();
+            let parsed: SymbolKind = wire
+                .parse()
+                .unwrap_or_else(|_| panic!("kind {wire:?} has no FromStr arm"));
+            assert_eq!(parsed, kind, "round-trip mismatch for {wire:?}");
+        }
+    }
+
+    /// Two variants sharing a wire string would make DB rows ambiguous.
+    #[test]
+    fn kind_wire_strings_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for kind in ALL_KINDS {
+            assert!(
+                seen.insert(kind.as_str()),
+                "duplicate wire string {:?}",
+                kind.as_str()
+            );
         }
     }
 

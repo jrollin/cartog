@@ -605,6 +605,30 @@ mod tests {
     use crate::provider::test_utils::MockEmbeddingProvider;
     use cartog_core::SymbolKind;
 
+    /// `CodeOnly` is defined twice — as SQL in `cartog-db` (`store/rag.rs`) and as
+    /// this predicate for vector hits. A kind excluded in one but not the other makes
+    /// FTS5 and vector retrieval disagree, so pin the exact excluded set here.
+    #[test]
+    fn code_only_scope_excludes_exactly_documents_and_imports() {
+        for kind in cartog_core::ALL_SYMBOL_KINDS {
+            let expected = !matches!(kind, SymbolKind::Document | SymbolKind::Import);
+            assert_eq!(
+                kind_in_scope(kind, KindScope::CodeOnly),
+                expected,
+                "CodeOnly disagrees for {kind:?}; keep it in sync with the SQL in cartog-db store/rag.rs"
+            );
+        }
+    }
+
+    /// New kinds must be reachable through an exact filter, not just `All`.
+    #[test]
+    fn exact_scope_matches_only_its_own_kind() {
+        for kind in cartog_core::ALL_SYMBOL_KINDS {
+            assert!(kind_in_scope(kind, KindScope::Exact(kind)));
+            assert!(kind_in_scope(kind, KindScope::All));
+        }
+    }
+
     /// Create a symbol + content pair and insert into the database.
     fn insert_symbol_with_content(
         db: &Database,

@@ -409,7 +409,7 @@ pub fn register_sqlite_vec() {
 }
 
 /// Current schema version. Increment when adding migrations.
-const SCHEMA_VERSION: u32 = 7;
+const SCHEMA_VERSION: u32 = 8;
 
 /// Public mirror of the private `SCHEMA_VERSION` for callers outside this crate
 /// (e.g. `cartog pull` needs it to compare against a pulled DB and refuse
@@ -676,6 +676,21 @@ fn migrate(conn: &Connection) {
     // clear the index for a full rebuild — mirrors the v2→3 stable-ID wipe.
     if current < 7 {
         info!("schema v7: symbol-ID escaping — clearing index for full rebuild");
+        for table in &["symbol_content", "edges", "symbols", "files"] {
+            let _ = conn.execute(&format!("DELETE FROM {table}"), []);
+        }
+        let _ = conn.execute("DELETE FROM symbol_vec", []);
+        let _ = conn.execute("DELETE FROM symbol_embedding_map", []);
+        let _ = conn.execute("DELETE FROM metadata WHERE key = 'last_commit'", []);
+    }
+
+    // Migration 7 → 8: enum members re-kinded, Rust `mod`-nested fns re-kinded.
+    // Enum members moved from `variable` (C/C++/C#/Kotlin/Swift/Dart) and `method`
+    // (Rust) to `enum_member`, and free fns inside a Rust `mod` from `method` to
+    // `function`. Kind is part of the stable symbol ID, so those rows' IDs change —
+    // clear the index for a full rebuild, as in v2→3 and v6→7.
+    if current < 8 {
+        info!("schema v8: enum-member/module-fn re-kind — clearing index for full rebuild");
         for table in &["symbol_content", "edges", "symbols", "files"] {
             let _ = conn.execute(&format!("DELETE FROM {table}"), []);
         }
