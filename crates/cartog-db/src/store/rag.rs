@@ -430,7 +430,7 @@ impl Database {
         self.conn
             .query_row(
                 "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                        parent_id, signature, visibility, is_async, docstring, in_degree,
+                        parent_id, signature, visibility, is_async, is_test, docstring, in_degree,
                     content_hash, subtree_hash
                  FROM symbols WHERE id = ?1",
                 params![id],
@@ -448,7 +448,7 @@ impl Database {
         let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
         let sql = format!(
             "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring, in_degree,
+                    parent_id, signature, visibility, is_async, is_test, docstring, in_degree,
                     content_hash, subtree_hash
              FROM symbols WHERE id IN ({})",
             placeholders.join(",")

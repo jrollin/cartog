@@ -64,12 +64,14 @@ impl Database {
         //   exact import=6, ...
         // Within the same rank score, secondary sort by kind (fn < method < class)
         // then by file_path and start_line for determinism.
+        // `is_test` breaks ties *after* rank and in_degree, so a test never outranks
+        // equally-matched implementation code but an exact-named test is still found.
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT id, name, kind, file_path, start_line, end_line,
                     start_byte, end_byte, parent_id, signature, visibility,
-                    is_async, docstring, in_degree, content_hash, subtree_hash,
+                    is_async, is_test, docstring, in_degree, content_hash, subtree_hash,
                     (CASE
                        WHEN LOWER(name) = LOWER(?1)                    THEN 0
                        WHEN LOWER(name) LIKE LOWER(?2) || '%' ESCAPE '\\' THEN 1
@@ -90,6 +92,7 @@ impl Database {
                AND (?4 IS NULL OR file_path = ?4)
              ORDER BY rank,
                       in_degree DESC,
+                      is_test,
                       CASE kind
                         WHEN 'function' THEN 0
                         WHEN 'method'   THEN 1
@@ -118,7 +121,7 @@ impl Database {
             .conn
             .prepare(
                 "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring, in_degree,
+                    parent_id, signature, visibility, is_async, is_test, docstring, in_degree,
                     content_hash, subtree_hash
              FROM symbols WHERE file_path = ?1
              ORDER BY start_line",
@@ -228,7 +231,7 @@ impl Database {
                         e.resolution_source,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                        s.is_async, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
+                        s.is_async, s.is_test, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
                  FROM edges e
                  LEFT JOIN symbols s ON e.source_id = s.id
                  -- Kind pushed into each OR arm (distributive equiv of `(A OR B)
@@ -253,7 +256,7 @@ impl Database {
                         e.resolution_source,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                        s.is_async, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
+                        s.is_async, s.is_test, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
                  FROM edges e
                  LEFT JOIN symbols s ON e.source_id = s.id
                  WHERE e.target_name = ?1
@@ -762,7 +765,7 @@ impl Database {
             .conn
             .prepare(
                 "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring, in_degree,
+                    parent_id, signature, visibility, is_async, is_test, docstring, in_degree,
                     content_hash, subtree_hash
              FROM symbols
              -- enum_member is excluded with variable: both are leaf data, not the
@@ -819,7 +822,7 @@ impl Database {
 
             let sql = format!(
                 "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                        parent_id, signature, visibility, is_async, docstring, in_degree,
+                        parent_id, signature, visibility, is_async, is_test, docstring, in_degree,
                     content_hash, subtree_hash
                  FROM symbols
                  WHERE file_path IN ({})

@@ -97,8 +97,8 @@ pub type DbResult<T> = std::result::Result<T, DbError>;
 
 const SQL_INSERT_SYMBOL: &str = "INSERT OR REPLACE INTO symbols
      (id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-      parent_id, signature, visibility, is_async, docstring, content_hash, subtree_hash)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
+      parent_id, signature, visibility, is_async, is_test, docstring, content_hash, subtree_hash)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)";
 
 const SQL_INSERT_EDGE: &str = "INSERT INTO edges
      (source_id, target_name, target_id, kind, file_path, line, resolution_state, resolution_source)
@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS symbols (
     signature TEXT,
     visibility TEXT,
     is_async BOOLEAN DEFAULT FALSE,
+    is_test BOOLEAN DEFAULT FALSE,
     docstring TEXT,
     in_degree INTEGER DEFAULT 0,
     content_hash TEXT,
@@ -545,12 +546,16 @@ fn migrate(conn: &Connection) {
     let has_resolution_source = conn
         .prepare("SELECT resolution_source FROM edges LIMIT 0")
         .is_ok();
+    // Same idea for the is_test column, added within v8: ensure it exists even
+    // if schema_version was already bumped to 8 before this column landed.
+    let has_is_test = conn.prepare("SELECT is_test FROM symbols LIMIT 0").is_ok();
 
     if current >= SCHEMA_VERSION
         && has_hash_cols
         && has_resolution_state
         && has_query_log
         && has_resolution_source
+        && has_is_test
     {
         return;
     }
@@ -580,6 +585,7 @@ fn migrate(conn: &Connection) {
         && has_resolution_state
         && has_query_log
         && has_resolution_source
+        && has_is_test
     {
         if let Err(e) = conn.execute(
             "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
@@ -697,6 +703,21 @@ fn migrate(conn: &Connection) {
         let _ = conn.execute("DELETE FROM symbol_vec", []);
         let _ = conn.execute("DELETE FROM symbol_embedding_map", []);
         let _ = conn.execute("DELETE FROM metadata WHERE key = 'last_commit'", []);
+    }
+
+    // Added within v8: symbols.is_test column. Additive; the full-rebuild wipe
+    // above (when current < 8) already clears every row, so a fresh index
+    // populates it. A DB already stamped at v8 (added earlier this session,
+    // before this column existed) needs the column added explicitly — same
+    // probe-guard + warn-on-failure style as the v6 resolution_source column.
+    if !has_is_test {
+        info!("schema v8: adding symbols.is_test column");
+        if let Err(e) = conn.execute(
+            "ALTER TABLE symbols ADD COLUMN is_test BOOLEAN DEFAULT FALSE",
+            [],
+        ) {
+            warn!(error = %e, "failed to add symbols.is_test column");
+        }
     }
 
     // Store the new schema version
@@ -1047,10 +1068,11 @@ fn row_to_symbol_offset(row: &rusqlite::Row<'_>, off: usize) -> rusqlite::Result
         signature: row.get(off + 9)?,
         visibility: Visibility::from_str_lossy(&vis_str),
         is_async: row.get(off + 11)?,
-        docstring: row.get(off + 12)?,
-        in_degree: row.get(off + 13).unwrap_or(0),
-        content_hash: row.get(off + 14).unwrap_or(None),
-        subtree_hash: row.get(off + 15).unwrap_or(None),
+        is_test: row.get(off + 12)?,
+        docstring: row.get(off + 13)?,
+        in_degree: row.get(off + 14).unwrap_or(0),
+        content_hash: row.get(off + 15).unwrap_or(None),
+        subtree_hash: row.get(off + 16).unwrap_or(None),
     })
 }
 

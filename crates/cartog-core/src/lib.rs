@@ -45,6 +45,7 @@ pub struct Symbol {
     pub signature: Option<String>,
     pub visibility: Visibility,
     pub is_async: bool,
+    pub is_test: bool,
     pub docstring: Option<String>,
     pub in_degree: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -60,7 +61,7 @@ impl Symbol {
     /// It is used to build the stable ID and also stored as `parent_id` (the parent's full ID).
     ///
     /// Optional fields (`signature`, `docstring`) default to `None`,
-    /// `visibility` defaults to `Public`, and `is_async` defaults to `false`.
+    /// `visibility` defaults to `Public`, and `is_async`/`is_test` default to `false`.
     /// Use the builder-style setters to override.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
@@ -89,6 +90,7 @@ impl Symbol {
             signature: None,
             visibility: Visibility::Public,
             is_async: false,
+            is_test: false,
             docstring: None,
             in_degree: 0,
             content_hash: None,
@@ -121,6 +123,13 @@ impl Symbol {
     #[must_use]
     pub fn with_async(mut self, is_async: bool) -> Self {
         self.is_async = is_async;
+        self
+    }
+
+    /// Mark as a test (test function/method).
+    #[must_use]
+    pub fn with_test(mut self, is_test: bool) -> Self {
+        self.is_test = is_test;
         self
     }
 

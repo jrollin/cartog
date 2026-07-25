@@ -153,9 +153,12 @@ fn extract_node(
                 extract_node(child, source, file_path, parent, queries, symbols, edges);
             }
         }
-        // Expression statements — scan for calls
+        // Expression statements — a test-DSL block (`describe`/`it`/…) becomes a
+        // symbol so its body is reachable; anything else is only scanned for calls.
         "expression_statement" => {
-            walk_for_calls_and_throws_q(node, source, file_path, parent.id, queries, edges);
+            if !extract_test_block(node, source, file_path, parent, queries, symbols, edges) {
+                walk_for_calls_and_throws_q(node, source, file_path, parent.id, queries, edges);
+            }
         }
         // TypeScript-specific
         "interface_declaration" => {
@@ -173,6 +176,127 @@ fn extract_node(
             }
         }
     }
+}
+
+// ── Test-DSL blocks (Jest / Vitest / Mocha) ──
+
+/// Callee names that introduce a test block. `describe.each`/`it.only`/… reduce to
+/// the leading identifier before the lookup.
+const TEST_BLOCK_CALLEES: [&str; 6] = ["describe", "context", "it", "test", "suite", "bench"];
+
+/// Reduce a test-DSL callee to its base name: `it` for `it`, `it.only`, `test.each`.
+/// Returns `None` for anything that isn't a plain identifier or a dotted chain on one.
+fn test_callee_base<'a>(callee: Node, source: &'a str) -> Option<&'a str> {
+    match callee.kind() {
+        "identifier" => Some(node_text(callee, source)),
+        // `it.only(...)`, `describe.each([...])(...)` — walk down to the root object.
+        "member_expression" => test_callee_base(callee.child_by_field_name("object")?, source),
+        "call_expression" => test_callee_base(callee.child_by_field_name("function")?, source),
+        _ => None,
+    }
+}
+
+/// The first string argument is the block's label (`describe('AuthService', ...)`).
+fn first_string_arg<'a>(args: Node, source: &'a str) -> Option<&'a str> {
+    for arg in args.named_children(&mut args.walk()) {
+        if arg.kind() == "string" {
+            // The fragment child excludes the quotes; an empty string has none.
+            let frag = arg
+                .named_children(&mut arg.walk())
+                .find(|c| c.kind() == "string_fragment")?;
+            return Some(node_text(frag, source));
+        }
+        if matches!(arg.kind(), "template_string") {
+            return Some(node_text(arg, source).trim_matches('`'));
+        }
+    }
+    None
+}
+
+/// The callback holding the block body, i.e. the first function-like argument.
+fn callback_arg<'a>(args: Node<'a>) -> Option<Node<'a>> {
+    args.named_children(&mut args.walk())
+        .find(|c| is_function_like(c.kind()))
+}
+
+/// Extract a Jest/Vitest/Mocha test block as a symbol, recursing into its body so
+/// nested blocks and their calls are indexed. Returns `false` when `node` is not a
+/// test block, leaving the caller to handle it as an ordinary expression.
+///
+/// Without this, a top-level `describe(...)` is an expression statement with no
+/// enclosing symbol, so the whole suite — every assertion and call inside it — was
+/// dropped from the graph.
+fn extract_test_block(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    parent: ParentScope<'_>,
+    queries: &JsQueries,
+    symbols: &mut Vec<Symbol>,
+    edges: &mut Vec<Edge>,
+) -> bool {
+    let Some(call) = node
+        .named_children(&mut node.walk())
+        .find(|c| c.kind() == "call_expression")
+    else {
+        return false;
+    };
+    let Some(callee) = call.child_by_field_name("function") else {
+        return false;
+    };
+    let Some(base) = test_callee_base(callee, source) else {
+        return false;
+    };
+    if !TEST_BLOCK_CALLEES.contains(&base) {
+        return false;
+    }
+    let Some(args) = call.child_by_field_name("arguments") else {
+        return false;
+    };
+    let Some(label) = first_string_arg(args, source) else {
+        return false;
+    };
+    if label.is_empty() {
+        return false;
+    }
+
+    let start_line = node.start_position().row as u32 + 1;
+    let end_line = node.end_position().row as u32 + 1;
+    let body = callback_arg(args);
+    let is_async = body.is_some_and(|b| has_async_keyword(b, source));
+
+    // Kind is always Function: a nested `it` is a test case, not a method of `describe`.
+    let sym_id = symbol_id(file_path, SymbolKind::Function, label, parent.qname);
+    symbols.push(
+        Symbol::new(
+            label,
+            SymbolKind::Function,
+            file_path,
+            start_line,
+            end_line,
+            node.start_byte() as u32,
+            node.end_byte() as u32,
+            parent.qname,
+        )
+        .with_parent(parent.id)
+        .with_signature(Some(format!("{base}('{label}')")))
+        .with_async(is_async)
+        .with_test(true),
+    );
+
+    if let Some(body) = body {
+        let qname = match parent.qname {
+            Some(pq) => format!("{pq}.{label}"),
+            None => label.to_string(),
+        };
+        let inner = ParentScope::nested(&sym_id, &qname);
+        if let Some(block) = body.child_by_field_name("body") {
+            for child in block.named_children(&mut block.walk()) {
+                extract_node(child, source, file_path, inner, queries, symbols, edges);
+            }
+        }
+    }
+    true
 }
 
 // ── Functions ──

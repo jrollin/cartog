@@ -351,7 +351,18 @@ fn extract_module(
     }
 }
 
-// ── Top-level calls (require, include, extend, raise) ──
+// ── Top-level calls (require, include, extend, raise, RSpec/Minitest DSL) ──
+
+/// RSpec/Minitest-spec DSL callees that introduce a test block. `RSpec.describe`
+/// reduces to `describe` for free: tree-sitter's `method` field on a `call` node
+/// is just the method name, receiver-independent.
+const TEST_BLOCK_CALLEES: [&str; 7] = [
+    "describe", "context", "it", "specify", "example", "scenario", "feature",
+];
+
+/// Setup-hook DSL callees: their bodies matter (calls inside), but they are not
+/// test cases, so no symbol is emitted for them.
+const TEST_HOOK_CALLEES: [&str; 6] = ["before", "after", "around", "let", "let!", "subject"];
 
 fn extract_top_level_call(
     node: Node,
@@ -393,9 +404,106 @@ fn extract_top_level_call(
         "attr_reader" | "attr_writer" | "attr_accessor" => {
             // Skip — these define dynamic methods, not symbols we track
         }
+        _ if TEST_BLOCK_CALLEES.contains(&method_name) => {
+            extract_test_block(node, source, file_path, parent, symbols, edges);
+        }
+        _ if TEST_HOOK_CALLEES.contains(&method_name) => {
+            // No symbol — just walk the hook body so its calls attach to the
+            // enclosing describe/context.
+            if let Some(ctx) = parent.id {
+                if let Some(block) = node.child_by_field_name("block") {
+                    if let Some(body) = block.child_by_field_name("body") {
+                        walk_for_calls_and_raises(body, source, file_path, ctx, edges);
+                    }
+                }
+            }
+        }
         _ => {
             // Regular call — ignore at top level, handled by walk_for_calls_and_raises
         }
+    }
+}
+
+/// Extract an RSpec/Minitest-spec DSL block (`describe`/`it`/…) as a `Function`
+/// symbol and recurse into its body, so a top-level `describe`/`it` no longer
+/// drops its whole body (previously the `_` no-op arm silently discarded it,
+/// indexing zero symbols and zero call edges for an entire spec file).
+fn extract_test_block(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    parent: ParentScope<'_>,
+    symbols: &mut Vec<Symbol>,
+    edges: &mut Vec<Edge>,
+) {
+    let Some(label) = test_block_label(node, source) else {
+        return;
+    };
+
+    let start_line = node.start_position().row as u32 + 1;
+    let end_line = node.end_position().row as u32 + 1;
+    let method_name = node_text(node.child_by_field_name("method").unwrap(), source);
+
+    // Kind is always Function: a nested `it` is a test case, not a method of `describe`.
+    let sym_id = symbol_id(file_path, SymbolKind::Function, &label, parent.qname);
+    symbols.push(
+        Symbol::new(
+            &label,
+            SymbolKind::Function,
+            file_path,
+            start_line,
+            end_line,
+            node.start_byte() as u32,
+            node.end_byte() as u32,
+            parent.qname,
+        )
+        .with_parent(parent.id)
+        .with_signature(Some(format!("{method_name}('{label}')")))
+        .with_test(true),
+    );
+
+    let Some(block) = node.child_by_field_name("block") else {
+        return;
+    };
+    let Some(body) = block.child_by_field_name("body") else {
+        return;
+    };
+    walk_for_calls_and_raises(body, source, file_path, &sym_id, edges);
+    let child_qname = match parent.qname {
+        Some(pq) => format!("{pq}.{label}"),
+        None => label.clone(),
+    };
+    for child in body.named_children(&mut body.walk()) {
+        if child.kind() == "call" {
+            extract_top_level_call(
+                child,
+                source,
+                file_path,
+                ParentScope::nested(&sym_id, &child_qname),
+                symbols,
+                edges,
+            );
+        }
+    }
+}
+
+/// The block's label: a string literal (`describe 'x'`) preferred, else a
+/// constant/class (`describe AuthService`, `RSpec.describe AuthService`).
+/// `None` when there is no first argument at all (a bare `describe do`).
+fn test_block_label(node: Node, source: &str) -> Option<String> {
+    let args = node.child_by_field_name("arguments")?;
+    let first_arg = args.named_child(0)?;
+    let label = match first_arg.kind() {
+        "string" => first_arg
+            .named_children(&mut first_arg.walk())
+            .find(|c| c.kind() == "string_content")
+            .map(|c| node_text(c, source).to_string())?,
+        _ => extract_constant_name(first_arg, source),
+    };
+    if label.is_empty() {
+        None
+    } else {
+        Some(label)
     }
 }
 
@@ -525,6 +633,15 @@ fn walk_for_calls_and_raises(
                         .unwrap_or("");
 
                     match method_name {
+                        // Nested test blocks/hooks are walked separately by
+                        // extract_test_block's own child loop — skip here so
+                        // their calls aren't attributed to the outer context too.
+                        _ if TEST_BLOCK_CALLEES.contains(&method_name)
+                            || TEST_HOOK_CALLEES.contains(&method_name) =>
+                        {
+                            did_visit_children = true;
+                            continue;
+                        }
                         "raise" | "fail" => {
                             extract_raise_from_call(current, source, file_path, context_id, edges);
                         }
@@ -1092,5 +1209,148 @@ end
     fn test_syntax_error_partial_parse() {
         let result = extract("def broken(\n  end");
         let _ = result.symbols.len();
+    }
+
+    #[test]
+    fn test_rspec_describe_with_constant_receiver() {
+        let result = extract(
+            r#"
+RSpec.describe AuthService do
+end
+"#,
+        );
+
+        let sym = result.symbols.iter().find(|s| s.name == "AuthService");
+        assert!(sym.is_some());
+        let sym = sym.unwrap();
+        assert_eq!(sym.kind, SymbolKind::Function);
+        assert!(sym.is_test);
+    }
+
+    #[test]
+    fn test_describe_with_string_label() {
+        let result = extract(
+            r#"
+describe 'string label' do
+end
+"#,
+        );
+
+        let sym = result.symbols.iter().find(|s| s.name == "string label");
+        assert!(sym.is_some());
+        assert!(sym.unwrap().is_test);
+    }
+
+    #[test]
+    fn test_nested_it_is_function_child_of_describe() {
+        let result = extract(
+            r#"
+RSpec.describe AuthService do
+  it 'rejects expired tokens' do
+    validate(token)
+  end
+end
+"#,
+        );
+
+        let describe = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "AuthService")
+            .unwrap();
+        let it = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "rejects expired tokens")
+            .unwrap();
+
+        assert_eq!(it.kind, SymbolKind::Function);
+        assert!(it.is_test);
+        assert_eq!(it.parent_id.as_deref(), Some(describe.id.as_str()));
+    }
+
+    #[test]
+    fn test_call_inside_it_body_attaches_to_it_symbol() {
+        let result = extract(
+            r#"
+RSpec.describe AuthService do
+  it 'rejects expired tokens' do
+    validate(token)
+  end
+end
+"#,
+        );
+
+        let it = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "rejects expired tokens")
+            .unwrap();
+
+        let call = result
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Calls && e.target_name == "validate")
+            .unwrap();
+        assert_eq!(call.source_id, it.id);
+    }
+
+    #[test]
+    fn test_bare_describe_without_label_is_skipped() {
+        let result = extract(
+            r#"
+describe do
+end
+"#,
+        );
+        assert!(result.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_ordinary_class_and_def_unaffected_by_test_dsl() {
+        let result = extract(
+            r#"
+class UserService
+  def get_user(user_id)
+    @db.find(user_id)
+  end
+end
+
+puts 'x'
+"#,
+        );
+
+        let class = result.symbols.iter().find(|s| s.name == "UserService");
+        assert!(class.is_some());
+        assert_eq!(class.unwrap().kind, SymbolKind::Class);
+
+        let method = result.symbols.iter().find(|s| s.name == "get_user");
+        assert!(method.is_some());
+        assert_eq!(method.unwrap().kind, SymbolKind::Method);
+
+        // A non-test top-level call still emits no symbol.
+        let names: Vec<&str> = result.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(!names.contains(&"puts"));
+        assert_eq!(result.symbols.len(), 2);
+    }
+
+    #[test]
+    fn test_require_still_yields_import_alongside_test_dsl() {
+        let result = extract(
+            r#"
+require 'rails_helper'
+
+RSpec.describe AuthService do
+end
+"#,
+        );
+
+        let imports: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Import)
+            .collect();
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].name, "rails_helper");
     }
 }

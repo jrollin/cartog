@@ -119,6 +119,31 @@ Indexes (9): symbols(name, kind, file, parent),
              embedding_map(symbol_id)
 ```
 
+## Test code
+
+Symbols carry an `is_test` flag so test code can be told apart from the
+implementation it exercises. It is set from the idiom of each language:
+
+| Language | Detected from |
+|----------|---------------|
+| Rust | `#[test]`, `#[bench]`, any `…::test` attribute (`#[tokio::test]`), `#[rstest]`, and everything inside a `#[cfg(test)]` module (helpers included) |
+| JS/TS (+ Vue/Svelte/Astro scripts) | `describe`/`context`/`it`/`test`/`suite`/`bench` blocks, including `.only`/`.skip`/`.each` forms |
+| Ruby | `describe`/`context`/`it`/`specify`/`example`/`scenario`/`feature` blocks (`RSpec.describe` included) |
+| Dart | `group`/`test`/`testWidgets` blocks |
+
+Two consequences worth knowing:
+
+**Callback-style test blocks become symbols.** A Jest `describe(...)` or an RSpec
+`describe ... do` is an expression, not a declaration, so it has no name of its own
+in the grammar. Each block is emitted as a `function` symbol named by its string
+label and nested under its enclosing block, which is what makes the calls inside it
+reachable — `cartog refs <symbol>` shows the tests that exercise a symbol. Before
+this, an entire spec file indexed to zero symbols and zero edges.
+
+**Ranking demotes tests only on a tie.** `is_test` sorts *after* match tier and
+in-degree in `cartog search`, so an exactly-named test is still found, but a test
+never outranks equally-matched implementation code.
+
 ## Minimum Supported Rust Version
 
 1.80+ (edition 2021). Declared in `Cargo.toml` as `rust-version = "1.80"`. (1.80

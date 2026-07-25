@@ -178,6 +178,7 @@ fn extract_function(
     let is_async = has_child_kind(node, "async");
     let signature = extract_fn_signature(node, source);
     let docstring = extract_doc_comment(node, source);
+    let is_test = has_test_attribute(node, source) || is_inside_cfg_test_mod(node, source);
 
     let sym_id = symbol_id(file_path, kind, &name, parent_qname);
     symbols.push(
@@ -195,6 +196,7 @@ fn extract_function(
         .with_signature(signature)
         .with_visibility(visibility)
         .with_async(is_async)
+        .with_test(is_test)
         .with_docstring(docstring),
     );
 
@@ -1017,6 +1019,78 @@ fn extract_fn_signature(node: Node, source: &str) -> Option<String> {
     Some(format!("{params_text}{}", return_type.unwrap_or_default()))
 }
 
+/// True when a preceding `#[...]` marks this item as a test: `#[test]`,
+/// `#[bench]`, or any path ending in `::test` (`#[tokio::test]`, `#[rstest]`…).
+///
+/// Attributes are *preceding siblings* of the item, not children, so this walks
+/// backwards the same way [`extract_doc_comment`] does.
+fn has_test_attribute(node: Node, source: &str) -> bool {
+    let mut prev = node.prev_sibling();
+    while let Some(p) = prev {
+        match p.kind() {
+            "attribute_item" => {
+                let text = node_text(p, source);
+                // Trim the `#[...]` wrapper and any argument list, then compare the
+                // final path segment so `#[tokio::test]` matches but `#[testing]` does not.
+                let inner = text
+                    .trim_start_matches('#')
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .trim();
+                let path = inner.split('(').next().unwrap_or(inner).trim();
+                let last = path.rsplit("::").next().unwrap_or(path).trim();
+                if matches!(last, "test" | "bench") || path == "rstest" {
+                    return true;
+                }
+            }
+            // Doc comments sit between the attribute and the item.
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        prev = p.prev_sibling();
+    }
+    false
+}
+
+/// True when `node` sits inside a `#[cfg(test)]` module, so it is test code even
+/// without its own `#[test]` (helpers, fixtures, and the `mod tests` convention).
+///
+/// Derived by walking ancestors rather than threaded as a parameter: every
+/// extractor arm would otherwise need to forward the flag.
+fn is_inside_cfg_test_mod(node: Node, source: &str) -> bool {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        if n.kind() == "mod_item" && has_cfg_test_attribute(n, source) {
+            return true;
+        }
+        cur = n.parent();
+    }
+    false
+}
+
+/// True when a preceding `#[cfg(test)]` (or `#[cfg(all(test, …))]`) gates this item.
+fn has_cfg_test_attribute(node: Node, source: &str) -> bool {
+    let mut prev = node.prev_sibling();
+    while let Some(p) = prev {
+        match p.kind() {
+            "attribute_item" => {
+                // Whitespace-insensitive so `#[cfg( test )]` and `cfg(all(test, x))` match.
+                let text: String = node_text(p, source)
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                if text.contains("cfg(test)") || text.contains("(test,") {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        prev = p.prev_sibling();
+    }
+    false
+}
+
 fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
     let mut lines = Vec::new();
     let mut prev = node.prev_sibling();
@@ -1726,5 +1800,93 @@ mod outer {
         let deep = result.symbols.iter().find(|s| s.name == "deep").unwrap();
         assert_eq!(deep.kind, SymbolKind::Function);
         assert!(deep.parent_id.is_some());
+    }
+
+    // ── #[test] flagging ──
+
+    fn f<'a>(r: &'a ExtractionResult, name: &str) -> &'a Symbol {
+        r.symbols
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("no symbol {name:?}"))
+    }
+
+    #[test]
+    fn plain_test_attribute_sets_is_test() {
+        let r = extract("#[test]\nfn checks_it() {}\n");
+        assert!(f(&r, "checks_it").is_test);
+    }
+
+    #[test]
+    fn qualified_test_attributes_set_is_test() {
+        for attr in [
+            "#[tokio::test]",
+            "#[async_std::test]",
+            "#[bench]",
+            "#[rstest]",
+        ] {
+            let r = extract(&format!("{attr}\nfn t() {{}}\n"));
+            assert!(f(&r, "t").is_test, "{attr} not recognized");
+        }
+    }
+
+    #[test]
+    fn attribute_below_a_doc_comment_still_sets_is_test() {
+        let r = extract("/// Docs.\n#[test]\nfn documented() {}\n");
+        let s = f(&r, "documented");
+        assert!(s.is_test);
+        assert!(s.docstring.is_some(), "doc comment must survive too");
+    }
+
+    #[test]
+    fn every_fn_in_a_cfg_test_mod_is_test_including_helpers() {
+        let r = extract(
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn case() {}\n    fn helper() {}\n}\n",
+        );
+        assert!(f(&r, "case").is_test);
+        // A helper in a test module is test code even without its own attribute.
+        assert!(f(&r, "helper").is_test);
+    }
+
+    #[test]
+    fn cfg_test_applies_to_deeply_nested_fns() {
+        let r =
+            extract("#[cfg(test)]\nmod outer {\n    mod inner {\n        fn deep() {}\n    }\n}\n");
+        assert!(f(&r, "deep").is_test);
+    }
+
+    #[test]
+    fn methods_in_a_cfg_test_mod_are_flagged() {
+        let r = extract("#[cfg(test)]\nmod tests {\n    struct H;\n    impl H {\n        fn m(&self) {}\n    }\n}\n");
+        let m = f(&r, "m");
+        assert_eq!(m.kind, SymbolKind::Method);
+        assert!(m.is_test);
+    }
+
+    #[test]
+    fn production_code_is_never_flagged_as_test() {
+        let r = extract("pub fn validate(x: u8) -> bool { x > 0 }\n");
+        assert!(!f(&r, "validate").is_test);
+    }
+
+    #[test]
+    fn similarly_named_attributes_do_not_false_positive() {
+        // `#[testing]`/`#[test_case]` are not test markers; only a `test` path segment is.
+        for attr in ["#[testing]", "#[test_util]", "#[derive(Debug)]"] {
+            let r = extract(&format!("{attr}\nfn t() {{}}\n"));
+            assert!(!f(&r, "t").is_test, "{attr} wrongly flagged");
+        }
+    }
+
+    #[test]
+    fn a_non_cfg_test_mod_does_not_flag_its_fns() {
+        let r = extract("mod util {\n    fn helper() {}\n}\n");
+        assert!(!f(&r, "helper").is_test);
+    }
+
+    #[test]
+    fn cfg_test_combined_with_other_predicates_is_recognized() {
+        let r = extract("#[cfg(all(test, feature = \"x\"))]\nmod tests {\n    fn helper() {}\n}\n");
+        assert!(f(&r, "helper").is_test);
     }
 }
