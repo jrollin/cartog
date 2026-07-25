@@ -342,7 +342,15 @@ fn extract_enum(
     if let Some(body) = node.child_by_field_name("body") {
         for variant in body.named_children(&mut body.walk()) {
             if variant.kind() == "enum_variant" {
-                extract_enum_variant(variant, source, file_path, &sym_id, &enum_qname, symbols);
+                extract_enum_variant(
+                    variant,
+                    source,
+                    file_path,
+                    &sym_id,
+                    &enum_qname,
+                    visibility,
+                    symbols,
+                );
             }
         }
     }
@@ -354,6 +362,7 @@ fn extract_enum_variant(
     file_path: &str,
     parent_id: &str,
     parent_qname: &str,
+    enum_visibility: Visibility,
     symbols: &mut Vec<Symbol>,
 ) {
     let name = match node.child_by_field_name("name") {
@@ -362,7 +371,6 @@ fn extract_enum_variant(
     };
 
     let start_line = node.start_position().row as u32 + 1;
-    let visibility = rust_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
 
     symbols.push(
@@ -377,7 +385,8 @@ fn extract_enum_variant(
             Some(parent_qname),
         )
         .with_parent(Some(parent_id))
-        .with_visibility(visibility)
+        // A variant has no visibility of its own — it inherits the enum's.
+        .with_visibility(enum_visibility)
         .with_docstring(docstring),
     );
 }
@@ -1888,5 +1897,33 @@ mod outer {
     fn cfg_test_combined_with_other_predicates_is_recognized() {
         let r = extract("#[cfg(all(test, feature = \"x\"))]\nmod tests {\n    fn helper() {}\n}\n");
         assert!(f(&r, "helper").is_test);
+    }
+
+    /// A Rust variant carries no `pub` of its own — it is as visible as its enum.
+    #[test]
+    fn enum_variants_inherit_the_enums_visibility() {
+        let r = extract("pub enum Color { Red, Green }\nenum Hidden { A }\n");
+        for v in ["Red", "Green"] {
+            let s = r.symbols.iter().find(|s| s.name == v).expect("variant");
+            assert_eq!(s.kind, SymbolKind::EnumMember);
+            assert_eq!(s.visibility, Visibility::Public, "{v} of a pub enum");
+        }
+        let a = r.symbols.iter().find(|s| s.name == "A").expect("variant");
+        assert_eq!(
+            a.visibility,
+            Visibility::Private,
+            "variant of a private enum"
+        );
+    }
+
+    /// Struct fields DO have their own visibility — guard against the enum fix
+    /// leaking into them.
+    #[test]
+    fn struct_fields_keep_their_own_visibility() {
+        let r = extract("pub struct P { pub x: i32, y: i32 }\n");
+        let x = r.symbols.iter().find(|s| s.name == "x").expect("field x");
+        let y = r.symbols.iter().find(|s| s.name == "y").expect("field y");
+        assert_eq!(x.visibility, Visibility::Public);
+        assert_eq!(y.visibility, Visibility::Private);
     }
 }
