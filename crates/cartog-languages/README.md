@@ -54,7 +54,7 @@ A crate-internal `js_shared` module holds extraction logic shared between the Ja
 | `ExtractionResult` | Symbols + edges extracted from a file |
 | `get_extractor()` | Factory: language name → `Box<dyn Extractor>` |
 | `detect_language()` | Re-export from `cartog-core` |
-| `python`, `go`, `java`, `csharp`, `javascript`, `typescript`, `ruby`, `php`, `dart`, `swift`, `kotlin`, `rust_lang` | Per-language extractor modules (note Rust's module is `rust_lang`) |
+| `python`, `go`, `java`, `c`, `cpp`, `csharp`, `javascript`, `typescript`, `ruby`, `php`, `dart`, `swift`, `kotlin`, `rust_lang` | Per-language extractor modules (note Rust's module is `rust_lang`) |
 | `sfc` | Vue/Svelte/Astro single-file-component extractors (`VueExtractor`, `SvelteExtractor`, `AstroExtractor`) |
 | `markdown` | Markdown document extractor (heading-based chunking) |
 

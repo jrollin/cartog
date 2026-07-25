@@ -202,9 +202,9 @@ works (path mirroring is mandatory). Per-image caveats (gopls deps,
 jdtls/sourcekit startup time, ruby-lsp bundle compose) are noted in each
 Dockerfile header.
 
-All 10 containerized servers resolve **identically to host** (same `lsp`-tier
+All 16 containerized servers resolve **identically to host** (same `lsp`-tier
 edge count). `python` and `typescript` use the upstream `lspcontainers` images
-(pinned by digest); the other 8 self-build on a pinned official base. cartog
+(pinned by digest); the other 14 self-build on a pinned official base. cartog
 sends `processId: null` to a command-override server because its host PID is
 absent from a container's PID namespace — without that, pyright and
 typescript-language-server honor the LSP parent-liveness check and exit at
