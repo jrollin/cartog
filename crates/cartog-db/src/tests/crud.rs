@@ -13,6 +13,17 @@ fn test_insert_and_query_symbols() {
 }
 
 #[test]
+fn test_insert_and_query_symbol_preserves_is_test_flag() {
+    let db = Database::open_memory().unwrap();
+    let sym = test_symbol("test_it_works", SymbolKind::Function, "test.py", 10).with_test(true);
+    db.insert_symbol(&sym).unwrap();
+
+    let outline = db.outline("test.py").unwrap();
+    assert_eq!(outline.len(), 1);
+    assert!(outline[0].is_test, "is_test flag must survive insert/read");
+}
+
+#[test]
 fn test_optimize_populates_planner_stats() {
     // PRAGMA optimize must build sqlite_stat1 once the tables are large
     // enough to be worth analyzing — proving the planner has real stats to
@@ -509,4 +520,48 @@ fn test_search_percent_treated_as_literal() {
 
     let results = db.search("%", None, None, 20).unwrap();
     assert!(results.is_empty(), "% should not act as a wildcard");
+}
+
+/// `is_test` is a tiebreak *after* rank and in_degree: an implementation symbol
+/// outranks an equally-matched test, but the test is still returned.
+#[test]
+fn search_ranks_tests_below_equally_matched_implementation_code() {
+    let db = Database::open_memory().unwrap();
+    let impl_sym = test_symbol("validate", SymbolKind::Function, "src/auth.rs", 10);
+    let test_sym =
+        test_symbol("validate", SymbolKind::Function, "spec/auth_spec.rb", 20).with_test(true);
+    db.insert_symbol(&test_sym).unwrap();
+    db.insert_symbol(&impl_sym).unwrap();
+
+    let results = db.search("validate", None, None, 10).unwrap();
+    assert_eq!(results.len(), 2, "both symbols must still be findable");
+    assert!(
+        !results[0].is_test,
+        "implementation code must rank first, got {:?}",
+        results
+            .iter()
+            .map(|s| (&s.file_path, s.is_test))
+            .collect::<Vec<_>>()
+    );
+    assert!(results[1].is_test);
+}
+
+/// A better *match tier* still wins regardless of `is_test`: the flag sorts after
+/// `rank`, so an exactly-named test beats a merely-substring implementation match.
+/// Guards against demoting tests so hard they become unfindable.
+#[test]
+fn is_test_does_not_override_match_tier() {
+    let db = Database::open_memory().unwrap();
+    let exact_test =
+        test_symbol("helper", SymbolKind::Function, "spec/h_spec.rb", 1).with_test(true);
+    let substring_impl = test_symbol("helper_internal", SymbolKind::Function, "src/h.rs", 1);
+    db.insert_symbol(&substring_impl).unwrap();
+    db.insert_symbol(&exact_test).unwrap();
+
+    let results = db.search("helper", None, None, 10).unwrap();
+    assert_eq!(
+        results[0].name, "helper",
+        "an exact-match test must still outrank a substring-match non-test"
+    );
+    assert!(results[0].is_test);
 }

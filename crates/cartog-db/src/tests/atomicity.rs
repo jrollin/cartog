@@ -17,6 +17,7 @@ fn tx_test_symbol(id: &str, file: &str) -> Symbol {
         signature: None,
         visibility: Visibility::Public,
         is_async: false,
+        is_test: false,
         docstring: None,
         in_degree: 0,
         content_hash: Some("h".to_string()),

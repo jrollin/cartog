@@ -119,6 +119,51 @@ Indexes (9): symbols(name, kind, file, parent),
              embedding_map(symbol_id)
 ```
 
+## Test code
+
+Symbols carry an `is_test` flag so test code can be told apart from the
+implementation it exercises. It is set from the idiom of each language:
+
+| Language | Detected from |
+|----------|---------------|
+| Rust | `#[test]`, `#[bench]`, any `…::test` attribute (`#[tokio::test]`), `#[rstest]`, and everything inside a `#[cfg(test)]` module (helpers included) |
+| JS/TS (+ Vue/Svelte/Astro scripts) | `describe`/`context`/`it`/`test`/`suite`/`bench` blocks, including `.only`/`.skip`/`.each` forms |
+| Ruby | `describe`/`context`/`it`/`specify`/`example`/`scenario`/`feature` blocks (`RSpec.describe` included) |
+| Dart | `group`/`test`/`testWidgets` blocks |
+
+Two consequences worth knowing:
+
+**Callback-style test blocks become symbols.** A Jest `describe(...)` or an RSpec
+`describe ... do` is an expression, not a declaration, so it has no name of its own
+in the grammar. Each block is emitted as a `function` symbol named by its string
+label and nested under its enclosing block, which is what makes the calls inside it
+reachable — `cartog refs <symbol>` shows the tests that exercise a symbol. Before
+this, an entire spec file indexed to zero symbols and zero edges.
+
+**Ranking demotes tests, and semantic search does it in two places.**
+
+In `cartog search` (symbol lookup) `is_test` sorts *after* match tier and
+in-degree, so an exactly-named test is still found but never outranks
+equally-matched implementation code.
+
+`cartog rag search` needs more than a tiebreak, because the cross-encoder gives
+every candidate a distinct score so ties never occur. Two mechanisms apply:
+
+1. **Retrieval** fetches production code and tests as separate FTS5 arms. A
+   single ranked list lets test names — which restate the query — fill the whole
+   budget before the implementation is reached.
+2. **Ranking** subtracts a fixed penalty from a test's rerank score. It is
+   subtractive because the cross-encoder emits raw logits that are frequently
+   negative; scaling a negative score would *raise* it.
+
+A query that explicitly asks for tests (`unit test for X`, `spec for Y`,
+`rspec`, `jest`, `pytest`) skips the penalty, so test-seeking searches still
+work. Matching is whole-word, so `testable`, `latest`, and `specification` do
+not trigger it.
+
+Measured on two large private repos, this cut test bodies in `rag search`
+results by roughly half without changing symbol-search behaviour.
+
 ## Minimum Supported Rust Version
 
 1.80+ (edition 2021). Declared in `Cargo.toml` as `rust-version = "1.80"`. (1.80

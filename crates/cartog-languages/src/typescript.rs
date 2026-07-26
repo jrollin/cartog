@@ -526,4 +526,100 @@ import { validate as validateUser } from '../validators/user';
         assert!(calls_from(&self_closing, "A").contains(&"Counter"));
         assert!(calls_from(&opening, "A").contains(&"Counter"));
     }
+
+    // ── Test-DSL blocks (Jest / Vitest / Mocha) ──
+    // Before these, a top-level `describe(...)` was an expression statement with no
+    // enclosing symbol, so a whole spec file indexed to zero symbols and zero edges.
+
+    fn sym<'a>(r: &'a ExtractionResult, name: &str) -> &'a cartog_core::Symbol {
+        r.symbols
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("no symbol named {name:?}"))
+    }
+
+    #[test]
+    fn describe_block_becomes_a_test_symbol() {
+        let r = extract_ts("describe('AuthService', () => {});\n");
+        let d = sym(&r, "AuthService");
+        assert_eq!(d.kind, SymbolKind::Function);
+        assert!(d.is_test);
+        assert_eq!(d.signature.as_deref(), Some("describe('AuthService')"));
+    }
+
+    #[test]
+    fn nested_it_is_a_child_test_and_never_a_method() {
+        let r = extract_ts("describe('Outer', () => { it('inner case', () => {}); });\n");
+        let outer = sym(&r, "Outer");
+        let inner = sym(&r, "inner case");
+        // A nested `it` is a test case, not a method of the describe.
+        assert_eq!(inner.kind, SymbolKind::Function);
+        assert!(inner.is_test);
+        assert_eq!(inner.parent_id.as_deref(), Some(outer.id.as_str()));
+    }
+
+    #[test]
+    fn calls_inside_a_test_body_are_attributed_to_that_test() {
+        let r = extract_ts("describe('S', () => { it('checks', () => { validate('x'); }); });\n");
+        assert!(
+            calls_from(&r, "checks").contains(&"validate"),
+            "a call inside the `it` body must be sourced from the test, got {:?}",
+            calls_from(&r, "checks")
+        );
+    }
+
+    #[test]
+    fn modifier_and_each_forms_are_recognized() {
+        for src in [
+            "it.only('a', () => {});\n",
+            "it.skip('a', () => {});\n",
+            "describe.each([1])('a', () => {});\n",
+        ] {
+            let r = extract_ts(src);
+            assert!(sym(&r, "a").is_test, "not recognized: {src}");
+        }
+    }
+
+    #[test]
+    fn every_supported_dsl_callee_is_recognized() {
+        for callee in ["describe", "context", "it", "test", "suite", "bench"] {
+            let r = extract_ts(&format!("{callee}('label', () => {{}});\n"));
+            assert!(sym(&r, "label").is_test, "{callee} not recognized");
+        }
+    }
+
+    #[test]
+    fn async_test_body_sets_is_async() {
+        let r = extract_ts("it('waits', async () => {});\n");
+        assert!(sym(&r, "waits").is_async);
+    }
+
+    #[test]
+    fn template_literal_label_is_used() {
+        let r = extract_ts("it(`renders fast`, () => {});\n");
+        assert!(sym(&r, "renders fast").is_test);
+    }
+
+    #[test]
+    fn non_test_call_emits_no_symbol_and_stays_an_edge_scan() {
+        let r = extract_ts("configure('AuthService', () => {});\n");
+        assert!(
+            !r.symbols.iter().any(|s| s.name == "AuthService"),
+            "a non-DSL callee must not become a symbol"
+        );
+    }
+
+    #[test]
+    fn dsl_call_without_a_string_label_emits_no_symbol() {
+        let r = extract_ts("describe(someVar, () => {});\n");
+        assert!(r.symbols.iter().all(|s| !s.is_test));
+    }
+
+    #[test]
+    fn ordinary_declarations_are_not_flagged_as_tests() {
+        let r = extract_ts("export function validate(x: string) { return !!x; }\n");
+        let f = sym(&r, "validate");
+        assert_eq!(f.kind, SymbolKind::Function);
+        assert!(!f.is_test, "a plain function must not be flagged is_test");
+    }
 }

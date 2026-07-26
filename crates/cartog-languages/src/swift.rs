@@ -374,7 +374,7 @@ fn extract_property(
     }
 }
 
-/// enum cases — one Variable per `name` identifier (`case a, b` → two).
+/// enum cases — one EnumMember per `name` identifier (`case a, b` → two).
 fn extract_enum_entry(
     node: Node,
     source: &str,
@@ -392,7 +392,7 @@ fn extract_enum_entry(
         symbols.push(
             Symbol::new(
                 &name,
-                SymbolKind::Variable,
+                SymbolKind::EnumMember,
                 file_path,
                 node.start_position().row as u32 + 1,
                 node.end_position().row as u32 + 1,
@@ -967,9 +967,17 @@ mod tests {
         assert_eq!(sym(&r, "Color").kind, SymbolKind::Enum);
         for case in ["red", "green", "blue"] {
             let c = sym(&r, case);
-            assert_eq!(c.kind, SymbolKind::Variable);
+            assert_eq!(c.kind, SymbolKind::EnumMember);
             assert_eq!(c.parent_id.as_deref(), Some("test.swift:enum:Color"));
         }
+    }
+
+    #[test]
+    fn class_property_stays_variable_kind() {
+        // Regression guard: enum-member re-kinding must not leak into properties.
+        let r = extract("class C { let name: String\n var count = 0 }");
+        assert_eq!(sym(&r, "name").kind, SymbolKind::Variable);
+        assert_eq!(sym(&r, "count").kind, SymbolKind::Variable);
     }
 
     #[test]

@@ -55,19 +55,23 @@ impl Database {
         let kind_str = kind_filter.map(|k| k.as_str());
         // Ranking: match_tier + kind_penalty.
         //   match_tier: 0 = exact, 1 = prefix, 2 = substring
-        //   kind_penalty: definitions (function/method/class) = 0, variable = 3, import = 6
+        //   kind_penalty: definitions (function/method/class/macro) = 0, variable = 3, import = 6
+        // A macro is a callable definition, so it ranks with function/method rather
+        // than falling to the `ELSE` variable penalty.
         // Definitions always rank above variables/imports across all match tiers:
         //   exact class=0, prefix function=1, substring method=2,
         //   exact variable=3, prefix variable=4, substring variable=5,
         //   exact import=6, ...
         // Within the same rank score, secondary sort by kind (fn < method < class)
         // then by file_path and start_line for determinism.
+        // `is_test` breaks ties *after* rank and in_degree, so a test never outranks
+        // equally-matched implementation code but an exact-named test is still found.
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT id, name, kind, file_path, start_line, end_line,
                     start_byte, end_byte, parent_id, signature, visibility,
-                    is_async, docstring, in_degree, content_hash, subtree_hash,
+                    is_async, is_test, docstring, in_degree, content_hash, subtree_hash,
                     (CASE
                        WHEN LOWER(name) = LOWER(?1)                    THEN 0
                        WHEN LOWER(name) LIKE LOWER(?2) || '%' ESCAPE '\\' THEN 1
@@ -77,6 +81,7 @@ impl Database {
                        WHEN 'function' THEN 0
                        WHEN 'method'   THEN 0
                        WHEN 'class'    THEN 0
+                       WHEN 'macro'    THEN 0
                        WHEN 'variable' THEN 3
                        WHEN 'import'   THEN 6
                        ELSE                 3
@@ -87,6 +92,7 @@ impl Database {
                AND (?4 IS NULL OR file_path = ?4)
              ORDER BY rank,
                       in_degree DESC,
+                      is_test,
                       CASE kind
                         WHEN 'function' THEN 0
                         WHEN 'method'   THEN 1
@@ -115,7 +121,7 @@ impl Database {
             .conn
             .prepare(
                 "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring, in_degree,
+                    parent_id, signature, visibility, is_async, is_test, docstring, in_degree,
                     content_hash, subtree_hash
              FROM symbols WHERE file_path = ?1
              ORDER BY start_line",
@@ -225,7 +231,7 @@ impl Database {
                         e.resolution_source,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                        s.is_async, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
+                        s.is_async, s.is_test, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
                  FROM edges e
                  LEFT JOIN symbols s ON e.source_id = s.id
                  -- Kind pushed into each OR arm (distributive equiv of `(A OR B)
@@ -250,7 +256,7 @@ impl Database {
                         e.resolution_source,
                         s.id, s.name, s.kind, s.file_path, s.start_line, s.end_line,
                         s.start_byte, s.end_byte, s.parent_id, s.signature, s.visibility,
-                        s.is_async, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
+                        s.is_async, s.is_test, s.docstring, s.in_degree, s.content_hash, s.subtree_hash
                  FROM edges e
                  LEFT JOIN symbols s ON e.source_id = s.id
                  WHERE e.target_name = ?1
@@ -759,10 +765,12 @@ impl Database {
             .conn
             .prepare(
                 "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring, in_degree,
+                    parent_id, signature, visibility, is_async, is_test, docstring, in_degree,
                     content_hash, subtree_hash
              FROM symbols
-             WHERE kind != 'import' AND kind != 'variable'
+             -- enum_member is excluded with variable: both are leaf data, not the
+             -- structural symbols a codebase map should surface.
+             WHERE kind NOT IN ('import', 'variable', 'enum_member')
              ORDER BY in_degree DESC, file_path, start_line
              LIMIT ?1",
             )
@@ -814,7 +822,7 @@ impl Database {
 
             let sql = format!(
                 "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                        parent_id, signature, visibility, is_async, docstring, in_degree,
+                        parent_id, signature, visibility, is_async, is_test, docstring, in_degree,
                     content_hash, subtree_hash
                  FROM symbols
                  WHERE file_path IN ({})

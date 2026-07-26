@@ -485,7 +485,16 @@ fn extract_declaration(
                         .find(|c| c.kind() == "identifier");
                     if let Some(id) = id {
                         let name = node_text(id, source).to_string();
-                        push_variable(id, source, file_path, parent, line, end_line, symbols);
+                        push_variable(
+                            id,
+                            source,
+                            file_path,
+                            parent,
+                            line,
+                            end_line,
+                            SymbolKind::Variable,
+                            symbols,
+                        );
                         let ctx = symbol_id(file_path, SymbolKind::Variable, &name, parent.qname);
                         walk_for_calls(spec, source, file_path, &ctx, edges);
                     }
@@ -525,6 +534,9 @@ fn decl_signature_name(node: Node, source: &str) -> Option<String> {
     None
 }
 
+/// `kind` is explicit because fields, top-level vars, and enum constants all land
+/// here but only the last is an [`SymbolKind::EnumMember`].
+#[allow(clippy::too_many_arguments)]
 fn push_variable(
     id_node: Node,
     source: &str,
@@ -532,6 +544,7 @@ fn push_variable(
     parent: ParentScope<'_>,
     line: u32,
     end_line: u32,
+    kind: SymbolKind,
     symbols: &mut Vec<Symbol>,
 ) {
     let name = node_text(id_node, source).to_string();
@@ -541,7 +554,7 @@ fn push_variable(
     let visibility = dart_visibility(&name);
     let mut sym = Symbol::new(
         name,
-        SymbolKind::Variable,
+        kind,
         file_path,
         line,
         end_line,
@@ -690,6 +703,7 @@ fn extract_enum(
                             ParentScope::nested(&sym_id, &qname),
                             child.start_position().row as u32 + 1,
                             child.end_position().row as u32 + 1,
+                            SymbolKind::EnumMember,
                             symbols,
                         );
                     }
@@ -879,7 +893,16 @@ fn extract_top_level_var(
                         .find(|c| c.kind() == "identifier");
                     if let Some(id) = id {
                         let name = node_text(id, source).to_string();
-                        push_variable(id, source, file_path, parent, line, end_line, symbols);
+                        push_variable(
+                            id,
+                            source,
+                            file_path,
+                            parent,
+                            line,
+                            end_line,
+                            SymbolKind::Variable,
+                            symbols,
+                        );
                         // Walk only this spec's initializer for Calls, so multi-
                         // declarator decls (`var a = f1(), b = f2();`) attribute
                         // each call to its own variable.
@@ -932,6 +955,14 @@ fn walk_for_calls(
                     did_visit_children = true;
                     continue;
                 }
+                // Same for a test-DSL block (group/test/testWidgets): its body is
+                // emitted as its own symbol, so don't attribute its calls here too.
+                "expression_statement"
+                    if current.id() != node.id() && test_block_call(current, source).is_some() =>
+                {
+                    did_visit_children = true;
+                    continue;
+                }
                 _ => {}
             }
         }
@@ -972,6 +1003,11 @@ fn walk_for_nested_decls(
     crate::parse::guard_recursion!();
     for child in node.named_children(&mut node.walk()) {
         match child.kind() {
+            "expression_statement" => {
+                if !extract_test_block(child, source, file_path, parent, symbols, edges) {
+                    walk_for_nested_decls(child, source, file_path, parent, symbols, edges);
+                }
+            }
             "local_function_declaration" | "function_declaration" => {
                 let sig = child
                     .named_children(&mut child.walk())
@@ -1039,6 +1075,102 @@ fn walk_for_nested_decls(
             }
         }
     }
+}
+
+// ── Test-DSL blocks (package:test / flutter_test) ──
+
+/// Callee names that introduce a test block.
+const TEST_BLOCK_CALLEES: [&str; 3] = ["group", "test", "testWidgets"];
+
+/// If `stmt` (an `expression_statement`) is a `group`/`test`/`testWidgets` call
+/// with a string-literal label, return its label and the `call_expression` node.
+/// Shared by `walk_for_calls` (to skip descending into the body) and
+/// `extract_test_block` (to emit the symbol) so the detection stays in one place.
+fn test_block_call<'a>(stmt: Node<'a>, source: &'a str) -> Option<(String, Node<'a>)> {
+    let call = stmt
+        .named_children(&mut stmt.walk())
+        .find(|c| c.kind() == "call_expression")?;
+    let callee = call.child_by_field_name("function")?;
+    if callee.kind() != "identifier" {
+        return None;
+    }
+    if !TEST_BLOCK_CALLEES.contains(&node_text(callee, source)) {
+        return None;
+    }
+    let args = call.child_by_field_name("arguments")?;
+    let label_node = args
+        .named_children(&mut args.walk())
+        .find(|c| c.kind() == "string_literal")?;
+    let label = strip_quotes(node_text(label_node, source));
+    if label.is_empty() {
+        return None;
+    }
+    Some((label, call))
+}
+
+/// Emit a `package:test`/`flutter_test` block (`group`/`test`/`testWidgets`) as a
+/// `Function` symbol and recurse into its body, so calls inside a test attach to
+/// the test case instead of to the enclosing function (previously e.g. `main`).
+/// Returns `false` when `stmt` is not a recognized test block.
+fn extract_test_block(
+    stmt: Node,
+    source: &str,
+    file_path: &str,
+    parent: ParentScope<'_>,
+    symbols: &mut Vec<Symbol>,
+    edges: &mut Vec<Edge>,
+) -> bool {
+    let Some((label, call)) = test_block_call(stmt, source) else {
+        return false;
+    };
+    let callee_text = call
+        .child_by_field_name("function")
+        .map(|c| node_text(c, source))
+        .unwrap_or_default();
+
+    let start_line = stmt.start_position().row as u32 + 1;
+    let end_line = stmt.end_position().row as u32 + 1;
+    let args = call.child_by_field_name("arguments");
+    let body = args.and_then(|a| {
+        a.named_children(&mut a.walk())
+            .find(|c| c.kind() == "function_expression")
+    });
+    let is_async = body
+        .and_then(|b| b.child_by_field_name("body"))
+        .map(|b| node_text(b, source).trim_start().starts_with("async"))
+        .unwrap_or(false);
+
+    // Kind is always Function: a nested `test` is a test case, not a method.
+    let sym_id = symbol_id(file_path, SymbolKind::Function, &label, parent.qname);
+    let qname = qualified(parent.qname, &label);
+    symbols.push(
+        Symbol::new(
+            &label,
+            SymbolKind::Function,
+            file_path,
+            start_line,
+            end_line,
+            stmt.start_byte() as u32,
+            stmt.end_byte() as u32,
+            parent.qname,
+        )
+        .with_parent(parent.id)
+        .with_signature(Some(format!("{callee_text}('{label}')")))
+        .with_async(is_async)
+        .with_test(true),
+    );
+
+    if let Some(func_body) = body.and_then(|b| b.child_by_field_name("body")) {
+        let inner = ParentScope::nested(&sym_id, &qname);
+        if let Some(block) = func_body
+            .named_children(&mut func_body.walk())
+            .find(|c| c.kind() == "block")
+        {
+            walk_for_calls(block, source, file_path, &sym_id, edges);
+            walk_for_nested_decls(block, source, file_path, inner, symbols, edges);
+        }
+    }
+    true
 }
 
 // ── Type references ──
@@ -1375,12 +1507,38 @@ enum Color { red, green, blue }
         let consts: Vec<&str> = result
             .symbols
             .iter()
-            .filter(|s| s.kind == SymbolKind::Variable)
+            .filter(|s| s.kind == SymbolKind::EnumMember)
             .map(|s| s.name.as_str())
             .collect();
         assert!(consts.contains(&"red"));
         assert!(consts.contains(&"green"));
         assert!(consts.contains(&"blue"));
+    }
+
+    #[test]
+    fn test_enum_member_parented_to_enum() {
+        let result = extract("enum Color { red }");
+        let red = result.symbols.iter().find(|s| s.name == "red").unwrap();
+        assert_eq!(red.kind, SymbolKind::EnumMember);
+        assert!(red.parent_id.as_ref().unwrap().contains("Color"));
+    }
+
+    #[test]
+    fn test_class_field_and_top_level_var_stay_variable_kind() {
+        // Regression guard: enum-member re-kinding must not leak into the
+        // shared push_variable helper's other callers (fields, top-level vars).
+        let result = extract(
+            r#"
+class Dog {
+  final String name;
+}
+var counter = 0;
+"#,
+        );
+        let field = result.symbols.iter().find(|s| s.name == "name").unwrap();
+        assert_eq!(field.kind, SymbolKind::Variable);
+        let top_level = result.symbols.iter().find(|s| s.name == "counter").unwrap();
+        assert_eq!(top_level.kind, SymbolKind::Variable);
     }
 
     #[test]
@@ -1673,5 +1831,137 @@ Duration delay(DateTime t, Uri u, Exception? e) {
     fn test_syntax_error_partial_parse() {
         let result = extract("class Broken {");
         let _ = result.symbols.len();
+    }
+
+    #[test]
+    fn test_group_block_is_test_symbol() {
+        let result = extract(
+            r#"
+void main() {
+  group('AuthService', () {
+    test('rejects expired', () { expect(v('x'), isFalse); });
+  });
+}
+"#,
+        );
+        let group = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "AuthService")
+            .expect("group block symbol");
+        assert_eq!(group.kind, SymbolKind::Function);
+        assert!(group.is_test);
+    }
+
+    #[test]
+    fn test_nested_test_block_is_child_of_group() {
+        let result = extract(
+            r#"
+void main() {
+  group('AuthService', () {
+    test('rejects expired', () { expect(v('x'), isFalse); });
+  });
+}
+"#,
+        );
+        let group = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "AuthService")
+            .expect("group block symbol");
+        let test_case = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "rejects expired")
+            .expect("test block symbol");
+        assert_eq!(test_case.kind, SymbolKind::Function);
+        assert!(test_case.is_test);
+        assert_eq!(test_case.parent_id.as_deref(), Some(group.id.as_str()));
+    }
+
+    #[test]
+    fn test_widgets_block_recognized() {
+        let result = extract(
+            r#"
+void main() {
+  testWidgets('renders', (tester) async {
+    await tester.pumpWidget(MyApp());
+  });
+}
+"#,
+        );
+        let widget_test = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "renders")
+            .expect("testWidgets block symbol");
+        assert_eq!(widget_test.kind, SymbolKind::Function);
+        assert!(widget_test.is_test);
+    }
+
+    #[test]
+    fn test_call_inside_test_attributes_to_test_not_main() {
+        let result = extract(
+            r#"
+void main() {
+  test('rejects expired', () { verify('x'); });
+}
+"#,
+        );
+        let test_case = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "rejects expired")
+            .expect("test block symbol");
+        let call = result
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Calls && e.target_name == "verify")
+            .expect("verify() call edge");
+        assert_eq!(&call.source_id, &test_case.id);
+    }
+
+    #[test]
+    fn test_block_without_string_label_emits_no_symbol() {
+        let result = extract(
+            r#"
+void main() {
+  var someVar = 'x';
+  test(someVar, () {});
+}
+"#,
+        );
+        assert!(!result.symbols.iter().any(|s| s.is_test));
+    }
+
+    #[test]
+    fn test_regression_ordinary_class_and_function_unaffected() {
+        let result = extract(
+            r#"
+void main() {}
+
+class Dog {
+  final String name = 'Rex';
+  void speak() { print('bark'); }
+}
+
+int helper() => 1;
+"#,
+        );
+        let main_fn = result.symbols.iter().find(|s| s.name == "main").unwrap();
+        assert_eq!(main_fn.kind, SymbolKind::Function);
+        assert!(!main_fn.is_test);
+
+        let dog = result.symbols.iter().find(|s| s.name == "Dog").unwrap();
+        assert_eq!(dog.kind, SymbolKind::Class);
+
+        let speak = result.symbols.iter().find(|s| s.name == "speak").unwrap();
+        assert_eq!(speak.kind, SymbolKind::Method);
+
+        let field = result.symbols.iter().find(|s| s.name == "name").unwrap();
+        assert_eq!(field.kind, SymbolKind::Variable);
+
+        let helper = result.symbols.iter().find(|s| s.name == "helper").unwrap();
+        assert_eq!(helper.kind, SymbolKind::Function);
     }
 }

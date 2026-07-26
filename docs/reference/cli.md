@@ -50,7 +50,7 @@ function  validate_user     services/user.py:12
 
 Results ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
 
-Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `type-alias`, `trait`, `module`, `document`.
+Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `enum-member`, `type-alias`, `trait`, `module`, `document`, `macro`.
 
 ### `cartog outline <file>`
 

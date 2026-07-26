@@ -426,7 +426,7 @@ fn extract_enum(
                     symbols.push(
                         Symbol::new(
                             member_name,
-                            SymbolKind::Variable,
+                            SymbolKind::EnumMember,
                             file_path,
                             m_line,
                             m_line,
@@ -1499,7 +1499,24 @@ public class Foo {
         let status = result.symbols.iter().find(|s| s.name == "Status").unwrap();
         assert_eq!(status.kind, SymbolKind::Enum);
         let active = result.symbols.iter().find(|s| s.name == "Active").unwrap();
+        assert_eq!(active.kind, SymbolKind::EnumMember);
         assert!(active.parent_id.as_ref().unwrap().contains("Status"));
+    }
+
+    #[test]
+    fn test_enum_member_and_field_kinds_stay_distinct() {
+        // Regression guard: enum-member re-kinding must not leak into fields.
+        let result = extract(
+            r#"
+public enum Status { Active }
+public class Foo { private int _count; }
+"#,
+        );
+        let active = result.symbols.iter().find(|s| s.name == "Active").unwrap();
+        assert_eq!(active.kind, SymbolKind::EnumMember);
+        assert_eq!(active.parent_id.as_deref(), Some("Test.cs:enum:Status"));
+        let count = result.symbols.iter().find(|s| s.name == "_count").unwrap();
+        assert_eq!(count.kind, SymbolKind::Variable);
     }
 
     #[test]

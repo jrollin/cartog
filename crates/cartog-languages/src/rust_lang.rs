@@ -65,6 +65,7 @@ fn extract_node(
                 file_path,
                 parent_id,
                 parent_qname,
+                false,
                 symbols,
                 edges,
             );
@@ -125,6 +126,9 @@ fn extract_node(
         "type_item" => {
             extract_type_alias(node, source, file_path, parent_id, parent_qname, symbols);
         }
+        "macro_definition" => {
+            extract_macro_definition(node, source, file_path, parent_id, parent_qname, symbols);
+        }
         "attribute_item" | "inner_attribute_item" => {
             // Skip attributes, but process the next sibling
         }
@@ -146,12 +150,14 @@ fn extract_node(
 
 // ── Functions ──
 
+#[allow(clippy::too_many_arguments)]
 fn extract_function(
     node: Node,
     source: &str,
     file_path: &str,
     parent_id: Option<&str>,
     parent_qname: Option<&str>,
+    is_method: bool,
     symbols: &mut Vec<Symbol>,
     edges: &mut Vec<Edge>,
 ) {
@@ -160,7 +166,6 @@ fn extract_function(
         None => return,
     };
 
-    let is_method = parent_id.is_some();
     let kind = if is_method {
         SymbolKind::Method
     } else {
@@ -173,6 +178,7 @@ fn extract_function(
     let is_async = has_child_kind(node, "async");
     let signature = extract_fn_signature(node, source);
     let docstring = extract_doc_comment(node, source);
+    let is_test = has_test_attribute(node, source) || is_inside_cfg_test_mod(node, source);
 
     let sym_id = symbol_id(file_path, kind, &name, parent_qname);
     symbols.push(
@@ -190,6 +196,7 @@ fn extract_function(
         .with_signature(signature)
         .with_visibility(visibility)
         .with_async(is_async)
+        .with_test(is_test)
         .with_docstring(docstring),
     );
 
@@ -221,9 +228,10 @@ fn extract_struct(
     let visibility = rust_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
 
+    let sym_id = symbol_id(file_path, SymbolKind::Class, &name, parent_qname);
     symbols.push(
         Symbol::new(
-            name,
+            name.clone(),
             SymbolKind::Class,
             file_path,
             start_line,
@@ -235,6 +243,58 @@ fn extract_struct(
         .with_parent(parent_id)
         .with_visibility(visibility)
         .with_docstring(docstring),
+    );
+
+    let struct_qname = match parent_qname {
+        Some(pq) => format!("{pq}.{name}"),
+        None => name,
+    };
+
+    // Tuple-struct fields are positional (`field_declaration_list` absent) — no useful name to emit.
+    if let Some(body) = node.child_by_field_name("body") {
+        if body.kind() == "field_declaration_list" {
+            for field in body.named_children(&mut body.walk()) {
+                if field.kind() == "field_declaration" {
+                    extract_struct_field(field, source, file_path, &sym_id, &struct_qname, symbols);
+                }
+            }
+        }
+    }
+}
+
+fn extract_struct_field(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    parent_id: &str,
+    parent_qname: &str,
+    symbols: &mut Vec<Symbol>,
+) {
+    let name = match node.child_by_field_name("name") {
+        Some(n) => node_text(n, source).to_string(),
+        None => return,
+    };
+
+    let start_line = node.start_position().row as u32 + 1;
+    let visibility = rust_visibility(node, source);
+    let signature = node
+        .child_by_field_name("type")
+        .map(|t| node_text(t, source).to_string());
+
+    symbols.push(
+        Symbol::new(
+            name,
+            SymbolKind::Variable,
+            file_path,
+            start_line,
+            node.end_position().row as u32 + 1,
+            node.start_byte() as u32,
+            node.end_byte() as u32,
+            Some(parent_qname),
+        )
+        .with_parent(Some(parent_id))
+        .with_signature(signature)
+        .with_visibility(visibility),
     );
 }
 
@@ -257,9 +317,10 @@ fn extract_enum(
     let visibility = rust_visibility(node, source);
     let docstring = extract_doc_comment(node, source);
 
+    let sym_id = symbol_id(file_path, SymbolKind::Enum, &name, parent_qname);
     symbols.push(
         Symbol::new(
-            name,
+            name.clone(),
             SymbolKind::Enum,
             file_path,
             start_line,
@@ -270,6 +331,62 @@ fn extract_enum(
         )
         .with_parent(parent_id)
         .with_visibility(visibility)
+        .with_docstring(docstring),
+    );
+
+    let enum_qname = match parent_qname {
+        Some(pq) => format!("{pq}.{name}"),
+        None => name,
+    };
+
+    if let Some(body) = node.child_by_field_name("body") {
+        for variant in body.named_children(&mut body.walk()) {
+            if variant.kind() == "enum_variant" {
+                extract_enum_variant(
+                    variant,
+                    source,
+                    file_path,
+                    &sym_id,
+                    &enum_qname,
+                    visibility,
+                    symbols,
+                );
+            }
+        }
+    }
+}
+
+fn extract_enum_variant(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    parent_id: &str,
+    parent_qname: &str,
+    enum_visibility: Visibility,
+    symbols: &mut Vec<Symbol>,
+) {
+    let name = match node.child_by_field_name("name") {
+        Some(n) => node_text(n, source).to_string(),
+        None => return,
+    };
+
+    let start_line = node.start_position().row as u32 + 1;
+    let docstring = extract_doc_comment(node, source);
+
+    symbols.push(
+        Symbol::new(
+            name,
+            SymbolKind::EnumMember,
+            file_path,
+            start_line,
+            node.end_position().row as u32 + 1,
+            node.start_byte() as u32,
+            node.end_byte() as u32,
+            Some(parent_qname),
+        )
+        .with_parent(Some(parent_id))
+        // A variant has no visibility of its own — it inherits the enum's.
+        .with_visibility(enum_visibility)
         .with_docstring(docstring),
     );
 }
@@ -398,6 +515,7 @@ fn extract_impl(
                     file_path,
                     Some(&impl_parent_id),
                     Some(&impl_qname),
+                    true,
                     symbols,
                     edges,
                 );
@@ -648,6 +766,42 @@ fn extract_const(
     }
 }
 
+// ── Macro definitions ──
+
+fn extract_macro_definition(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    parent_id: Option<&str>,
+    parent_qname: Option<&str>,
+    symbols: &mut Vec<Symbol>,
+) {
+    let name = match node.child_by_field_name("name") {
+        Some(n) => node_text(n, source).to_string(),
+        None => return,
+    };
+
+    let start_line = node.start_position().row as u32 + 1;
+    let visibility = rust_visibility(node, source);
+    let docstring = extract_doc_comment(node, source);
+
+    symbols.push(
+        Symbol::new(
+            name,
+            SymbolKind::Macro,
+            file_path,
+            start_line,
+            node.end_position().row as u32 + 1,
+            node.start_byte() as u32,
+            node.end_byte() as u32,
+            parent_qname,
+        )
+        .with_parent(parent_id)
+        .with_visibility(visibility)
+        .with_docstring(docstring),
+    );
+}
+
 // ── Type aliases ──
 
 fn extract_type_alias(
@@ -872,6 +1026,78 @@ fn extract_fn_signature(node: Node, source: &str) -> Option<String> {
     });
 
     Some(format!("{params_text}{}", return_type.unwrap_or_default()))
+}
+
+/// True when a preceding `#[...]` marks this item as a test: `#[test]`,
+/// `#[bench]`, or any path ending in `::test` (`#[tokio::test]`, `#[rstest]`…).
+///
+/// Attributes are *preceding siblings* of the item, not children, so this walks
+/// backwards the same way [`extract_doc_comment`] does.
+fn has_test_attribute(node: Node, source: &str) -> bool {
+    let mut prev = node.prev_sibling();
+    while let Some(p) = prev {
+        match p.kind() {
+            "attribute_item" => {
+                let text = node_text(p, source);
+                // Trim the `#[...]` wrapper and any argument list, then compare the
+                // final path segment so `#[tokio::test]` matches but `#[testing]` does not.
+                let inner = text
+                    .trim_start_matches('#')
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .trim();
+                let path = inner.split('(').next().unwrap_or(inner).trim();
+                let last = path.rsplit("::").next().unwrap_or(path).trim();
+                if matches!(last, "test" | "bench") || path == "rstest" {
+                    return true;
+                }
+            }
+            // Doc comments sit between the attribute and the item.
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        prev = p.prev_sibling();
+    }
+    false
+}
+
+/// True when `node` sits inside a `#[cfg(test)]` module, so it is test code even
+/// without its own `#[test]` (helpers, fixtures, and the `mod tests` convention).
+///
+/// Derived by walking ancestors rather than threaded as a parameter: every
+/// extractor arm would otherwise need to forward the flag.
+fn is_inside_cfg_test_mod(node: Node, source: &str) -> bool {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        if n.kind() == "mod_item" && has_cfg_test_attribute(n, source) {
+            return true;
+        }
+        cur = n.parent();
+    }
+    false
+}
+
+/// True when a preceding `#[cfg(test)]` (or `#[cfg(all(test, …))]`) gates this item.
+fn has_cfg_test_attribute(node: Node, source: &str) -> bool {
+    let mut prev = node.prev_sibling();
+    while let Some(p) = prev {
+        match p.kind() {
+            "attribute_item" => {
+                // Whitespace-insensitive so `#[cfg( test )]` and `cfg(all(test, x))` match.
+                let text: String = node_text(p, source)
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                if text.contains("cfg(test)") || text.contains("(test,") {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        prev = p.prev_sibling();
+    }
+    false
 }
 
 fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
@@ -1427,5 +1653,277 @@ fn connect(cfg: &crate::Config) -> io::Result<Connection> {
     fn test_syntax_error_partial_parse() {
         let result = extract("fn broken( { }");
         let _ = result.symbols.len();
+    }
+
+    #[test]
+    fn test_enum_variants() {
+        let result = extract(
+            r#"
+pub enum Shape {
+    Unit,
+    Circle(f64),
+    Rectangle { width: f64, height: f64 },
+}
+"#,
+        );
+
+        let e = result.symbols.iter().find(|s| s.name == "Shape").unwrap();
+        assert_eq!(e.kind, SymbolKind::Enum);
+
+        let variants: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::EnumMember)
+            .collect();
+        assert_eq!(variants.len(), 3);
+        for variant in &variants {
+            assert_eq!(variant.parent_id.as_deref(), Some(e.id.as_str()));
+        }
+
+        let names: Vec<&str> = variants.iter().map(|v| v.name.as_str()).collect();
+        assert!(names.contains(&"Unit"));
+        assert!(names.contains(&"Circle"));
+        assert!(names.contains(&"Rectangle"));
+
+        // Inner fields of a struct-like variant are not emitted as their own symbols.
+        assert!(!result.symbols.iter().any(|s| s.name == "width"));
+    }
+
+    #[test]
+    fn test_struct_named_fields() {
+        let result = extract(
+            r#"
+pub struct User {
+    pub name: String,
+    age: u32,
+}
+"#,
+        );
+
+        let user = result.symbols.iter().find(|s| s.name == "User").unwrap();
+        assert_eq!(user.kind, SymbolKind::Class);
+
+        let fields: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Variable)
+            .collect();
+        assert_eq!(fields.len(), 2);
+
+        let name_field = fields.iter().find(|f| f.name == "name").unwrap();
+        assert_eq!(name_field.parent_id.as_deref(), Some(user.id.as_str()));
+        assert_eq!(name_field.visibility, Visibility::Public);
+        assert_eq!(name_field.signature.as_deref(), Some("String"));
+
+        let age_field = fields.iter().find(|f| f.name == "age").unwrap();
+        assert_eq!(age_field.visibility, Visibility::Private);
+        assert_eq!(age_field.signature.as_deref(), Some("u32"));
+    }
+
+    #[test]
+    fn test_tuple_struct_has_no_field_symbols() {
+        let result = extract("pub struct Point(f32, f32);");
+
+        let point = result.symbols.iter().find(|s| s.name == "Point").unwrap();
+        assert_eq!(point.kind, SymbolKind::Class);
+
+        let fields: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Variable)
+            .collect();
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn test_macro_rules_definition() {
+        let result = extract(
+            r#"
+#[macro_export]
+macro_rules! foo {
+    () => {};
+}
+"#,
+        );
+
+        let mac = result.symbols.iter().find(|s| s.name == "foo").unwrap();
+        assert_eq!(mac.kind, SymbolKind::Macro);
+    }
+
+    #[test]
+    fn test_fn_inside_mod_is_function_not_method() {
+        let result = extract(
+            r#"
+mod tests {
+    fn helper() {}
+}
+"#,
+        );
+
+        let module = result.symbols.iter().find(|s| s.name == "tests").unwrap();
+        let helper = result.symbols.iter().find(|s| s.name == "helper").unwrap();
+        assert_eq!(helper.kind, SymbolKind::Function);
+        assert_eq!(helper.parent_id.as_deref(), Some(module.id.as_str()));
+    }
+
+    #[test]
+    fn test_fn_inside_impl_is_method() {
+        let result = extract(
+            r#"
+struct Foo;
+
+impl Foo {
+    fn bar() {}
+}
+"#,
+        );
+
+        let bar = result.symbols.iter().find(|s| s.name == "bar").unwrap();
+        assert_eq!(bar.kind, SymbolKind::Method);
+    }
+
+    #[test]
+    fn test_top_level_fn_is_function() {
+        let result = extract("fn standalone() {}");
+
+        let f = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "standalone")
+            .unwrap();
+        assert_eq!(f.kind, SymbolKind::Function);
+    }
+
+    #[test]
+    fn test_fn_inside_nested_mod_is_function() {
+        let result = extract(
+            r#"
+mod outer {
+    mod inner {
+        fn deep() {}
+    }
+}
+"#,
+        );
+
+        let deep = result.symbols.iter().find(|s| s.name == "deep").unwrap();
+        assert_eq!(deep.kind, SymbolKind::Function);
+        assert!(deep.parent_id.is_some());
+    }
+
+    // ── #[test] flagging ──
+
+    fn f<'a>(r: &'a ExtractionResult, name: &str) -> &'a Symbol {
+        r.symbols
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("no symbol {name:?}"))
+    }
+
+    #[test]
+    fn plain_test_attribute_sets_is_test() {
+        let r = extract("#[test]\nfn checks_it() {}\n");
+        assert!(f(&r, "checks_it").is_test);
+    }
+
+    #[test]
+    fn qualified_test_attributes_set_is_test() {
+        for attr in [
+            "#[tokio::test]",
+            "#[async_std::test]",
+            "#[bench]",
+            "#[rstest]",
+        ] {
+            let r = extract(&format!("{attr}\nfn t() {{}}\n"));
+            assert!(f(&r, "t").is_test, "{attr} not recognized");
+        }
+    }
+
+    #[test]
+    fn attribute_below_a_doc_comment_still_sets_is_test() {
+        let r = extract("/// Docs.\n#[test]\nfn documented() {}\n");
+        let s = f(&r, "documented");
+        assert!(s.is_test);
+        assert!(s.docstring.is_some(), "doc comment must survive too");
+    }
+
+    #[test]
+    fn every_fn_in_a_cfg_test_mod_is_test_including_helpers() {
+        let r = extract(
+            "#[cfg(test)]\nmod tests {\n    #[test]\n    fn case() {}\n    fn helper() {}\n}\n",
+        );
+        assert!(f(&r, "case").is_test);
+        // A helper in a test module is test code even without its own attribute.
+        assert!(f(&r, "helper").is_test);
+    }
+
+    #[test]
+    fn cfg_test_applies_to_deeply_nested_fns() {
+        let r =
+            extract("#[cfg(test)]\nmod outer {\n    mod inner {\n        fn deep() {}\n    }\n}\n");
+        assert!(f(&r, "deep").is_test);
+    }
+
+    #[test]
+    fn methods_in_a_cfg_test_mod_are_flagged() {
+        let r = extract("#[cfg(test)]\nmod tests {\n    struct H;\n    impl H {\n        fn m(&self) {}\n    }\n}\n");
+        let m = f(&r, "m");
+        assert_eq!(m.kind, SymbolKind::Method);
+        assert!(m.is_test);
+    }
+
+    #[test]
+    fn production_code_is_never_flagged_as_test() {
+        let r = extract("pub fn validate(x: u8) -> bool { x > 0 }\n");
+        assert!(!f(&r, "validate").is_test);
+    }
+
+    #[test]
+    fn similarly_named_attributes_do_not_false_positive() {
+        // `#[testing]`/`#[test_case]` are not test markers; only a `test` path segment is.
+        for attr in ["#[testing]", "#[test_util]", "#[derive(Debug)]"] {
+            let r = extract(&format!("{attr}\nfn t() {{}}\n"));
+            assert!(!f(&r, "t").is_test, "{attr} wrongly flagged");
+        }
+    }
+
+    #[test]
+    fn a_non_cfg_test_mod_does_not_flag_its_fns() {
+        let r = extract("mod util {\n    fn helper() {}\n}\n");
+        assert!(!f(&r, "helper").is_test);
+    }
+
+    #[test]
+    fn cfg_test_combined_with_other_predicates_is_recognized() {
+        let r = extract("#[cfg(all(test, feature = \"x\"))]\nmod tests {\n    fn helper() {}\n}\n");
+        assert!(f(&r, "helper").is_test);
+    }
+
+    /// A Rust variant carries no `pub` of its own — it is as visible as its enum.
+    #[test]
+    fn enum_variants_inherit_the_enums_visibility() {
+        let r = extract("pub enum Color { Red, Green }\nenum Hidden { A }\n");
+        for v in ["Red", "Green"] {
+            let s = r.symbols.iter().find(|s| s.name == v).expect("variant");
+            assert_eq!(s.kind, SymbolKind::EnumMember);
+            assert_eq!(s.visibility, Visibility::Public, "{v} of a pub enum");
+        }
+        let a = r.symbols.iter().find(|s| s.name == "A").expect("variant");
+        assert_eq!(
+            a.visibility,
+            Visibility::Private,
+            "variant of a private enum"
+        );
+    }
+
+    /// Struct fields DO have their own visibility — guard against the enum fix
+    /// leaking into them.
+    #[test]
+    fn struct_fields_keep_their_own_visibility() {
+        let r = extract("pub struct P { pub x: i32, y: i32 }\n");
+        let x = r.symbols.iter().find(|s| s.name == "x").expect("field x");
+        let y = r.symbols.iter().find(|s| s.name == "y").expect("field y");
+        assert_eq!(x.visibility, Visibility::Public);
+        assert_eq!(y.visibility, Visibility::Private);
     }
 }

@@ -153,6 +153,9 @@ impl Database {
 
     /// Like [`Self::fts5_search`] but filters by kind in SQL, so a prose query
     /// doesn't spend the whole `limit` budget on `Document` (markdown) hits.
+    ///
+    /// Production code and tests are retrieved as separate arms so neither can
+    /// starve the other — see the comment on the query below.
     pub fn fts5_search_kinded(
         &self,
         query: &str,
@@ -165,6 +168,10 @@ impl Database {
             KindScope::CodeOnly => ("AND s.kind NOT IN ('document', 'import')", None),
             KindScope::Exact(k) => ("AND s.kind = ?3", Some(k.as_str())),
         };
+        // Test names restate the query ("test_resolve_edges" for "how are edges
+        // resolved"), so on a test-heavy repo tests fill the whole `limit` before
+        // the implementation is reached — the same starvation `CodeOnly` was added
+        // to prevent for `Document` hits.
         let sql = if matches!(scope, KindScope::All) {
             "SELECT sc.symbol_id
              FROM symbol_fts f
@@ -174,30 +181,55 @@ impl Database {
              LIMIT ?2"
                 .to_string()
         } else {
+            // Two independent arms, each with its own LIMIT and NO outer LIMIT:
+            // an outer limit would truncate the second arm entirely (production
+            // rows come first in the union), which is the starvation this exists
+            // to prevent. Production gets the full budget, tests half of it, and
+            // the reranker decides the final mix — retrieval cannot tell a
+            // code-seeking query from a test-seeking one.
             format!(
-                "SELECT sc.symbol_id
-                 FROM symbol_fts f
-                 JOIN symbol_content sc ON sc.rowid = f.rowid
-                 JOIN symbols s ON s.id = sc.symbol_id
-                 WHERE symbol_fts MATCH ?1 {where_kind}
-                 ORDER BY rank
-                 LIMIT ?2"
+                "SELECT symbol_id FROM (
+                     SELECT sc.symbol_id AS symbol_id, rank AS r
+                     FROM symbol_fts f
+                     JOIN symbol_content sc ON sc.rowid = f.rowid
+                     JOIN symbols s ON s.id = sc.symbol_id
+                     WHERE symbol_fts MATCH ?1 {where_kind} AND s.is_test = 0
+                     ORDER BY rank LIMIT ?2
+                 )
+                 UNION ALL
+                 SELECT symbol_id FROM (
+                     SELECT sc.symbol_id AS symbol_id, rank AS r
+                     FROM symbol_fts f
+                     JOIN symbol_content sc ON sc.rowid = f.rowid
+                     JOIN symbols s ON s.id = sc.symbol_id
+                     WHERE symbol_fts MATCH ?1 {where_kind} AND s.is_test = 1
+                     ORDER BY rank LIMIT MAX(?2 / 2, 1)
+                 )"
             )
         };
         let ctx =
             || format!("fts5_search_kinded (scope={scope:?}, query={query:?}, limit={limit})");
         let mut stmt = self.conn.prepare(&sql).with_context(ctx)?;
-        let rows: Vec<String> = match kind_param {
-            Some(k) => stmt
-                .query_map(params![query, limit, k], |row| row.get(0))
+        let rows: Vec<String> = if matches!(scope, KindScope::All) {
+            stmt.query_map(params![query, limit], |row| row.get(0))
                 .with_context(ctx)?
                 .collect::<std::result::Result<_, _>>()
-                .with_context(ctx)?,
-            None => stmt
-                .query_map(params![query, limit], |row| row.get(0))
                 .with_context(ctx)?
-                .collect::<std::result::Result<_, _>>()
-                .with_context(ctx)?,
+        } else {
+            // Bind `?3` only for `Exact`, whose SQL is the only variant naming it —
+            // rusqlite rejects a parameter the statement does not use.
+            match kind_param {
+                Some(k) => stmt
+                    .query_map(params![query, limit, k], |row| row.get(0))
+                    .with_context(ctx)?
+                    .collect::<std::result::Result<_, _>>()
+                    .with_context(ctx)?,
+                None => stmt
+                    .query_map(params![query, limit], |row| row.get(0))
+                    .with_context(ctx)?
+                    .collect::<std::result::Result<_, _>>()
+                    .with_context(ctx)?,
+            }
         };
         Ok(rows)
     }
@@ -430,7 +462,7 @@ impl Database {
         self.conn
             .query_row(
                 "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                        parent_id, signature, visibility, is_async, docstring, in_degree,
+                        parent_id, signature, visibility, is_async, is_test, docstring, in_degree,
                     content_hash, subtree_hash
                  FROM symbols WHERE id = ?1",
                 params![id],
@@ -448,7 +480,7 @@ impl Database {
         let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
         let sql = format!(
             "SELECT id, name, kind, file_path, start_line, end_line, start_byte, end_byte,
-                    parent_id, signature, visibility, is_async, docstring, in_degree,
+                    parent_id, signature, visibility, is_async, is_test, docstring, in_degree,
                     content_hash, subtree_hash
              FROM symbols WHERE id IN ({})",
             placeholders.join(",")

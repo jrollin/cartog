@@ -58,7 +58,10 @@ fn extract_node(
 ) {
     crate::parse::guard_recursion!();
     match node.kind() {
-        "class_declaration" | "enum_declaration" | "annotation_type_declaration" => {
+        "class_declaration"
+        | "enum_declaration"
+        | "annotation_type_declaration"
+        | "record_declaration" => {
             extract_class_like(
                 node,
                 source,
@@ -174,6 +177,21 @@ fn extract_class_like(
             EdgeKind::Implements,
             edges,
         );
+    }
+
+    // Record components (implicit fields from the header parameter list)
+    if node.kind() == "record_declaration" {
+        if let Some(params) = node.child_by_field_name("parameters") {
+            extract_record_components(
+                params,
+                source,
+                file_path,
+                &sym_id,
+                &class_qname,
+                symbols,
+                edges,
+            );
+        }
     }
 
     // Walk body for methods, constructors, fields, nested named classes
@@ -319,7 +337,8 @@ fn extract_class_body(
             "class_declaration"
             | "interface_declaration"
             | "enum_declaration"
-            | "annotation_type_declaration" => {
+            | "annotation_type_declaration"
+            | "record_declaration" => {
                 if child.kind() == "interface_declaration" {
                     extract_interface(
                         child,
@@ -352,6 +371,9 @@ fn extract_class_body(
                     symbols,
                     edges,
                 );
+            }
+            "enum_constant" => {
+                extract_enum_constant(child, source, file_path, parent_id, parent_qname, symbols);
             }
             _ => {}
         }
@@ -521,6 +543,86 @@ fn extract_field(
             }
         }
     }
+}
+
+// ── Record components (implicit fields declared in the record header) ──
+
+fn extract_record_components(
+    params: Node,
+    source: &str,
+    file_path: &str,
+    parent_id: &str,
+    parent_qname: &str,
+    symbols: &mut Vec<Symbol>,
+    edges: &mut Vec<Edge>,
+) {
+    for param in params.named_children(&mut params.walk()) {
+        if param.kind() != "formal_parameter" {
+            continue;
+        }
+        let name = match param.child_by_field_name("name") {
+            Some(n) => node_text(n, source).to_string(),
+            None => continue,
+        };
+        let type_node = param.child_by_field_name("type");
+        let signature = type_node.map(|t| format!("{} {name}", node_text(t, source)));
+        let start_line = param.start_position().row as u32 + 1;
+        let end_line = param.end_position().row as u32 + 1;
+
+        let sym_id = symbol_id(file_path, SymbolKind::Variable, &name, Some(parent_qname));
+        // Record components are implicitly public — no modifiers node to inspect.
+        symbols.push(
+            Symbol::new(
+                name,
+                SymbolKind::Variable,
+                file_path,
+                start_line,
+                end_line,
+                param.start_byte() as u32,
+                param.end_byte() as u32,
+                Some(parent_qname),
+            )
+            .with_parent(Some(parent_id))
+            .with_signature(signature),
+        );
+
+        if let Some(tn) = type_node {
+            collect_type_refs(tn, source, file_path, &sym_id, start_line, edges);
+        }
+    }
+}
+
+// ── Enum constants ──
+
+fn extract_enum_constant(
+    node: Node,
+    source: &str,
+    file_path: &str,
+    parent_id: &str,
+    parent_qname: &str,
+    symbols: &mut Vec<Symbol>,
+) {
+    let name = match node.child_by_field_name("name") {
+        Some(n) => node_text(n, source).to_string(),
+        None => return,
+    };
+    let start_line = node.start_position().row as u32 + 1;
+    let end_line = node.end_position().row as u32 + 1;
+
+    // Enum constants are implicitly public — no modifiers node to inspect.
+    symbols.push(
+        Symbol::new(
+            name,
+            SymbolKind::EnumMember,
+            file_path,
+            start_line,
+            end_line,
+            node.start_byte() as u32,
+            node.end_byte() as u32,
+            Some(parent_qname),
+        )
+        .with_parent(Some(parent_id)),
+    );
 }
 
 // ── Imports ──
@@ -1507,5 +1609,145 @@ public class Foo {
         assert!(targets.contains(&"Response"));
         assert!(targets.contains(&"Request"));
         assert!(targets.contains(&"Context"));
+    }
+
+    #[test]
+    fn test_record() {
+        let result = extract(
+            r#"
+public record UserDto(String name, int age) {
+}
+"#,
+        );
+        let sym = result.symbols.iter().find(|s| s.name == "UserDto").unwrap();
+        assert_eq!(sym.kind, SymbolKind::Class);
+        assert_eq!(sym.visibility, Visibility::Public);
+    }
+
+    #[test]
+    fn test_record_components() {
+        let result = extract(
+            r#"
+public record UserDto(String name, int age) {
+}
+"#,
+        );
+        let record = result.symbols.iter().find(|s| s.name == "UserDto").unwrap();
+        let record_id = record.id.clone();
+
+        let name_field = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "name" && s.kind == SymbolKind::Variable)
+            .unwrap();
+        assert_eq!(name_field.parent_id.as_deref(), Some(record_id.as_str()));
+        assert_eq!(name_field.signature.as_deref(), Some("String name"));
+
+        let age_field = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "age" && s.kind == SymbolKind::Variable)
+            .unwrap();
+        assert_eq!(age_field.parent_id.as_deref(), Some(record_id.as_str()));
+        assert_eq!(age_field.signature.as_deref(), Some("int age"));
+    }
+
+    #[test]
+    fn test_record_method() {
+        let result = extract(
+            r#"
+public record UserDto(String name, int age) {
+    public String describe() {
+        return name + " " + age;
+    }
+}
+"#,
+        );
+        let method = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "describe" && s.kind == SymbolKind::Method)
+            .unwrap();
+        assert!(method.parent_id.is_some());
+    }
+
+    #[test]
+    fn test_nested_record() {
+        let result = extract(
+            r#"
+public class Outer {
+    public record Point(int x, int y) {
+    }
+}
+"#,
+        );
+        let point = result.symbols.iter().find(|s| s.name == "Point").unwrap();
+        assert_eq!(point.kind, SymbolKind::Class);
+        assert!(point.parent_id.is_some());
+        assert!(point.parent_id.as_ref().unwrap().contains("Outer"));
+
+        let x_field = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "x" && s.kind == SymbolKind::Variable)
+            .unwrap();
+        assert!(x_field.parent_id.as_ref().unwrap().contains("Point"));
+    }
+
+    #[test]
+    fn test_enum_constants() {
+        let result = extract(
+            r#"
+public enum Status {
+    ACTIVE, INACTIVE;
+}
+"#,
+        );
+        let status = result.symbols.iter().find(|s| s.name == "Status").unwrap();
+        let status_id = status.id.clone();
+
+        let active = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "ACTIVE" && s.kind == SymbolKind::EnumMember)
+            .unwrap();
+        assert_eq!(active.parent_id.as_deref(), Some(status_id.as_str()));
+
+        let inactive = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "INACTIVE" && s.kind == SymbolKind::EnumMember)
+            .unwrap();
+        assert_eq!(inactive.parent_id.as_deref(), Some(status_id.as_str()));
+    }
+
+    #[test]
+    fn test_enum_constants_and_body_declarations() {
+        let result = extract(
+            r#"
+public enum Status {
+    ACTIVE, INACTIVE;
+
+    public boolean isActive() {
+        return this == ACTIVE;
+    }
+}
+"#,
+        );
+        let constants: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::EnumMember)
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(constants.contains(&"ACTIVE"));
+        assert!(constants.contains(&"INACTIVE"));
+
+        let method = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "isActive" && s.kind == SymbolKind::Method)
+            .unwrap();
+        assert!(method.parent_id.is_some());
     }
 }
