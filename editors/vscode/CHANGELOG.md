@@ -1,10 +1,20 @@
 # Changelog
 
-All notable changes to the cartog VS Code extension.
+## [0.32.0] - 2026-07-26
 
-The version tracks the cartog binary release it ships against.
+### Bug Fixes
 
-## Unreleased
+- **lang**: Extract nested C enums and C++ function-pointer members
+- **lang**: Rust enum variants inherit the enum's visibility
+- **rag**: Stop test bodies crowding out code in semantic search
+
+### Features
+
+- **lang**: Add C and C++ support (17th and 18th languages)
+- **lang**: Add EnumMember and Macro kinds, fix extraction gaps
+- Detect test code and demote it in search ranking
+
+## [0.30.1] - 2026-06-26
 
 ### Added
 

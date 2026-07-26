@@ -22,7 +22,16 @@ platform-agnostic, and independent of the release build matrix.
 ```
 
 The script keeps `editors/vscode/package.json` in lockstep with the workspace
-version, commits, tags `vX.Y.Z`, and pushes. On the tag, `release.yml` runs the
+version, commits, tags `vX.Y.Z`, and pushes.
+
+It also generates `editors/vscode/CHANGELOG.md` (the Marketplace renders it)
+with git-cliff, using the **same config and commit range as the root
+`CHANGELOG.md`**. That is deliberate: the extension is only a launcher, so the
+notes users care about are the bundled binary's changes. A path-scoped run over
+`editors/vscode/` would emit empty sections, because most releases touch that
+directory solely via the `chore: bump version` commit that `cliff.toml` skips.
+Keep the file's header bare (`# Changelog`) — `--prepend` inserts the new
+section right after it, so prose there would end up under the wrong version. On the tag, `release.yml` runs the
 `publish-vscode` job, which:
 
 1. installs Node deps and compiles the extension (`vscode:prepublish` → `tsc`),

@@ -5,6 +5,7 @@ CARGO_TOML="Cargo.toml"
 PLUGIN_JSON=".claude-plugin/plugin.json"
 INSTALL_SKILL="skills/cartog-install/SKILL.md"
 VSCODE_PKG="editors/vscode/package.json"
+VSCODE_CHANGELOG="editors/vscode/CHANGELOG.md"
 
 # ── helpers ──────────────────────────────────────────────────────────
 die()  { echo "error: $*" >&2; exit 1; }
@@ -171,12 +172,26 @@ if command -v git-cliff &>/dev/null; then
   # release degrades instead of aborting after the version bump is applied.
   [[ -f CHANGELOG.md ]] || printf '# Changelog\n\n' > CHANGELOG.md
   git-cliff --config cliff.toml --tag "$TAG" --prepend CHANGELOG.md $RANGE
+
+  # The VS Code extension ships its own CHANGELOG.md (the Marketplace renders
+  # it). The extension is only a launcher, so its notes are the *binary's*
+  # changes — same config and range as the root file, not a path-scoped run:
+  # scoping to editors/vscode/ yields empty sections, since most releases touch
+  # it solely via the skipped "chore: bump version" commit.
+  if [[ -f "$VSCODE_CHANGELOG" ]]; then
+    info "generating $VSCODE_CHANGELOG with git-cliff"
+    git-cliff --config cliff.toml --tag "$TAG" --prepend "$VSCODE_CHANGELOG" $RANGE
+    if ! grep -q "^## \[${NEW}\]" "$VSCODE_CHANGELOG"; then
+      die "changelog section did not stick in $VSCODE_CHANGELOG"
+    fi
+  fi
 else
   info "git-cliff not found — skipping local CHANGELOG.md update (CI will still generate release notes)"
 fi
 
 info "committing version bump"
-git add "$CARGO_TOML" Cargo.lock "$PLUGIN_JSON" "$INSTALL_SKILL" "$VSCODE_PKG" site/ CHANGELOG.md
+git add "$CARGO_TOML" Cargo.lock "$PLUGIN_JSON" "$INSTALL_SKILL" "$VSCODE_PKG" \
+        "$VSCODE_CHANGELOG" site/ CHANGELOG.md
 git commit -m "chore: bump version to ${NEW}"
 
 info "tagging $TAG"

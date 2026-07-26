@@ -5,7 +5,7 @@ Code-graph navigation and semantic search for AI coding agents, inside VS Code.
 This extension registers [cartog](https://github.com/jrollin/cartog) as an MCP
 server with GitHub Copilot. Copilot's agent can then call cartog's 16 tools —
 symbol search, semantic search, references, call-path tracing, impact analysis,
-and more — across Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP,
+and more — across Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, C#, PHP,
 C, C++, Dart, Swift, Kotlin, Vue, Svelte, Astro, and Markdown.
 
 ## What it does
@@ -17,6 +17,11 @@ editing `.vscode/mcp.json`** and without the GUI-launch `PATH` problem that a
 hand-written config hits when VS Code is opened from Finder or the Dock.
 
 It ships no binary and adds no new tools — the same `cartog` the CLI runs.
+
+Because of that, the extension's version tracks the `cartog` release it targets,
+and its [changelog](CHANGELOG.md) lists that release's changes: new languages,
+search and indexing fixes, and other binary-side improvements you get through
+Copilot. Entries are generated from the cartog release history.
 
 ## Requirements
 
