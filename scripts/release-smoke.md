@@ -134,5 +134,7 @@ release. After removal, pre-0.14 users will be told to reinstall via
 ## After all checks pass
 
 - Tag the release: `./scripts/release.sh patch|minor|major`
-- CI will build binaries, publish to crates.io, and create the GitHub
-  release.
+- CI runs in order: build the binaries, create the GitHub release with its
+  assets, then publish to crates.io and the VS Code marketplaces. The two
+  publish jobs are gated on the release so neither advertises a version whose
+  tarballs are not yet downloadable.

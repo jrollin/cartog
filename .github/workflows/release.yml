@@ -230,7 +230,10 @@ jobs:
   # `cartog self update` overwrite cargo-managed binaries.
   publish:
     name: Publish to crates.io
-    needs: build
+    # Gated on `release` (not `build`) so the GitHub Release and its tarballs
+    # exist before crates.io advertises the version — otherwise a user who
+    # upgrades in that window resolves a tag with no downloadable assets.
+    needs: release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -262,13 +265,19 @@ jobs:
           done
 
   # Publish the VS Code extension to the Visual Studio Marketplace (vsce) and
-  # Open VSX (ovsx, for Cursor / Windsurf / VSCodium). The extension bundles no
-  # binary — it spawns the user's installed `cartog serve` — so it does not
-  # depend on the `build` job's artifacts. Its version is kept in lockstep with
-  # the workspace version by scripts/release.sh, so the tag and the published
-  # extension version always match.
+  # Open VSX (ovsx, for Cursor / Windsurf / VSCodium). Its version is kept in
+  # lockstep with the workspace version by scripts/release.sh, so the tag and
+  # the published extension version always match.
+  #
+  # The extension bundles no binary, but its in-editor "Install cartog" action
+  # pins CARTOG_VERSION to the extension's own version, so install.sh asserts
+  # `releases/download/v<version>/` instead of discovering it via
+  # `releases/latest`. Gate on `release` so that URL exists before the
+  # Marketplace serves the version — otherwise Install 404s for anyone who
+  # upgrades in the gap.
   publish-vscode:
     name: Publish VS Code extension
+    needs: release
     runs-on: ubuntu-latest
     defaults:
       run:

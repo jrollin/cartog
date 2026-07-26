@@ -34,7 +34,9 @@ version, commits, tags `vX.Y.Z`, and pushes. On the tag, `release.yml` runs the
 6. uploads the `.vsix` as a build artifact.
 
 The extension publish and the crates.io publish are **independent jobs** in the
-same workflow, so one failing does not roll back the other.
+same workflow, so one failing does not roll back the other. Both are gated on
+the `release` job (see below), so neither can advertise a version before its
+GitHub Release exists.
 
 ### Version pinning and release ordering
 
@@ -42,11 +44,19 @@ The extension's in-editor **Install cartog** action pins `CARTOG_VERSION` to the
 extension's own version, so the installed binary matches the extension. The
 installer fetches `releases/download/v<version>/`, so that **GitHub Release and
 its binary assets must exist before a user runs Install** for the just-published
-version — otherwise `install.sh` 404s. Both come from the same `v*` tag, but the
-release-build matrix (binary assets) and the `publish-vscode` job race. If a
-release ever publishes the extension while the binary build is still failing or
-in flight, hold or re-run the binary build before announcing: a user who runs
-Install in that window gets a 404 even though `latest` is healthy.
+version — otherwise `install.sh` 404s.
+
+`publish-vscode` therefore declares `needs: release`, and `release` in turn
+needs the whole build matrix. The tag's binary assets are published before the
+Marketplace serves the matching extension version, so there is no window in
+which Install resolves a version whose tarballs are missing.
+
+One narrow gap remains by design: `softprops/action-gh-release` makes the
+release public as it uploads, so for the seconds during which the last assets
+land, `releases/latest` already resolves to the new tag. A `cartog self update`
+that starts inside that window can 404 on its platform tarball or on
+`SHA256SUMS`; re-running it succeeds. This does not affect the extension path,
+which never consults `releases/latest`.
 
 ## Publish from your machine first
 
