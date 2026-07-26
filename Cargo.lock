@@ -292,7 +292,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cartog"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-core"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "proptest",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-db"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-indexer"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -381,7 +381,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-languages"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -410,14 +410,14 @@ dependencies = [
 
 [[package]]
 name = "cartog-loom-models"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "loom",
 ]
 
 [[package]]
 name = "cartog-lsp"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-mcp"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -452,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-process-lock"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "libc",
  "tempfile",
@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-rag"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "cartog-core",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "cartog-watch"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "cartog-core",

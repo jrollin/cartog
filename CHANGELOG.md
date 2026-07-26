@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.32.1] - 2026-07-26
+
+### Bug Fixes
+
+- **vscode**: Run init before index so a fresh repo can be set up ([`28ec4f9`](https://github.com/jrollin/cartog/commit/28ec4f99402d79b07d4d5155523066951814b07a))
+
+### Miscellaneous
+
+- **vscode**: Generate the extension changelog on release ([`c6a3a1e`](https://github.com/jrollin/cartog/commit/c6a3a1ecf2b0a51f56cdb55d19ccc0d813f0629f))
+
 ## [0.32.0] - 2026-07-26
 
 ### Bug Fixes
