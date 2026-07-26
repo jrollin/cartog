@@ -413,9 +413,6 @@ where
     ))
 }
 
-/// Shared tail of the two `hybrid_search_tuned*` entry points: sort by
-/// (rerank_score → rrf_score → in_degree), apply `kind_filter`, truncate to
-/// `limit`, pack into a `HybridSearchResult`.
 /// Penalty subtracted from a test symbol's rerank score before ordering.
 ///
 /// A pure tiebreak is useless here: the cross-encoder gives every candidate a
@@ -438,11 +435,6 @@ const TEST_SCORE_PENALTY: f64 = 0.75;
 /// penalty would erase them entirely; scale by a factor instead.
 const TEST_RRF_FACTOR: f64 = 0.5;
 
-/// Effective ranking score with tests demoted.
-///
-/// Two scales are in play: reranker logits (unbounded, often negative) take a
-/// subtractive penalty, while the RRF fallback (small positives) takes a
-/// multiplicative one. Both are order-preserving within each group.
 /// Whether the query is explicitly asking for test code.
 ///
 /// The test penalty exists for the common case ("how does X work"), where test
@@ -465,6 +457,11 @@ fn query_wants_tests(query: &str) -> bool {
         })
 }
 
+/// Effective ranking score with tests demoted.
+///
+/// Two scales are in play: reranker logits (unbounded, often negative) take a
+/// subtractive penalty, while the RRF fallback (small positives) takes a
+/// multiplicative one. Both are order-preserving within each group.
 fn effective_score(r: &SearchResult, demote_tests: bool) -> f64 {
     let is_test = r.symbol.is_test && demote_tests;
     match r.rerank_score {
@@ -490,6 +487,9 @@ fn rerank_ordering(a: &SearchResult, b: &SearchResult, demote_tests: bool) -> st
     score_cmp.then(b.symbol.in_degree.cmp(&a.symbol.in_degree))
 }
 
+/// Shared tail of the two `hybrid_search_tuned*` entry points: sort by
+/// (rerank_score → rrf_score → in_degree), apply `kind_filter`, truncate to
+/// `limit`, pack into a `HybridSearchResult`.
 fn sort_filter_and_pack(
     mut candidates: Vec<SearchResult>,
     counts: (u32, u32, u32),
