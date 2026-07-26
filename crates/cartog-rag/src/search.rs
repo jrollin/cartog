@@ -314,6 +314,7 @@ pub fn hybrid_search_tuned<E: EmbeddingProvider + ?Sized>(
         (fts_count, vec_count, merged_count),
         limit,
         kind_filter,
+        !query_wants_tests(query),
     ))
 }
 
@@ -408,22 +409,82 @@ where
         (fts_count, vec_count, merged_count),
         limit,
         kind_filter,
+        !query_wants_tests(query),
     ))
 }
 
 /// Shared tail of the two `hybrid_search_tuned*` entry points: sort by
 /// (rerank_score → rrf_score → in_degree), apply `kind_filter`, truncate to
 /// `limit`, pack into a `HybridSearchResult`.
-/// Ranking order: rerank score desc, unscored last (fall back to RRF), ties by
+/// Penalty subtracted from a test symbol's rerank score before ordering.
+///
+/// A pure tiebreak is useless here: the cross-encoder gives every candidate a
+/// distinct score, so equal-score ties essentially never occur. Test names
+/// restate the query ("test_resolve_edges" for "how are edges resolved"), which
+/// scores them above the implementation an agent actually asked for.
+///
+/// Subtractive, not multiplicative: this cross-encoder emits raw logits, not
+/// probabilities, and in practice every score in a result set can be negative
+/// (observed range -2.5..-1.3). Scaling a negative score *raises* it, which
+/// promoted the very tests it was meant to demote. Subtraction is sign-safe.
+///
+/// Sized against the observed intra-query spread (~1.0-1.5 logits): large enough
+/// to sink a test that merely name-matches, small enough that a decisively better
+/// test still surfaces.
+const TEST_SCORE_PENALTY: f64 = 0.75;
+
+/// Penalty applied to a test's RRF score when no reranker ran. RRF scores are
+/// small positives (`sum of 1/(k+rank)`, ~0.001-0.03), so the rerank-scale
+/// penalty would erase them entirely; scale by a factor instead.
+const TEST_RRF_FACTOR: f64 = 0.5;
+
+/// Effective ranking score with tests demoted.
+///
+/// Two scales are in play: reranker logits (unbounded, often negative) take a
+/// subtractive penalty, while the RRF fallback (small positives) takes a
+/// multiplicative one. Both are order-preserving within each group.
+/// Whether the query is explicitly asking for test code.
+///
+/// The test penalty exists for the common case ("how does X work"), where test
+/// bodies crowd out the implementation. But "unit test for the permission guard"
+/// wants exactly what the penalty suppresses, so detect that intent and skip it.
+///
+/// Deliberately narrow — whole words only, and only terms that name a test
+/// artifact. `testable` or `latest` must not trigger it, and neither should a
+/// production symbol that merely contains "spec" (`inspect`, `specification`).
+fn query_wants_tests(query: &str) -> bool {
+    const TEST_INTENT_WORDS: [&str; 8] = [
+        "test", "tests", "spec", "specs", "rspec", "jest", "vitest", "pytest",
+    ];
+    query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .any(|w| {
+            let lower = w.to_ascii_lowercase();
+            TEST_INTENT_WORDS.contains(&lower.as_str())
+        })
+}
+
+fn effective_score(r: &SearchResult, demote_tests: bool) -> f64 {
+    let is_test = r.symbol.is_test && demote_tests;
+    match r.rerank_score {
+        Some(s) if is_test => s - TEST_SCORE_PENALTY,
+        Some(s) => s,
+        None if is_test => r.rrf_score * TEST_RRF_FACTOR,
+        None => r.rrf_score,
+    }
+}
+
+/// Ranking order: effective score desc (tests damped), unscored last, ties by
 /// in-degree desc. Shared with tests so they exercise the real comparator.
-fn rerank_ordering(a: &SearchResult, b: &SearchResult) -> std::cmp::Ordering {
+fn rerank_ordering(a: &SearchResult, b: &SearchResult, demote_tests: bool) -> std::cmp::Ordering {
+    // Reranked candidates always precede unscored ones: a missing score means
+    // the cross-encoder never saw it, not that it is irrelevant.
     let score_cmp = match (a.rerank_score, b.rerank_score) {
-        (Some(sa), Some(sb)) => sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => b
-            .rrf_score
-            .partial_cmp(&a.rrf_score)
+        _ => effective_score(b, demote_tests)
+            .partial_cmp(&effective_score(a, demote_tests))
             .unwrap_or(std::cmp::Ordering::Equal),
     };
     score_cmp.then(b.symbol.in_degree.cmp(&a.symbol.in_degree))
@@ -434,9 +495,10 @@ fn sort_filter_and_pack(
     counts: (u32, u32, u32),
     limit: u32,
     kind_filter: KindFilter,
+    demote_tests: bool,
 ) -> HybridSearchResult {
     // 5b. Stable tiebreaker: within same score, prefer higher in-degree (more referenced).
-    candidates.sort_by(rerank_ordering);
+    candidates.sort_by(|a, b| rerank_ordering(a, b, demote_tests));
 
     // Filter by kind before capping to `limit` so we never return fewer than
     // `limit` qualifying results just because docs ranked above code. Reuse
@@ -1648,7 +1710,7 @@ mod tests {
             make_result("mid", 0.7, Some(5.0), Some("mid content")),
         ];
 
-        candidates.sort_by(rerank_ordering);
+        candidates.sort_by(|a, b| rerank_ordering(a, b, true));
 
         assert_eq!(candidates[0].symbol.name, "high");
         assert_eq!(candidates[1].symbol.name, "mid");
@@ -1663,7 +1725,7 @@ mod tests {
             make_result("also_no_content", 0.8, None, None),
         ];
 
-        candidates.sort_by(rerank_ordering);
+        candidates.sort_by(|a, b| rerank_ordering(a, b, true));
 
         assert_eq!(candidates[0].symbol.name, "scored");
         // Unscored candidates fall back to RRF score: 0.9 before 0.8.
@@ -1679,12 +1741,133 @@ mod tests {
             make_result("third", 0.3, None, None),
         ];
 
-        candidates.sort_by(rerank_ordering);
+        candidates.sort_by(|a, b| rerank_ordering(a, b, true));
 
         // No rerank scores → RRF score descending.
         assert_eq!(candidates[0].symbol.name, "first");
         assert_eq!(candidates[1].symbol.name, "second");
         assert_eq!(candidates[2].symbol.name, "third");
+    }
+
+    /// Test names restate the query, so a modestly-better-scoring test used to
+    /// displace the code an agent asked for.
+    #[test]
+    fn a_marginally_better_test_does_not_outrank_production_code() {
+        let mut test_sym = make_result("test_resolve_edges", 0.5, Some(0.61), Some("c"));
+        test_sym.symbol.is_test = true;
+        let impl_sym = make_result("resolve_edges", 0.5, Some(0.52), Some("c"));
+        let mut candidates = [test_sym, impl_sym];
+
+        candidates.sort_by(|a, b| rerank_ordering(a, b, true));
+
+        // 0.61 - 0.75 = -0.14 < 0.52
+        assert_eq!(candidates[0].symbol.name, "resolve_edges");
+    }
+
+    /// Regression: this cross-encoder emits raw logits and a whole result set can
+    /// be negative. A multiplicative damp *raises* a negative score, promoting the
+    /// tests it was meant to demote.
+    #[test]
+    fn demotion_is_correct_for_negative_rerank_scores() {
+        let mut test_sym = make_result("some_test", 0.5, Some(-0.29), Some("c"));
+        test_sym.symbol.is_test = true;
+        let impl_sym = make_result("some_impl", 0.5, Some(-0.96), Some("c"));
+        let mut candidates = [test_sym, impl_sym];
+
+        candidates.sort_by(|a, b| rerank_ordering(a, b, true));
+
+        // -0.29 - 0.75 = -1.04 < -0.96, so the production symbol wins.
+        assert_eq!(candidates[0].symbol.name, "some_impl");
+    }
+
+    /// The penalty must not bury a decisively better test.
+    #[test]
+    fn a_clearly_better_test_still_ranks_first() {
+        let mut strong_test = make_result("exact_match_test", 0.5, Some(2.0), Some("c"));
+        strong_test.symbol.is_test = true;
+        let weak_impl = make_result("loosely_related", 0.5, Some(0.30), Some("c"));
+        let mut candidates = [weak_impl, strong_test];
+
+        candidates.sort_by(|a, b| rerank_ordering(a, b, true));
+
+        // 2.0 - 0.75 = 1.25 > 0.30
+        assert_eq!(candidates[0].symbol.name, "exact_match_test");
+    }
+
+    /// The RRF fallback uses a factor, since a 0.75 subtraction would erase scores
+    /// that live around 0.01.
+    #[test]
+    fn test_demotion_applies_on_the_rrf_fallback_too() {
+        let mut test_sym = make_result("some_test", 0.020, None, None);
+        test_sym.symbol.is_test = true;
+        let impl_sym = make_result("some_impl", 0.015, None, None);
+        let mut candidates = [test_sym, impl_sym];
+
+        candidates.sort_by(|a, b| rerank_ordering(a, b, true));
+
+        // 0.020 * 0.5 = 0.010 < 0.015
+        assert_eq!(candidates[0].symbol.name, "some_impl");
+    }
+
+    /// Two tests keep their relative order — the penalty is uniform within a group.
+    #[test]
+    fn demotion_preserves_ordering_among_tests() {
+        let mut hi = make_result("hi_test", 0.5, Some(-1.0), Some("c"));
+        let mut lo = make_result("lo_test", 0.5, Some(-2.0), Some("c"));
+        hi.symbol.is_test = true;
+        lo.symbol.is_test = true;
+        let mut candidates = [lo, hi];
+
+        candidates.sort_by(|a, b| rerank_ordering(a, b, true));
+
+        assert_eq!(candidates[0].symbol.name, "hi_test");
+    }
+
+    #[test]
+    fn query_wants_tests_detects_explicit_test_intent() {
+        for q in [
+            "unit test for the permission guard",
+            "spec for shop permissions",
+            "rspec for payroll export",
+            "jest tests for the date helper",
+            "pytest fixtures",
+            "Test That Absence Is Approved",
+        ] {
+            assert!(query_wants_tests(q), "should detect intent: {q:?}");
+        }
+    }
+
+    /// Whole-word matching only: a substring must not trigger the exemption, or
+    /// ordinary queries silently lose the demotion.
+    #[test]
+    fn query_wants_tests_ignores_substring_lookalikes() {
+        for q in [
+            "how are edges resolved",
+            "is this code testable",
+            "the latest migration",
+            "inspect the payload",
+            "specification of the api",
+            "protest handler",
+        ] {
+            assert!(!query_wants_tests(q), "false positive on: {q:?}");
+        }
+    }
+
+    /// A test-seeking query must rank tests on their raw score, undemoted.
+    #[test]
+    fn test_seeking_query_does_not_demote_tests() {
+        let mut test_sym = make_result("permission_guard_test", 0.5, Some(-0.29), Some("c"));
+        test_sym.symbol.is_test = true;
+        let impl_sym = make_result("permission_guard", 0.5, Some(-0.96), Some("c"));
+        let candidates = vec![impl_sym, test_sym];
+
+        // demote_tests = false, as `query_wants_tests` would yield for this query.
+        let out = sort_filter_and_pack(candidates, (2, 2, 2), 2, KindFilter::CodeOnly, false);
+
+        assert_eq!(
+            out.results[0].symbol.name, "permission_guard_test",
+            "an explicit test query must not demote tests"
+        );
     }
 
     #[test]
@@ -1696,7 +1879,7 @@ mod tests {
         b.symbol.in_degree = 9;
         let mut candidates = [a, b];
 
-        candidates.sort_by(rerank_ordering);
+        candidates.sort_by(|a, b| rerank_ordering(a, b, true));
 
         assert_eq!(candidates[0].symbol.name, "more_referenced");
         assert_eq!(candidates[1].symbol.name, "less_referenced");
@@ -1895,7 +2078,7 @@ mod tests {
             candidate("do_thing", SymbolKind::Function, 0.7),
             candidate("do_method", SymbolKind::Method, 0.6),
         ];
-        let out = sort_filter_and_pack(candidates, (4, 4, 4), 2, KindFilter::CodeOnly);
+        let out = sort_filter_and_pack(candidates, (4, 4, 4), 2, KindFilter::CodeOnly, true);
         let names: Vec<&str> = out.results.iter().map(|r| r.symbol.name.as_str()).collect();
         assert_eq!(names, vec!["do_thing", "do_method"]);
         // Counts stay pre-filter (diagnostic).
@@ -1909,8 +2092,109 @@ mod tests {
             candidate("a", SymbolKind::Document, 0.9),
             candidate("b", SymbolKind::Document, 0.8),
         ];
-        let out = sort_filter_and_pack(candidates, (2, 2, 2), 5, KindFilter::CodeOnly);
+        let out = sort_filter_and_pack(candidates, (2, 2, 2), 5, KindFilter::CodeOnly, true);
         assert!(out.results.is_empty());
+    }
+
+    /// Tests must not consume the whole retrieval budget: their names restate the
+    /// query, so a single ranked list lets them starve the implementation before
+    /// it ever reaches the reranker. Separate arms guarantee code is retrieved.
+    #[test]
+    fn fts5_kinded_retrieval_keeps_code_in_a_test_dominated_corpus() {
+        let db = Database::open_memory().unwrap();
+        // 20 tests that match the query strongly, and 3 production symbols.
+        for i in 0..20 {
+            let mut sym = Symbol::new(
+                format!("test_resolve_edges_case_{i}"),
+                SymbolKind::Function,
+                &format!("tests/t{i}.rs"),
+                1,
+                9,
+                0,
+                80,
+                None,
+            );
+            sym.is_test = true;
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(
+                &sym.id,
+                &sym.name,
+                "fn resolve edges test asserting edges resolve correctly",
+                "",
+            )
+            .unwrap();
+        }
+        for i in 0..3 {
+            let sym = Symbol::new(
+                format!("resolve_edges_{i}"),
+                SymbolKind::Function,
+                &format!("src/r{i}.rs"),
+                1,
+                9,
+                0,
+                80,
+                None,
+            );
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(
+                &sym.id,
+                &sym.name,
+                "fn resolve edges walking the graph to resolve edges",
+                "",
+            )
+            .unwrap();
+        }
+
+        let ids = db
+            .fts5_search_kinded("\"resolve\" OR \"edges\"", 8, KindScope::CodeOnly)
+            .unwrap();
+        let n_test = ids.iter().filter(|i| i.starts_with("tests/")).count();
+        let n_prod = ids.iter().filter(|i| i.starts_with("src/")).count();
+
+        assert!(
+            n_prod > 0,
+            "production code must survive a test-dominated corpus: {ids:?}"
+        );
+        assert!(
+            n_test > 0,
+            "tests must still be retrieved, not excluded: {ids:?}"
+        );
+        // The point is that code survives at all: a single `ORDER BY rank` list
+        // over 20 strong test matches and 3 code matches returned zero code.
+        assert!(
+            n_prod >= 3,
+            "all 3 production symbols should be retrieved, got {n_prod}: {ids:?}"
+        );
+    }
+
+    /// The cap must not become an exclusion — a test-seeking query still needs tests.
+    #[test]
+    fn fts5_kinded_retrieval_still_returns_some_tests() {
+        let db = Database::open_memory().unwrap();
+        for i in 0..5 {
+            let mut sym = Symbol::new(
+                format!("redaction_test_{i}"),
+                SymbolKind::Function,
+                &format!("tests/r{i}.rs"),
+                1,
+                9,
+                0,
+                80,
+                None,
+            );
+            sym.is_test = true;
+            db.insert_symbol(&sym).unwrap();
+            db.upsert_symbol_content(&sym.id, &sym.name, "redaction secret scrubbing test", "")
+                .unwrap();
+        }
+
+        let ids = db
+            .fts5_search_kinded("\"redaction\"", 10, KindScope::CodeOnly)
+            .unwrap();
+        assert!(
+            !ids.is_empty(),
+            "a test-only corpus must still return tests, not an empty set"
+        );
     }
 
     #[test]
