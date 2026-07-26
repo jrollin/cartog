@@ -34,14 +34,25 @@ test("buildInstallCommand with an empty version emits a bare env var (installer 
 });
 
 test("buildIndexCommand uses the resolved absolute path, not a bare cartog", () => {
-  assert.equal(buildIndexCommand("/usr/local/bin/cartog"), "'/usr/local/bin/cartog' index .");
+  assert.equal(
+    buildIndexCommand("/usr/local/bin/cartog"),
+    "'/usr/local/bin/cartog' init && '/usr/local/bin/cartog' index .",
+  );
 });
 
 test("buildIndexCommand quotes a path containing spaces", () => {
   assert.equal(
     buildIndexCommand("/Users/a b/.local/bin/cartog"),
-    "'/Users/a b/.local/bin/cartog' index .",
+    "'/Users/a b/.local/bin/cartog' init && '/Users/a b/.local/bin/cartog' index .",
   );
+});
+
+// The consent gate refuses a bare `index` when the project has no .cartog.toml
+// and no existing index, so `init` must run first and must gate `index`.
+test("buildIndexCommand runs init before index, chained so a failed init stops it", () => {
+  const command = buildIndexCommand("/usr/local/bin/cartog");
+  assert.ok(command.indexOf(" init") < command.indexOf(" index ."));
+  assert.ok(command.includes("&&"));
 });
 
 test("shellQuote escapes an embedded single quote", () => {

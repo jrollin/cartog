@@ -25,6 +25,11 @@ export function shellQuote(value: string): string {
 // Index the current directory using the already-resolved absolute binary path,
 // not a bare `cartog` — a GUI-launched terminal inherits the same PATH-less env
 // the resolver works around, so a bare name would print "command not found".
+//
+// `init` first: the consent gate makes a bare `index` refuse on a project with
+// no .cartog.toml and no existing index. Both are idempotent, so this is also
+// the right command for an already-initialised repo.
 export function buildIndexCommand(binaryPath: string): string {
-  return `${shellQuote(binaryPath)} index .`;
+  const cartog = shellQuote(binaryPath);
+  return `${cartog} init && ${cartog} index .`;
 }

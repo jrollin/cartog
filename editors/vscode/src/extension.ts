@@ -100,11 +100,16 @@ async function recheck(didChange: vscode.EventEmitter<void>): Promise<void> {
     // Offer indexing only with a folder open — `index .` against the home dir
     // (the cwd fallback) would index the whole tree.
     const folder = firstFolder();
+    // Name the .cartog.toml write up front: the action runs `init` before
+    // `index` (the consent gate refuses a bare `index`), so clicking it adds a
+    // file to the user's repo. The terminal is visible, but that's after the
+    // fact — say it before the click, not only in the scrollback.
     const choice = await vscode.window.showInformationMessage(
-      "cartog found — code-graph tools are now available.",
-      ...(folder ? ["Index this repo"] : []),
+      "cartog found — code-graph tools are now available." +
+        (folder ? " Indexing writes a .cartog.toml config, then builds the graph." : ""),
+      ...(folder ? ["Set up and index"] : []),
     );
-    if (choice === "Index this repo" && folder) {
+    if (choice === "Set up and index" && folder) {
       runIndex(binaryPath, folder);
     }
     return;

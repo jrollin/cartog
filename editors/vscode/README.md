@@ -32,7 +32,8 @@ On macOS and Linux, click **Install cartog** in that prompt: the extension opens
 a terminal with the installer command (pinned to the extension's version) typed
 in but **not run** — review the `curl … | sh` line and press Enter to install.
 When it finishes, run **cartog: Recheck** from the Command Palette to register
-the server; it then offers to index the current repo. (On Windows, follow the
+the server; it then offers to set up and index the current repo (writing a
+`.cartog.toml`, then building the graph). (On Windows, follow the
 [install instructions](https://www.cartog.dev/usage.html) — download the
 `.zip` from Releases.)
 
@@ -48,11 +49,18 @@ Or with Cargo:
 cargo install cartog
 ```
 
-Then index your repo once:
+Then set up the repo once — two commands, the same as the
+[CLI quickstart](https://www.cartog.dev/usage.html):
 
 ```bash
-cartog index .
+cartog init                   # 1. scaffold .cartog.toml
+cartog index                  # 2. build the code graph
 ```
+
+Both are idempotent: `init` never overwrites an existing config, and `index` is
+incremental. `cartog init` is what opts the project in — without a
+`.cartog.toml` (or an existing index) `cartog index` refuses rather than
+creating one on its own.
 
 ## How the binary is located
 
