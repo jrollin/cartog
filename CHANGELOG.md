@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.32.0] - 2026-07-26
+
+### Bug Fixes
+
+- **lang**: Extract nested C enums and C++ function-pointer members ([`584e205`](https://github.com/jrollin/cartog/commit/584e2058f637c093f1ce09485e3365493664766b))
+- **lang**: Rust enum variants inherit the enum's visibility ([`39cc85b`](https://github.com/jrollin/cartog/commit/39cc85b98222ade0f9b2ab0549c9a2ebdd0ad05c))
+- **rag**: Stop test bodies crowding out code in semantic search ([`49791f8`](https://github.com/jrollin/cartog/commit/49791f8f9dabfd62cc373097a209bf421142d6a0))
+
+### Documentation
+
+- Sync remaining C/C++ counts flagged in review ([`24448f2`](https://github.com/jrollin/cartog/commit/24448f25cb8239fd6f5d1d9878d52c0afb4ccfd5))
+- **rag**: Re-attach doc blocks orphaned by the search refactor ([`44161af`](https://github.com/jrollin/cartog/commit/44161af2bd0ef893981921bcdb30dfed646f951f))
+
+### Features
+
+- **lang**: Add C and C++ support (17th and 18th languages) ([`8589662`](https://github.com/jrollin/cartog/commit/858966270cc21c44dd91aebf20839786538d4c33))
+- **lang**: Add EnumMember and Macro kinds, fix extraction gaps ([`643d80e`](https://github.com/jrollin/cartog/commit/643d80eb8534e57cffa9cdfe2e1fbaaed09f0476))
+- Detect test code and demote it in search ranking ([`9bbdc78`](https://github.com/jrollin/cartog/commit/9bbdc789328a661642e8317e3d6bd1c2748ed0c3))
+
 ## [0.31.1] - 2026-07-22
 
 ### Bug Fixes
