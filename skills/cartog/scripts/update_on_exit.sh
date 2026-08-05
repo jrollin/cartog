@@ -103,14 +103,10 @@ apply_pending_update() {
             echo "Deferred update applied (or nothing pending)."
             ;;
         6)
-            # Peer still running at session end — expected fallback, NOT an
-            # error. The binary fast-fails on a lock it knows cannot clear (a
-            # peer outside this project) rather than burning this hook's budget
-            # and being killed (#154), and its own stderr — already captured in
-            # $SESSION_LOG — names the blocking slot/PID and how many other
-            # sessions are live. Keep this line neutral so it cannot contradict
-            # that message; the intent stays armed and the next boundary retries,
-            # so we deliberately do NOT cry wolf via last-error.
+            # Expected fallback, NOT an error: the intent stays armed and the next
+            # boundary retries, so no last-error. The binary's own stderr (already
+            # in $SESSION_LOG) names the blocking slot/PID, so keep this line
+            # neutral rather than restating a count that could contradict it.
             echo "Deferred update kept: a cartog process still holds the lock (see message above); retries at the next session boundary."
             ;;
         2|5)

@@ -240,16 +240,14 @@ fn own_slots() -> Vec<String> {
 
 #[test]
 fn peer_wait_budget_is_full_when_nothing_is_blocking() {
-    // No live peer yet — keep the generous budget so a peer that appears
-    // mid-wait (our own teardown lag) is still absorbed.
+    // Nothing blocking yet: keep the budget that absorbs a peer arriving mid-wait.
     assert_eq!(peer_wait_budget(&own_slots(), &[], &[]), APPLY_PEER_WAIT);
 }
 
 #[test]
 fn peer_wait_budget_caps_own_project_peer_at_the_hook_safe_grace() {
-    // Our own serve mid-teardown is worth waiting for, but a same-repo sibling
-    // window hashes to the identical slot and never clears — indistinguishable
-    // here, so the wait is capped rather than given the full 10s (#154).
+    // Own teardown is worth waiting for, but a same-repo window hashes to the
+    // same slot and never clears, so the wait is capped (#154).
     let active = vec!["serve-abc".to_string()];
     assert_eq!(
         peer_wait_budget(&own_slots(), &active, &[]),
@@ -269,9 +267,8 @@ fn peer_wait_budget_does_not_wait_for_foreign_peer() {
 
 #[test]
 fn peer_wait_budget_does_not_wait_when_a_foreign_peer_is_among_own_peers() {
-    // The #154 regression: an own peer co-live with a foreign one must NOT buy
-    // the full budget, because the foreign lock keeps the wait blocked for all
-    // of it. One unclearable blocker makes waiting futile regardless.
+    // The #154 regression: a co-live own peer must not buy a budget the foreign
+    // lock then consumes.
     let active = vec!["serve-other".to_string(), "watch-abc".to_string()];
     assert_eq!(
         peer_wait_budget(&own_slots(), &active, &[]),
@@ -282,8 +279,8 @@ fn peer_wait_budget_does_not_wait_when_a_foreign_peer_is_among_own_peers() {
 
 #[test]
 fn peer_wait_budget_ignores_excluded_slots_like_the_wait_does() {
-    // --at-startup excludes our own slots from the wait, so they must not drive
-    // the budget either: with only a foreign blocker left, do not wait.
+    // --at-startup excludes own slots from the wait, so they must not drive the
+    // budget either.
     let active = vec!["serve-abc".to_string(), "serve-other".to_string()];
     let excluded = own_slots();
     assert_eq!(
@@ -307,9 +304,8 @@ fn peer_wait_budget_is_full_when_every_blocker_is_excluded() {
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn foreign_peer_wait_returns_promptly_via_the_real_budget_path() {
-    // The regression that caused "Hook cancelled". Composes the budget exactly
-    // as run_apply_pending does (own slots + live locks + exclusions) and
-    // asserts real elapsed time, not just the chosen Duration.
+    // The "Hook cancelled" regression: composes the budget as run_apply_pending
+    // does and asserts real elapsed time, not just the chosen Duration.
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::write(
         dir.path().join("serve-other999.pid"),
@@ -333,50 +329,77 @@ fn foreign_peer_wait_returns_promptly_via_the_real_budget_path() {
     );
 }
 
-#[cfg(not(target_os = "windows"))]
 #[test]
 fn foreign_peer_count_counts_pids_not_slots() {
-    // One session holds both a serve and a watch lock under a single PID; it
-    // must count once, else the message over-reports how many sessions are live.
-    let dir = tempfile::TempDir::new().unwrap();
-    let pid = std::process::id().to_string();
-    std::fs::write(dir.path().join("serve-other.pid"), &pid).unwrap();
-    std::fs::write(dir.path().join("watch-other.pid"), &pid).unwrap();
-    assert_eq!(foreign_peer_process_count(dir.path(), &own_slots(), &[]), 1);
+    // A session's serve+watch share one PID: must count once, not twice.
+    let locks = vec![
+        ("serve-other".to_string(), 700u32),
+        ("watch-other".to_string(), 700u32),
+    ];
+    let diag = peer_diagnostic_from(&locks, &own_slots(), &[], ("serve-other", 700));
+    assert_eq!(diag.foreign_processes, 1);
 }
 
-#[cfg(not(target_os = "windows"))]
 #[test]
 fn foreign_peer_count_excludes_this_projects_own_peers() {
-    // Our own server is not "another session" — counting it inflated the
-    // message and mislabelled this session's own process.
-    let dir = tempfile::TempDir::new().unwrap();
-    let pid = std::process::id().to_string();
-    std::fs::write(dir.path().join("serve-abc.pid"), &pid).unwrap();
+    // Our own server is not "another session".
+    let locks = vec![("serve-abc".to_string(), 700u32)];
+    let diag = peer_diagnostic_from(&locks, &own_slots(), &[], ("serve-abc", 700));
     assert_eq!(
-        foreign_peer_process_count(dir.path(), &own_slots(), &[]),
-        0,
+        diag.foreign_processes, 0,
         "own-project locks must not be reported as other sessions"
     );
 }
 
+#[test]
+fn foreign_peer_count_excludes_excluded_slots() {
+    // Excluded slots must not be counted as foreign peers.
+    let locks = vec![("serve-abc".to_string(), 700u32)];
+    let excluded = own_slots();
+    let diag = peer_diagnostic_from(&locks, &own_slots(), &excluded, ("serve-abc", 700));
+    assert_eq!(diag.foreign_processes, 0);
+}
+
 #[cfg(not(target_os = "windows"))]
 #[test]
-fn foreign_peer_count_excludes_the_apply_coordination_lock() {
+fn peer_lock_snapshot_excludes_the_apply_coordination_lock() {
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::write(
         dir.path().join(format!("{APPLY_LOCK_SLOT}.pid")),
         std::process::id().to_string(),
     )
     .unwrap();
-    assert_eq!(foreign_peer_process_count(dir.path(), &own_slots(), &[]), 0);
+    assert!(peer_lock_snapshot(dir.path()).is_empty());
+}
+
+#[test]
+fn peer_diagnostic_names_a_foreign_lock_when_one_exists() {
+    // Reporting "N other sessions" while naming our own lock points the user at
+    // the wrong process, so a foreign lock wins.
+    let locks = vec![
+        ("watch-abc".to_string(), 111u32),
+        ("serve-other".to_string(), 222u32),
+    ];
+    let diag = peer_diagnostic_from(&locks, &own_slots(), &[], ("watch-abc", 111));
+    assert_eq!(diag.slot, "serve-other", "must name the foreign lock");
+    assert_eq!(diag.pid, 222);
+    assert_eq!(diag.foreign_processes, 1);
+}
+
+#[test]
+fn peer_diagnostic_falls_back_to_the_blocking_lock_when_all_are_ours() {
+    // No foreign lock to name: keep the one the wait timed out on.
+    let locks = vec![("serve-abc".to_string(), 111u32)];
+    let diag = peer_diagnostic_from(&locks, &own_slots(), &[], ("serve-abc", 111));
+    assert_eq!(diag.slot, "serve-abc");
+    assert_eq!(diag.pid, 111);
+    assert_eq!(diag.foreign_processes, 0);
 }
 
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn active_peer_slots_excludes_apply_coordination_lock() {
-    // The apply lock is not a serve/watch peer; counting it would push the
-    // budget decision toward a phantom peer.
+    // The apply lock is not a peer; counting it invents a phantom blocker.
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::write(
         dir.path().join(format!("{APPLY_LOCK_SLOT}.pid")),
@@ -389,8 +412,7 @@ fn active_peer_slots_excludes_apply_coordination_lock() {
 #[test]
 #[serial]
 fn test_seam_overrides_every_tier_rather_than_capping_it() {
-    // The seam is documented as an override: a value ABOVE a tier must still
-    // apply, so a test can exercise the teardown-absorption path.
+    // Override, not cap: a value above a tier must still apply.
     let _guard = EnvVarGuard::set("CARTOG_TEST_APPLY_PEER_WAIT_MS", "3000");
     let active = vec!["serve-other".to_string()];
     assert_eq!(
@@ -408,6 +430,25 @@ fn effective_peer_wait_falls_back_to_the_tier_without_the_seam() {
     assert_eq!(
         effective_peer_wait(&own_slots(), &active, &[]),
         APPLY_FOREIGN_PEER_WAIT
+    );
+}
+
+#[test]
+#[serial]
+fn effective_peer_wait_ignores_a_malformed_seam_value() {
+    // A garbage override must defer to the tier, not to some fixed budget.
+    let _guard = EnvVarGuard::set("CARTOG_TEST_APPLY_PEER_WAIT_MS", "not-a-number");
+    let active = vec!["serve-other".to_string()];
+    assert_eq!(
+        effective_peer_wait(&own_slots(), &active, &[]),
+        APPLY_FOREIGN_PEER_WAIT,
+        "malformed override must defer to the tier"
+    );
+    let own_only = vec!["serve-abc".to_string()];
+    assert_eq!(
+        effective_peer_wait(&own_slots(), &own_only, &[]),
+        APPLY_OWN_PEER_GRACE,
+        "malformed override must not collapse the own-peer tier either"
     );
 }
 
@@ -431,8 +472,7 @@ fn peer_running_message_reports_other_sessions_without_naming_a_product() {
 
 #[test]
 fn peer_running_message_uses_singular_for_one_other_session() {
-    // One other session is exactly one PID — the case #154 is about. It must
-    // still get the other-session framing, not a count-based fallback.
+    // One other session is exactly one PID: the case #154 is about.
     let msg = peer_running_message("serve-xyz", 99, 1);
     assert!(msg.contains("1 other session"), "expected singular: {msg}");
     assert!(msg.contains("serve-xyz") && msg.contains("99"));
@@ -440,7 +480,7 @@ fn peer_running_message_uses_singular_for_one_other_session() {
 
 #[test]
 fn peer_running_message_describes_own_shutdown_when_no_foreign_peer() {
-    // Only our own serve is mid-teardown: must not claim another session exists.
+    // Own teardown only: must not claim another session exists.
     let msg = peer_running_message("serve-abc", 4242, 0);
     assert!(
         !msg.contains("other session"),
