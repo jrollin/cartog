@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.2] - 2026-08-05
+
+### Bug Fixes
+
+- **self-update**: Size the peer wait by which lock is blocking ([`83fb13b`](https://github.com/jrollin/cartog/commit/83fb13bbc40628a4302e884a16420dc646199c5b))
+- **self-update**: Name a foreign lock in the exit-6 diagnostic ([`3ff9b2b`](https://github.com/jrollin/cartog/commit/3ff9b2b7f4af3fc817bb3cfb9c2e3af791ab338c))
+
 ## [0.32.1] - 2026-07-26
 
 ### Bug Fixes
