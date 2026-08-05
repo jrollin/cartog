@@ -1254,6 +1254,57 @@ fn apply_pending_refuses_when_peer_held() {
 
 #[cfg(unix)]
 #[test]
+fn apply_pending_does_not_wait_on_a_foreign_peer_without_the_test_seam() {
+    // Call-site coverage for #154: with NO CARTOG_TEST_APPLY_PEER_WAIT_MS, the
+    // real tiered budget must apply. A foreign peer (a slot that is not this
+    // project's hashed serve-<hash>/watch-<hash>) cannot clear, so the apply has
+    // to give up promptly instead of burning the full APPLY_PEER_WAIT and getting
+    // the session hook killed. Asserts wall-clock so reverting the call site to an
+    // unconditional wait fails here rather than shipping green.
+    let dir = tempfile::TempDir::new().unwrap();
+    let state_path = seeded_state_path(dir.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        "[pending_update]\ntarget_version = \"999.0.0\"\n",
+    )
+    .unwrap();
+    let lock_dir = isolated_lock_dir(dir.path());
+    std::fs::create_dir_all(&lock_dir).unwrap();
+    std::fs::write(
+        lock_dir.join("serve-feedfacefeedface.pid"),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+
+    let start = std::time::Instant::now();
+    let out = run_self_update_mode(
+        "--apply-pending",
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+    let elapsed = start.elapsed();
+
+    assert_eq!(
+        out.status.code(),
+        Some(6),
+        "live foreign peer must exit 6; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "must not wait out the full peer budget for an unclearable foreign lock; took {elapsed:?}"
+    );
+    let text = std::fs::read_to_string(&state_path).unwrap();
+    assert!(
+        text.contains("999.0.0"),
+        "intent must be kept for retry, got: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn apply_pending_checksum_failure_clears_intent() {
     // Pending target armed, no peer, but the release mock serves a tarball
     // whose SHA does not match SHA256SUMS. Apply reaches perform_upgrade,

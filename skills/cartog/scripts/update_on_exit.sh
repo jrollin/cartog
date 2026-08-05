@@ -103,11 +103,11 @@ apply_pending_update() {
             echo "Deferred update applied (or nothing pending)."
             ;;
         6)
-            # Peer still running at session end — expected fallback, NOT an
-            # error. The intent stays armed; the next session retries. The
-            # SessionStart drift line tells the user the apply is waiting on
-            # other sessions, so we deliberately do NOT cry wolf via last-error.
-            echo "Another cartog process still running; deferred update kept for next session."
+            # Expected fallback, NOT an error: the intent stays armed and the next
+            # boundary retries, so no last-error. The binary's own stderr (already
+            # in $SESSION_LOG) names the blocking slot/PID, so keep this line
+            # neutral rather than restating a count that could contradict it.
+            echo "Deferred update kept: a cartog process still holds the lock (see message above); retries at the next session boundary."
             ;;
         2|5)
             # Transient (network / disk). Intent kept by the binary; retries.
