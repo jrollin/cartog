@@ -126,7 +126,16 @@ if ! has_deferred; then
     esac
 fi
 case "\$1 \$2 \$3" in
-    "self update --apply-pending") exit $update_exit ;;
+    "self update --apply-pending")
+        # Mirror the real binary's exit-6 stderr so the hook's log assertions see
+        # a realistic composite (binary message + hook echo), not just the hook's
+        # own string. The binary's exact wording is guarded in Rust by the
+        # peer_running_message tests.
+        if [ "$update_exit" = "6" ]; then
+            echo "cartog: cartog is still running in 2 other sessions (blocking lock: serve-deadbeef, PID 4242); deferred update kept and retries at the next session boundary — close the other sessions if you want it to land sooner" >&2
+        fi
+        exit $update_exit
+        ;;
     "self update --quiet")         exit $update_exit ;;
 esac
 exit 0
@@ -389,7 +398,19 @@ test_apply_pending_exit_6_is_not_error() {
     else
         echo "  PASS: exit 6 did not write last-error"; PASS=$((PASS + 1))
     fi
-    assert_contains "log explains the retry" "kept for next session" "$(session_log)"
+    assert_contains "log explains the retry" "retries at the next session boundary" "$(session_log)"
+    # The binary's stderr must survive into the log: it carries the only
+    # identification of what blocked the swap (#154). The hook writes no
+    # last-error for exit 6, so losing this leaves nothing to grep.
+    assert_contains "log keeps the blocking slot" "serve-deadbeef" "$(session_log)"
+    assert_contains "log keeps the blocking pid" "4242" "$(session_log)"
+    # The hook's own line must stay neutral rather than asserting a peer count
+    # that contradicts the binary's message.
+    if printf '%s' "$(session_log)" | grep -q 'Other cartog processes still running'; then
+        echo "  FAIL: hook line re-asserts a peer count that may contradict the binary"; FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: hook line stays neutral about how many peers"; PASS=$((PASS + 1))
+    fi
     teardown
 }
 

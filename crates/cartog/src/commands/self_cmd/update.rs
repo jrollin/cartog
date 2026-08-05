@@ -293,7 +293,22 @@ pub(crate) enum UpgradeError {
 /// Claude Code is not contractually guaranteed, so this budget is generous (it
 /// matches the secondary-promoter takeover window) to absorb teardown lag and
 /// land the swap on the same boundary rather than deferring a session.
-const APPLY_PEER_WAIT: Duration = Duration::from_secs(10);
+pub(crate) const APPLY_PEER_WAIT: Duration = Duration::from_secs(10);
+
+/// Ceiling when every blocker is one of *this project's* own slots. That is
+/// either our own `serve` mid-teardown (its lock clears within ~1s) or a sibling
+/// window on the same repo (never clears while it stays open) — slot names are
+/// db-path hashes carrying no session identity, so the two are indistinguishable
+/// here. Bounded well under the SessionEnd hook's budget so the ambiguous case
+/// cannot get the hook killed (`Hook cancelled`, #154); anything that misses the
+/// boundary is picked up by the SessionStart `--at-startup` catch-up.
+pub(crate) const APPLY_OWN_PEER_GRACE: Duration = Duration::from_secs(2);
+
+/// No wait at all once a blocker is known to belong to another project: it holds
+/// its lock for as long as that session stays open, so polling can only burn the
+/// hook's budget before deferring anyway (#154). A single probe decides; the
+/// intent stays armed and the next boundary retries.
+pub(crate) const APPLY_FOREIGN_PEER_WAIT: Duration = Duration::ZERO;
 
 /// Poll interval while waiting for peers to clear in [`wait_for_no_peer_excluding`].
 const APPLY_PEER_POLL: Duration = Duration::from_millis(200);
@@ -303,18 +318,19 @@ const APPLY_PEER_POLL: Duration = Duration::from_millis(200);
 /// must mutually exclude regardless of which project triggered them.
 pub(crate) const APPLY_LOCK_SLOT: &str = "apply-update";
 
-/// Test seam: overrides [`APPLY_PEER_WAIT`] (milliseconds) so the suite can
-/// exercise the timeout branch without a real 3s wait.
+/// Test seam: overrides the whole tiered budget (milliseconds) so the suite can
+/// exercise the timeout branch without a real wait. A true override, not a cap —
+/// a value above a tier still applies, so a test can exercise the teardown-lag
+/// absorption path.
 const TEST_APPLY_PEER_WAIT_MS_ENV: &str = "CARTOG_TEST_APPLY_PEER_WAIT_MS";
 
-fn apply_peer_wait() -> Duration {
-    match std::env::var(TEST_APPLY_PEER_WAIT_MS_ENV) {
-        Ok(v) => v
-            .parse::<u64>()
-            .map(Duration::from_millis)
-            .unwrap_or(APPLY_PEER_WAIT),
-        Err(_) => APPLY_PEER_WAIT,
-    }
+/// The test-seam override, if set and parseable.
+fn test_peer_wait_override() -> Option<Duration> {
+    std::env::var(TEST_APPLY_PEER_WAIT_MS_ENV)
+        .ok()?
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_millis)
 }
 
 /// Whether a pending update should still be applied given the running version.
@@ -410,6 +426,132 @@ pub(crate) fn wait_for_no_peer_excluding(
             }
         }
     }
+}
+
+/// Pick the peer-wait budget from the slots that can actually block the wait.
+///
+/// `own_slots` are this project's serve/watch slots; `active_slots` is every live
+/// peer slot; `excluded_slots` are the slots the wait itself ignores (the
+/// `--at-startup` own-peer exclusion). The decision runs over
+/// `active_slots - excluded_slots` so the budget and
+/// [`wait_for_no_peer_excluding`] agree on what counts as a blocker — evaluating
+/// it over the unfiltered set would grant a long budget for a peer the wait
+/// never even looks at.
+///
+/// Tiers, in the order they are tested:
+/// - **nothing blocking** → [`APPLY_PEER_WAIT`]: no lock stands in the way yet, so
+///   keep the generous window that absorbs a serve appearing mid-wait.
+/// - **any blocker is foreign** → [`APPLY_FOREIGN_PEER_WAIT`]: one unclearable
+///   lock keeps the wait blocked for the whole budget no matter what the other
+///   blockers do, so waiting is futile. This is the `any`, not `all`, case — the
+///   inverse would let a co-live own peer buy a full budget the foreign lock then
+///   consumes (#154).
+/// - **every blocker is our own** → [`APPLY_OWN_PEER_GRACE`]: plausible teardown
+///   lag, but capped because a same-repo sibling window is indistinguishable.
+pub(crate) fn peer_wait_budget(
+    own_slots: &[String],
+    active_slots: &[String],
+    excluded_slots: &[String],
+) -> Duration {
+    let blocking: Vec<&String> = active_slots
+        .iter()
+        .filter(|slot| !excluded_slots.iter().any(|ex| ex == *slot))
+        .collect();
+    if blocking.is_empty() {
+        return APPLY_PEER_WAIT;
+    }
+    let any_foreign = blocking
+        .iter()
+        .any(|slot| !own_slots.iter().any(|own| own == *slot));
+    if any_foreign {
+        APPLY_FOREIGN_PEER_WAIT
+    } else {
+        APPLY_OWN_PEER_GRACE
+    }
+}
+
+/// The budget `--apply-pending` actually waits: the test seam when set, else the
+/// tier from [`peer_wait_budget`]. Single place the call site consults, so the
+/// composition is unit-testable rather than assembled inline.
+pub(crate) fn effective_peer_wait(
+    own_slots: &[String],
+    active_slots: &[String],
+    excluded_slots: &[String],
+) -> Duration {
+    test_peer_wait_override()
+        .unwrap_or_else(|| peer_wait_budget(own_slots, active_slots, excluded_slots))
+}
+
+/// Build the exit-6 explanation. Always names the blocking slot + PID: it is the
+/// only identification the caller gets (`emit_upgrade_message` serialises just
+/// status + message), and `update_on_exit.sh` deliberately writes no `last-error`
+/// for exit 6, so dropping it would leave nothing to grep when an update never
+/// lands.
+///
+/// `foreign_processes` counts distinct processes outside this project (see
+/// [`foreign_peer_process_count`]), so this session's own server is never
+/// reported as somebody else's. Says the update retries on its own, and mentions
+/// closing the other sessions only as an optional way to land it sooner — a
+/// blocker is not necessarily transient (a wedged serve or a hand-started
+/// `cartog watch` may never exit), so promising "no action needed" would be
+/// false. Deliberately names no specific product: a lock holder can be any MCP
+/// client or a plain terminal `cartog watch`.
+pub(crate) fn peer_running_message(
+    blocking_slot: &str,
+    blocking_pid: u32,
+    foreign_processes: usize,
+) -> String {
+    if foreign_processes > 0 {
+        let sessions = if foreign_processes == 1 {
+            "session"
+        } else {
+            "sessions"
+        };
+        format!(
+            "cartog is still running in {foreign_processes} other {sessions} \
+             (blocking lock: {blocking_slot}, PID {blocking_pid}); deferred update kept \
+             and retries at the next session boundary — close the other sessions if you \
+             want it to land sooner"
+        )
+    } else {
+        format!(
+            "a cartog process for this project is still shutting down \
+             ({blocking_slot}, PID {blocking_pid}); deferred update kept and retries \
+             at the next session boundary"
+        )
+    }
+}
+
+/// Slots currently holding a live lock, excluding the apply-coordination lock.
+/// Mirrors the filtering in [`wait_for_no_peer_excluding`] so the budget decision
+/// and the wait itself agree on what counts as a peer.
+pub(crate) fn active_peer_slots(state_dir: &Path) -> Vec<String> {
+    cartog_process_lock::find_active_locks(state_dir)
+        .into_iter()
+        .filter(|lock| lock.slot != APPLY_LOCK_SLOT)
+        .map(|lock| lock.slot)
+        .collect()
+}
+
+/// How many distinct processes hold a lock that is neither the apply-coordination
+/// lock, one of `excluded_slots`, nor one of this project's `own_slots` — i.e.
+/// peers belonging to another project or session.
+///
+/// Counts PIDs, not slots: one session's `serve` and `watch` locks are held by a
+/// single process, so counting slots would report one session as two peers.
+pub(crate) fn foreign_peer_process_count(
+    state_dir: &Path,
+    own_slots: &[String],
+    excluded_slots: &[String],
+) -> usize {
+    let pids: std::collections::HashSet<u32> = cartog_process_lock::find_active_locks(state_dir)
+        .into_iter()
+        .filter(|lock| lock.slot != APPLY_LOCK_SLOT)
+        .filter(|lock| !excluded_slots.iter().any(|ex| ex == &lock.slot))
+        .filter(|lock| !own_slots.iter().any(|own| own == &lock.slot))
+        .map(|lock| lock.pid)
+        .collect();
+    pids.len()
 }
 
 /// The serve/watch lock slots this project's own peers would hold, so
@@ -598,17 +740,19 @@ fn run_apply_pending(at_startup: bool, db_path: &Path, quiet: bool, json: bool) 
         Vec::new()
     };
     if let Some(dir) = state::default_state_dir() {
-        if let Err(peer) = wait_for_no_peer_excluding(&dir, apply_peer_wait(), &self_peer_slots) {
+        // Size the wait to what can actually block it: an unclearable foreign
+        // lock fast-fails instead of running a session hook out of time (#154).
+        // `self_peer_slots` is passed to both the budget and the wait so the two
+        // agree on which locks count as blockers.
+        let own_slots = current_project_peer_slots(db_path);
+        let budget = effective_peer_wait(&own_slots, &active_peer_slots(&dir), &self_peer_slots);
+        if let Err(peer) = wait_for_no_peer_excluding(&dir, budget, &self_peer_slots) {
+            let foreign = foreign_peer_process_count(&dir, &own_slots, &self_peer_slots);
             emit_upgrade_message(
                 quiet,
                 json,
                 "peer-running",
-                &format!(
-                    "another cartog process is still running ({slot}, PID {pid}); \
-                     deferred update kept and will retry next session",
-                    slot = peer.slot,
-                    pid = peer.pid,
-                ),
+                &peer_running_message(&peer.slot, peer.pid, foreign),
             );
             return exit::PEER_RUNNING;
         }
