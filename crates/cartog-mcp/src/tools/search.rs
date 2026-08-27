@@ -2,9 +2,7 @@
 
 use std::sync::Arc;
 
-use rmcp::{
-    handler::server::wrapper::Parameters, model::*, tool, tool_router, ErrorData as McpError,
-};
+use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, ErrorData as McpError};
 
 use crate::types::*;
 use crate::*;

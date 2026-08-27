@@ -1,6 +1,6 @@
 //! MCP management tool: cartog_update.
 
-use rmcp::{model::*, tool, tool_router, ErrorData as McpError};
+use rmcp::{tool, tool_router, ErrorData as McpError};
 
 use crate::types::*;
 use crate::*;

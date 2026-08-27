@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use rmcp::{
-    handler::server::wrapper::Parameters, model::*, service::RequestContext, tool, tool_router,
+    handler::server::wrapper::Parameters, service::RequestContext, tool, tool_router,
     ErrorData as McpError, RoleServer,
 };
 
