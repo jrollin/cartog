@@ -28,6 +28,7 @@ use cartog_rag as rag;
 use cartog_watch as watch;
 use cartog_watch::{StaleSnapshot, WatchConfig, WatchHandle};
 
+mod lazy_provider;
 mod progress;
 mod tools;
 mod types;
@@ -866,8 +867,10 @@ pub struct CartogServer {
     /// Cached embedding provider, created once at server start to avoid
     /// reloading the ONNX model (or probing Ollama) on every request.
     embedding_provider: Arc<Mutex<Box<dyn rag::provider::EmbeddingProvider>>>,
-    /// Cached reranker provider (if configured).
-    reranker_provider: Arc<Mutex<Option<Box<dyn rag::provider::RerankerProvider>>>>,
+    /// Reranker provider, built on first semantic query rather than at start.
+    /// The cross-encoder commits ~162 MB that an idle server never uses; see
+    /// [`lazy_provider`].
+    reranker_provider: Arc<lazy_provider::LazyReranker>,
     /// Persistent LSP manager for warm server reuse across index calls.
     #[cfg(feature = "lsp")]
     lsp_manager: Arc<Mutex<cartog_lsp::manager::LspManager>>,
@@ -1013,11 +1016,7 @@ impl CartogServer {
             db.reconcile_embedding_fingerprint(&rag::fingerprint_of(provider.as_ref()))
                 .map_err(|e| anyhow::anyhow!("failed to reconcile embedding fingerprint: {e}"))?;
         }
-        let reranker = rag::create_reranker_provider(
-            &rag_config.reranker_provider,
-            rag_config.reranker_model.as_deref(),
-            rag_config.intra_threads,
-        );
+        let reranker = lazy_provider::lazy_reranker(rag_config.clone());
         Self::from_parts(
             db,
             provider,
@@ -1061,11 +1060,7 @@ impl CartogServer {
                 .map_err(|e| anyhow::anyhow!("failed to open in-memory database: {e}"))?;
             let provider = rag::create_embedding_provider(&rag_config)
                 .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
-            let reranker = rag::create_reranker_provider(
-                &rag_config.reranker_provider,
-                rag_config.reranker_model.as_deref(),
-                rag_config.intra_threads,
-            );
+            let reranker = lazy_provider::lazy_reranker(rag_config.clone());
             // Primary role keeps a degraded server (no DB, refuses writes) out of
             // the ReadOnly promotion path; degraded=true gates the write tools.
             return Self::from_parts(
@@ -1083,11 +1078,7 @@ impl CartogServer {
             .map_err(|e| anyhow::anyhow!("failed to open database read-only: {e}"))?;
         let provider = rag::create_embedding_provider(&rag_config)
             .map_err(|e| anyhow::anyhow!("failed to load embedding model: {e}"))?;
-        let reranker = rag::create_reranker_provider(
-            &rag_config.reranker_provider,
-            rag_config.reranker_model.as_deref(),
-            rag_config.intra_threads,
-        );
+        let reranker = lazy_provider::lazy_reranker(rag_config.clone());
         Self::from_parts(
             db,
             provider,
@@ -1130,7 +1121,7 @@ impl CartogServer {
     fn from_parts(
         db: Database,
         provider: Box<dyn rag::provider::EmbeddingProvider>,
-        reranker: Option<Box<dyn rag::provider::RerankerProvider>>,
+        reranker: lazy_provider::LazyReranker,
         redact: indexer::RedactionConfig,
         lsp_overrides: std::collections::HashMap<String, Vec<String>>,
         filter: indexer::WalkFilter,
@@ -1147,7 +1138,7 @@ impl CartogServer {
             tool_router: Self::tool_router(),
             db: Arc::new(Mutex::new(db)),
             embedding_provider: Arc::new(Mutex::new(provider)),
-            reranker_provider: Arc::new(Mutex::new(reranker)),
+            reranker_provider: Arc::new(reranker),
             #[cfg(feature = "lsp")]
             lsp_manager: Arc::new(Mutex::new(cartog_lsp::manager::LspManager::with_overrides(
                 &cwd,
@@ -1203,7 +1194,7 @@ impl CartogServer {
         Self::from_parts(
             db,
             provider,
-            None,
+            lazy_provider::no_reranker(),
             redact,
             std::collections::HashMap::new(),
             filter,
@@ -1226,7 +1217,7 @@ impl CartogServer {
         Self::from_parts(
             db,
             provider,
-            None,
+            lazy_provider::no_reranker(),
             redact,
             std::collections::HashMap::new(),
             filter,

@@ -58,10 +58,11 @@ impl CartogServer {
             let mut provider = provider
                 .lock()
                 .map_err(|_| mcp_err("internal error: embedding provider lock poisoned (server restart required)"))?;
+            // First semantic query of the process builds the cross-encoder here.
             let mut reranker = reranker
-                .lock()
+                .get()
                 .map_err(|_| mcp_err("internal error: reranker lock poisoned (server restart required)"))?;
-            let mut result = match reranker.as_mut() {
+            let mut result = match reranker.as_mut().and_then(|r| r.as_mut()) {
                 Some(r) => rag::search::hybrid_search(
                     &db, &query, limit, kind_filter, provider.as_mut(), Some(r.as_mut()),
                 ),
@@ -124,11 +125,12 @@ impl CartogServer {
                     "internal error: embedding provider lock poisoned (server restart required)",
                 )
             })?;
-            let mut reranker = reranker.lock().map_err(|_| {
+            // First semantic query of the process builds the cross-encoder here.
+            let mut reranker = reranker.get().map_err(|_| {
                 mcp_err("internal error: reranker lock poisoned (server restart required)")
             })?;
             let opts = rag::context::ContextOptions::default();
-            let result = match reranker.as_mut() {
+            let result = match reranker.as_mut().and_then(|r| r.as_mut()) {
                 Some(r) => rag::context::build_task_context(
                     &db,
                     &task,
