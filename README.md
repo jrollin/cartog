@@ -634,7 +634,8 @@ base_url = "http://localhost:11434"
 # api_key_env = "OPENAI_API_KEY"             # env var NAME; never the key itself
 
 [reranker]
-provider = "none"            # "local" (default) or "none"
+enabled = false              # false turns rerank off (wins over `provider`)
+# provider = "none"          # "local" (default) or "none" — equivalent
 # model  = "BAAI/bge-reranker-base"   # default: jinaai/jina-reranker-v1-turbo-en (~150MB)
 
 # [index]

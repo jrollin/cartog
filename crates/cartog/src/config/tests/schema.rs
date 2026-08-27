@@ -309,6 +309,34 @@ unknown_field = "should be ignored"
 }
 
 #[test]
+fn reranker_enabled_false_resolves_provider_to_none() {
+    let cfg: CartogConfig = toml::from_str("[reranker]\nenabled = false\n").unwrap();
+    assert_eq!(cfg.reranker.unwrap().provider(), "none");
+}
+
+#[test]
+fn reranker_enabled_false_wins_over_explicit_provider() {
+    let toml_str = r#"
+[reranker]
+enabled = false
+provider = "local"
+"#;
+    let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.reranker.unwrap().provider(), "none");
+}
+
+#[test]
+fn reranker_enabled_true_keeps_provider() {
+    let toml_str = r#"
+[reranker]
+enabled = true
+provider = "local"
+"#;
+    let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.reranker.unwrap().provider(), "local");
+}
+
+#[test]
 fn to_search_tuning_clamps_zero_retrieval() {
     let cfg = RagConfig {
         retrieval_multiplier: Some(0),

@@ -173,7 +173,7 @@ cartog index .          <span class="comment"># 6. re-index after changes</span>
           <tbody>
             <tr><td><code>[database]</code></td><td><code>.cartog/db.sqlite</code> (git-root relative)</td><td>you want the DB elsewhere</td></tr>
             <tr><td><code>[embedding]</code></td><td><code>provider = "local"</code> (ONNX, CPU)</td><td>using Ollama / a different model — see <a href="#config-providers">Embedding Providers</a></td></tr>
-            <tr><td><code>[reranker]</code></td><td><code>provider = "local"</code>, <code>model = "jinaai/jina-reranker-v1-turbo-en"</code> (default)</td><td>picking a different cross-encoder, or disabling rerank (<code>"none"</code>)</td></tr>
+            <tr><td><code>[reranker]</code></td><td><code>provider = "local"</code>, <code>model = "jinaai/jina-reranker-v1-turbo-en"</code> (default)</td><td>picking a different cross-encoder, or disabling rerank (<code>enabled = false</code>)</td></tr>
             <tr><td><code>[rag]</code></td><td>tuned retrieval/rerank pools</td><td>tuning hybrid-search recall vs. cost</td></tr>
             <tr><td><code>[remote]</code></td><td>unset (no sync)</td><td>sharing an index over S3 — see <a href="#config-remote">Remote Storage</a></td></tr>
             <tr><td><code>[security]</code></td><td><code>redact_secrets = true</code></td><td>opting out of pattern redaction — see <a href="#config-secrets">Secret Redaction</a></td></tr>
@@ -257,6 +257,7 @@ base_url    = "https://api.openai.com/v1"  <span class="comment"># or http://loc
 api_key_env = "OPENAI_API_KEY"   <span class="comment"># env var NAME, not the key; unset = keyless local endpoint</span>
 
 [reranker]
+enabled  = true                  <span class="comment"># DEFAULT — false turns rerank off (wins over provider)</span>
 provider = "local"               <span class="comment"># DEFAULT — "local" or "none"</span>
 
 [rag]
@@ -305,7 +306,7 @@ url        = "s3://my-team-bucket/cartog/main"
         <h3>Default models (local provider)</h3>
         <table>
           <thead>
-            <tr><th>Role</th><th>Config value</th><th>HuggingFace repo (downloaded)</th><th>Dim</th><th>Size</th></tr>
+            <tr><th>Role</th><th>Config value</th><th>HuggingFace repo (downloaded)</th><th>Dim</th><th>Download size</th></tr>
           </thead>
           <tbody>
             <tr>
@@ -324,6 +325,12 @@ url        = "s3://my-team-bucket/cartog/main"
             </tr>
           </tbody>
         </table>
+        <p>
+          Sizes above are <strong>on-disk download size, not resident memory</strong>. Loading a
+          model costs more than its weights (ONNX Runtime arenas scale with thread count), so these
+          figures are not a memory budget — set <code>[reranker] enabled = false</code> to avoid the
+          cross-encoder's footprint entirely.
+        </p>
         <p>
           The embedding config value is the fastembed model code you set under
           <code>[embedding] model</code>; cartog downloads the matching ONNX-quantized repo from
@@ -393,7 +400,7 @@ cartog rag search "error handling"</pre>
         <pre><span class="comment"># Skip the ~150MB reranker model download</span>
 cat > .cartog.toml &lt;&lt;EOF
 [reranker]
-provider = "none"
+enabled = false
 EOF
 
 cartog rag setup     <span class="comment"># only downloads embedding model (~80MB)</span></pre>

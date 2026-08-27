@@ -16,31 +16,44 @@ use cartog_rag as rag;
 /// Download the embedding model.
 pub fn cmd_rag_setup(json: bool, provider_config: &rag::EmbeddingProviderConfig) -> Result<()> {
     let reranker_model = provider_config.reranker_model.as_deref();
+    // Re-ranking off ⇒ don't fetch the cross-encoder. `[reranker] enabled =
+    // false` / `provider = "none"` exists to avoid that model entirely, so
+    // downloading it here would contradict the setting.
+    let want_reranker = provider_config.reranker_provider != "none";
     let spinner = if json {
         None
     } else {
         // One-time notice so the multi-hundred-MB download isn't a silent wait.
-        eprintln!(
-            "Downloading embedding (~80MB) + re-ranker ({}) models, one-time…",
-            reranker_model.unwrap_or(rag::DEFAULT_RERANKER_MODEL)
-        );
+        if want_reranker {
+            eprintln!(
+                "Downloading embedding (~80MB) + re-ranker ({}) models, one-time…",
+                reranker_model.unwrap_or(rag::DEFAULT_RERANKER_MODEL)
+            );
+        } else {
+            eprintln!(
+                "Downloading embedding model (~80MB), one-time… \
+                 (re-ranking disabled; skipping the cross-encoder)"
+            );
+        }
         Spinner::start("Downloading models")
     };
     // Download bi-encoder (embeddings)
     let embed_result = rag::setup::download_model();
     // Download cross-encoder (re-ranking) — the configured model, not always the default.
-    let rerank_result =
-        rag::setup::download_cross_encoder(reranker_model, provider_config.intra_threads);
+    let rerank_result = want_reranker
+        .then(|| rag::setup::download_cross_encoder(reranker_model, provider_config.intra_threads));
     if let Some(s) = spinner {
         s.stop();
     }
     let embed_result = embed_result?;
-    let rerank_result = rerank_result?;
+    let rerank_result = rerank_result.transpose()?;
 
     #[derive(serde::Serialize)]
     struct CombinedSetup {
         embedding: rag::setup::SetupResult,
-        reranker: rag::setup::SetupResult,
+        /// Absent when re-ranking is disabled — no cross-encoder was fetched.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reranker: Option<rag::setup::SetupResult>,
     }
 
     let combined = CombinedSetup {
@@ -49,9 +62,13 @@ pub fn cmd_rag_setup(json: bool, provider_config: &rag::EmbeddingProviderConfig)
     };
 
     output(&combined, json, None, |c| {
+        let rerank_line = match &c.reranker {
+            Some(r) => format!("Re-ranker model: {}\n", r.model_dir),
+            None => "Re-ranker: disabled (no cross-encoder downloaded)\n".to_string(),
+        };
         format!(
-            "Embedding model: {}\nRe-ranker model: {}\nModels ready. You can now run 'cartog rag index'.\n",
-            c.embedding.model_dir, c.reranker.model_dir
+            "Embedding model: {}\n{rerank_line}Models ready. You can now run 'cartog rag index'.\n",
+            c.embedding.model_dir
         )
     })
 }

@@ -312,6 +312,13 @@ Only the nearest one is used. There is no merging.
 See [`.cartog.toml.example`](../.cartog.toml.example) at the repo root for a
 fully commented template.
 
+### `[reranker] enabled = false` had no effect on older versions
+
+`enabled` was shipped in the `cartog init` template before it was a real config
+field, so unknown-key handling dropped it and the cross-encoder stayed loaded.
+It is now honored, and takes precedence over `provider`. On an older binary use
+`provider = "none"` instead.
+
 ## Database
 
 ### "database at `<path>` is corrupt or not a cartog database"

@@ -151,10 +151,15 @@ regardless of this value.
 
 **Default models (local provider):**
 
-| Role | Config value | HuggingFace repo (downloaded) | Dim | Size |
-|------|-------------|-------------------------------|-----|------|
+| Role | Config value | HuggingFace repo (downloaded) | Dim | Download size |
+|------|-------------|-------------------------------|-----|---------------|
 | Embedding | `BAAI/bge-small-en-v1.5` | `Qdrant/bge-small-en-v1.5-onnx-Q` (ONNX-quantized) | 384 | ~80MB |
 | Reranker | `jinaai/jina-reranker-v1-turbo-en` (default) | `jinaai/jina-reranker-v1-turbo-en` | — | ~150MB |
+
+Sizes above are **on-disk download size**, not resident memory. Loading a model
+costs more than its weights (ONNX Runtime arenas scale with thread count), so
+these figures are not a memory budget — set `[reranker] enabled = false` if you
+need to avoid the cross-encoder's footprint entirely.
 
 The embedding config value is the fastembed model code you set under `[embedding]
 model`; cartog downloads the matching ONNX-quantized repo from HuggingFace into the
@@ -186,11 +191,12 @@ TOML > uncapped. Read at provider load, so restart `cartog serve` to change it.
 
 **Reranker model** — the cross-encoder is configurable, mirroring `[embedding]
 model`. The value is a fastembed reranker HuggingFace repo path; unset uses the
-default (`jinaai/jina-reranker-v1-turbo-en`, ~150MB — small, fast, and higher
-BEIR NDCG@10 than the older `bge-reranker-base`):
+default (`jinaai/jina-reranker-v1-turbo-en`, ~150MB to download — small, fast,
+and higher BEIR NDCG@10 than the older `bge-reranker-base`):
 
 ```toml
 [reranker]
+enabled  = true                                 # false = off, wins over `provider`
 provider = "local"                              # "local" (default) | "none"
 model    = "BAAI/bge-reranker-base"             # opt back to the former default (~1.1GB)
 # model  = "jinaai/jina-reranker-v2-base-multilingual"  # multilingual (~300MB)
@@ -204,12 +210,15 @@ one (it reuses the already-downloaded weights). See
 [troubleshooting](../troubleshooting.md) to reclaim the orphaned `bge-reranker-base`
 cache.
 
-**Disable re-ranking** (skips the ~150MB reranker download):
+**Disable re-ranking** (skips the ~150MB reranker download and its resident cost).
+Either spelling works; `enabled = false` wins over an explicit `provider`:
 
 ```toml
 [reranker]
-provider = "none"
+enabled = false
+# provider = "none"   # equivalent
 ```
+
 
 ## Hybrid search tuning (`[rag]`)
 

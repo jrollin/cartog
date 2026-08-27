@@ -335,6 +335,15 @@ impl OpenAiConfig {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct RerankerConfig {
+    /// Turn re-ranking off without naming a provider. `false` resolves the
+    /// provider to `"none"` regardless of [`Self::provider`].
+    ///
+    /// Shipped in the `cartog init` template long before it was a real field,
+    /// so a config carrying `enabled = false` was silently ignored and left
+    /// the cross-encoder loaded. Honored here rather than rejected: erroring
+    /// on a key our own template taught users to write would punish them for
+    /// that bug.
+    pub enabled: Option<bool>,
     /// Provider type: "local" (default) or "none".
     pub provider: Option<String>,
     /// Reranker model as a fastembed HF repo path (e.g. `BAAI/bge-reranker-base`).
@@ -343,9 +352,15 @@ pub struct RerankerConfig {
 }
 
 pub const DEFAULT_RERANKER_PROVIDER: &str = "local";
+pub const RERANKER_PROVIDER_NONE: &str = "none";
 
 impl RerankerConfig {
+    /// Resolved provider name. `enabled = false` wins over an explicit
+    /// `provider` so the two spellings can't disagree about being off.
     pub fn provider(&self) -> &str {
+        if self.enabled == Some(false) {
+            return RERANKER_PROVIDER_NONE;
+        }
         self.provider
             .as_deref()
             .unwrap_or(DEFAULT_RERANKER_PROVIDER)

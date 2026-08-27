@@ -34,4 +34,5 @@
 # model    = "nomic-embed-text"
 
 [reranker]
+# enabled = true       # false turns rerank off entirely (wins over `provider`)
 # provider = "local"   # or "none" to skip cross-encoder reranking

@@ -53,7 +53,9 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # command = ["docker", "run", "--rm", "-i", "-v", "${ROOT}:${ROOT}", "-w", "${ROOT}", "cartog-lsp-dart:stable"]
 
 # [reranker]
-# enabled = true
+# enabled = true                 # false turns re-ranking off (wins over `provider`)
+# provider = "local"             # "local" (default) or "none"
+# model    = "jinaai/jina-reranker-v1-turbo-en"
 
 # [rag]
 # retrieval_multiplier = 3  # over-retrieve N× before fusion (default: 3)
