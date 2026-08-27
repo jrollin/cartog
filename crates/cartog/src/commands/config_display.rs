@@ -91,7 +91,9 @@ pub fn cmd_config(
                 value: reranker.map_or(DEFAULT_RERANKER_PROVIDER.into(), |r| {
                     r.provider().to_string()
                 }),
-                is_default: reranker.map_or(true, |r| r.provider.is_none()),
+                // `enabled = false` resolves the provider to "none"; without it
+                // in the check, an explicit opt-out reads back as "(default)".
+                is_default: reranker.map_or(true, |r| r.provider.is_none() && r.enabled.is_none()),
                 default: DEFAULT_RERANKER_PROVIDER.into(),
             },
         },

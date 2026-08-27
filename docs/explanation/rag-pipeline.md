@@ -54,7 +54,7 @@ Query
   │     Over-retrieval: max(limit × 3, 20) per source
   │
   └─→ Cross-encoder re-ranking (optional)
-        jina-reranker-v1-turbo-en (`jinaai/jina-reranker-v1-turbo-en`, default; configurable via `[reranker] model`, or disable with `[reranker] provider = "none"`), scores (query, full_content) pairs jointly
+        jina-reranker-v1-turbo-en (`jinaai/jina-reranker-v1-turbo-en`, default; configurable via `[reranker] model`, or disable with `[reranker] enabled = false`), scores (query, full_content) pairs jointly
         Capped at 50 candidates to bound latency
         Graceful degradation: tri-state cache (not attempted / failed / ready)
         If model unavailable → search works with RRF-only ordering

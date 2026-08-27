@@ -277,6 +277,16 @@ fn read_config_rejects_unknown_lsp_field() {
     let cfg_path = dir.path().join(".cartog.toml");
     fs::write(&cfg_path, "[lsp.dart]\ncmd = [\"x\"]\n").unwrap();
     assert!(read_config(&cfg_path).is_none());
+
+    // `cmd` alone is a *missing field* error, which would pass even with
+    // `deny_unknown_fields` off. Pair a valid `command` with a stray key so this
+    // actually exercises unknown-field rejection.
+    let stray = dir.path().join("stray.toml");
+    fs::write(&stray, "[lsp.dart]\ncommand = [\"x\"]\nargz = 1\n").unwrap();
+    assert!(
+        read_config(&stray).is_none(),
+        "a stray key alongside a valid `command` must still reject"
+    );
 }
 
 #[test]
@@ -382,4 +392,254 @@ fn scopeguard(key: &'static str) -> impl Drop {
         key,
         prev: std::env::var(key).ok(),
     }
+}
+
+/// An unknown key is a typo, not a reason to discard the file. Before this was
+/// handled, `deny_unknown_fields` made one misspelling drop every other setting
+/// AND revoke index-creation consent (`config_present` is false for `Rejected`),
+/// so `cartog index` refused with "no .cartog.toml in this project".
+#[test]
+fn unknown_key_keeps_the_rest_of_the_config() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(
+        &cfg_path,
+        "[database]\npath = \"/tmp/kept.db\"\n\n[rag]\nrerank_mx = 10\nrerank_max = 33\n",
+    )
+    .unwrap();
+
+    let cfg = read_config(&cfg_path).expect("a stray key must not reject the whole config");
+    assert_eq!(
+        cfg.database.expect("[database] survives").path.as_deref(),
+        Some("/tmp/kept.db"),
+    );
+    // A valid sibling in the *same* section survives too.
+    assert_eq!(cfg.rag.expect("[rag] survives").rerank_max, Some(33));
+}
+
+#[test]
+fn unknown_key_still_loads_so_consent_is_preserved() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(&cfg_path, "[security]\nredact_secretz = false\n").unwrap();
+    // `Some` is what makes `ConfigLoad::Loaded` (= consent to create an index).
+    assert!(
+        read_config(&cfg_path).is_some(),
+        "a typo must not revoke index-creation consent"
+    );
+}
+
+#[test]
+fn genuine_syntax_error_is_still_rejected() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(&cfg_path, "[database\npath = \"x\"\n").unwrap();
+    assert!(read_config(&cfg_path).is_none());
+}
+
+#[test]
+fn wrong_value_type_is_still_rejected() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(&cfg_path, "[index]\njobs = \"many\"\n").unwrap();
+    assert!(read_config(&cfg_path).is_none());
+}
+
+#[test]
+fn unknown_lsp_scalar_key_is_dropped_not_fatal() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(
+        &cfg_path,
+        "[lsp]\nmax_concurrent_serverz = 2\n\n[lsp.rust]\ncommand = [\"rust-analyzer\"]\n",
+    )
+    .unwrap();
+    let cfg = read_config(&cfg_path).expect("[lsp] typo must not reject the config");
+    let lsp = cfg.lsp.expect("[lsp] survives");
+    assert!(
+        lsp.langs.contains_key("rust"),
+        "per-language entry survives"
+    );
+    assert_eq!(lsp.max_concurrent_servers, None);
+}
+
+/// `[remote]` is exempt from the lenient unknown-key path: a mistyped key there
+/// could silently redirect where the index is pushed or pulled.
+#[test]
+fn unknown_remote_key_stays_a_hard_rejection() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(
+        &cfg_path,
+        "[remote]\nurl = \"s3://b/k\"\npathstyle = true\n",
+    )
+    .unwrap();
+    assert!(
+        read_config(&cfg_path).is_none(),
+        "a stray [remote] key must reject the config, not be ignored"
+    );
+}
+
+/// The lenient path keys off `toml`'s error text (`is_unknown_field_error`).
+/// If a dep bump rewords it, typos silently revert to full rejection — which
+/// also revokes index-creation consent. Fail loudly here instead.
+#[test]
+fn toml_still_reports_unknown_fields_in_the_format_we_parse() {
+    let e = toml::from_str::<CartogConfig>("[security]\nredact_secretz = false\n")
+        .expect_err("unknown field must error");
+    assert!(
+        e.to_string().contains("unknown field"),
+        "toml error format changed — is_unknown_field_error is now dead: {e}"
+    );
+}
+
+/// A stray key must be dropped from the section it was written in, never matched
+/// by name across the tree. `[rag] path` once deleted `[database] path`, silently
+/// pointing cartog at a different database.
+#[test]
+fn typo_does_not_delete_a_same_named_key_in_another_section() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(
+        &cfg_path,
+        "[database]\npath = \"/tmp/kept.db\"\n\n[rag]\npath = \"oops\"\nrerank_max = 33\n",
+    )
+    .unwrap();
+    let cfg = read_config(&cfg_path).expect("stray key must not reject the config");
+    assert_eq!(
+        cfg.database.expect("[database] survives").path.as_deref(),
+        Some("/tmp/kept.db"),
+        "a [rag] typo must not delete [database] path"
+    );
+    assert_eq!(cfg.rag.expect("[rag] survives").rerank_max, Some(33));
+}
+
+#[test]
+fn typo_does_not_delete_embedding_provider_from_another_section() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(
+        &cfg_path,
+        "[embedding]\nprovider = \"ollama\"\n\n[security]\nprovider = \"x\"\n",
+    )
+    .unwrap();
+    let cfg = read_config(&cfg_path).expect("stray key must not reject the config");
+    assert_eq!(
+        cfg.embedding.expect("[embedding] survives").provider(),
+        "ollama",
+        "a [security] typo must not reset [embedding] provider to the default"
+    );
+}
+
+/// Two typos in different sections: both siblings must survive. Exercises the
+/// per-section pass more than once.
+#[test]
+fn multiple_typos_in_different_sections_all_resolve() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(
+        &cfg_path,
+        "[database]\npath = \"/tmp/x.db\"\nbogus = 1\n\n[rag]\nrerank_max = 7\nalso_bogus = 2\n",
+    )
+    .unwrap();
+    let cfg = read_config(&cfg_path).expect("stray keys must not reject the config");
+    assert_eq!(
+        cfg.database.expect("[database] survives").path.as_deref(),
+        Some("/tmp/x.db")
+    );
+    assert_eq!(cfg.rag.expect("[rag] survives").rerank_max, Some(7));
+}
+
+/// `[lsp.<lang>]` stays strict: the argv there spawns a process, so a stray key
+/// must reject rather than be silently dropped.
+#[test]
+fn unknown_lsp_lang_key_stays_a_hard_rejection() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(
+        &cfg_path,
+        "[lsp.rust]\ncommand = [\"rust-analyzer\"]\nargz = 1\n",
+    )
+    .unwrap();
+    assert!(
+        read_config(&cfg_path).is_none(),
+        "a stray [lsp.<lang>] key must reject the config"
+    );
+}
+
+/// The `[remote]` boundary must not be defeatable from another section. A typo
+/// named like a remote field once deleted the REAL `[remote] endpoint`, which
+/// makes `cartog push` fall back to AWS's default host instead of the user's
+/// private endpoint.
+#[test]
+fn typo_elsewhere_never_deletes_a_remote_key() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(
+        &cfg_path,
+        "[remote]\nurl = \"s3://team/idx\"\nendpoint = \"https://minio.internal\"\n\
+         \n[security]\nendpoint = \"typo\"\n",
+    )
+    .unwrap();
+    let cfg = read_config(&cfg_path).expect("stray [security] key must not reject the config");
+    let remote = cfg.remote.expect("[remote] survives");
+    assert_eq!(
+        remote.endpoint.as_deref(),
+        Some("https://minio.internal"),
+        "a typo in another section must never delete [remote] endpoint"
+    );
+    assert_eq!(remote.url.as_deref(), Some("s3://team/idx"));
+}
+
+/// `LSP_SCALAR_KEYS` hand-lists `LspConfig`'s non-flattened fields (it can't use
+/// `deny_unknown_fields` — `#[serde(flatten)]` forbids it). If a new scalar field
+/// is added to `LspConfig` and not to that list, it would be silently stripped as
+/// a typo. Assert every listed key round-trips, so the two can't drift apart.
+#[test]
+fn lsp_scalar_keys_are_all_real_lsp_config_fields() {
+    for key in LSP_SCALAR_KEYS {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join(".cartog.toml");
+        // A usize-valued scalar covers today's only entry; extend if a
+        // non-numeric scalar is ever added.
+        std::fs::write(&cfg_path, format!("[lsp]\n{key} = 2\n")).unwrap();
+        let cfg = read_config(&cfg_path)
+            .unwrap_or_else(|| panic!("[lsp] {key} must parse — is it a real LspConfig field?"));
+        let lsp = cfg
+            .lsp
+            .unwrap_or_else(|| panic!("[lsp] section must survive for key {key}"));
+        assert!(
+            !lsp.langs.contains_key(*key),
+            "{key} was routed into the per-language map instead of a real field \
+             — LSP_SCALAR_KEYS and LspConfig have drifted"
+        );
+    }
+}
+
+/// A stray key inside a provider sub-table must not take the sub-table with it.
+/// Deleting `[embedding.openai]` silently moved the endpoint from a self-hosted
+/// server to the public API and changed which env var supplies the key.
+#[test]
+fn typo_in_a_provider_subtable_keeps_the_subtable() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(
+        &cfg_path,
+        "[embedding]\nprovider = \"openai\"\n\n[embedding.openai]\n\
+         base_url = \"http://good.example/v1\"\napi_key_env = \"MY_CUSTOM_KEY\"\n\
+         base_urll = \"typo\"\n",
+    )
+    .unwrap();
+    let cfg = read_config(&cfg_path).expect("stray sub-table key must not reject the config");
+    let openai = cfg
+        .embedding
+        .expect("[embedding] survives")
+        .openai
+        .expect("[embedding.openai] must survive a typo inside it");
+    assert_eq!(
+        openai.base_url(),
+        "http://good.example/v1",
+        "a typo must not repoint the endpoint at the public API"
+    );
+    assert_eq!(openai.api_key_env(), "MY_CUSTOM_KEY");
 }
