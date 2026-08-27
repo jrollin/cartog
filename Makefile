@@ -230,8 +230,12 @@ bench-resolution-docker: ## Run edge-resolution rate with Docker LSP servers (ru
 	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/resolution_rate.sh --lsp --docker-lsp
 
 bench-memory: ## Guard `cartog serve` idle memory footprint (macOS only; skips elsewhere)
-	cargo build --release
-	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/idle_memory.sh
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "bench-memory: skipped (needs macOS \`footprint\`; got $$(uname -s))"; \
+	else \
+		cargo build --release && \
+		CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/idle_memory.sh; \
+	fi
 
 bench-resolution-scale: ## Catch super-linear resolution regressions (synthetic N vs 2N repo, asserts time ratio; cf. #110)
 	cargo build --release

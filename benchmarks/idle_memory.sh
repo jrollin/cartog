@@ -21,8 +21,15 @@ MAX_IDLE_MB="${MAX_IDLE_MB:-150}"
 # Floor. A broken sampler that reports 0 would otherwise pass forever; a real
 # serve process cannot be this small.
 MIN_IDLE_MB="${MIN_IDLE_MB:-5}"
-# Seconds to let the server settle after `initialized` before sampling.
+# Seconds to let the server settle after `initialized` before sampling. Too
+# short and we sample a half-initialised process, which reads low no matter what
+# the code does — so this has a floor of its own.
 SETTLE="${SETTLE:-10}"
+MIN_SETTLE=5
+if [ "$SETTLE" -lt "$MIN_SETTLE" ]; then
+  echo "idle_memory: FAIL — SETTLE=$SETTLE is below ${MIN_SETTLE}s; a reading that early is meaningless" >&2
+  exit 1
+fi
 
 if [ "$(uname -s)" != "Darwin" ]; then
   echo "idle_memory: skipped (needs macOS \`footprint\`; got $(uname -s))"
@@ -50,7 +57,12 @@ git init -q .
 # A real config so the consent gate is satisfied and serve starts non-degraded.
 printf '[database]\npath = ".cartog/db.sqlite"\n' > .cartog.toml
 printf 'def hello():\n    return 1\n' > sample.py
-"$CARTOG" index . >/dev/null 2>&1 || true
+# Must succeed: a degraded (unindexed) server has a different memory profile,
+# so passing on one would green-light the wrong state.
+if ! "$CARTOG" index . >/dev/null 2>&1; then
+  echo "idle_memory: FAIL — \`cartog index\` failed on the fixture; cannot measure a real server" >&2
+  exit 1
+fi
 
 # Handshake only — no tools/call, so nothing should pull in a model.
 {
@@ -58,14 +70,17 @@ printf 'def hello():\n    return 1\n' > sample.py
   printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
   sleep $((SETTLE + 15))
 } | "$CARTOG" serve >/dev/null 2>&1 &
+# In a pipeline `$!` is the LAST command, i.e. the serve process itself — not a
+# parent to search under. Use it directly; never widen to a host-wide lookup,
+# which would happily measure another project's long-lived `serve --watch`.
 SERVE_PID=$!
 
 sleep "$SETTLE"
 
-PID="$(pgrep -P "$SERVE_PID" -f "cartog serve" | head -1 || true)"
-[ -z "$PID" ] && PID="$(pgrep -n -f "cartog serve" || true)"
-if [ -z "$PID" ]; then
-  echo "idle_memory: FAIL — serve process not found (did it exit at startup?)" >&2
+PID="$SERVE_PID"
+# Confirm the pid we are about to sample is really our serve, not a recycled one.
+if ! ps -o command= -p "$PID" 2>/dev/null | grep -q "cartog serve"; then
+  echo "idle_memory: FAIL — pid $PID is not a \`cartog serve\` (did it exit at startup?)" >&2
   exit 1
 fi
 
