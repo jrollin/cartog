@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@pagefind/default-ui": "^1.5.2",
-    "astro": "^6.4.2",
+    "astro": "^7.2.8",
     "astro-pagefind": "^1.8.6",
     "mermaid": "^11.15.0"
   }
