@@ -219,6 +219,10 @@ enabled = false
 # provider = "none"   # equivalent
 ```
 
+Unknown keys inside a config section are reported on stderr with the valid
+alternatives, so a typo like `rerank_mx = 10` is visible instead of silently
+leaving you on defaults. The bad key is ignored and the rest of the config still
+applies. (Unknown top-level *sections* warn the same way.)
 
 ## Hybrid search tuning (`[rag]`)
 

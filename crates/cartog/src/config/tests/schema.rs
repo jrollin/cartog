@@ -297,15 +297,21 @@ path = "/tmp/test.db"
 }
 
 #[test]
-fn test_config_unknown_fields_ignored() {
+fn unknown_key_in_a_section_is_rejected() {
+    // Previously ignored in silence, which is how `[reranker] enabled` shipped
+    // in the init template for releases without being a real field.
     let toml_str = r#"
 [embedding]
 provider = "local"
-unknown_field = "should be ignored"
+unknown_field = "typo"
 "#;
-    // serde default: unknown fields are silently ignored
-    let cfg: CartogConfig = toml::from_str(toml_str).unwrap();
-    assert_eq!(cfg.embedding.unwrap().provider(), "local");
+    let err = toml::from_str::<CartogConfig>(toml_str)
+        .expect_err("unknown key must be rejected")
+        .to_string();
+    assert!(
+        err.contains("unknown_field"),
+        "error must name the key: {err}"
+    );
 }
 
 #[test]

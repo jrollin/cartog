@@ -312,6 +312,27 @@ Only the nearest one is used. There is no merging.
 See [`.cartog.toml.example`](../.cartog.toml.example) at the repo root for a
 fully commented template.
 
+### `cartog: warning: unknown field 'x'` in my config
+
+Keys inside a config section are validated, so a typo (`rerank_mx = 10`) or a
+key written for a newer cartog than your binary is now **named on stderr** with
+the valid alternatives, instead of being silently ignored:
+
+```
+cartog: warning: in .cartog.toml: unknown field `rerank_mx`, expected one of
+  `retrieval_multiplier`, `retrieval_floor`, `rerank_max`, `rerank_min`
+cartog: warning: ignoring that key; the rest of the config still applies.
+```
+
+The offending key is dropped from **the section it was written in**, and every
+other setting still applies — a typo costs you that one key, not the whole file.
+Unknown top-level *sections* warn the same way.
+
+Two sections are deliberately stricter, because a stray key there could redirect
+where data goes rather than merely be ignored: an unknown key in `[remote]` (the
+push/pull target) or in `[lsp.<lang>]` (the argv cartog spawns) rejects the whole
+config with a loud error instead of being dropped.
+
 ### `[reranker] enabled = false` had no effect on older versions
 
 `enabled` was shipped in the `cartog init` template before it was a real config

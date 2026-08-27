@@ -236,6 +236,83 @@ mod tests {
         }
     }
 
+    /// Uncomment every commented directive in a template, dropping prose.
+    fn uncomment_template(src: &str) -> String {
+        let mut out = String::new();
+        for line in src.lines() {
+            let t = line.trim_start_matches(['#', ' ']).trim();
+            // Strip a trailing inline comment so `[embedding.openai]  # note`
+            // is still recognized as a header.
+            let t = if t.starts_with('[') {
+                t.split('#').next().unwrap_or(t).trim()
+            } else {
+                t
+            };
+            let is_header = t.starts_with('[') && t.ends_with(']');
+            // An assignment, not prose that happens to contain '=' ("0 or
+            // omitted = auto"): the text left of the first '=' must be a single
+            // bare TOML key.
+            let is_assignment = !t.starts_with('[')
+                && t.split_once('=').is_some_and(|(k, _)| {
+                    let k = k.trim();
+                    !k.is_empty()
+                        && k.chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+                });
+            if is_header || is_assignment {
+                out.push_str(t);
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    /// Every key a user-facing template teaches must deserialize into a real
+    /// config field. `[reranker] enabled` shipped in both templates for
+    /// releases while no such field existed, so anyone who followed them was
+    /// silently left with the cross-encoder loaded. Uncommenting and parsing
+    /// under `deny_unknown_fields` is what catches that class of drift.
+    ///
+    /// Covers `.cartog.toml.example` too — a second shipped template, and the
+    /// only place `[embedding.local]` / `[embedding.ollama]` appear.
+    #[test]
+    fn every_template_key_parses_into_a_real_config_field() {
+        let example = fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(".cartog.toml.example"),
+        )
+        .expect("`.cartog.toml.example` must exist at the repo root");
+
+        for (name, src) in [
+            ("init.rs TOML_TEMPLATE", TOML_TEMPLATE),
+            (".cartog.toml.example", example.as_str()),
+        ] {
+            let rendered = uncomment_template(src);
+            let cfg: Result<crate::config::CartogConfig, _> = toml::from_str(&rendered);
+            assert!(
+                cfg.is_ok(),
+                "{name}: key is not a real config field: {}\n--- rendered ---\n{rendered}",
+                cfg.unwrap_err()
+            );
+        }
+    }
+
+    /// A freshly-scaffolded config must load clean — no unknown-section
+    /// warnings on a user's very first run.
+    #[test]
+    fn scaffolded_template_has_no_unknown_sections() {
+        let tmp = TempDir::new().unwrap();
+        scaffold_toml(tmp.path(), false).unwrap();
+        let body = fs::read_to_string(tmp.path().join(".cartog.toml")).unwrap();
+        let raw: toml::value::Table = toml::from_str(&body).unwrap();
+        assert!(
+            crate::config::unknown_sections(&raw).is_empty(),
+            "template emits unknown sections: {:?}",
+            crate::config::unknown_sections(&raw)
+        );
+    }
+
     #[test]
     fn toml_scaffold_preserves_existing_file() {
         let tmp = TempDir::new().unwrap();

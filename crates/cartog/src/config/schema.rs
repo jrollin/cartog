@@ -60,6 +60,7 @@ pub struct LspLangConfig {
 
 /// Secret-redaction settings.
 #[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
     /// Redact known secret patterns from stored symbol text. Default: true.
     /// The sensitive-file deny-list is always enforced regardless of this flag.
@@ -76,6 +77,7 @@ impl SecurityConfig {
 
 /// Indexing settings.
 #[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IndexConfig {
     /// Repo-root-relative globs whose matching files and directories are skipped
     /// during indexing (e.g. `vendor/**`, `**/*.generated.*`). Complements the
@@ -186,6 +188,7 @@ pub(crate) fn validate_remote_no_credentials(table: &toml::value::Table) -> Resu
 /// rerank_min           = 8
 /// ```
 #[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RagConfig {
     /// Over-retrieval multiplier for FTS5 + vector candidate pools.
     pub retrieval_multiplier: Option<u32>,
@@ -225,12 +228,14 @@ impl RagConfig {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DatabaseConfig {
     /// Filesystem path to the cartog SQLite database. Supports `~` expansion.
     pub path: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EmbeddingConfig {
     /// Provider type: "local" (default), "ollama", or "openai".
     pub provider: Option<String>,
@@ -267,6 +272,7 @@ impl EmbeddingConfig {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalEmbeddingConfig {
     /// Prefix prepended to text during search (e.g. "search_query: ").
     pub query_prefix: Option<String>,
@@ -279,6 +285,7 @@ pub struct LocalEmbeddingConfig {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OllamaConfig {
     /// Ollama server URL (default: "http://localhost:11434").
     pub base_url: Option<String>,
@@ -300,6 +307,7 @@ impl OllamaConfig {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OpenAiConfig {
     /// OpenAI-compatible base URL (default: "https://api.openai.com/v1").
     pub base_url: Option<String>,
@@ -334,6 +342,7 @@ impl OpenAiConfig {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RerankerConfig {
     /// Turn re-ranking off without naming a provider. `false` resolves the
     /// provider to `"none"` regardless of [`Self::provider`].
