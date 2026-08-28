@@ -57,6 +57,49 @@ impl ConfigLoad {
     pub fn is_rejected(&self) -> bool {
         matches!(self, ConfigLoad::Rejected { .. })
     }
+
+    /// Whether the user has opted this project in to a cartog index.
+    ///
+    /// Writing a `.cartog.toml` *is* the opt-in, so a file that was found but
+    /// failed to parse still counts: the question "may cartog create an index
+    /// here?" is answered by the file's existence, not by its contents being
+    /// valid. Deriving consent from parse success instead conflated the two and
+    /// made a single typo report `no .cartog.toml in this project` at a user
+    /// who was looking straight at one.
+    ///
+    /// Settings still fail closed on a rejected config — [`config_or_default`]
+    /// hands back defaults and `read_config` has already explained why on
+    /// stderr. Only the consent signal is decoupled.
+    ///
+    /// [`config_or_default`]: ConfigLoad::config_or_default
+    #[must_use]
+    pub fn consent(&self) -> IndexConsent {
+        match self {
+            ConfigLoad::Loaded { .. } | ConfigLoad::Rejected { .. } => IndexConsent::Granted,
+            ConfigLoad::Missing => IndexConsent::Absent,
+        }
+    }
+}
+
+/// Whether cartog may create a `.cartog/` index for this project.
+///
+/// A distinct type rather than a `bool` so the two states are named at every
+/// call site: `allow_index_creation(&path, true)` gave no hint which `true`
+/// meant, and the parameter was easy to pass inverted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexConsent {
+    /// The user opted in — a `.cartog.toml` is present (parsed or not).
+    Granted,
+    /// No opt-in signal from a config file.
+    Absent,
+}
+
+impl IndexConsent {
+    /// Whether this is [`IndexConsent::Granted`].
+    #[must_use]
+    pub fn is_granted(self) -> bool {
+        matches!(self, IndexConsent::Granted)
+    }
 }
 
 /// Known non-language keys of `[lsp]`. A scalar `[lsp]` key outside this set is
@@ -510,7 +553,9 @@ pub const AUTO_INIT_ENV: &str = "CARTOG_AUTO_INIT";
 /// True when an index/DB may be created for this project — i.e. the user has
 /// opted in by at least one of three signals:
 ///
-/// 1. a present `.cartog.toml` (`config_present`);
+/// 1. a `.cartog.toml` is present ([`IndexConsent::Granted`], from
+///    [`ConfigLoad::consent`]) — including one that failed to parse, since the
+///    file's existence is the opt-in and its contents are a separate concern;
 /// 2. the resolved main DB file already exists (Branch 1 — once an index
 ///    exists the project is de-facto opted in, and steady-state updates must
 ///    keep working). A stray `-wal`/`-shm` without the main file does NOT
@@ -519,12 +564,10 @@ pub const AUTO_INIT_ENV: &str = "CARTOG_AUTO_INIT";
 ///
 /// When none hold, the write paths (`cartog index` / `rag index` / `watch`,
 /// the MCP write tools, the watcher's first index) must refuse rather than
-/// materialize a `.cartog/` for a project nobody opted into. A `Rejected`
-/// (broken) `.cartog.toml` is **not** `config_present` — the caller passes
-/// `false` and this returns `false`, so a broken config refuses too.
+/// materialize a `.cartog/` for a project nobody opted into.
 #[must_use]
-pub fn allow_index_creation(db_path: &Path, config_present: bool) -> bool {
-    config_present || db_path.exists() || auto_init_enabled()
+pub fn allow_index_creation(db_path: &Path, consent: IndexConsent) -> bool {
+    consent.is_granted() || db_path.exists() || auto_init_enabled()
 }
 
 /// Read `CARTOG_AUTO_INIT`: any non-empty value enables the bypass.

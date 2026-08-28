@@ -62,8 +62,11 @@ config-less repository stays untouched until you opt in. Consent is granted by
 3. `CARTOG_AUTO_INIT` set to any non-empty value — indexes with in-memory
    defaults and **never writes a `.cartog.toml`**.
 
-A broken (`Rejected`) `.cartog.toml` is **not** consent: the parse error is
-printed and write paths refuse.
+A broken (`Rejected`) `.cartog.toml` **is** still consent — the file's existence
+is the opt-in, and whether its contents parse is a separate question. The parse
+error is printed and every setting falls back to its default, but indexing is
+allowed: reporting `no .cartog.toml in this project` at someone who is looking
+straight at one is worse than indexing with defaults.
 
 Behavior when none of the three hold:
 

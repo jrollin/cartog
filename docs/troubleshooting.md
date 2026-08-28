@@ -93,6 +93,12 @@ On a fresh, config-less repository the write commands (`index`, `rag index`,
 - nothing further if an index already exists — an existing `.cartog/db.sqlite`
   is itself consent, so steady-state re-indexes keep working without a config.
 
+If you *do* have a `.cartog.toml` and still see this, you are on a version that
+derived consent from the config parsing successfully; a syntax error there made
+the file invisible to the gate. Fix the parse error (the message naming it is
+printed just above), or upgrade — a present-but-broken config now grants consent
+and indexes with defaults.
+
 Read commands (`search`, `map`, …) never refuse — they return empty results
 with a hint and create nothing. The MCP server (`cartog serve`) starts
 **degraded** rather than refusing: `cartog_stats` shows `"degraded": true` and

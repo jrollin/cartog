@@ -243,3 +243,37 @@ fn index_allows_when_db_already_exists_without_config() {
         stderr(&out)
     );
 }
+
+/// A `.cartog.toml` that exists but cannot be parsed at all is still an opt-in.
+///
+/// Consent used to be derived from parse success, so an unparseable config was
+/// indistinguishable from no config — `cartog index` refused with "no
+/// .cartog.toml in this project" while the user was looking straight at one.
+/// Settings still fall back to defaults (loudly); only consent is decoupled.
+#[test]
+fn index_allows_with_a_present_but_unparseable_config() {
+    let sb = Sandbox::new();
+    // Unclosed table header: a hard syntax error, not a recoverable stray key.
+    fs::write(
+        sb.repo.path().join(".cartog.toml"),
+        "[database\npath = \"x\"\n",
+    )
+    .unwrap();
+
+    let out = sb.cmd(&["index", "."]);
+    assert!(
+        out.status.success(),
+        "a present-but-broken config must not read as 'no config': stdout={} stderr={}",
+        stdout(&out),
+        stderr(&out)
+    );
+    assert!(
+        sb.has(".cartog"),
+        "index should have created the index dir once consent was granted"
+    );
+    let err = stderr(&out);
+    assert!(
+        !err.contains("no .cartog.toml in this project"),
+        "must not claim the config is missing when it exists: {err}"
+    );
+}

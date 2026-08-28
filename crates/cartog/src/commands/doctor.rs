@@ -469,11 +469,17 @@ pub fn cmd_doctor(
     provider_config: &rag::EmbeddingProviderConfig,
 ) -> Result<()> {
     // Loaded config (present + not rejected) grants consent; a rejected one does not.
-    let config_present = config_path.is_some() && !config_rejected;
+    // A present-but-rejected config still grants consent: `cartog index` will
+    // run with defaults rather than refuse, so the hint must match that.
+    let file_consent = if config_path.is_some() {
+        crate::config::IndexConsent::Granted
+    } else {
+        crate::config::IndexConsent::Absent
+    };
     // The full runtime gate (config OR existing DB OR CARTOG_AUTO_INIT), so the
     // "database not found" hint matches what `cartog index` will actually do —
     // e.g. AUTO_INIT alone makes index succeed, so don't tell the user to init.
-    let consent = crate::config::allow_index_creation(db_path, config_present);
+    let consent = crate::config::allow_index_creation(db_path, file_consent);
     let checks = vec![
         check_git_repo(),
         check_config(config_path, config_rejected),
