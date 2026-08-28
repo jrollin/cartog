@@ -8,8 +8,9 @@
 # RSS is therefore useless here; this uses `footprint`, which counts dirty +
 # compressed + swapped.
 #
-# macOS only (`footprint` is an Apple tool). Skips cleanly elsewhere so the
-# target is safe to wire into a cross-platform `make check`.
+# macOS uses `footprint` (an Apple tool); Linux reads Pss + Swap from
+# /proc/<pid>/smaps_rollup, which counts the same thing the RSS number misses.
+# Skips cleanly on any other platform so the target is safe in `make check`.
 set -euo pipefail
 
 CARTOG="${CARTOG:-$(cd "$(dirname "$0")/.." && pwd)/target/release/cartog}"
@@ -31,14 +32,25 @@ if [ "$SETTLE" -lt "$MIN_SETTLE" ]; then
   exit 1
 fi
 
-if [ "$(uname -s)" != "Darwin" ]; then
-  echo "idle_memory: skipped (needs macOS \`footprint\`; got $(uname -s))"
-  exit 0
-fi
-if ! command -v footprint >/dev/null 2>&1; then
-  echo "idle_memory: skipped (\`footprint\` not on PATH)"
-  exit 0
-fi
+OS="$(uname -s)"
+case "$OS" in
+  Darwin)
+    if ! command -v footprint >/dev/null 2>&1; then
+      echo "idle_memory: skipped (\`footprint\` not on PATH)"
+      exit 0
+    fi
+    ;;
+  Linux)
+    if [ ! -r /proc/self/smaps_rollup ]; then
+      echo "idle_memory: skipped (no readable /proc/<pid>/smaps_rollup)"
+      exit 0
+    fi
+    ;;
+  *)
+    echo "idle_memory: skipped (no supported sampler on $OS)"
+    exit 0
+    ;;
+esac
 if [ ! -x "$CARTOG" ]; then
   echo "idle_memory: FAIL — cartog binary not found at $CARTOG (run: cargo build --release)" >&2
   exit 1
@@ -84,9 +96,17 @@ if ! ps -o command= -p "$PID" 2>/dev/null | grep -q "cartog serve"; then
   exit 1
 fi
 
-FOOTPRINT_MB="$(footprint -p "$PID" 2>/dev/null \
-  | grep -oE 'Footprint: [0-9]+ (KB|MB|GB)' | head -1 \
-  | awk '{ if ($3=="GB") print $2*1024; else if ($3=="KB") print int($2/1024); else print $2 }')"
+# Both samplers must count compressed/swapped pages, not just resident ones:
+# the four-peer 2.06 GB case showed 5-35 MB each under plain RSS.
+if [ "$OS" = "Darwin" ]; then
+  FOOTPRINT_MB="$(footprint -p "$PID" 2>/dev/null \
+    | grep -oE 'Footprint: [0-9]+ (KB|MB|GB)' | head -1 \
+    | awk '{ if ($3=="GB") print $2*1024; else if ($3=="KB") print int($2/1024); else print $2 }')"
+else
+  # Pss (proportional set size) + Swap, both reported in KB.
+  FOOTPRINT_MB="$(awk '/^Pss:|^Swap:/ { kb += $2 } END { if (kb > 0) print int(kb/1024) }' \
+    "/proc/$PID/smaps_rollup" 2>/dev/null)"
+fi
 
 if [ -z "$FOOTPRINT_MB" ]; then
   echo "idle_memory: FAIL — could not read footprint for pid $PID (sampler broken)" >&2
