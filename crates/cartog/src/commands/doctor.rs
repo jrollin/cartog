@@ -484,15 +484,17 @@ pub fn cmd_doctor(
     } else {
         crate::config::IndexConsent::Absent
     };
-    // Mirror `main`: a rejected config whose `[database] path` could not be read
-    // does NOT permit creating a fresh index, because the default location may
-    // not be where the user configured it. Without this, doctor advised
-    // `run 'cartog index'` for a state where `cartog index` refuses.
-    let db_path_unknown = config_rejected && !db_path.exists();
-    // The full runtime gate (config OR existing DB OR CARTOG_AUTO_INIT), so the
-    // "database not found" hint matches what `cartog index` will actually do —
-    // e.g. AUTO_INIT alone makes index succeed, so don't tell the user to init.
-    let consent = crate::config::allow_index_creation(db_path, file_consent) && !db_path_unknown;
+    // The same gate `main` applies, so the "database not found" hint matches what
+    // `cartog index` will actually do — e.g. AUTO_INIT alone makes index succeed,
+    // so don't tell the user to init. Shared rather than mirrored: the hand-copied
+    // version here had drifted, omitting the explicit-`--db` term.
+    //
+    // `db_override` is None: doctor receives the already-resolved `db_path` and
+    // has no `--db` flag of its own.
+    let creation =
+        crate::config::IndexCreation::resolve(db_path, file_consent, config_rejected, None);
+    let db_path_unknown = creation.is_db_path_unknown();
+    let consent = creation.is_allowed();
     let checks = vec![
         check_git_repo(),
         check_config(config_path, config_rejected),
