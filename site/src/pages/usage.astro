@@ -537,7 +537,7 @@ jobs = 4</pre>
         <p><strong>Note:</strong> When using Ollama, skip this — models are managed by the Ollama server.</p>
         <pre><span class="comment"># To also skip the reranker download:</span>
 [reranker]
-provider = "none"</pre>
+enabled = false</pre>
 
         <h2 id="rag-index"><code>cartog rag index</code></h2>
         <p>Build the embedding index for semantic search. Indexes both code symbols and Markdown documents (<code>.md</code> files). Requires <code>cartog index</code> first. For the local provider, also requires <code>cartog rag setup</code>.</p>
