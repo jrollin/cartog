@@ -97,12 +97,21 @@ fn check_config(config_path: Option<&Path>, rejected: bool) -> CheckResult {
     }
 }
 
-fn check_database(db_path: &Path, embedding_dim: usize, consent: bool) -> CheckResult {
+fn check_database(
+    db_path: &Path,
+    embedding_dim: usize,
+    consent: bool,
+    db_path_unknown: bool,
+) -> CheckResult {
     if !db_path.exists() {
-        // `consent` mirrors the runtime gate. Without it, `cartog index` would
-        // refuse — so point at `cartog init` (the opt-in) rather than a command
-        // that fails; with it, `cartog index` works, so just suggest that.
-        let hint = if consent {
+        // `consent` mirrors the runtime gate, so the hint never names a command
+        // that would refuse. Three distinct states, three different fixes:
+        // a config exists but is unreadable (fix it or pick a path), no opt-in
+        // at all (init), or good to go (index).
+        let hint = if db_path_unknown {
+            "the config was rejected so its `[database] path` is unknown — fix \
+             the error reported above, or pass --db <PATH>"
+        } else if consent {
             "run 'cartog index'"
         } else {
             "run 'cartog init' then 'cartog index' (or set CARTOG_AUTO_INIT=1)"
@@ -468,21 +477,26 @@ pub fn cmd_doctor(
     embedding_dim: usize,
     provider_config: &rag::EmbeddingProviderConfig,
 ) -> Result<()> {
-    // A present-but-rejected config still grants consent: `cartog index` will
-    // run with defaults rather than refuse, so the hint must match that.
+    // A present-but-rejected config grants consent — the file existing is the
+    // opt-in — so a missing config is the only `Absent` case here.
     let file_consent = if config_path.is_some() {
         crate::config::IndexConsent::Granted
     } else {
         crate::config::IndexConsent::Absent
     };
+    // Mirror `main`: a rejected config whose `[database] path` could not be read
+    // does NOT permit creating a fresh index, because the default location may
+    // not be where the user configured it. Without this, doctor advised
+    // `run 'cartog index'` for a state where `cartog index` refuses.
+    let db_path_unknown = config_rejected && !db_path.exists();
     // The full runtime gate (config OR existing DB OR CARTOG_AUTO_INIT), so the
     // "database not found" hint matches what `cartog index` will actually do —
     // e.g. AUTO_INIT alone makes index succeed, so don't tell the user to init.
-    let consent = crate::config::allow_index_creation(db_path, file_consent);
+    let consent = crate::config::allow_index_creation(db_path, file_consent) && !db_path_unknown;
     let checks = vec![
         check_git_repo(),
         check_config(config_path, config_rejected),
-        check_database(db_path, embedding_dim, consent),
+        check_database(db_path, embedding_dim, consent, db_path_unknown),
         check_embedding_provider(provider_config),
         check_reranker(provider_config),
         check_remote(config, config_rejected),
@@ -559,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_check_database_missing_with_config_suggests_index() {
-        let result = check_database(Path::new("/nonexistent/path.db"), 384, true);
+        let result = check_database(Path::new("/nonexistent/path.db"), 384, true, false);
         assert_eq!(result.status, CheckStatus::Warn);
         assert!(result.message.contains("not found"));
         assert!(result.message.contains("cartog index"));
@@ -569,7 +583,7 @@ mod tests {
     #[test]
     fn test_check_database_missing_without_config_suggests_init() {
         // Consent gate: `cartog index` would refuse, so doctor must point at init.
-        let result = check_database(Path::new("/nonexistent/path.db"), 384, false);
+        let result = check_database(Path::new("/nonexistent/path.db"), 384, false, false);
         assert_eq!(result.status, CheckStatus::Warn);
         assert!(result.message.contains("not found"));
         assert!(
@@ -580,11 +594,30 @@ mod tests {
     }
 
     #[test]
+    fn test_check_database_missing_with_rejected_config_does_not_suggest_index() {
+        // A rejected config whose `[database] path` is unknown makes `cartog
+        // index` refuse, so advising it would send the user to a command that
+        // fails. Point at the real fix instead.
+        let result = check_database(Path::new("/nonexistent/path.db"), 384, false, true);
+        assert_eq!(result.status, CheckStatus::Warn);
+        assert!(
+            !result.message.contains("run 'cartog index'"),
+            "must not advise a command that refuses: {}",
+            result.message
+        );
+        assert!(
+            result.message.contains("--db") && result.message.contains("rejected"),
+            "must name the real fix: {}",
+            result.message
+        );
+    }
+
+    #[test]
     fn test_check_database_empty() {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("test.db");
         let _db = Database::open(&db_path, 384).unwrap();
-        let result = check_database(&db_path, 384, true);
+        let result = check_database(&db_path, 384, true, false);
         assert_eq!(result.status, CheckStatus::Warn);
         assert!(result.message.contains("empty"));
     }
@@ -911,7 +944,7 @@ mod tests {
         .unwrap();
         drop(db);
 
-        let result = check_database(&db_path, 384, true);
+        let result = check_database(&db_path, 384, true, false);
         assert_eq!(result.status, CheckStatus::Ok);
         assert!(result.message.contains("1 files"));
     }

@@ -182,7 +182,7 @@ fn main() -> Result<()> {
         anyhow::bail!(
             "{} was rejected, so `[database] path` could not be read — refusing to \
              create a new index at the default location, which may not be where you \
-             configured it. Fix the parse error above (see the earlier `cartog:` \
+             configured it. Fix the error reported above (see the earlier `cartog:` \
              line), or pass --db <PATH> to choose explicitly.",
             config_path
                 .as_deref()

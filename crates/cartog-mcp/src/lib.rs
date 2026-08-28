@@ -999,8 +999,8 @@ impl CartogServer {
                     info!(
                         "no usable .cartog.toml and no index yet — starting MCP server \
                          degraded (no .cartog/ created). Run `cartog init` to opt in, or \
-                         fix the parse error if a .cartog.toml exists; the index loads on \
-                         the next Claude Code launch."
+                         fix the reported config error if a .cartog.toml exists; the index \
+                         loads on the next Claude Code launch."
                     );
                     let db = Database::open_memory()
                         .map_err(|e| anyhow::anyhow!("failed to open in-memory database: {e}"))?;
@@ -1261,8 +1261,8 @@ impl CartogServer {
                  index yet, so cartog will not create one automatically. Run `cartog init` \
                  to opt in (the index builds in the background and loads on the next Claude \
                  Code launch), or set CARTOG_AUTO_INIT=1 to index with defaults without \
-                 writing a config file. If a .cartog.toml does exist, check stderr for a \
-                 parse error — fix that and relaunch."
+                 writing a config file. If a .cartog.toml does exist, check stderr for the \
+                 config error it reported — fix that and relaunch."
             )))
         } else {
             None

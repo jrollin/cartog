@@ -94,10 +94,18 @@ On a fresh, config-less repository the write commands (`index`, `rag index`,
   is itself consent, so steady-state re-indexes keep working without a config.
 
 If you *do* have a `.cartog.toml` and still see this, you are on a version that
-derived consent from the config parsing successfully; a syntax error there made
-the file invisible to the gate. Fix the parse error (the message naming it is
-printed just above), or upgrade — a present-but-broken config now grants consent
-and indexes with defaults.
+derived consent from the config parsing successfully; an error there made the
+file invisible to the gate. Upgrade, or fix the error named just above.
+
+On a current version a present-but-rejected config grants consent, but what
+happens next depends on whether a database location is already known:
+
+- an **existing index** (or `--db` / `CARTOG_DB`) — re-indexes with defaults for
+  every other setting;
+- **no index and no `--db`** — creating one is *refused*, because the rejected
+  file may name a `[database] path` cartog cannot read and it will not guess a
+  location you configured away from. Fix the reported error, or pass
+  `--db <PATH>`.
 
 Read commands (`search`, `map`, …) never refuse — they return empty results
 with a hint and create nothing. The MCP server (`cartog serve`) starts
