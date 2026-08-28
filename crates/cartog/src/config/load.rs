@@ -1,6 +1,7 @@
 //! Config file loading, validation, and database-path resolution.
 
 use super::*;
+use crate::config::repair::{is_unknown_field_error, reparse_ignoring_unknown_keys};
 use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -109,6 +110,58 @@ impl IndexConsent {
     }
 }
 
+/// Whether cartog may create a fresh index, and why not when it may not.
+///
+/// One definition for `main` and `doctor`: doctor used to re-derive its own
+/// `db_path_unknown` with a "Mirror `main`" comment, and the copies drifted —
+/// doctor's omitted the explicit-`--db` term, so it could report a
+/// db-path-unknown state for a run that would have succeeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexCreation {
+    /// A fresh `.cartog/` may be created.
+    Allowed,
+    /// No opt-in signal: no `.cartog.toml`, no existing DB, no `CARTOG_AUTO_INIT`.
+    RefusedNoConsent,
+    /// A rejected config may have named a `[database] path` we could not read,
+    /// so creating a fresh index would silently materialize it at the default
+    /// location the user configured away from. `--db`/`CARTOG_DB` or an existing
+    /// DB settles the location and lifts this.
+    RefusedUnknownDbPath,
+}
+
+impl IndexCreation {
+    /// Resolve the gate. `db_override` is the explicit `--db`/`CARTOG_DB` path,
+    /// which settles the location question on its own.
+    #[must_use]
+    pub fn resolve(
+        db_path: &Path,
+        consent: IndexConsent,
+        config_rejected: bool,
+        db_override: Option<&Path>,
+    ) -> Self {
+        if config_rejected && db_override.is_none() && !db_path.exists() {
+            return Self::RefusedUnknownDbPath;
+        }
+        if allow_index_creation(db_path, consent) {
+            Self::Allowed
+        } else {
+            Self::RefusedNoConsent
+        }
+    }
+
+    /// Whether a fresh index may be created.
+    #[must_use]
+    pub fn is_allowed(self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+
+    /// Whether the refusal is specifically an unreadable `[database] path`.
+    #[must_use]
+    pub fn is_db_path_unknown(self) -> bool {
+        matches!(self, Self::RefusedUnknownDbPath)
+    }
+}
+
 /// Known non-language keys of `[lsp]`. A scalar `[lsp]` key outside this set is
 /// a typo, not a language name (a language entry is a table: `[lsp.rust]`).
 pub(crate) const LSP_SCALAR_KEYS: &[&str] = &["max_concurrent_servers"];
@@ -136,124 +189,6 @@ fn strip_unknown_lsp_scalars(raw: &mut toml::value::Table, path: &Path) -> bool 
         );
     }
     !bad.is_empty()
-}
-
-/// Whether a TOML error is serde's `deny_unknown_fields` rejection (a typo)
-/// rather than a syntax or type error.
-fn is_unknown_field_error(e: &toml::de::Error) -> bool {
-    e.to_string().contains("unknown field")
-}
-
-/// Whether `section` is refused by schema `S` specifically for an unknown field.
-fn section_has_unknown_field<S: serde::de::DeserializeOwned>(section: &toml::value::Table) -> bool {
-    match toml::to_string(&toml::Value::Table(section.clone())) {
-        Ok(rendered) => {
-            matches!(toml::from_str::<S>(&rendered), Err(ref e) if is_unknown_field_error(e))
-        }
-        Err(_) => false,
-    }
-}
-
-/// Drop the keys that schema `S` refuses from `section`, in place.
-///
-/// Each candidate is removed and the section re-probed: a removal is kept only
-/// if it actually resolved an unknown-field complaint **for this section**. That
-/// scoping is the point — an earlier version matched the offending name against
-/// the whole tree, so `[rag] path` silently deleted `[database] path` and
-/// pointed cartog at a different database. A key is now only ever removed from
-/// the section it was written in.
-/// A stray key inside a sub-table (`[embedding.openai] base_urll`) must never be
-/// resolved by deleting the sub-table: that silently discarded a whole provider
-/// block, moving the endpoint from a self-hosted server to the public API. Only
-/// scalar keys are ever candidates; sub-tables are cleaned by their own schema
-/// via `strip_unknown_in_subtable` before this runs.
-fn strip_unknown_in_section<S: serde::de::DeserializeOwned>(section: &mut toml::value::Table) {
-    if !section_has_unknown_field::<S>(section) {
-        return;
-    }
-    let candidates: Vec<String> = section
-        .iter()
-        .filter(|(_, v)| !v.is_table())
-        .map(|(k, _)| k.clone())
-        .collect();
-    for key in candidates {
-        if !section_has_unknown_field::<S>(section) {
-            return;
-        }
-        let Some(saved) = section.remove(&key) else {
-            continue;
-        };
-        // Removing it didn't help ⇒ it wasn't the stray key; put it back.
-        if section_has_unknown_field::<S>(section) {
-            section.insert(key, saved);
-        }
-    }
-}
-
-/// Clean one named sub-table of `section` against its own schema `S`, leaving the
-/// sub-table itself in place.
-fn strip_unknown_in_subtable<S: serde::de::DeserializeOwned>(
-    section: &mut toml::value::Table,
-    name: &str,
-) {
-    if let Some(toml::Value::Table(sub)) = section.get_mut(name) {
-        strip_unknown_in_section::<S>(sub);
-    }
-}
-
-/// Re-parse `text` with unknown keys removed, so one typo doesn't cost the whole
-/// config. Returns `None` when the result still won't parse — a real syntax or
-/// type error rather than a stray key.
-///
-/// Works section by section against that section's own schema, so a stray key is
-/// only ever dropped from where it was written.
-fn reparse_ignoring_unknown_keys(text: &str) -> Option<CartogConfig> {
-    let mut raw: toml::value::Table = toml::from_str(text).ok()?;
-    // `[remote]` and `[lsp.<lang>]` are exempt: a mistyped key there could
-    // redirect where the index is pushed or which process is spawned as a
-    // language server, so both stay hard rejections. See
-    // `unknown_remote_key_stays_a_hard_rejection` /
-    // `read_config_rejects_unknown_lsp_field`.
-    if let Some(toml::Value::Table(remote)) = raw.get("remote") {
-        if section_has_unknown_field::<crate::config::RemoteConfig>(remote) {
-            return None;
-        }
-    }
-    if let Some(toml::Value::Table(lsp)) = raw.get("lsp") {
-        for value in lsp.values() {
-            if let toml::Value::Table(lang) = value {
-                if section_has_unknown_field::<crate::config::LspLangConfig>(lang) {
-                    return None;
-                }
-            }
-        }
-    }
-
-    for (name, value) in raw.iter_mut() {
-        let toml::Value::Table(section) = value else {
-            continue;
-        };
-        match name.as_str() {
-            "database" => strip_unknown_in_section::<DatabaseConfig>(section),
-            "embedding" => {
-                // Clean the provider sub-tables first, each against its own
-                // schema, so the parent probe never sees them as the problem.
-                strip_unknown_in_subtable::<LocalEmbeddingConfig>(section, "local");
-                strip_unknown_in_subtable::<OllamaConfig>(section, "ollama");
-                strip_unknown_in_subtable::<OpenAiConfig>(section, "openai");
-                strip_unknown_in_section::<EmbeddingConfig>(section);
-            }
-            "reranker" => strip_unknown_in_section::<RerankerConfig>(section),
-            "rag" => strip_unknown_in_section::<RagConfig>(section),
-            "security" => strip_unknown_in_section::<SecurityConfig>(section),
-            "index" => strip_unknown_in_section::<IndexConfig>(section),
-            // `remote` / `lsp` rejected above; unknown sections already warned.
-            _ => {}
-        }
-    }
-
-    let rendered = toml::to_string(&raw).ok()?;
-    toml::from_str::<CartogConfig>(&rendered).ok()
 }
 
 /// Load the local project config from `.cartog.toml`. See [`ConfigLoad`]
@@ -293,7 +228,7 @@ fn local_config_path() -> Option<PathBuf> {
 /// Known top-level sections of `.cartog.toml`. Kept in sync with the fields of
 /// [`CartogConfig`]. Unknown keys are warned about (non-fatal) so a typo like
 /// `[embeddings]` is visible instead of silently ignored.
-const KNOWN_CONFIG_SECTIONS: &[&str] = &[
+pub(crate) const KNOWN_CONFIG_SECTIONS: &[&str] = &[
     "database",
     "embedding",
     "reranker",
@@ -389,13 +324,17 @@ pub(crate) fn read_config(path: &Path) -> Option<CartogConfig> {
             // silent-ignore bug this change exists to fix precisely where
             // cartog does most of its work (MCP, `--json`, CI). Mirrors
             // `main.rs`'s rule that captured stderr suppresses info, not warn.
-            eprintln!(
-                "cartog: warning: in {}: {e}\n\
-                 cartog: warning: ignoring that key; the rest of the config still applies.",
-                path.display()
-            );
+            eprintln!("cartog: warning: in {}: {e}", path.display());
+            // The reassurance is earned only by a salvage that actually worked:
+            // printing it up front told users "the rest of the config still
+            // applies" and then rejected the file anyway.
             match reparse_ignoring_unknown_keys(&text) {
-                Some(cfg) => cfg,
+                Some(cfg) => {
+                    eprintln!(
+                        "cartog: warning: ignoring that key; the rest of the config still applies."
+                    );
+                    cfg
+                }
                 None => {
                     eprintln!("cartog: warning: failed to parse {}", path.display());
                     return None;

@@ -340,7 +340,11 @@ cartog: warning: ignoring that key; the rest of the config still applies.
 
 The offending key is dropped from **the section it was written in**, and every
 other setting still applies — a typo costs you that one key, not the whole file.
-Unknown top-level *sections* warn the same way.
+Several typos, in the same section or across sections, each cost only their own
+key. Unknown top-level *sections* warn the same way.
+
+The "the rest of the config still applies" line is printed only once the file
+has actually been recovered, so it never precedes a rejection.
 
 Two sections are deliberately stricter, because a stray key there could redirect
 where data goes rather than merely be ignored: an unknown key in `[remote]` (the
