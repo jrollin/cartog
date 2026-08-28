@@ -258,6 +258,7 @@ fn pid_file_acquire_failure_propagates() {
     let opts = ServerOptions {
         pid_lock_dir: Some(blocker.path().to_path_buf()),
         pid_lock_slot: Some(SERVE_LOCK_SLOT.to_string()),
+        ..Default::default()
     };
     let err = acquire_serve_lock(&opts).unwrap_err();
     assert!(

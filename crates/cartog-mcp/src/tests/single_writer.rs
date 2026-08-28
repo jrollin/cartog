@@ -12,6 +12,7 @@ fn pid_file_acquired_when_lock_dir_set() {
     let opts = ServerOptions {
         pid_lock_dir: Some(dir.path().to_path_buf()),
         pid_lock_slot: Some(SERVE_LOCK_SLOT.to_string()),
+        ..Default::default()
     };
     let outcome = acquire_serve_lock(&opts).expect("acquire");
     let lock = match outcome {
@@ -62,6 +63,7 @@ fn acquire_serve_lock_rejects_dir_without_slot() {
     let opts = ServerOptions {
         pid_lock_dir: Some(dir.path().to_path_buf()),
         pid_lock_slot: None,
+        ..Default::default()
     };
     let err = acquire_serve_lock(&opts).unwrap_err();
     assert!(
@@ -80,6 +82,7 @@ fn acquire_serve_lock_rejects_slot_without_dir() {
     let opts = ServerOptions {
         pid_lock_dir: None,
         pid_lock_slot: Some("serve-deadbeef".to_string()),
+        ..Default::default()
     };
     let err = acquire_serve_lock(&opts).unwrap_err();
     assert!(
@@ -99,10 +102,12 @@ fn distinct_slots_for_different_dbs_do_not_collide() {
     let opts_a = ServerOptions {
         pid_lock_dir: Some(dir.path().to_path_buf()),
         pid_lock_slot: Some("serve-aaaa1111".to_string()),
+        ..Default::default()
     };
     let opts_b = ServerOptions {
         pid_lock_dir: Some(dir.path().to_path_buf()),
         pid_lock_slot: Some("serve-bbbb2222".to_string()),
+        ..Default::default()
     };
     let _a = match acquire_serve_lock(&opts_a).expect("acquire A") {
         ServeLockOutcome::Primary(l) => l,
@@ -191,6 +196,7 @@ fn second_acquire_for_same_dir_reports_held() {
     let opts = ServerOptions {
         pid_lock_dir: Some(dir.path().to_path_buf()),
         pid_lock_slot: Some(SERVE_LOCK_SLOT.to_string()),
+        ..Default::default()
     };
     let _first = match acquire_serve_lock(&opts).expect("first acquire") {
         ServeLockOutcome::Primary(l) => l,
@@ -217,6 +223,7 @@ fn kill_switch_disables_election() {
     let opts = ServerOptions {
         pid_lock_dir: Some(dir.path().to_path_buf()),
         pid_lock_slot: Some(SERVE_LOCK_SLOT.to_string()),
+        ..Default::default()
     };
     let _first = match acquire_serve_lock(&opts).expect("first acquire") {
         ServeLockOutcome::Primary(l) => l,

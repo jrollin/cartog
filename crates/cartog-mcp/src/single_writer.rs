@@ -63,6 +63,12 @@ pub struct ServerOptions {
     /// embedders should follow the same shape: `<prefix>-<16 hex chars>`
     /// where the hex is a SHA-256 prefix of the canonicalized DB path.
     pub pid_lock_slot: Option<String>,
+    /// True when a `.cartog.toml` exists but could not be parsed, so its
+    /// `[database] path` is unknown. Threaded to the watcher, whose live
+    /// consent re-check keys on that file merely *existing* — without this a
+    /// broken config would let it pre-build an index at the default location
+    /// the user may have configured away from.
+    pub config_unparseable: bool,
 }
 
 /// Outcome of trying to claim the `serve` lock at MCP startup.
@@ -216,6 +222,7 @@ pub async fn run_server(
         // so it can pre-build the index once `cartog init` runs, but it stays
         // degraded (no `.cartog/`) until then.
         config.allow_create = allow_create;
+        config.config_unparseable = opts.config_unparseable;
         // Claim the watcher's PID slot so a separately-running `cartog watch`
         // from a terminal correctly refuses to start against the same DB.
         config.pid_lock_dir = opts.pid_lock_dir.clone();

@@ -453,6 +453,9 @@ fn main() -> Result<()> {
             let opts = mcp::ServerOptions {
                 pid_lock_dir,
                 pid_lock_slot,
+                // The watcher's live consent re-check keys on `.cartog.toml`
+                // existing; tell it when that file is the unreadable one.
+                config_unparseable: db_path_unknown,
             };
             runtime.block_on(mcp::run_server(
                 &db_path,
