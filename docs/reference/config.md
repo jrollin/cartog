@@ -62,8 +62,23 @@ config-less repository stays untouched until you opt in. Consent is granted by
 3. `CARTOG_AUTO_INIT` set to any non-empty value — indexes with in-memory
    defaults and **never writes a `.cartog.toml`**.
 
-A broken (`Rejected`) `.cartog.toml` is **not** consent: the parse error is
-printed and write paths refuse.
+A broken (`Rejected`) `.cartog.toml` **is** still consent — the file's existence
+is the opt-in, and whether its contents parse is a separate question. Reporting
+`no .cartog.toml in this project` at someone looking straight at one is the
+failure this avoids.
+
+Rejection is wider than a syntax error: a credential-shaped `[remote]` key, an
+`endpoint` carrying userinfo, an unknown `provider`, a malformed `[index]
+exclude` glob, or an unreadable file all reject too. All of them grant consent —
+indexing reads none of those sections, and `push`/`pull` still refuse outright on
+a rejected config, so the credential checks keep their teeth.
+
+Settings still fail closed: every value falls back to its default and the reason
+is printed. One exception protects you — creating a **new** index is refused,
+because the unreadable config may have set `[database] path` and cartog will not
+guess a location you configured away from. Fix the parse error, or pass
+`--db <PATH>` to choose explicitly. An already-existing index re-indexes
+normally, since its location is settled.
 
 Behavior when none of the three hold:
 

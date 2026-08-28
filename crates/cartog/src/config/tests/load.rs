@@ -318,7 +318,7 @@ fn allow_index_creation_refuses_fresh_repo() {
     let _guard = scopeguard(AUTO_INIT_ENV);
     std::env::remove_var(AUTO_INIT_ENV);
     assert!(
-        !allow_index_creation(&absent, false),
+        !allow_index_creation(&absent, IndexConsent::Absent),
         "no config + no DB + no env must refuse"
     );
 }
@@ -327,7 +327,7 @@ fn allow_index_creation_refuses_fresh_repo() {
 fn allow_index_creation_allows_with_config_present() {
     let dir = tempfile::TempDir::new().unwrap();
     let absent = dir.path().join(".cartog").join("db.sqlite");
-    assert!(allow_index_creation(&absent, true));
+    assert!(allow_index_creation(&absent, IndexConsent::Granted));
 }
 
 #[test]
@@ -335,7 +335,7 @@ fn allow_index_creation_allows_with_existing_db() {
     let dir = tempfile::TempDir::new().unwrap();
     let db = dir.path().join("db.sqlite");
     std::fs::write(&db, b"").unwrap();
-    assert!(allow_index_creation(&db, false));
+    assert!(allow_index_creation(&db, IndexConsent::Absent));
 }
 
 #[test]
@@ -347,7 +347,7 @@ fn allow_index_creation_stray_wal_without_main_file_is_gated() {
     std::fs::write(dir.path().join("db.sqlite-wal"), b"").unwrap();
     let _guard = scopeguard(AUTO_INIT_ENV);
     std::env::remove_var(AUTO_INIT_ENV);
-    assert!(!allow_index_creation(&db, false));
+    assert!(!allow_index_creation(&db, IndexConsent::Absent));
 }
 
 #[test]
@@ -357,7 +357,7 @@ fn allow_index_creation_allows_with_auto_init_env() {
     let absent = dir.path().join(".cartog").join("db.sqlite");
     let _guard = scopeguard(AUTO_INIT_ENV);
     std::env::set_var(AUTO_INIT_ENV, "1");
-    assert!(allow_index_creation(&absent, false));
+    assert!(allow_index_creation(&absent, IndexConsent::Absent));
 }
 
 #[test]
@@ -368,7 +368,7 @@ fn allow_index_creation_ignores_empty_auto_init_env() {
     let _guard = scopeguard(AUTO_INIT_ENV);
     std::env::set_var(AUTO_INIT_ENV, "");
     assert!(
-        !allow_index_creation(&absent, false),
+        !allow_index_creation(&absent, IndexConsent::Absent),
         "an empty CARTOG_AUTO_INIT must not count as opt-in"
     );
 }
@@ -642,4 +642,68 @@ fn typo_in_a_provider_subtable_keeps_the_subtable() {
         "a typo must not repoint the endpoint at the public API"
     );
     assert_eq!(openai.api_key_env(), "MY_CUSTOM_KEY");
+}
+
+// ── Consent is derived from file presence, not parse success ──
+//
+// Deriving it from parse success conflated "which settings apply" with "may
+// cartog index here", so one typo made `cartog index` refuse with
+// "no .cartog.toml in this project" while the user was looking at one.
+
+#[test]
+fn consent_is_absent_when_no_config_file_exists() {
+    assert_eq!(ConfigLoad::Missing.consent(), IndexConsent::Absent);
+}
+
+#[test]
+fn consent_is_granted_by_a_loaded_config() {
+    let loaded = ConfigLoad::Loaded {
+        config: CartogConfig::default(),
+        path: PathBuf::from("/tmp/.cartog.toml"),
+    };
+    assert_eq!(loaded.consent(), IndexConsent::Granted);
+}
+
+#[test]
+fn consent_is_granted_by_a_rejected_config_too() {
+    let rejected = ConfigLoad::Rejected {
+        path: PathBuf::from("/tmp/.cartog.toml"),
+    };
+    assert_eq!(
+        rejected.consent(),
+        IndexConsent::Granted,
+        "a config file that failed to parse is still an opt-in: the file exists"
+    );
+}
+
+#[test]
+fn a_rejected_config_still_allows_index_creation() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let absent_db = dir.path().join("nope.sqlite");
+    let rejected = ConfigLoad::Rejected {
+        path: dir.path().join(".cartog.toml"),
+    };
+    assert!(
+        allow_index_creation(&absent_db, rejected.consent()),
+        "a broken config must not be reported as no config"
+    );
+}
+
+#[test]
+fn settings_still_fall_back_to_defaults_when_rejected() {
+    // Consent is decoupled from settings, not merged with them: a rejected
+    // config grants consent but must NOT leak half-parsed values.
+    let rejected = ConfigLoad::Rejected {
+        path: PathBuf::from("/tmp/.cartog.toml"),
+    };
+    let cfg = rejected.config_or_default();
+    assert!(cfg.database.is_none());
+    assert!(cfg.embedding.is_none());
+    assert!(cfg.index.is_none());
+}
+
+#[test]
+fn is_granted_matches_the_variant() {
+    assert!(IndexConsent::Granted.is_granted());
+    assert!(!IndexConsent::Absent.is_granted());
 }

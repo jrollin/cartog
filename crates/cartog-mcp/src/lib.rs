@@ -997,8 +997,9 @@ impl CartogServer {
                 Ok(db) => (db, false),
                 Err(DbError::NotFound { .. }) => {
                     info!(
-                        "no .cartog.toml and no index yet — starting MCP server degraded \
-                         (no .cartog/ created). Run `cartog init` to opt in; the index \
+                        "no usable .cartog.toml and no index yet — starting MCP server \
+                         degraded (no .cartog/ created). Run `cartog init` to opt in, or \
+                         fix the reported config error if a .cartog.toml exists; the index \
                          loads on the next Claude Code launch."
                     );
                     let db = Database::open_memory()
@@ -1251,11 +1252,17 @@ impl CartogServer {
     /// when the server has a real index and the write should proceed.
     fn refuse_if_degraded(&self, tool: &str) -> Option<McpError> {
         if self.is_degraded() {
+            // Deliberately does not claim the config is *absent*: a present but
+            // rejected `.cartog.toml` also lands here (cartog won't guess a
+            // `[database] path` it couldn't read), and telling a user they have
+            // no config while they are looking at one is the failure this avoids.
             Some(mcp_err(format!(
-                "`{tool}` is unavailable: this project has no .cartog.toml and no index yet, \
-                 so cartog will not create one automatically. Run `cartog init` to opt in \
-                 (the index builds in the background and loads on the next Claude Code launch), \
-                 or set CARTOG_AUTO_INIT=1 to index with defaults without writing a config file."
+                "`{tool}` is unavailable: this project has no usable .cartog.toml and no \
+                 index yet, so cartog will not create one automatically. Run `cartog init` \
+                 to opt in (the index builds in the background and loads on the next Claude \
+                 Code launch), or set CARTOG_AUTO_INIT=1 to index with defaults without \
+                 writing a config file. If a .cartog.toml does exist, check stderr for the \
+                 config error it reported — fix that and relaunch."
             )))
         } else {
             None

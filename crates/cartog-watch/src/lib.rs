@@ -84,6 +84,16 @@ pub struct WatchConfig {
     /// DB each pass, so an existing DB or a newly-set `CARTOG_AUTO_INIT` also
     /// flips it.
     pub allow_create: bool,
+    /// True when a `.cartog.toml` exists but could not be parsed, so its
+    /// `[database] path` is unknown.
+    ///
+    /// The live re-check in [`watcher_consents`] keys on the file *existing*
+    /// (the mid-session `cartog init` signal), which would otherwise let a
+    /// broken config grant consent and pre-build an index at the default
+    /// location the user may have configured away from. The binary already
+    /// parsed the file, so it passes the verdict down rather than making this
+    /// crate re-derive it.
+    pub config_unparseable: bool,
 }
 
 impl WatchConfig {
@@ -115,6 +125,7 @@ impl WatchConfig {
             // the CLI before it reaches here; the degraded `serve --watch` path
             // sets this to false explicitly.
             allow_create: true,
+            config_unparseable: false,
         }
     }
 }
@@ -763,8 +774,11 @@ const AUTO_INIT_ENV: &str = "CARTOG_AUTO_INIT";
 /// DB file now exists OR `CARTOG_AUTO_INIT` is now set. Keyed on the main DB
 /// file, so a stray `-wal`/`-shm` without it does not count.
 fn watcher_consents(config: &WatchConfig, root: &Path, db_path: &str) -> bool {
+    // An existing DB or AUTO_INIT still consents: the location is settled, or
+    // the user asked for defaults explicitly. Only the "a `.cartog.toml`
+    // appeared" signal is suppressed, since that file is the unreadable one.
     config.allow_create
-        || cartog_toml_at_or_above(root)
+        || (!config.config_unparseable && cartog_toml_at_or_above(root))
         || Path::new(db_path).exists()
         || std::env::var(AUTO_INIT_ENV)
             .map(|v| !v.is_empty())
@@ -779,8 +793,18 @@ fn watcher_consents(config: &WatchConfig, root: &Path, db_path: &str) -> bool {
 fn cartog_toml_at_or_above(root: &Path) -> bool {
     let mut dir = root;
     loop {
-        if dir.join(".cartog.toml").exists() {
-            return true;
+        let candidate = dir.join(".cartog.toml");
+        if candidate.exists() {
+            // Existence alone is not the signal: a file that cannot be parsed
+            // may name a `[database] path` we would then ignore, pre-building an
+            // index at the default location the user configured away from. Only
+            // syntax is checked here — schema validation belongs to the binary,
+            // and a schema-rejected config still resolves its own db path.
+            return match std::fs::read_to_string(&candidate) {
+                Ok(text) => toml::from_str::<toml::value::Table>(&text).is_ok(),
+                // Unreadable is equally unknown.
+                Err(_) => false,
+            };
         }
         // Stop at the git root: don't escape the project into ancestors / $HOME.
         if dir.join(".git").exists() {
@@ -1628,6 +1652,39 @@ mod tests {
         let mut config = WatchConfig::new(tmp.path().to_path_buf());
         config.allow_create = true;
         assert!(watcher_consents(&config, tmp.path(), "/no/such/db.sqlite"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn watcher_withholds_consent_for_an_unparseable_cartog_toml() {
+        // A `.cartog.toml` that appears mid-session but cannot be parsed may name
+        // a `[database] path` we would then ignore — pre-building an index at the
+        // default location the user configured away from. Existence alone is not
+        // the signal.
+        let _g = auto_init_guard();
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(".cartog.toml"), "[database\npath = \"x\"\n").unwrap();
+        let mut config = WatchConfig::new(tmp.path().to_path_buf());
+        config.allow_create = false;
+        assert!(
+            !watcher_consents(&config, tmp.path(), "/no/such/db.sqlite"),
+            "a broken config must not grant the mid-session init signal"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn watcher_consents_when_an_existing_db_outlives_a_broken_config() {
+        // Contrast: the db location is already settled, so a broken config is
+        // irrelevant — steady-state re-indexing must keep working.
+        let _g = auto_init_guard();
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(".cartog.toml"), "[database\n").unwrap();
+        let db = tmp.path().join("db.sqlite");
+        std::fs::write(&db, b"").unwrap();
+        let mut config = WatchConfig::new(tmp.path().to_path_buf());
+        config.allow_create = false;
+        assert!(watcher_consents(&config, tmp.path(), db.to_str().unwrap()));
     }
 
     #[test]

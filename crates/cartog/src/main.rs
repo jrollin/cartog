@@ -132,20 +132,21 @@ fn main() -> Result<()> {
     }
 
     let config_rejected = config_load.is_rejected();
-    // Consent signal #1: a successfully-loaded `.cartog.toml`. A `Rejected`
-    // (broken) config is NOT consent — captured here before `config_or_default`
-    // collapses the enum to a plain config.
-    let config_present = matches!(config_load, config::ConfigLoad::Loaded { .. });
+    // Consent signal #1: a `.cartog.toml` exists. Captured before
+    // `config_or_default` collapses the enum to a plain config.
+    let consent = config_load.consent();
     let config_path = config_load.path().map(|p| p.to_path_buf());
     // A rejected config silently falls back to defaults, so an indexing command
-    // would ignore `[index] exclude`, `[security]`, and `[lsp.<lang>]` without
-    // saying so. The underlying parse error is already on stderr; add a note
-    // that those settings were dropped for commands that actually consume them.
+    // would ignore `[database] path`, `[index] exclude`, `[security]`, and
+    // `[lsp.<lang>]` without saying so. The underlying parse error is already on
+    // stderr; add a note that those settings were dropped for commands that
+    // actually consume them.
     if config_rejected && indexes_with_config(&cli.command) {
         if let Some(p) = &config_path {
             eprintln!(
                 "cartog: note: {} was rejected; indexing with defaults \
-                 ([index] exclude, [security], and [lsp] settings ignored).",
+                 ([database] path, [index] exclude, [security], and [lsp] \
+                 settings ignored).",
                 p.display()
             );
         }
@@ -154,17 +155,39 @@ fn main() -> Result<()> {
 
     let db_path = config::resolve_db_path(cli.db.clone(), &cartog_config);
     // Consent gate: may we create a fresh `.cartog/` for this project? True when
-    // a config is present, the DB already exists, or `CARTOG_AUTO_INIT` is set.
-    // The explicit one-shot creators (`index` / `rag index` / `watch`) refuse
-    // up front when this is false; `serve` instead starts degraded (threaded in
-    // below), and read commands fall back to an empty in-memory DB (see
-    // `commands::shared::open_db`).
-    let allow_create = config::allow_index_creation(&db_path, config_present);
-    if !allow_create && is_gated_write_command(&cli.command) {
+    // a `.cartog.toml` exists (parsed or not), the DB already exists, or
+    // `CARTOG_AUTO_INIT` is set. The explicit one-shot creators (`index` /
+    // `rag index` / `watch`) refuse up front when this is false; `serve` instead
+    // starts degraded (threaded in below), and read commands fall back to an
+    // empty in-memory DB (see `commands::shared::open_db`).
+    // A rejected config may have named a `[database] path` we could not read, so
+    // creating a *fresh* index would silently materialize it at the default
+    // location the user configured away from. `--db`/`CARTOG_DB` is an explicit
+    // override and settles the question; an existing DB means the location is
+    // already established.
+    //
+    // This suppresses `allow_create` rather than only bailing below, so every
+    // creator honors it: `serve` builds its own DB from this flag and would
+    // otherwise create the default path while the CLI refused it.
+    let db_path_unknown = config_rejected && cli.db.is_none() && !db_path.exists();
+    let allow_create = config::allow_index_creation(&db_path, consent) && !db_path_unknown;
+    if !allow_create && !db_path_unknown && is_gated_write_command(&cli.command) {
         anyhow::bail!(
             "no .cartog.toml in this project and no existing index — refusing to \
              create one. Run `cartog init` to opt in (then `cartog index .`), or set \
              CARTOG_AUTO_INIT=1 to index with defaults without writing a config file."
+        );
+    }
+    if db_path_unknown && is_gated_write_command(&cli.command) {
+        anyhow::bail!(
+            "{} was rejected, so `[database] path` could not be read — refusing to \
+             create a new index at the default location, which may not be where you \
+             configured it. Fix the error reported above (see the earlier `cartog:` \
+             line), or pass --db <PATH> to choose explicitly.",
+            config_path
+                .as_deref()
+                .unwrap_or(Path::new(".cartog.toml"))
+                .display(),
         );
     }
     let provider_config = config::to_provider_config(&cartog_config);
@@ -430,6 +453,9 @@ fn main() -> Result<()> {
             let opts = mcp::ServerOptions {
                 pid_lock_dir,
                 pid_lock_slot,
+                // The watcher's live consent re-check keys on `.cartog.toml`
+                // existing; tell it when that file is the unreadable one.
+                config_unparseable: db_path_unknown,
             };
             runtime.block_on(mcp::run_server(
                 &db_path,

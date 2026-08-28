@@ -243,3 +243,110 @@ fn index_allows_when_db_already_exists_without_config() {
         stderr(&out)
     );
 }
+
+/// A `.cartog.toml` that exists but cannot be parsed is still an opt-in — the
+/// consent gate must not report it as "no .cartog.toml in this project", which
+/// is what deriving consent from parse success used to do.
+///
+/// It is nonetheless refused, for a different and honest reason: the unreadable
+/// config may have set `[database] path`, so creating a fresh index at the
+/// default location could materialize `.cartog/` somewhere the user configured
+/// away from. The error must name the real cause, and nothing may be created.
+#[test]
+fn unparseable_config_is_consent_but_refuses_to_guess_the_db_path() {
+    let sb = Sandbox::new();
+    // Unclosed table header: a hard syntax error, not a recoverable stray key.
+    fs::write(
+        sb.repo.path().join(".cartog.toml"),
+        "[database\npath = \"custom/db.sqlite\"\n",
+    )
+    .unwrap();
+
+    let out = sb.cmd(&["index", "."]);
+    let err = stderr(&out);
+    assert!(
+        !out.status.success(),
+        "must not guess a db path from an unreadable config: stdout={} stderr={err}",
+        stdout(&out)
+    );
+    assert!(
+        !err.contains("no .cartog.toml in this project"),
+        "must not claim the config is missing when it exists: {err}"
+    );
+    assert!(
+        err.contains("[database] path` could not be read"),
+        "refusal must name the real reason: {err}"
+    );
+    assert!(
+        !sb.has(".cartog"),
+        "nothing may be created at the default location"
+    );
+}
+
+/// Same unreadable config, but `--db` settles the location explicitly — consent
+/// is granted and indexing proceeds.
+#[test]
+fn unparseable_config_with_explicit_db_flag_indexes() {
+    let sb = Sandbox::new();
+    fs::write(
+        sb.repo.path().join(".cartog.toml"),
+        "[database\npath = \"x\"\n",
+    )
+    .unwrap();
+
+    let out = sb.cmd(&["index", ".", "--db", "chosen/db.sqlite"]);
+    assert!(
+        out.status.success(),
+        "an explicit --db must override an unreadable config: stdout={} stderr={}",
+        stdout(&out),
+        stderr(&out)
+    );
+    assert!(
+        sb.has("chosen/db.sqlite"),
+        "index must land where --db said"
+    );
+}
+
+/// `serve` must honor the same db-path uncertainty the CLI does.
+///
+/// The MCP server creates its own database from the `allow_create` flag, so an
+/// early version of the guard — which only bailed in the CLI dispatch path —
+/// left `serve` materializing `.cartog/` at the default location while
+/// `cartog index` refused on the identical repo. Found by driving the real
+/// Claude agent CLI against the local binary.
+#[test]
+fn serve_with_unparseable_config_stays_degraded_and_creates_nothing() {
+    use std::process::Stdio;
+    let sb = Sandbox::new();
+    fs::write(
+        sb.repo.path().join(".cartog.toml"),
+        "[database\npath = \"custom/db.sqlite\"\n",
+    )
+    .unwrap();
+
+    let mut child = Command::new(cartog_bin())
+        .args(["serve"])
+        .current_dir(sb.repo.path())
+        .env("HOME", sb.home.path())
+        .env("XDG_CONFIG_HOME", sb.home.path().join(".config"))
+        .env("XDG_DATA_HOME", sb.home.path().join(".local/share"))
+        .env("XDG_STATE_HOME", sb.home.path().join(".local/state"))
+        .env_remove("CARGO_HOME")
+        .env_remove("CARTOG_AUTO_INIT")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn cartog serve");
+    child.wait().expect("serve did not exit");
+
+    assert!(
+        !sb.has(".cartog"),
+        "serve must not guess the default db path when the config that names it \
+         could not be read"
+    );
+    assert!(
+        !sb.has("custom/db.sqlite"),
+        "and must not invent the unreadable config's path either"
+    );
+}
