@@ -306,3 +306,47 @@ fn unparseable_config_with_explicit_db_flag_indexes() {
         "index must land where --db said"
     );
 }
+
+/// `serve` must honor the same db-path uncertainty the CLI does.
+///
+/// The MCP server creates its own database from the `allow_create` flag, so an
+/// early version of the guard — which only bailed in the CLI dispatch path —
+/// left `serve` materializing `.cartog/` at the default location while
+/// `cartog index` refused on the identical repo. Found by driving the real
+/// Claude agent CLI against the local binary.
+#[test]
+fn serve_with_unparseable_config_stays_degraded_and_creates_nothing() {
+    use std::process::Stdio;
+    let sb = Sandbox::new();
+    fs::write(
+        sb.repo.path().join(".cartog.toml"),
+        "[database\npath = \"custom/db.sqlite\"\n",
+    )
+    .unwrap();
+
+    let mut child = Command::new(cartog_bin())
+        .args(["serve"])
+        .current_dir(sb.repo.path())
+        .env("HOME", sb.home.path())
+        .env("XDG_CONFIG_HOME", sb.home.path().join(".config"))
+        .env("XDG_DATA_HOME", sb.home.path().join(".local/share"))
+        .env("XDG_STATE_HOME", sb.home.path().join(".local/state"))
+        .env_remove("CARGO_HOME")
+        .env_remove("CARTOG_AUTO_INIT")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn cartog serve");
+    child.wait().expect("serve did not exit");
+
+    assert!(
+        !sb.has(".cartog"),
+        "serve must not guess the default db path when the config that names it \
+         could not be read"
+    );
+    assert!(
+        !sb.has("custom/db.sqlite"),
+        "and must not invent the unreadable config's path either"
+    );
+}

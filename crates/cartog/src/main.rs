@@ -160,24 +160,25 @@ fn main() -> Result<()> {
     // `rag index` / `watch`) refuse up front when this is false; `serve` instead
     // starts degraded (threaded in below), and read commands fall back to an
     // empty in-memory DB (see `commands::shared::open_db`).
-    let allow_create = config::allow_index_creation(&db_path, consent);
-    if !allow_create && is_gated_write_command(&cli.command) {
+    // A rejected config may have named a `[database] path` we could not read, so
+    // creating a *fresh* index would silently materialize it at the default
+    // location the user configured away from. `--db`/`CARTOG_DB` is an explicit
+    // override and settles the question; an existing DB means the location is
+    // already established.
+    //
+    // This suppresses `allow_create` rather than only bailing below, so every
+    // creator honors it: `serve` builds its own DB from this flag and would
+    // otherwise create the default path while the CLI refused it.
+    let db_path_unknown = config_rejected && cli.db.is_none() && !db_path.exists();
+    let allow_create = config::allow_index_creation(&db_path, consent) && !db_path_unknown;
+    if !allow_create && !db_path_unknown && is_gated_write_command(&cli.command) {
         anyhow::bail!(
             "no .cartog.toml in this project and no existing index — refusing to \
              create one. Run `cartog init` to opt in (then `cartog index .`), or set \
              CARTOG_AUTO_INIT=1 to index with defaults without writing a config file."
         );
     }
-    // A rejected config may have named a `[database] path` we could not read, so
-    // creating a *fresh* index would silently materialize it at the default
-    // location the user configured away from. `--db`/`CARTOG_DB` is an explicit
-    // override and settles the question; an existing DB means the location is
-    // already established. Otherwise refuse and let them fix the parse error.
-    if config_rejected
-        && is_gated_write_command(&cli.command)
-        && cli.db.is_none()
-        && !db_path.exists()
-    {
+    if db_path_unknown && is_gated_write_command(&cli.command) {
         anyhow::bail!(
             "{} was rejected, so `[database] path` could not be read — refusing to \
              create a new index at the default location, which may not be where you \
