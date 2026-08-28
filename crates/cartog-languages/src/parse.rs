@@ -121,20 +121,38 @@ mod tests {
         p
     }
 
-    // Kotlin input that makes tree-sitter's parser recurse/run unbounded (regression
+    // Kotlin input that once made tree-sitter's parser run unbounded (regression
     // for the CI stack overflow in `extractors_never_panic_on_arbitrary_source`).
+    // tree-sitter 0.26.13 fixed the underlying blow-up — it now parses in ~2 ms —
+    // so this is kept as a corpus entry, not as proof that cancellation fires.
     const KOTLIN_PARSE_BOMB: &str =
         "(0mf0l:!D4sE^_-Qg9A@y|\"E~=.ztkM!SJeP~@z\\I_\\-Ybf%hrP<1R(iz+&%jw}B`";
 
     #[test]
-    fn cancels_pathological_parse_within_budget() {
-        // Unbounded, this input never returns; bounded, it cancels to None.
+    fn cancels_a_parse_that_exceeds_its_budget() {
+        // A zero budget is exceeded by construction, so this asserts the
+        // cancellation path itself rather than any one input staying slow. The
+        // previous version required KOTLIN_PARSE_BOMB to keep hanging, and broke
+        // the moment upstream fixed it — a grammar fix should not read as a
+        // regression in our cancel logic.
         let tree = parse_bounded_with(
             &mut kotlin_parser(),
             KOTLIN_PARSE_BOMB,
-            Duration::from_millis(50),
+            Duration::from_millis(0),
         );
-        assert!(tree.is_none(), "pathological parse must be cancelled");
+        assert!(
+            tree.is_none(),
+            "a parse past its budget must cancel to None"
+        );
+    }
+
+    #[test]
+    fn the_former_parse_bomb_still_parses_without_panicking() {
+        // Whatever upstream does with this input, it must not panic or hang the
+        // indexer: either a tree or a clean cancel, never an abort.
+        let tree = parse_bounded_with(&mut kotlin_parser(), KOTLIN_PARSE_BOMB, MAX_PARSE_TIME);
+        // Deliberately no assertion on Some/None — the point is that we got here.
+        drop(tree);
     }
 
     #[test]
