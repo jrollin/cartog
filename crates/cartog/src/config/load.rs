@@ -61,11 +61,18 @@ impl ConfigLoad {
     /// Whether the user has opted this project in to a cartog index.
     ///
     /// Writing a `.cartog.toml` *is* the opt-in, so a file that was found but
-    /// failed to parse still counts: the question "may cartog create an index
-    /// here?" is answered by the file's existence, not by its contents being
-    /// valid. Deriving consent from parse success instead conflated the two and
-    /// made a single typo report `no .cartog.toml in this project` at a user
-    /// who was looking straight at one.
+    /// rejected still counts: the question "may cartog create an index here?" is
+    /// answered by the file's existence, not by its contents being valid.
+    /// Deriving consent from parse success instead conflated the two and made a
+    /// single typo report `no .cartog.toml in this project` at a user who was
+    /// looking straight at one.
+    ///
+    /// `Rejected` is wider than a syntax error: `read_config` also returns it for
+    /// a credential-shaped `[remote]` key, a userinfo-bearing `endpoint`, an
+    /// unknown `provider`, a malformed `[index] exclude` glob, and an unreadable
+    /// file (EACCES/EIO). All of them grant consent — indexing reads none of
+    /// those sections, and `main` still hard-refuses `push`/`pull` on a rejected
+    /// config, so the credential checks keep their teeth.
     ///
     /// Settings still fail closed on a rejected config — [`config_or_default`]
     /// hands back defaults and `read_config` has already explained why on
@@ -372,9 +379,9 @@ pub(crate) fn read_config(path: &Path) -> Option<CartogConfig> {
     let parsed = match toml::from_str::<CartogConfig>(&text) {
         Ok(cfg) => cfg,
         // An unknown key is a typo, not a reason to discard the file. Reporting
-        // it is the point of `deny_unknown_fields`, but `Rejected` also revokes
-        // index-creation consent and drops every other setting — too much blast
-        // radius for one misspelling. Name the key, then retry without it.
+        // it is the point of `deny_unknown_fields`, but `Rejected` drops every
+        // other setting — too much blast radius for one misspelling. Name the
+        // key, then retry without it.
         Err(e) if is_unknown_field_error(&e) => {
             // Deliberately NOT TTY-gated, unlike the info-ish sibling
             // diagnostics: a dropped key means a setting the user wrote is not

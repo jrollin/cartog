@@ -468,7 +468,6 @@ pub fn cmd_doctor(
     embedding_dim: usize,
     provider_config: &rag::EmbeddingProviderConfig,
 ) -> Result<()> {
-    // Loaded config (present + not rejected) grants consent; a rejected one does not.
     // A present-but-rejected config still grants consent: `cartog index` will
     // run with defaults rather than refuse, so the hint must match that.
     let file_consent = if config_path.is_some() {

@@ -137,14 +137,16 @@ fn main() -> Result<()> {
     let consent = config_load.consent();
     let config_path = config_load.path().map(|p| p.to_path_buf());
     // A rejected config silently falls back to defaults, so an indexing command
-    // would ignore `[index] exclude`, `[security]`, and `[lsp.<lang>]` without
-    // saying so. The underlying parse error is already on stderr; add a note
-    // that those settings were dropped for commands that actually consume them.
+    // would ignore `[database] path`, `[index] exclude`, `[security]`, and
+    // `[lsp.<lang>]` without saying so. The underlying parse error is already on
+    // stderr; add a note that those settings were dropped for commands that
+    // actually consume them.
     if config_rejected && indexes_with_config(&cli.command) {
         if let Some(p) = &config_path {
             eprintln!(
                 "cartog: note: {} was rejected; indexing with defaults \
-                 ([index] exclude, [security], and [lsp] settings ignored).",
+                 ([database] path, [index] exclude, [security], and [lsp] \
+                 settings ignored).",
                 p.display()
             );
         }
@@ -164,6 +166,27 @@ fn main() -> Result<()> {
             "no .cartog.toml in this project and no existing index — refusing to \
              create one. Run `cartog init` to opt in (then `cartog index .`), or set \
              CARTOG_AUTO_INIT=1 to index with defaults without writing a config file."
+        );
+    }
+    // A rejected config may have named a `[database] path` we could not read, so
+    // creating a *fresh* index would silently materialize it at the default
+    // location the user configured away from. `--db`/`CARTOG_DB` is an explicit
+    // override and settles the question; an existing DB means the location is
+    // already established. Otherwise refuse and let them fix the parse error.
+    if config_rejected
+        && is_gated_write_command(&cli.command)
+        && cli.db.is_none()
+        && !db_path.exists()
+    {
+        anyhow::bail!(
+            "{} was rejected, so `[database] path` could not be read — refusing to \
+             create a new index at the default location, which may not be where you \
+             configured it. Fix the parse error above (see the earlier `cartog:` \
+             line), or pass --db <PATH> to choose explicitly.",
+            config_path
+                .as_deref()
+                .unwrap_or(Path::new(".cartog.toml"))
+                .display(),
         );
     }
     let provider_config = config::to_provider_config(&cartog_config);

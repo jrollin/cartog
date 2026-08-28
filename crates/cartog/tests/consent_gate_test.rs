@@ -244,36 +244,65 @@ fn index_allows_when_db_already_exists_without_config() {
     );
 }
 
-/// A `.cartog.toml` that exists but cannot be parsed at all is still an opt-in.
+/// A `.cartog.toml` that exists but cannot be parsed is still an opt-in — the
+/// consent gate must not report it as "no .cartog.toml in this project", which
+/// is what deriving consent from parse success used to do.
 ///
-/// Consent used to be derived from parse success, so an unparseable config was
-/// indistinguishable from no config — `cartog index` refused with "no
-/// .cartog.toml in this project" while the user was looking straight at one.
-/// Settings still fall back to defaults (loudly); only consent is decoupled.
+/// It is nonetheless refused, for a different and honest reason: the unreadable
+/// config may have set `[database] path`, so creating a fresh index at the
+/// default location could materialize `.cartog/` somewhere the user configured
+/// away from. The error must name the real cause, and nothing may be created.
 #[test]
-fn index_allows_with_a_present_but_unparseable_config() {
+fn unparseable_config_is_consent_but_refuses_to_guess_the_db_path() {
     let sb = Sandbox::new();
     // Unclosed table header: a hard syntax error, not a recoverable stray key.
+    fs::write(
+        sb.repo.path().join(".cartog.toml"),
+        "[database\npath = \"custom/db.sqlite\"\n",
+    )
+    .unwrap();
+
+    let out = sb.cmd(&["index", "."]);
+    let err = stderr(&out);
+    assert!(
+        !out.status.success(),
+        "must not guess a db path from an unreadable config: stdout={} stderr={err}",
+        stdout(&out)
+    );
+    assert!(
+        !err.contains("no .cartog.toml in this project"),
+        "must not claim the config is missing when it exists: {err}"
+    );
+    assert!(
+        err.contains("[database] path` could not be read"),
+        "refusal must name the real reason: {err}"
+    );
+    assert!(
+        !sb.has(".cartog"),
+        "nothing may be created at the default location"
+    );
+}
+
+/// Same unreadable config, but `--db` settles the location explicitly — consent
+/// is granted and indexing proceeds.
+#[test]
+fn unparseable_config_with_explicit_db_flag_indexes() {
+    let sb = Sandbox::new();
     fs::write(
         sb.repo.path().join(".cartog.toml"),
         "[database\npath = \"x\"\n",
     )
     .unwrap();
 
-    let out = sb.cmd(&["index", "."]);
+    let out = sb.cmd(&["index", ".", "--db", "chosen/db.sqlite"]);
     assert!(
         out.status.success(),
-        "a present-but-broken config must not read as 'no config': stdout={} stderr={}",
+        "an explicit --db must override an unreadable config: stdout={} stderr={}",
         stdout(&out),
         stderr(&out)
     );
     assert!(
-        sb.has(".cartog"),
-        "index should have created the index dir once consent was granted"
-    );
-    let err = stderr(&out);
-    assert!(
-        !err.contains("no .cartog.toml in this project"),
-        "must not claim the config is missing when it exists: {err}"
+        sb.has("chosen/db.sqlite"),
+        "index must land where --db said"
     );
 }
