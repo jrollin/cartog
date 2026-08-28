@@ -86,6 +86,36 @@ async fn degraded_stats_reports_degraded_state() {
     );
 }
 
+/// No degraded surface may claim the config is *absent*. A present-but-rejected
+/// `.cartog.toml` lands in the same degraded state, so "this project has no
+/// .cartog.toml" tells a user looking straight at one that it isn't there — the
+/// exact failure the consent-gate fix exists to remove. The stats banner kept
+/// that wording after its two siblings were corrected.
+#[tokio::test]
+async fn no_degraded_message_claims_the_config_is_absent() {
+    let server = degraded_server();
+    let stats = server.cartog_stats().await.expect("stats succeeds");
+    let banner = stats
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .expect("stats has text");
+    let refusal = format!("{:?}", server.refuse_if_degraded("cartog_index").unwrap());
+
+    for (surface, msg) in [("stats banner", &banner), ("write refusal", &refusal)] {
+        assert!(
+            !msg.contains("has no .cartog.toml") && !msg.contains("no .cartog.toml in"),
+            "{surface} claims the config is absent; say \"no usable .cartog.toml\" \
+             so a rejected-config user isn't told their file doesn't exist: {msg}"
+        );
+        assert!(
+            msg.contains("no usable .cartog.toml"),
+            "{surface} must use the agreed \"no usable .cartog.toml\" wording: {msg}"
+        );
+    }
+}
+
 #[test]
 fn read_only_secondary_against_absent_db_starts_degraded_not_error() {
     // A 2nd serve peer that loses election while the primary is degraded (no DB
@@ -129,5 +159,43 @@ fn open_existing_drives_new_degraded_decision_without_creating_dir() {
     assert!(
         !db_path.parent().unwrap().exists(),
         "the consent gate must not materialize .cartog/ for an un-opted repo"
+    );
+}
+
+/// Constructing a server must not build the cross-encoder. That deferral is the
+/// entire ~162 MB idle-memory win, and its only other guard (`make bench-memory`)
+/// runs on macOS alone and in no CI job — so without this assertion a change that
+/// re-eagers the build ships green everywhere.
+#[test]
+fn server_construction_does_not_build_the_reranker() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let server = CartogServer::new_with_provider(
+        &dir.path().join("test.db"),
+        test_provider(),
+        indexer::RedactionConfig::disabled(),
+        indexer::WalkFilter::unrestricted(),
+        Role::Primary,
+    )
+    .expect("primary constructs");
+    assert!(
+        !server.reranker_is_loaded(),
+        "the cross-encoder must stay unbuilt until the first semantic query"
+    );
+    assert!(
+        !degraded_server().reranker_is_loaded(),
+        "a degraded server must not build the cross-encoder either"
+    );
+}
+
+/// The production wiring must be lazy too — the test constructors inject a
+/// no-op reranker, so they cannot catch `lazy_reranker` itself being changed to
+/// build at construction.
+#[test]
+fn production_reranker_wiring_is_lazy_at_construction() {
+    let lazy = crate::lazy_provider::lazy_reranker(rag::EmbeddingProviderConfig::default());
+    assert!(
+        !lazy.is_loaded(),
+        "lazy_reranker must not build until first use — this is the wiring the \
+         real server uses, unlike the test harness's no_reranker()"
     );
 }

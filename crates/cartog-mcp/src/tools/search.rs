@@ -125,9 +125,16 @@ impl CartogServer {
             // Lead with a plain-text degraded banner so a human reading the
             // tool result sees the "no index yet" state, not just empty counts.
             if degraded {
-                let banner = "no index yet — this project has no .cartog.toml and was not \
-                    indexed. Run `cartog init` to opt in (the index loads on the next Claude \
-                    Code launch), or set CARTOG_AUTO_INIT=1.\n";
+                // Mirrors `refuse_if_degraded`: deliberately does not claim the
+                // config is *absent*. A present but rejected `.cartog.toml` also
+                // lands here, and this is the most-read of the degraded surfaces
+                // (a read tool an agent calls freely), so claiming absence sends
+                // the agent after `cartog init`, which cannot fix a broken file.
+                let banner = "no index yet — this project has no usable .cartog.toml and was \
+                    not indexed. Run `cartog init` to opt in (the index loads on the next \
+                    Claude Code launch), or set CARTOG_AUTO_INIT=1. If a .cartog.toml does \
+                    exist, check stderr for the config error it reported — fix that and \
+                    relaunch.\n";
                 return Ok(success_result(format!("{banner}{json}"), structured));
             }
             Ok(success_result(json, structured))
