@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-csharp check-c check-cpp check-kt check-vue check-svelte check-astro check-install-script tla loom bench bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-csharp check-c check-cpp check-kt check-vue check-svelte check-astro check-install-script tla loom bench bench-memory bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -228,6 +228,14 @@ bench-resolution: ## Run edge-resolution rate (heuristic + host LSP, all languag
 bench-resolution-docker: ## Run edge-resolution rate with Docker LSP servers (run `make lsp-images` first; errors on a missing image, no host fallback)
 	cargo build --release
 	CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/resolution_rate.sh --lsp --docker-lsp
+
+bench-memory: ## Guard `cartog serve` idle memory footprint (macOS only; skips elsewhere)
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "bench-memory: skipped (needs macOS \`footprint\`; got $$(uname -s))"; \
+	else \
+		cargo build --release && \
+		CARTOG=$(CURDIR)/target/release/cartog ./benchmarks/idle_memory.sh; \
+	fi
 
 bench-resolution-scale: ## Catch super-linear resolution regressions (synthetic N vs 2N repo, asserts time ratio; cf. #110)
 	cargo build --release
