@@ -75,8 +75,14 @@ jobs:
     # The ~162 MB cross-encoder must stay unbuilt on a serve that has answered no
     # semantic query. `cargo test` pins the flag (`reranker_is_loaded`); this
     # measures the process, so an allocation that escapes the flag still fails.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
+        with:
+          # The job builds and runs repository code and never pushes, so do not
+          # leave credentials persisted in the workspace.
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: make bench-memory

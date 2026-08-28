@@ -762,6 +762,28 @@ fn is_granted_matches_the_variant() {
 
 // ── IndexCreation: one gate for `main` and `doctor` ──
 
+/// Clears `CARTOG_AUTO_INIT` for a test and restores it on drop. Restoring on
+/// drop (not at the end of the body) keeps a panicking test from leaking the
+/// change into the next one.
+struct AutoInitGuard(Option<String>);
+
+impl AutoInitGuard {
+    fn clearing() -> Self {
+        let prev = std::env::var(AUTO_INIT_ENV).ok();
+        std::env::remove_var(AUTO_INIT_ENV);
+        Self(prev)
+    }
+}
+
+impl Drop for AutoInitGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(v) => std::env::set_var(AUTO_INIT_ENV, v),
+            None => std::env::remove_var(AUTO_INIT_ENV),
+        }
+    }
+}
+
 /// An explicit `--db` settles the location, so a rejected config no longer
 /// blocks creation. `doctor` re-derived this predicate by hand and dropped the
 /// override term, so it could report a db-path-unknown state for a run that
@@ -788,7 +810,12 @@ fn explicit_db_override_lifts_the_unknown_db_path_refusal() {
 /// so the refusal must be the db-path one, which carries its own message, not
 /// the generic "no .cartog.toml" that would tell a user their file isn't there.
 #[test]
+#[serial]
 fn rejected_config_refuses_on_db_path_not_on_consent() {
+    // The `Absent` case falls through to `allow_index_creation`, which reads
+    // CARTOG_AUTO_INIT — a set var in the ambient environment turns the expected
+    // refusal into `Allowed`. The other assertions return before that call.
+    let _guard = AutoInitGuard::clearing();
     let dir = tempfile::TempDir::new().unwrap();
     let absent = dir.path().join(".cartog").join("db.sqlite");
     assert_eq!(
