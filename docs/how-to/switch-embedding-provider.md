@@ -122,9 +122,12 @@ one (it reuses the already-downloaded weights). See
 [troubleshooting](../troubleshooting.md) to reclaim the orphaned `bge-reranker-base`
 cache.
 
-**Disable re-ranking** (skips the ~150MB reranker download):
+**Disable re-ranking** (skips the ~150MB reranker download and its resident
+cost). Either spelling
+works; `enabled = false` wins over an explicit `provider`:
 
 ```toml
 [reranker]
-provider = "none"
+enabled = false
+# provider = "none"   # equivalent
 ```

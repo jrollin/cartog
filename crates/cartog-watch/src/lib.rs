@@ -87,7 +87,7 @@ pub struct WatchConfig {
     /// True when a `.cartog.toml` exists but could not be parsed, so its
     /// `[database] path` is unknown.
     ///
-    /// The live re-check in [`watcher_consents`] keys on the file *existing*
+    /// The live re-check in `watcher_consents` keys on the file *existing*
     /// (the mid-session `cartog init` signal), which would otherwise let a
     /// broken config grant consent and pre-build an index at the default
     /// location the user may have configured away from. The binary already
