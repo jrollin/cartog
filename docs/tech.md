@@ -51,7 +51,7 @@ instead of duplicating an existing one.
 | Skill eval | Does the agent pick the **right cartog command first**? (tools off) | `make eval-skill` | LLM judge, tool-selection only |
 | Agent eval | Same, for the agent definitions | `make eval-agents` | LLM judge, tool-selection only |
 | Criterion benches | How fast is cartog's own CPU work (µs–ms)? | `make bench-criterion` | in-process latency |
-| Idle memory guard | Does an idle `cartog serve` hold a model it was never asked to use? | `make bench-memory` | macOS `footprint`; skips elsewhere |
+| Idle memory guard | Does an idle `cartog serve` hold a model it was never asked to use? | `make bench-memory` | macOS `footprint` / Linux `smaps_rollup`; runs in CI |
 | Shell suite | Is one cartog query smaller/more complete than one grep? (**per-query**, no LLM) | `make bench` | token + recall |
 | Agent-task | Does giving an agent cartog cut **end-to-end** task cost? (LLM, with/without arms) | `make bench-agent` | task outcome + cost |
 

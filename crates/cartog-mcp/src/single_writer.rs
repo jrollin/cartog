@@ -63,12 +63,20 @@ pub struct ServerOptions {
     /// embedders should follow the same shape: `<prefix>-<16 hex chars>`
     /// where the hex is a SHA-256 prefix of the canonicalized DB path.
     pub pid_lock_slot: Option<String>,
-    /// True when a `.cartog.toml` exists but could not be parsed, so its
-    /// `[database] path` is unknown. Threaded to the watcher, whose live
+    /// True when the `.cartog.toml` present at startup could not be parsed, so
+    /// its `[database] path` is unknown. Threaded to the watcher, whose live
     /// consent re-check keys on that file merely *existing* — without this a
     /// broken config would let it pre-build an index at the default location
     /// the user may have configured away from.
     pub config_unparseable: bool,
+    /// Usability verdict for a `.cartog.toml` that appears mid-session, given
+    /// its path. `None` trusts presence alone (the historical behavior).
+    ///
+    /// `config_unparseable` only describes the file seen at startup, so a serve
+    /// that began with no config cannot speak for one written afterwards. The
+    /// watch crate must not re-derive this: a local syntax check is blind to the
+    /// schema and credential validation the binary applies.
+    pub config_usable: Option<watch::ConfigUsable>,
 }
 
 /// Outcome of trying to claim the `serve` lock at MCP startup.
@@ -223,6 +231,7 @@ pub async fn run_server(
         // degraded (no `.cartog/`) until then.
         config.allow_create = allow_create;
         config.config_unparseable = opts.config_unparseable;
+        config.config_usable = opts.config_usable.clone();
         // Claim the watcher's PID slot so a separately-running `cartog watch`
         // from a terminal correctly refuses to start against the same DB.
         config.pid_lock_dir = opts.pid_lock_dir.clone();

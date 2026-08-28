@@ -26,6 +26,12 @@ use cartog_rag as rag;
 mod stale;
 pub use stale::{StaleSnapshot, StaleState};
 
+/// Verdict on whether a `.cartog.toml` at the given path is usable.
+///
+/// Supplied by the binary, which owns the schema; see
+/// [`WatchConfig::config_usable`].
+pub type ConfigUsable = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+
 /// Configuration for the watch loop.
 pub struct WatchConfig {
     /// Root directory to watch.
@@ -84,16 +90,29 @@ pub struct WatchConfig {
     /// DB each pass, so an existing DB or a newly-set `CARTOG_AUTO_INIT` also
     /// flips it.
     pub allow_create: bool,
-    /// True when a `.cartog.toml` exists but could not be parsed, so its
-    /// `[database] path` is unknown.
+    /// True when the `.cartog.toml` seen **at startup** existed but could not be
+    /// parsed, so its `[database] path` is unknown.
     ///
-    /// The live re-check in `watcher_consents` keys on the file *existing*
-    /// (the mid-session `cartog init` signal), which would otherwise let a
-    /// broken config grant consent and pre-build an index at the default
-    /// location the user may have configured away from. The binary already
-    /// parsed the file, so it passes the verdict down rather than making this
-    /// crate re-derive it.
+    /// Without this, a broken config would grant consent and pre-build an index
+    /// at the default location the user may have configured away from. The
+    /// binary already parsed the file, so it passes the verdict down rather than
+    /// making this crate re-derive it — `cartog_toml_at_or_above` therefore
+    /// reports *presence* only.
+    ///
+    /// This is a startup snapshot. A config that appears or changes mid-session
+    /// is judged by [`WatchConfig::config_usable`] instead.
     pub config_unparseable: bool,
+    /// Live usability check for a `.cartog.toml` that appears or changes after
+    /// startup, given its path. `None` (the default) trusts presence alone.
+    ///
+    /// The binary injects its real loader here. `config_unparseable` only covers
+    /// the file present at startup, so a serve that began with *no* config has it
+    /// `false` — and a broken config written mid-session would otherwise be
+    /// consented to on presence alone. This crate must not re-derive the verdict
+    /// itself: a local syntax check is blind to the schema, provider and
+    /// credential validation `main` applies, which is exactly how the two answers
+    /// drifted apart.
+    pub config_usable: Option<ConfigUsable>,
 }
 
 impl WatchConfig {
@@ -126,6 +145,7 @@ impl WatchConfig {
             // sets this to false explicitly.
             allow_create: true,
             config_unparseable: false,
+            config_usable: None,
         }
     }
 }
@@ -769,51 +789,61 @@ const AUTO_INIT_ENV: &str = "CARTOG_AUTO_INIT";
 
 /// True when the watcher may build/refresh the index. Consent is granted by
 /// the threaded `allow_create` flag (config present / DB existed / AUTO_INIT at
-/// startup) OR — re-evaluated live each pass — a `.cartog.toml` now exists at or
-/// above the watched `root` (the `cartog init` mid-session signal) OR the main
-/// DB file now exists OR `CARTOG_AUTO_INIT` is now set. Keyed on the main DB
-/// file, so a stray `-wal`/`-shm` without it does not count.
+/// startup) OR — re-evaluated live each pass — a *usable* `.cartog.toml` now
+/// exists at or above the watched `root` (the `cartog init` mid-session signal)
+/// OR the main DB file now exists OR `CARTOG_AUTO_INIT` is now set. Keyed on the
+/// main DB file, so a stray `-wal`/`-shm` without it does not count.
 fn watcher_consents(config: &WatchConfig, root: &Path, db_path: &str) -> bool {
     // An existing DB or AUTO_INIT still consents: the location is settled, or
     // the user asked for defaults explicitly. Only the "a `.cartog.toml`
     // appeared" signal is suppressed, since that file is the unreadable one.
     config.allow_create
-        || (!config.config_unparseable && cartog_toml_at_or_above(root))
+        || (!config.config_unparseable && config_appeared_and_is_usable(config, root))
         || Path::new(db_path).exists()
         || std::env::var(AUTO_INIT_ENV)
             .map(|v| !v.is_empty())
             .unwrap_or(false)
 }
 
-/// True when a `.cartog.toml` exists at `root` or any ancestor up to (and
-/// including) the git root. Mirrors the binary's `local_config_path` walk-up so
+/// The mid-session "a `.cartog.toml` appeared" signal, gated on the binary's
+/// usability verdict when one was injected.
+///
+/// `config_unparseable` is a startup snapshot, so a serve that began with no
+/// config carries `false` and cannot speak for a file written afterwards. Absent
+/// an injected predicate, presence alone consents — the historical behavior.
+fn config_appeared_and_is_usable(config: &WatchConfig, root: &Path) -> bool {
+    let Some(path) = cartog_toml_path_at_or_above(root) else {
+        return false;
+    };
+    match &config.config_usable {
+        Some(is_usable) => is_usable(&path),
+        None => true,
+    }
+}
+
+/// The `.cartog.toml` at `root` or the nearest ancestor up to (and including)
+/// the git root, if any. Mirrors the binary's `local_config_path` walk-up so
 /// a `cartog serve --watch` launched from a subdirectory still sees a `.cartog.toml`
 /// written at the git root by `cartog init` — without this, the watcher (rooted
 /// at the subdir) would miss it and only the next relaunch would un-degrade.
-fn cartog_toml_at_or_above(root: &Path) -> bool {
+///
+/// **Presence only.** Whether the file is *usable* is the binary's verdict,
+/// threaded in as [`WatchConfig::config_unparseable`]; re-deriving it here meant
+/// two answers to one question, and the weaker of the two (a raw syntax check,
+/// blind to the schema and credential validation `main` applies) decided the
+/// mid-session case. See `watcher_consents`.
+fn cartog_toml_path_at_or_above(root: &Path) -> Option<PathBuf> {
     let mut dir = root;
     loop {
         let candidate = dir.join(".cartog.toml");
         if candidate.exists() {
-            // Existence alone is not the signal: a file that cannot be parsed
-            // may name a `[database] path` we would then ignore, pre-building an
-            // index at the default location the user configured away from. Only
-            // syntax is checked here — schema validation belongs to the binary,
-            // and a schema-rejected config still resolves its own db path.
-            return match std::fs::read_to_string(&candidate) {
-                Ok(text) => toml::from_str::<toml::value::Table>(&text).is_ok(),
-                // Unreadable is equally unknown.
-                Err(_) => false,
-            };
+            return Some(candidate);
         }
         // Stop at the git root: don't escape the project into ancestors / $HOME.
         if dir.join(".git").exists() {
-            return false;
+            return None;
         }
-        match dir.parent() {
-            Some(parent) => dir = parent,
-            None => return false,
-        }
+        dir = dir.parent()?;
     }
 }
 
@@ -1654,21 +1684,79 @@ mod tests {
         assert!(watcher_consents(&config, tmp.path(), "/no/such/db.sqlite"));
     }
 
+    /// Reject every `.cartog.toml` the binary would reject.
+    fn rejecting_verdict() -> Option<ConfigUsable> {
+        Some(Arc::new(|_: &Path| false))
+    }
+
     #[test]
     #[serial_test::serial]
     fn watcher_withholds_consent_for_an_unparseable_cartog_toml() {
         // A `.cartog.toml` that appears mid-session but cannot be parsed may name
         // a `[database] path` we would then ignore — pre-building an index at the
         // default location the user configured away from. Existence alone is not
-        // the signal.
+        // the signal; the binary's verdict is.
         let _g = auto_init_guard();
         let tmp = tempfile::TempDir::new().unwrap();
         std::fs::write(tmp.path().join(".cartog.toml"), "[database\npath = \"x\"\n").unwrap();
         let mut config = WatchConfig::new(tmp.path().to_path_buf());
         config.allow_create = false;
+        config.config_usable = rejecting_verdict();
         assert!(
             !watcher_consents(&config, tmp.path(), "/no/such/db.sqlite"),
             "a broken config must not grant the mid-session init signal"
+        );
+    }
+
+    /// The gap that closed: `config_unparseable` is a *startup* snapshot, so a
+    /// serve that began with no config carries `false` and cannot speak for a
+    /// file written afterwards. The crate used to fall back to its own raw-syntax
+    /// check, which is blind to the schema, provider and credential validation
+    /// the binary applies — so a syntactically-valid but schema-rejected config
+    /// appearing mid-session granted consent `main` would have refused.
+    #[test]
+    #[serial_test::serial]
+    fn schema_rejected_config_appearing_mid_session_is_refused() {
+        let _g = auto_init_guard();
+        std::env::remove_var(AUTO_INIT_ENV);
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Valid TOML — a syntax-only check says yes; the binary says no.
+        std::fs::write(
+            tmp.path().join(".cartog.toml"),
+            "[remote]\nendpoint = \"https://x.example.com\"\nbucket = \"b\"\nsecret_key = \"AKIA\"\n",
+        )
+        .unwrap();
+        assert!(
+            toml::from_str::<toml::value::Table>(
+                &std::fs::read_to_string(tmp.path().join(".cartog.toml")).unwrap()
+            )
+            .is_ok(),
+            "fixture must be syntactically valid, or it wouldn't cover the gap"
+        );
+        let mut config = WatchConfig::new(tmp.path().to_path_buf());
+        // A serve that started with no config: the startup flag says nothing.
+        config.allow_create = false;
+        config.config_unparseable = false;
+        config.config_usable = rejecting_verdict();
+        assert!(
+            !watcher_consents(&config, tmp.path(), "/no/such/db.sqlite"),
+            "the binary's verdict must decide, not a local syntax check"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn usable_config_appearing_mid_session_still_consents() {
+        let _g = auto_init_guard();
+        std::env::remove_var(AUTO_INIT_ENV);
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join(".cartog.toml"), b"[database]\n").unwrap();
+        let mut config = WatchConfig::new(tmp.path().to_path_buf());
+        config.allow_create = false;
+        config.config_usable = Some(Arc::new(|_: &Path| true));
+        assert!(
+            watcher_consents(&config, tmp.path(), "/no/such/db.sqlite"),
+            "a good config written mid-session is still the `cartog init` signal"
         );
     }
 
@@ -1750,7 +1838,7 @@ mod tests {
         let subdir = git_root.join("src");
         std::fs::create_dir_all(&subdir).unwrap();
         assert!(
-            !cartog_toml_at_or_above(&subdir),
+            cartog_toml_path_at_or_above(&subdir).is_none(),
             "walk-up must stop at the git root, not reach the outer .cartog.toml"
         );
     }

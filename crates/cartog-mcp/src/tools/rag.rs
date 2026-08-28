@@ -40,8 +40,10 @@ impl CartogServer {
             }
 
             debug!(query = %query, kind = ?kind_str, limit, "rag search");
-            let db = db.lock().map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
 
+            // Reject a bad `kind` before priming: the build below can download
+            // ~150 MB, and a request that ends in a validation error must not
+            // pay for it.
             let kind_filter = match kind_str.as_deref() {
                 Some("all") => rag::search::KindFilter::All,
                 Some(s) => {
@@ -55,10 +57,17 @@ impl CartogServer {
                 None => rag::search::KindFilter::CodeOnly,
             };
 
+            // Before any other lock: the first semantic query of the process
+            // builds the cross-encoder. Under the db/provider locks that stalls
+            // every other tool for the length of the download.
+            reranker
+                .prime()
+                .map_err(|_| mcp_err("internal error: reranker lock poisoned (server restart required)"))?;
+            let db = db.lock().map_err(|_| mcp_err("internal error: database lock poisoned (server restart required)"))?;
+
             let mut provider = provider
                 .lock()
                 .map_err(|_| mcp_err("internal error: embedding provider lock poisoned (server restart required)"))?;
-            // First semantic query of the process builds the cross-encoder here.
             let mut reranker = reranker
                 .get()
                 .map_err(|_| mcp_err("internal error: reranker lock poisoned (server restart required)"))?;
@@ -117,6 +126,10 @@ impl CartogServer {
                 return Err(mcp_err("task description cannot be empty"));
             }
             debug!(task = %task, tokens, "context");
+            // Before any other lock — see `cartog_rag_search`.
+            reranker.prime().map_err(|_| {
+                mcp_err("internal error: reranker lock poisoned (server restart required)")
+            })?;
             let db = db.lock().map_err(|_| {
                 mcp_err("internal error: database lock poisoned (server restart required)")
             })?;
@@ -125,7 +138,6 @@ impl CartogServer {
                     "internal error: embedding provider lock poisoned (server restart required)",
                 )
             })?;
-            // First semantic query of the process builds the cross-encoder here.
             let mut reranker = reranker.get().map_err(|_| {
                 mcp_err("internal error: reranker lock poisoned (server restart required)")
             })?;

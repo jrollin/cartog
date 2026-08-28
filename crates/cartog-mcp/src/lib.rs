@@ -1118,6 +1118,17 @@ impl CartogServer {
             .and_then(|cell| cell.as_ref().map(|s| s.snapshot()))
     }
 
+    /// Whether the cross-encoder has been built yet.
+    ///
+    /// The ~162 MB it commits is the whole reason for [`lazy_provider`], and
+    /// `make bench-memory` — the footprint guard — runs only on macOS and in no
+    /// CI job. This is what lets a plain `cargo test` catch a regression that
+    /// re-eagers the build.
+    #[cfg(test)]
+    pub(crate) fn reranker_is_loaded(&self) -> bool {
+        self.reranker_provider.is_loaded()
+    }
+
     #[allow(clippy::too_many_arguments)] // single field-wiring point
     fn from_parts(
         db: Database,

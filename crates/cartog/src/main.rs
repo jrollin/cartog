@@ -169,8 +169,14 @@ fn main() -> Result<()> {
     // This suppresses `allow_create` rather than only bailing below, so every
     // creator honors it: `serve` builds its own DB from this flag and would
     // otherwise create the default path while the CLI refused it.
-    let db_path_unknown = config_rejected && cli.db.is_none() && !db_path.exists();
-    let allow_create = config::allow_index_creation(&db_path, consent) && !db_path_unknown;
+    let creation = config::IndexCreation::resolve(
+        &db_path,
+        consent,
+        config_rejected,
+        cli.db.as_deref().map(Path::new),
+    );
+    let db_path_unknown = creation.is_db_path_unknown();
+    let allow_create = creation.is_allowed();
     if !allow_create && !db_path_unknown && is_gated_write_command(&cli.command) {
         anyhow::bail!(
             "no .cartog.toml in this project and no existing index — refusing to \
@@ -456,6 +462,12 @@ fn main() -> Result<()> {
                 // The watcher's live consent re-check keys on `.cartog.toml`
                 // existing; tell it when that file is the unreadable one.
                 config_unparseable: db_path_unknown,
+                // …and let it ask us about a config written *after* startup,
+                // which the flag above cannot describe. One definition of
+                // "usable" for both, evaluated by the crate that owns the schema.
+                config_usable: Some(std::sync::Arc::new(|path: &Path| {
+                    config::read_config(path).is_some()
+                })),
             };
             runtime.block_on(mcp::run_server(
                 &db_path,

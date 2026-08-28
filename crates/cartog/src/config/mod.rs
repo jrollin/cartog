@@ -2,6 +2,7 @@
 
 mod convert;
 mod load;
+pub(crate) mod repair;
 mod schema;
 
 pub use convert::*;

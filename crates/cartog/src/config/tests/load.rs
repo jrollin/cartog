@@ -491,6 +491,14 @@ fn toml_still_reports_unknown_fields_in_the_format_we_parse() {
         e.to_string().contains("unknown field"),
         "toml error format changed — is_unknown_field_error is now dead: {e}"
     );
+    // The salvage removes the key serde names, so the name must stay extractable.
+    // If this breaks, every typo reverts to whole-file rejection (which also
+    // revokes index consent) instead of dropping one key.
+    assert_eq!(
+        crate::config::repair::unknown_field_name(&e).as_deref(),
+        Some("redact_secretz"),
+        "toml no longer names the offending key in a parseable form: {e}"
+    );
 }
 
 /// A stray key must be dropped from the section it was written in, never matched
@@ -548,6 +556,50 @@ fn multiple_typos_in_different_sections_all_resolve() {
         Some("/tmp/x.db")
     );
     assert_eq!(cfg.rag.expect("[rag] survives").rerank_max, Some(7));
+}
+
+/// Two typos in the *same* section must both go. The salvage used to remove one
+/// candidate and restore it when the section still complained, so with two stray
+/// keys neither removal ever "helped" and the whole file was rejected — after the
+/// user had already been told the rest of the config still applied.
+#[test]
+fn two_typos_in_one_section_both_resolve() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    std::fs::write(&cfg_path, "[rag]\nrerank_max = 7\nbogus1 = 1\nbogus2 = 2\n").unwrap();
+    let cfg = read_config(&cfg_path).expect("two stray keys must not reject the config");
+    assert_eq!(cfg.rag.expect("[rag] survives").rerank_max, Some(7));
+}
+
+/// The salvage must converge on any number of typos, not just two.
+#[test]
+fn many_typos_in_one_section_all_resolve() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    let strays: String = (0..12).map(|i| format!("bogus{i} = {i}\n")).collect();
+    std::fs::write(&cfg_path, format!("[rag]\nrerank_max = 7\n{strays}")).unwrap();
+    let cfg = read_config(&cfg_path).expect("many stray keys must not reject the config");
+    assert_eq!(cfg.rag.expect("[rag] survives").rerank_max, Some(7));
+}
+
+/// Every salvageable section must actually be wired into the dispatch. A section
+/// added to `KNOWN_CONFIG_SECTIONS` but forgotten there silently reverts to
+/// whole-file rejection while every sibling section salvages.
+#[test]
+fn every_known_section_salvages_a_stray_key() {
+    // `remote` and `lsp` are the deliberate exemptions: a stray key there could
+    // redirect where data is pushed or which process is spawned.
+    const STRICT: &[&str] = &["remote", "lsp"];
+    for section in KNOWN_CONFIG_SECTIONS.iter().filter(|s| !STRICT.contains(s)) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg_path = dir.path().join(".cartog.toml");
+        std::fs::write(&cfg_path, format!("[{section}]\nbogus_key = 1\n")).unwrap();
+        assert!(
+            read_config(&cfg_path).is_some(),
+            "[{section}] is in KNOWN_CONFIG_SECTIONS but has no salvage arm, \
+             so a typo there rejects the whole file"
+        );
+    }
 }
 
 /// `[lsp.<lang>]` stays strict: the argv there spawns a process, so a stray key
@@ -706,4 +758,85 @@ fn settings_still_fall_back_to_defaults_when_rejected() {
 fn is_granted_matches_the_variant() {
     assert!(IndexConsent::Granted.is_granted());
     assert!(!IndexConsent::Absent.is_granted());
+}
+
+// ── IndexCreation: one gate for `main` and `doctor` ──
+
+/// Clears `CARTOG_AUTO_INIT` for a test and restores it on drop. Restoring on
+/// drop (not at the end of the body) keeps a panicking test from leaking the
+/// change into the next one.
+struct AutoInitGuard(Option<String>);
+
+impl AutoInitGuard {
+    fn clearing() -> Self {
+        let prev = std::env::var(AUTO_INIT_ENV).ok();
+        std::env::remove_var(AUTO_INIT_ENV);
+        Self(prev)
+    }
+}
+
+impl Drop for AutoInitGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(v) => std::env::set_var(AUTO_INIT_ENV, v),
+            None => std::env::remove_var(AUTO_INIT_ENV),
+        }
+    }
+}
+
+/// An explicit `--db` settles the location, so a rejected config no longer
+/// blocks creation. `doctor` re-derived this predicate by hand and dropped the
+/// override term, so it could report a db-path-unknown state for a run that
+/// would have succeeded.
+#[test]
+fn explicit_db_override_lifts_the_unknown_db_path_refusal() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let absent = dir.path().join(".cartog").join("db.sqlite");
+    let over = dir.path().join("explicit.db");
+
+    assert_eq!(
+        IndexCreation::resolve(&absent, IndexConsent::Granted, true, None),
+        IndexCreation::RefusedUnknownDbPath,
+        "a rejected config with no override must not guess the db path"
+    );
+    assert_eq!(
+        IndexCreation::resolve(&absent, IndexConsent::Granted, true, Some(&over)),
+        IndexCreation::Allowed,
+        "an explicit --db settles the location the rejected config left unknown"
+    );
+}
+
+/// A rejected config still grants *consent* — the file existing is the opt-in —
+/// so the refusal must be the db-path one, which carries its own message, not
+/// the generic "no .cartog.toml" that would tell a user their file isn't there.
+#[test]
+#[serial]
+fn rejected_config_refuses_on_db_path_not_on_consent() {
+    // The `Absent` case falls through to `allow_index_creation`, which reads
+    // CARTOG_AUTO_INIT — a set var in the ambient environment turns the expected
+    // refusal into `Allowed`. The other assertions return before that call.
+    let _guard = AutoInitGuard::clearing();
+    let dir = tempfile::TempDir::new().unwrap();
+    let absent = dir.path().join(".cartog").join("db.sqlite");
+    assert_eq!(
+        IndexCreation::resolve(&absent, IndexConsent::Granted, true, None),
+        IndexCreation::RefusedUnknownDbPath
+    );
+    assert_eq!(
+        IndexCreation::resolve(&absent, IndexConsent::Absent, false, None),
+        IndexCreation::RefusedNoConsent,
+        "no config at all is the generic no-consent case"
+    );
+}
+
+/// An existing DB settles the location even when the config is rejected.
+#[test]
+fn existing_db_lifts_the_unknown_db_path_refusal() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = dir.path().join("db.sqlite");
+    std::fs::write(&db, b"").unwrap();
+    assert_eq!(
+        IndexCreation::resolve(&db, IndexConsent::Granted, true, None),
+        IndexCreation::Allowed
+    );
 }
