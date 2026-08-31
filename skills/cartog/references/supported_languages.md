@@ -187,6 +187,10 @@
   - **Objective-C headers are also `.h`.** Objective-C is not supported, so an ObjC header (`@interface` / `@property`) yields **zero symbols** rather than wrong ones — it degrades quietly, is still counted as an indexed file, and never emits garbage. `.m`/`.mm` are not indexed at all. Extension mapping is a pure extension match by design; cartog does not sniff file content to disambiguate `.h`.
 - `#ifdef`-guarded code is extracted as written — no preprocessor evaluation
 
+Vue, Svelte and Astro each emit one whole-file `component` symbol. An index built
+before those existed only gains them as SFC files change: run `cartog index --force`
+once after upgrading to backfill them.
+
 ### Vue (.vue)
 - Symbols + edges from every `<script>` / `<script setup>` block (one file may have several)
 - `lang="ts"` / `lang="typescript"` → TypeScript extractor; otherwise JavaScript
