@@ -76,7 +76,7 @@ pub struct DepsParams {
 pub struct SearchParams {
     /// Case-insensitive query string (prefix + substring match against symbol names)
     pub query: String,
-    /// Filter by symbol kind: function, class, method, variable, import, document
+    /// Filter by symbol kind: function, class, method, variable, import, interface, enum, enum_member, type_alias, trait, module, macro, component, document
     pub kind: Option<String>,
     /// Filter to a specific file path relative to project root
     pub file: Option<String>,
@@ -98,7 +98,7 @@ pub struct RagIndexParams {
 pub struct ChangesParams {
     /// Number of recent commits to consider (default 5)
     pub commits: Option<u32>,
-    /// Filter by symbol kind: function, class, method, variable, import, document
+    /// Filter by symbol kind: function, class, method, variable, import, interface, enum, enum_member, type_alias, trait, module, macro, component, document
     pub kind: Option<String>,
 }
 
@@ -106,7 +106,7 @@ pub struct ChangesParams {
 pub struct RagSearchParams {
     /// Natural language query for semantic code search
     pub query: String,
-    /// Filter by symbol kind: function, class, method, variable, import, interface, enum, type-alias, trait, module, document, all. Defaults to code only (excludes documents).
+    /// Filter by symbol kind: function, class, method, variable, import, interface, enum, enum_member, type_alias, trait, module, macro, component, document, all. Defaults to code only (excludes documents).
     pub kind: Option<String>,
     /// Maximum results to return (default 10)
     pub limit: Option<u32>,

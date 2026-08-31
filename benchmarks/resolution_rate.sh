@@ -41,7 +41,7 @@ Usage:
   resolution_rate.sh                 # heuristic, all langs, save snapshot
   resolution_rate.sh --lsp           # add LSP pass (uses host-installed servers)
   resolution_rate.sh --lsp --docker-lsp  # LSP via Docker images (build them first; no host fallback)
-  resolution_rate.sh --fixture rs    # one language (py ts rs go rb java c cpp csharp php dart swift kt vue svelte astro)
+  resolution_rate.sh --fixture rs    # one language (py ts rs go rb java c cpp csharp php dart swift kt vue svelte astro react)
   resolution_rate.sh --baseline      # diff vs last saved snapshot (does not overwrite it)
   resolution_rate.sh --no-save       # don't write the snapshot
   CARTOG=target/debug/cartog resolution_rate.sh   # pick a binary
@@ -74,7 +74,7 @@ export FIXTURE_FILTER=""
 # Language tags. Keep in sync with benchmarks/fixtures/webapp_*.
 # macOS ships bash 3.2 (no associative arrays), so lookups use case like the
 # rest of the suite (see benchmarks/lib/common.sh).
-LANGS=(py ts rs go rb java c cpp csharp php dart swift kt vue svelte astro)
+LANGS=(py ts rs go rb java c cpp csharp php dart swift kt vue svelte astro react)
 
 lang_name() {
   case "$1" in
@@ -83,6 +83,7 @@ lang_name() {
     c) echo C ;; cpp) echo C++ ;; csharp) echo 'C#' ;;
     dart) echo Dart ;; swift) echo Swift ;; kt) echo Kotlin ;;
     vue) echo Vue ;; svelte) echo Svelte ;; astro) echo Astro ;;
+    react) echo React ;;
     *) echo "$1" ;;
   esac
 }
@@ -96,7 +97,7 @@ lsp_bin() {
     c) echo clangd ;; cpp) echo clangd ;; csharp) echo csharp-ls ;;
     swift) echo sourcekit-lsp ;; kt) echo kotlin-language-server ;;
     vue) echo vue-language-server ;; svelte) echo svelteserver ;;
-    astro) echo astro-ls ;;
+    astro) echo astro-ls ;; react) echo typescript-language-server ;;
     *) echo __none__ ;;
   esac
 }
@@ -105,7 +106,7 @@ lsp_bin() {
 lsp_lang() {
   case "$1" in
     py) echo python ;; ts) echo typescript ;; rs) echo rust ;;
-    rb) echo ruby ;; kt) echo kotlin ;;
+    rb) echo ruby ;; kt) echo kotlin ;; react) echo tsx ;;
     *) echo "$1" ;;  # go, java, php, dart, swift are identity
   esac
 }
@@ -114,7 +115,15 @@ lsp_lang() {
 # Every language uses the uniform `cartog-lsp-<lang>:stable` tag; a Dockerfile may
 # simply `FROM` an upstream image (python/typescript wrap lspcontainers) — that
 # choice is local to each Dockerfile and invisible here.
-docker_image() { echo "cartog-lsp-$(lsp_lang "$1"):stable"; }
+# `tsx` has no image of its own: typescript.Dockerfile serves typescript/tsx/
+# javascript from one typescript-language-server, so react reuses that image
+# while its `[lsp.<lang>]` key stays `tsx`.
+docker_image() {
+  local lang
+  lang="$(lsp_lang "$1")"
+  [ "$lang" = "tsx" ] && lang=typescript
+  echo "cartog-lsp-$lang:stable"
+}
 
 CARTOG="$USER_CARTOG"
 DO_BASELINE=0

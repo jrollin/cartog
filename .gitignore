@@ -21,5 +21,6 @@ benchmarks/fixtures/webapp_svelte/node_modules/
 benchmarks/fixtures/webapp_svelte/.svelte-kit/
 benchmarks/fixtures/webapp_astro/node_modules/
 benchmarks/fixtures/webapp_astro/.astro/
+benchmarks/fixtures/webapp_react/node_modules/
 .playwright-mcp/
 docs/launch/

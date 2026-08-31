@@ -7,6 +7,7 @@ mod jobs;
 mod merkle;
 mod progress;
 mod redaction;
+mod sfc;
 mod walk_filter;
 
 pub(super) fn visible_dir(tmp: &tempfile::TempDir, name: &str) -> std::path::PathBuf {

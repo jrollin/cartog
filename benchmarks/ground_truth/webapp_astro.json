@@ -4,6 +4,7 @@
     "description": "What's in src/components/UserBadge.astro?",
     "query": "outline src/components/UserBadge.astro",
     "expected": [
+      { "name": "UserBadge", "kind": "component" },
       { "name": "AuthService", "kind": "import" },
       { "name": "Props", "kind": "interface" },
       { "name": "auth", "kind": "variable" },

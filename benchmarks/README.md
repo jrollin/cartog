@@ -51,13 +51,15 @@ test-and-benchmark matrix.
 
 All fixtures model the same domain (auth service, tokens, routes, middleware, database, cache, events, validators) with controlled, known relationships defined in `ground_truth/`.
 
-The criterion `indexing` bench exercises all 13 fixtures (10 code-language webapps
-+ the `webapp_{vue,svelte,astro}` SFC apps). The full 13-scenario shell suite and
-`ground_truth/` cover the 10 code-language fixtures (minus `webapp_dart`, which has
-no scenario ground truth yet). The three SFC fixtures are component apps, not the
-shared backend graph, so their `ground_truth/` covers only the scenarios that fit
-an SFC app (outline, callees, deps, search) — derived from real `cartog --json`
-output and hand-verified.
+The criterion `indexing` bench exercises the code-language webapps plus the
+component apps (`webapp_{vue,svelte,astro}` SFCs and `webapp_react` TSX). The
+full 13-scenario shell suite and `ground_truth/` cover the 10 code-language fixtures (minus `webapp_dart`, which has
+no scenario ground truth yet). The four component fixtures (`webapp_react` and the
+three SFC apps) are component apps, not the shared backend graph, so their
+`ground_truth/` covers only the scenarios that fit one (outline, callees, deps,
+search) — derived from real `cartog --json` output and hand-verified.
+`webapp_react` exists to keep JSX component-usage edges under test: it is the
+only fixture with `.tsx` files.
 
 ## Scenarios
 

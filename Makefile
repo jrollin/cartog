@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-csharp check-c check-cpp check-kt check-vue check-svelte check-astro check-install-script tla loom bench bench-memory bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-csharp check-c check-cpp check-kt check-vue check-svelte check-astro check-react check-install-script tla loom bench bench-memory bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -155,11 +155,12 @@ check-kt: ## Validate Kotlin fixtures (kotlinc compile, falls back to pinned Doc
 	fi
 	@echo "    OK"
 
-# SFC fixtures (Vue/Svelte/Astro) type-check with the framework's own checker via
-# npx. These pull a full framework toolchain on first run, so they're NOT wired
-# into the `check-fixtures` gate (which must stay fast + offline-friendly); run
-# them explicitly when touching an SFC fixture. cartog's own SFC parse/extract is
-# covered by the unit tests in crates/cartog-languages/src/sfc.rs.
+# Component fixtures (Vue/Svelte/Astro SFCs + React TSX) type-check via npx.
+# These pull a framework toolchain on first run, so they're NOT wired into the
+# `check-fixtures` gate (which must stay fast + offline-friendly); run them
+# explicitly when touching a component fixture. cartog's own SFC parse/extract is
+# covered by the unit tests in crates/cartog-languages/src/sfc.rs, and JSX
+# extraction by those in crates/cartog-languages/src/typescript.rs.
 check-vue: ## Type-check Vue fixtures (vue-tsc via npx, falls back to Docker)
 	@echo "==> Checking Vue fixtures..."
 	$(call check_lang,npx,node:22-slim,\
@@ -177,6 +178,15 @@ check-astro: ## Type-check Astro fixtures (astro check via npx, falls back to Do
 	$(call check_lang,npx,node:22-slim,\
 		cd benchmarks/fixtures/webapp_astro && npx --yes --package astro --package typescript@5 --package @astrojs/check -- astro check,\
 		cd webapp_astro && HOME=/tmp npm_config_cache=/tmp/npm npx --yes --package astro --package typescript@5 --package @astrojs/check -- astro check)
+
+# React needs only tsc, no framework checker. npx installs @types/react into its
+# own cache dir, outside the fixture's node_modules lookup, so --typeRoots points
+# tsc at it (derived from the tsc bin path, since the cache dir name is a hash).
+check-react: ## Type-check React fixtures (tsc via npx, falls back to Docker)
+	@echo "==> Checking React fixtures..."
+	$(call check_lang,npx,node:22-slim,\
+		cd benchmarks/fixtures/webapp_react && npx --yes --package typescript@5 --package @types/react -- sh -c 'tsc --noEmit -p tsconfig.json --typeRoots "$$(dirname $$(dirname $$(command -v tsc)))/@types"',\
+		cd webapp_react && HOME=/tmp npm_config_cache=/tmp/npm npx --yes --package typescript@5 --package @types/react -- sh -c "tsc --noEmit -p tsconfig.json --typeRoots \$$(dirname \$$(dirname \$$(command -v tsc)))/@types")
 
 # --- Skill tests ---
 

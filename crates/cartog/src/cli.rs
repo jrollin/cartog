@@ -64,6 +64,7 @@ pub enum SymbolKindFilter {
     Module,
     Document,
     Macro,
+    Component,
     /// Include all symbol kinds (code + documents).
     All,
 }
@@ -84,6 +85,7 @@ impl From<SymbolKindFilter> for SymbolKind {
             SymbolKindFilter::Module => SymbolKind::Module,
             SymbolKindFilter::Document => SymbolKind::Document,
             SymbolKindFilter::Macro => SymbolKind::Macro,
+            SymbolKindFilter::Component => SymbolKind::Component,
             SymbolKindFilter::All => unreachable!("All is not a single SymbolKind"),
         }
     }

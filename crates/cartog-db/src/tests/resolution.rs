@@ -1201,3 +1201,201 @@ fn dot_then_colon_reduce_to_final_segment() {
     let call = call_edge_target(&refs);
     assert_eq!(call.target_id.as_ref().unwrap(), &method.id);
 }
+
+// ── SFC component symbols at the global tiers ──
+
+/// `resolution_state` of the single edge in the DB.
+fn only_edge_state(db: &Database) -> i64 {
+    db.conn
+        .query_row("SELECT resolution_state FROM edges", [], |row| row.get(0))
+        .unwrap()
+}
+
+#[test]
+fn component_import_resolves_via_unique_global() {
+    let db = Database::open_memory().unwrap();
+
+    // A lone `LoginForm` component in an unrelated directory: tiers 1-4 miss, tier 5 hits.
+    let importer = test_symbol("App", SymbolKind::Component, "app/App.vue", 1);
+    let component = test_symbol(
+        "LoginForm",
+        SymbolKind::Component,
+        "shared/ui/LoginForm.vue",
+        1,
+    );
+    db.insert_symbols(&[importer.clone(), component.clone()])
+        .unwrap();
+    db.insert_edge(&Edge::new(
+        &importer.id,
+        "LoginForm",
+        EdgeKind::Imports,
+        "app/App.vue",
+        2,
+    ))
+    .unwrap();
+
+    assert_eq!(db.resolve_edges().unwrap(), 1);
+
+    let refs = db.refs("LoginForm", None).unwrap();
+    let import = refs
+        .iter()
+        .find(|(e, _)| e.kind == EdgeKind::Imports)
+        .unwrap();
+    assert_eq!(import.0.target_id.as_ref().unwrap(), &component.id);
+    assert_eq!(import.0.provenance, Some(EdgeProvenance::UniqueGlobal));
+    assert_eq!(only_edge_state(&db), 1);
+}
+
+#[test]
+fn component_and_variable_same_name_stay_unresolved() {
+    let db = Database::open_memory().unwrap();
+
+    // Both kinds carry kind_priority 0, so tier 6 cannot break the tie.
+    let importer = test_symbol("App", SymbolKind::Component, "src/App.vue", 1);
+    let component = test_symbol("Badge", SymbolKind::Component, "ui/Badge.vue", 1);
+    let variable = test_symbol("Badge", SymbolKind::Variable, "lib/consts.ts", 3);
+    db.insert_symbols(&[importer.clone(), component, variable])
+        .unwrap();
+    db.insert_edge(&Edge::new(
+        &importer.id,
+        "Badge",
+        EdgeKind::Imports,
+        "src/App.vue",
+        2,
+    ))
+    .unwrap();
+
+    assert_eq!(db.resolve_edges().unwrap(), 0);
+    assert_eq!(only_edge_state(&db), 0);
+}
+
+#[test]
+fn component_and_class_same_name_resolves_to_class() {
+    let db = Database::open_memory().unwrap();
+
+    // Tier 6: class (priority 3) beats component (priority 0).
+    let importer = test_symbol("App", SymbolKind::Component, "src/App.vue", 1);
+    let component = test_symbol("Badge", SymbolKind::Component, "ui/Badge.vue", 1);
+    let class = test_symbol("Badge", SymbolKind::Class, "lib/badge.ts", 3);
+    db.insert_symbols(&[importer.clone(), component, class.clone()])
+        .unwrap();
+    db.insert_edge(&Edge::new(
+        &importer.id,
+        "Badge",
+        EdgeKind::Imports,
+        "src/App.vue",
+        2,
+    ))
+    .unwrap();
+
+    assert_eq!(db.resolve_edges().unwrap(), 1);
+
+    let refs = db.refs("Badge", None).unwrap();
+    let import = refs
+        .iter()
+        .find(|(e, _)| e.kind == EdgeKind::Imports)
+        .unwrap();
+    assert_eq!(import.0.target_id.as_ref().unwrap(), &class.id);
+    assert_eq!(import.0.provenance, Some(EdgeProvenance::KindDisambig));
+}
+
+#[test]
+fn two_components_same_name_stay_unresolved() {
+    let db = Database::open_memory().unwrap();
+
+    let importer = test_symbol("App", SymbolKind::Component, "src/App.vue", 1);
+    let a = test_symbol("Badge", SymbolKind::Component, "pkg_a/Badge.vue", 1);
+    let b = test_symbol("Badge", SymbolKind::Component, "pkg_b/Badge.vue", 1);
+    db.insert_symbols(&[importer.clone(), a, b]).unwrap();
+    db.insert_edge(&Edge::new(
+        &importer.id,
+        "Badge",
+        EdgeKind::Imports,
+        "src/App.vue",
+        2,
+    ))
+    .unwrap();
+
+    assert_eq!(db.resolve_edges().unwrap(), 0);
+    assert_eq!(only_edge_state(&db), 0);
+}
+
+#[test]
+fn same_stem_component_does_not_shadow_a_cross_file_target() {
+    let db = Database::open_memory().unwrap();
+
+    // `Widget.vue` importing a `Widget` helper: the file's own component symbol
+    // must not win any tier, or the real cross-file target is lost.
+    let component = test_symbol("Widget", SymbolKind::Component, "src/ui/Widget.vue", 1);
+    let helper = test_symbol("Widget", SymbolKind::Function, "src/lib/helpers.ts", 3);
+    db.insert_symbols(&[component.clone(), helper.clone()])
+        .unwrap();
+    db.insert_edge(&Edge::new(
+        &component.id,
+        "Widget",
+        EdgeKind::Imports,
+        "src/ui/Widget.vue",
+        2,
+    ))
+    .unwrap();
+
+    assert_eq!(db.resolve_edges().unwrap(), 1);
+
+    let refs = db.refs("Widget", None).unwrap();
+    let import = refs
+        .iter()
+        .find(|(e, _)| e.kind == EdgeKind::Imports)
+        .unwrap();
+    assert_eq!(import.0.target_id.as_ref().unwrap(), &helper.id);
+}
+
+#[test]
+fn same_stem_component_in_same_dir_does_not_shadow_a_cross_file_target() {
+    let db = Database::open_memory().unwrap();
+
+    // Tier 3 scans the whole directory, so the exclusion must be file-scoped,
+    // not tier-1-only: a sibling `Badge` function in the same dir still wins.
+    let component = test_symbol("Badge", SymbolKind::Component, "src/ui/Badge.vue", 1);
+    let sibling = test_symbol("Badge", SymbolKind::Function, "src/ui/badge_util.ts", 4);
+    db.insert_symbols(&[component.clone(), sibling.clone()])
+        .unwrap();
+    db.insert_edge(&Edge::new(
+        &component.id,
+        "Badge",
+        EdgeKind::Calls,
+        "src/ui/Badge.vue",
+        3,
+    ))
+    .unwrap();
+
+    assert_eq!(db.resolve_edges().unwrap(), 1);
+
+    let refs = db.refs("Badge", None).unwrap();
+    let call = refs
+        .iter()
+        .find(|(e, _)| e.kind == EdgeKind::Calls)
+        .unwrap();
+    assert_eq!(call.0.target_id.as_ref().unwrap(), &sibling.id);
+}
+
+#[test]
+fn same_stem_component_leaves_an_external_import_unresolved() {
+    let db = Database::open_memory().unwrap();
+
+    // `Table.vue` importing `Table` from a node_modules package: nothing in the
+    // project matches, so the edge must stay unresolved for the LSP pass rather
+    // than become a false self-edge.
+    let component = test_symbol("Table", SymbolKind::Component, "src/ui/Table.vue", 1);
+    db.insert_symbols(std::slice::from_ref(&component)).unwrap();
+    db.insert_edge(&Edge::new(
+        &component.id,
+        "Table",
+        EdgeKind::Imports,
+        "src/ui/Table.vue",
+        2,
+    ))
+    .unwrap();
+
+    assert_eq!(db.resolve_edges().unwrap(), 0);
+    assert_eq!(only_edge_state(&db), 0);
+}

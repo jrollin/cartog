@@ -41,7 +41,7 @@
 - Functions, structs, enums, traits, type aliases, constants/statics
 - Use declarations (use statements)
 - Function calls, macro invocations (tracked as `name!`)
-- Trait implementations (impl Trait for Type -> inherits edge)
+- Trait implementations (impl Trait for Type → inherits edge)
 - Type references in function signatures (parameter types, return types, generic types)
 - Async functions
 - Doc comments (///)
@@ -187,22 +187,29 @@
   - **Objective-C headers are also `.h`.** Objective-C is not supported, so an ObjC header (`@interface` / `@property`) yields **zero symbols** rather than wrong ones — it degrades quietly, is still counted as an indexed file, and never emits garbage. `.m`/`.mm` are not indexed at all. Extension mapping is a pure extension match by design; cartog does not sniff file content to disambiguate `.h`.
 - `#ifdef`-guarded code is extracted as written — no preprocessor evaluation
 
+Vue, Svelte and Astro each emit one whole-file `component` symbol. An index built
+before those existed only gains them as SFC files change: run `cartog index --force`
+once after upgrading to backfill them.
+
 ### Vue (.vue)
 - Symbols + edges from every `<script>` / `<script setup>` block (one file may have several)
 - `lang="ts"` / `lang="typescript"` → TypeScript extractor; otherwise JavaScript
 - Same symbols/edges as the delegated JS/TS extractor (functions, classes, methods, variables, imports; calls, imports, inherits, type refs)
 - Byte/line offsets remapped back to the full `.vue` file
+- One whole-file `component` symbol per file, named after the file stem (`login-form.vue` → `LoginForm`), so component imports and `<X/>` usages resolve to it
 - Template markup and `<style>` blocks are not indexed
 
 ### Svelte (.svelte)
 - Symbols + edges from the `<script>` block(s), including `<script context="module">`
 - `lang="ts"` → TypeScript extractor; otherwise JavaScript
 - Same symbols/edges as the delegated JS/TS extractor
+- One whole-file `component` symbol per file, named after the file stem (`user-badge.svelte` → `UserBadge`), so component imports and `<X/>` usages resolve to it
 - Markup and `<style>` blocks are not indexed
 
 ### Astro (.astro)
 - Symbols + edges from the `---` frontmatter (always TypeScript) plus any client-side `<script>` blocks
 - Same symbols/edges as the delegated JS/TS extractor
+- One whole-file `component` symbol per file, named after the file stem (`user-badge.astro` → `UserBadge`), so component imports and `<X/>` usages resolve to it
 - HTML/template markup is not indexed
 
 ### Markdown (.md)

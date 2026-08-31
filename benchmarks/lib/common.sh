@@ -33,7 +33,7 @@ should_skip_fixture() {
     # also select webapp_cpp and webapp_csharp. Keep this list in sync with the
     # languages that have fixtures under benchmarks/fixtures/.
     case "$FIXTURE_FILTER" in
-        py|ts|go|rs|rb|java|c|cpp|csharp|php|dart|swift|kt|vue|svelte|astro)
+        py|ts|go|rs|rb|java|c|cpp|csharp|php|dart|swift|kt|vue|svelte|astro|react)
             [[ "$fixture_name" != *"_${FIXTURE_FILTER}" ]] && return 0 || return 1 ;;
         *) return 1 ;;
     esac

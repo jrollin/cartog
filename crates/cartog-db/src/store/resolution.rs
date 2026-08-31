@@ -72,9 +72,16 @@ impl Database {
     fn resolve_edge_batch(&self, unresolved: &[(i64, String, String, String)]) -> Result<u32> {
         let mut resolved = 0u32;
 
-        let mut same_file_stmt = self
-            .conn
-            .prepare("SELECT id FROM symbols WHERE name = ?1 AND file_path = ?2 LIMIT 1")?;
+        // A `component` symbol spans its whole SFC file and is named after the file
+        // stem, so an edge *inside* that file naming the stem (`Widget.vue` importing
+        // or calling a `Widget` helper) means the imported target, never the file
+        // itself. Every tier below therefore excludes a component whose file_path is
+        // the edge's own file; cross-file component resolution (the feature's point)
+        // is untouched.
+        let mut same_file_stmt = self.conn.prepare(
+            "SELECT id FROM symbols WHERE name = ?1 AND file_path = ?2
+                 AND kind != 'component' LIMIT 1",
+        )?;
 
         let mut import_resolve_stmt = self.conn.prepare(
             "SELECT s.id FROM symbols s
@@ -84,12 +91,14 @@ impl Database {
              INNER JOIN symbols resolved ON resolved.id = ie.target_id
              WHERE s.name = ?1 AND s.kind != 'import'
                  AND s.file_path = resolved.file_path
+                 AND NOT (s.kind = 'component' AND s.file_path = ?2)
              LIMIT 1",
         )?;
 
-        let mut same_dir_stmt = self
-            .conn
-            .prepare("SELECT id FROM symbols WHERE name = ?1 AND file_path LIKE ?2 LIMIT 1")?;
+        let mut same_dir_stmt = self.conn.prepare(
+            "SELECT id FROM symbols WHERE name = ?1 AND file_path LIKE ?2
+                 AND NOT (kind = 'component' AND file_path = ?3) LIMIT 1",
+        )?;
 
         let mut parent_scope_stmt = self.conn.prepare(
             "SELECT s.id FROM symbols s
@@ -98,9 +107,10 @@ impl Database {
              LIMIT 1",
         )?;
 
-        let mut anywhere_stmt = self
-            .conn
-            .prepare("SELECT id, kind FROM symbols WHERE name = ?1 AND kind != 'import' LIMIT 3")?;
+        let mut anywhere_stmt = self.conn.prepare(
+            "SELECT id, kind FROM symbols WHERE name = ?1 AND kind != 'import'
+                 AND NOT (kind = 'component' AND file_path = ?2) LIMIT 3",
+        )?;
 
         // Heuristic resolve must flip state=1 alongside target_id; otherwise
         // unresolved_edges() (state=0 filter) would still surface the edge to
@@ -160,7 +170,7 @@ impl Database {
 
                 if !dir.is_empty() {
                     if let Some(tid) = same_dir_stmt
-                        .query_row(params![name, dir], |row| row.get::<_, String>(0))
+                        .query_row(params![name, dir, edge_file], |row| row.get::<_, String>(0))
                         .optional()?
                     {
                         resolution = Some((tid, EdgeProvenance::SameDir));
@@ -181,7 +191,7 @@ impl Database {
             // 5+6) Project-wide: unique match, or class-over-constructor disambiguation.
             // full_name only — see the note above on why reduced_name is excluded here.
             if resolution.is_none() {
-                let mut rows = anywhere_stmt.query(params![full_name])?;
+                let mut rows = anywhere_stmt.query(params![full_name, edge_file])?;
                 let mut matches: Vec<(String, String)> = Vec::new();
                 while let Some(row) = rows.next()? {
                     matches.push((row.get(0)?, row.get(1)?));
