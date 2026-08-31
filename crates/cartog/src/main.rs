@@ -378,6 +378,7 @@ fn main() -> Result<()> {
             config_path.as_deref(),
             config_rejected,
             &db_path,
+            &project_root_from_cwd(),
             cli.json,
             embedding_dim,
             &provider_config,

@@ -666,7 +666,7 @@ Your code never leaves your machine — unless you explicitly opt in to
 | **MCP "Connection closed" on a 2nd editor window** | Expected: single-writer election makes the 2nd instance read-only (14 of 16 tools). Ensure `cartog --version` ≥ 0.17 and `CARTOG_SINGLE_WRITER` is unset. |
 | **`.cartog.toml` ignored** | Cartog walks up to the git root; with no `.git`, put it in the cwd or pass `--db`. `cartog config` prints the resolved paths. |
 | **Missing symbols / recall lower than expected** | Wait for the watcher (or run `cartog index`), check the file's language is supported and not `.gitignore`d. Install a language server on PATH to lift edge resolution from ~25% to up to ~81%. |
-| **Anything else** | `cartog doctor` checks git, config, DB, and models. |
+| **Anything else** | `cartog doctor` checks git, config, key paths, DB, LSP servers, models, the remote, and the release version. |
 
 Full list with detailed fixes: **[docs/troubleshooting.md](docs/troubleshooting.md)**.
 

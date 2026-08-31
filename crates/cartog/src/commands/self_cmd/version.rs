@@ -151,6 +151,10 @@ pub fn cmd_self_version(json: bool) -> Result<()> {
     Ok(())
 }
 
+// Re-exported so the `use super::*` glob in each `self_cmd` submodule (and
+// its tests) resolves these to the one shared implementation.
+pub(crate) use cartog::semver::{compare_stable_versions, is_stable_semver, parse_release_tag};
+
 const DEFAULT_GITHUB_LATEST_URL: &str =
     "https://api.github.com/repos/jrollin/cartog/releases/latest";
 
@@ -182,32 +186,6 @@ pub(crate) fn fetch_latest_version(url: &str) -> Result<String> {
     parse_release_tag(&body).ok_or_else(|| {
         anyhow::anyhow!("could not extract a stable release tag from GitHub response")
     })
-}
-
-/// Pull `tag_name` out of the GitHub release JSON, strip a leading `v`, and
-/// return `None` for any prerelease-shaped tag. SemVer prerelease metadata
-/// is delimited by `-`, so any hyphen in the version (e.g. `0.15.0-rc.1`,
-/// `0.15.0-alpha`, `0.15.0-nightly.42`) disqualifies the tag.
-pub(crate) fn parse_release_tag(json: &str) -> Option<String> {
-    let parsed: serde_json::Value = serde_json::from_str(json).ok()?;
-    let tag = parsed.get("tag_name")?.as_str()?;
-    let trimmed = tag.strip_prefix('v').unwrap_or(tag);
-    if trimmed.contains('-') {
-        return None;
-    }
-    if !is_stable_semver(trimmed) {
-        return None;
-    }
-    Some(trimmed.to_string())
-}
-
-/// Quick guard: accept exactly three dot-separated non-empty numeric parts.
-pub(crate) fn is_stable_semver(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('.').collect();
-    parts.len() == 3
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// JSON-friendly view of an update check. A single shape covers both the
@@ -259,23 +237,6 @@ impl CheckOutcome {
             _ => "cartog: update check produced an empty outcome".to_string(),
         }
     }
-}
-
-/// Lexicographic compare on `(major, minor, patch)`.
-///
-/// Both inputs are expected to be stable `MAJOR.MINOR.PATCH` triples — any
-/// non-numeric component is treated as `0`, so the function never panics on
-/// weird input but degrades gracefully.
-pub(crate) fn compare_stable_versions(a: &str, b: &str) -> std::cmp::Ordering {
-    let parse = |s: &str| -> [u64; 3] {
-        let mut parts = s.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
-        [
-            parts.next().unwrap_or(0),
-            parts.next().unwrap_or(0),
-            parts.next().unwrap_or(0),
-        ]
-    };
-    parse(a).cmp(&parse(b))
 }
 
 // ── upgrade flow ──────────────────────────────────────────────────────

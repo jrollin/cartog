@@ -41,3 +41,9 @@ pub mod state;
 /// target's `commands::self_cmd` can reach it without a duplicate copy.
 #[doc(hidden)]
 pub mod time_fmt;
+
+/// Stable-release tag parsing and version comparison. Internal — exposed via
+/// the lib facade only so `auto_check` and the bin target's `self_cmd` /
+/// `doctor` share one copy instead of three.
+#[doc(hidden)]
+pub mod semver;

@@ -363,11 +363,21 @@ cartog doctor
 ```text
   [+] git: git repository at /home/user/project
   [+] config: loaded from /home/user/project/.cartog.toml
+  [+] paths:
+      project root:  /home/user/project
+      config:        /home/user/project/.cartog.toml
+      database:      /home/user/project/.cartog/db.sqlite
+      state file:    /home/user/.local/state/cartog/state.toml
+      model cache:   /home/user/.cache/cartog/models
+      install:       release-tarball (x86_64-unknown-linux-gnu)
   [+] database: 42 files, 387 symbols at /home/user/project/.cartog/db.sqlite
+  [+] lsp: servers found for rust, python, typescript
   [+] embedding: local model cached
   [+] reranker: jinaai/jina-reranker-v1-turbo-en cached
+  [+] remote: not configured (local-only)
+  [+] version: 0.33.0 is up to date
 
-All 5 checks passed
+All 9 checks passed
 ```
 
 **Checks performed:**
@@ -376,11 +386,43 @@ All 5 checks passed
 |-------|-----|------|-------|
 | git | Inside a git repo | — | Not a git repo |
 | config | `.cartog.toml` found and parsed | No config file (using defaults) | — |
+| paths | Always — an inventory row, not a health check | — | — |
 | database | DB exists with indexed data | DB empty or missing | DB cannot be opened |
+| lsp | A server is available for every indexed language | A server is missing, or clangd has no compile database | — |
 | embedding | Local model cached / Ollama reachable | Local model not downloaded | Ollama unreachable / unknown provider |
 | reranker | Model cached / disabled | Model not downloaded | Unknown provider |
+| remote | Not configured, or the bucket is reachable | `url` empty, unreachable, or config rejected | `[remote]` set but built without `remote-s3` |
+| version | Up to date, or the check is disabled/unreachable | A newer stable release exists | — |
 
 Exits with code 1 if any check is an error. Supports `--json` for structured output.
+
+**`version`** queries the GitHub releases API with an 800 ms timeout — much
+shorter than the 5 s `cartog self update` allows, because there waiting for an
+answer *is* the task, while doctor is what you run when something is already
+broken. A failed probe reports `latest unknown` and stays OK: being offline is
+not a broken environment. It is also the last check to run, so every local row
+is computed before the probe starts. Measured: ~0.1 s normally, ~0.8 s worst
+case on a blackholed network. Set `CARTOG_NO_UPDATE_CHECK=1` to skip the
+request entirely, or `CARTOG_GITHUB_API_URL` to point at a mirror.
+
+**`paths`** is informational: it collects every location a bug report needs
+(project root, config, database, state file, model cache, install source and
+target triple) into one block. In `--json` these are discrete strings under
+`details`, not a newline-joined message.
+
+**`lsp`** only reports languages the project has actually indexed, so it never
+nags about a language you do not use. Languages resolved by heuristics alone
+(Markdown) are skipped. A `[lsp.<lang>] command` override counts as available
+without a `PATH` probe, since the binary usually lives in a container. A language with several
+candidate servers (Ruby: `ruby-lsp`, `solargraph`) lists all of them, since they
+carry different minimum runtimes. When C or C++ is indexed and `clangd` is
+reachable, it also checks for a `compile_commands.json` or `compile_flags.txt`
+covering the directories that actually hold the C/C++ sources, walking up to the
+project root — a polyglot repo (a Rust workspace with a C fixture, a vendored
+native dependency) is never asked for a compile database at a root where one
+would be meaningless. Without a compile database clangd guesses bare flags and
+most cross-file includes go unresolved. The row is
+absent from builds compiled `--no-default-features` (no `lsp` feature).
 
 ### `cartog watch [path] [--debounce N] [--rag] [--rag-delay N] [--json]`
 
