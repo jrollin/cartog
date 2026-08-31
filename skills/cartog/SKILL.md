@@ -350,7 +350,7 @@ The primary tool for "how does X work?" and understanding an area: one call retu
 cartog doctor                            # check all requirements
 cartog --json doctor                     # structured JSON output
 ```
-Validates git repo, config, key paths, database, LSP servers, embedding provider, reranker, and the release version. Returns OK / Warn / Error per check and exits with code 1 if any error. Run this when commands fail unexpectedly or after first setup to verify everything is working.
+Validates git repo, config, key paths, database, LSP servers, embedding provider, reranker, the remote, and the release version. Returns OK / Warn / Error per check and exits with code 1 if any error. Run this when commands fail unexpectedly or after first setup to verify everything is working.
 
 ### Stats (index summary, savings retention hook)
 ```bash

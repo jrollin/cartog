@@ -391,6 +391,7 @@ All 9 checks passed
 | lsp | A server is available for every indexed language | A server is missing, or clangd has no compile database | — |
 | embedding | Local model cached / Ollama reachable | Local model not downloaded | Ollama unreachable / unknown provider |
 | reranker | Model cached / disabled | Model not downloaded | Unknown provider |
+| remote | Not configured, or the bucket is reachable | `url` empty, unreachable, or config rejected | `[remote]` set but built without `remote-s3` |
 | version | Up to date, or the check is disabled/unreachable | A newer stable release exists | — |
 
 Exits with code 1 if any check is an error. Supports `--json` for structured output.

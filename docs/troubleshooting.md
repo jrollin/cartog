@@ -66,7 +66,9 @@ simpler `compile_flags.txt` listing one flag per line:
 
 Without one, clangd guesses bare flags and cross-file includes go unresolved, so
 LSP adds little over the heuristic tiers. `cartog doctor` reports a missing
-compile database in its `lsp` row whenever C or C++ is indexed. A Dockerized server via `[lsp.cpp]
+compile database in its `lsp` row when C or C++ is indexed **and clangd is
+reachable**; when clangd itself is missing it reports that instead, since the
+absent server is the finding. A Dockerized server via `[lsp.cpp]
 command = [...]` (see `benchmarks/lsp-images/cpp.Dockerfile`) avoids a host
 install. Note `.h` is parsed with the C++ grammar (a superset that also parses C
 headers correctly).

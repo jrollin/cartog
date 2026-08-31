@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 
 #[cfg(feature = "remote-s3")]
@@ -487,18 +487,23 @@ fn fetch_latest_version_quick(url: &str) -> Result<String> {
         // stall well past it, which is exactly the blackholed-network case.
         .connect_timeout(VERSION_PROBE_TIMEOUT)
         .timeout(VERSION_PROBE_TIMEOUT)
-        .build()?;
+        .build()
+        .context("building the HTTP client for the release probe")?;
     let response = client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
-        .send()?;
+        .send()
+        .with_context(|| format!("release probe to {url} failed"))?;
     let status = response.status();
     if !status.is_success() {
         anyhow::bail!("GitHub API returned status {status}");
     }
-    parse_release_tag(&response.text()?)
-        .ok_or_else(|| anyhow::anyhow!("no stable release tag in the GitHub response"))
+    let body = response
+        .text()
+        .with_context(|| format!("reading the release-probe response from {url}"))?;
+    parse_release_tag(&body)
+        .ok_or_else(|| anyhow::anyhow!("no stable release tag in the response from {url}"))
 }
 
 /// Compare the running version against the latest stable GitHub release.
@@ -544,7 +549,9 @@ fn check_version(
         Err(e) => CheckResult {
             name: "version".into(),
             status: CheckStatus::Ok,
-            message: format!("{current} (latest unknown: {e})"),
+            // `{:#}` so the whole context chain shows — the outer context
+            // alone names the probe but hides why it failed.
+            message: format!("{current} (latest unknown: {e:#})"),
             details: Vec::new(),
         },
     }
@@ -1707,6 +1714,7 @@ mod tests {
         }
 
         #[test]
+        #[serial]
         fn warn_row_still_reports_the_servers_that_were_found() {
             // The positive half is what a bug report needs; a single gap must
             // not hide the eleven languages that did resolve.

@@ -1046,7 +1046,7 @@ Measured across 13 benchmark scenarios (see crates/cartog/benches/queries.rs).</
         <p>Data comes from a local <code>query_log</code> table inside <code>.cartog/db.sqlite</code>. Nothing leaves the machine; no query payloads are recorded — only the tool name, call surface (<code>cli</code> / <code>mcp</code>), and a timestamp. Secondary read-only MCP attaches can't write, so multi-MCP-server setups under-report secondary traffic rather than double-counting it.</p>
 
         <h2 id="cmd-doctor"><code>cartog doctor</code></h2>
-        <p>Validate that all requirements are met and everything is working. Checks the release version, git repo, config, key paths, database, LSP servers, embedding provider, and reranker.</p>
+        <p>Validate that all requirements are met and everything is working. Checks the git repo, config, key paths, database, LSP servers, embedding provider, reranker, remote, and the release version.</p>
         <pre>cartog doctor                 <span class="comment"># check all requirements</span>
 cartog --json doctor          <span class="comment"># structured JSON output</span></pre>
         <p class="example-label">Example output</p>
