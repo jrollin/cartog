@@ -65,7 +65,8 @@ simpler `compile_flags.txt` listing one flag per line:
 ```
 
 Without one, clangd guesses bare flags and cross-file includes go unresolved, so
-LSP adds little over the heuristic tiers. A Dockerized server via `[lsp.cpp]
+LSP adds little over the heuristic tiers. `cartog doctor` reports a missing
+compile database in its `lsp` row whenever C or C++ is indexed. A Dockerized server via `[lsp.cpp]
 command = [...]` (see `benchmarks/lsp-images/cpp.Dockerfile`) avoids a host
 install. Note `.h` is parsed with the C++ grammar (a superset that also parses C
 headers correctly).
@@ -431,8 +432,10 @@ already-downloaded weights, no re-download).
 
 ### `cartog refs X` returns fewer hits than I expect
 
-Check whether the `lsp` feature is compiled in:
-`cartog doctor` shows "LSP: available" when it is. Heuristic-only resolution
+Check whether the `lsp` feature is compiled in and a server is actually
+reachable: `cartog doctor`'s `lsp` row lists the servers found for the
+languages you have indexed, and names the missing ones with their install
+hint. Heuristic-only resolution
 hovers around 25–37 % across languages; LSP-backed resolution is 44–81 %
 depending on language.
 
@@ -471,6 +474,8 @@ service shutdown) still work; only Ctrl-C is unavailable until restart.
 A useful issue includes:
 
 - `cartog --version`
-- `cartog doctor`
+- `cartog doctor` — its `paths` row collects the config, database, state-file
+  and model-cache locations plus the install source, which is most of what a
+  maintainer needs to reproduce
 - `cartog stats`
 - The failing command, run with `RUST_LOG=debug`.

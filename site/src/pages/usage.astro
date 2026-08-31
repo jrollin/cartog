@@ -1046,19 +1046,31 @@ Measured across 13 benchmark scenarios (see crates/cartog/benches/queries.rs).</
         <p>Data comes from a local <code>query_log</code> table inside <code>.cartog/db.sqlite</code>. Nothing leaves the machine; no query payloads are recorded — only the tool name, call surface (<code>cli</code> / <code>mcp</code>), and a timestamp. Secondary read-only MCP attaches can't write, so multi-MCP-server setups under-report secondary traffic rather than double-counting it.</p>
 
         <h2 id="cmd-doctor"><code>cartog doctor</code></h2>
-        <p>Validate that all requirements are met and everything is working. Checks git repo, config, database, embedding provider, and reranker.</p>
+        <p>Validate that all requirements are met and everything is working. Checks the release version, git repo, config, key paths, database, LSP servers, embedding provider, and reranker.</p>
         <pre>cartog doctor                 <span class="comment"># check all requirements</span>
 cartog --json doctor          <span class="comment"># structured JSON output</span></pre>
         <p class="example-label">Example output</p>
         <pre class="example-output">  [+] git: git repository at /your/repo
   [+] config: loaded from /your/repo/.cartog.toml
+  [+] paths:
+      project root:  /your/repo
+      config:        /your/repo/.cartog.toml
+      database:      /your/repo/.cartog/db.sqlite
+      state file:    /home/you/.local/state/cartog/state.toml
+      model cache:   /home/you/.cache/cartog/models
+      install:       release-tarball (x86_64-unknown-linux-gnu)
   [+] database: 70 files, 697 symbols at .cartog/db.sqlite
+  [+] lsp: servers found for rust, python, typescript
   [+] embedding: local model cached
   [+] reranker: jinaai/jina-reranker-v1-turbo-en cached
   [+] remote: not configured (local-only)
+  [+] version: 0.33.0 is up to date
 
-All 6 checks passed</pre>
+All 9 checks passed</pre>
         <p>Each check reports <strong>OK</strong>, <strong>Warn</strong>, or <strong>Error</strong>. Exits with code 1 if any check is an error. Run this when commands fail unexpectedly or after first setup.</p>
+        <p><strong>version</strong> queries the GitHub releases API with an 800&nbsp;ms timeout — much shorter than the 5&nbsp;s <code>cartog self update</code> allows, because there waiting for an answer <em>is</em> the task, while doctor is what you run when something is already broken. A failed probe reports <code>latest unknown</code> and stays OK: being offline is not a broken environment. Measured: ~0.1&nbsp;s normally, ~0.8&nbsp;s worst case on a blackholed network. Set <code>CARTOG_NO_UPDATE_CHECK=1</code> to skip the request entirely.</p>
+        <p><strong>paths</strong> is an inventory row, not a health check: it collects every location a bug report needs into one block. In <code>--json</code> these are discrete strings under <code>details</code>.</p>
+        <p><strong>lsp</strong> reports only the languages you have actually indexed, so it never nags about a language you do not use. A <code>[lsp.&lt;lang&gt;] command</code> override counts as available without a <code>PATH</code> probe. A language with several candidate servers (Ruby: <code>ruby-lsp</code>, <code>solargraph</code>) lists all of them, since they carry different minimum runtimes. When C or C++ is indexed and <code>clangd</code> is reachable, it also checks for a <code>compile_commands.json</code> or <code>compile_flags.txt</code> covering the directories that actually hold the C/C++ sources, walking up to the project root — a polyglot repo is never asked for a compile database at a root where one would be meaningless. Without one clangd guesses bare flags and most cross-file includes go unresolved.</p>
 
         <h2 id="cmd-map"><code>cartog map</code></h2>
         <p>Token-budget-aware codebase summary — file tree + top symbols ranked by reference count. Add <code>--mermaid</code> for a <code>graph TD</code> rooted at "Repo"; the token budget still applies (renderer stops adding nodes before it overflows).</p>
