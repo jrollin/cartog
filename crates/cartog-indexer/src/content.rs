@@ -32,13 +32,17 @@ const MIN_CONTENT_BYTES: usize = 50;
 ///
 /// Returns `(content, header)` where `header` is a brief preamble for embedding context.
 /// Returns `None` if: byte offsets are invalid, content is empty/too short,
-/// or the symbol is an import (not useful for semantic search).
+/// the symbol is an import (not useful for semantic search), or the symbol is an
+/// SFC component (it spans the whole file, so its content would duplicate every
+/// script symbol's text in FTS and embeddings).
 pub(crate) fn extract_symbol_content(
     source: &str,
     sym: &cartog_core::Symbol,
 ) -> Option<(String, String)> {
-    // Skip imports — they don't contain searchable logic.
-    if sym.kind == cartog_core::SymbolKind::Import {
+    if matches!(
+        sym.kind,
+        cartog_core::SymbolKind::Import | cartog_core::SymbolKind::Component
+    ) {
         return None;
     }
 
@@ -116,6 +120,22 @@ mod tests {
         assert_eq!(floor_char_boundary(s, 4), 3); // mid ─ → snap back
         assert_eq!(floor_char_boundary(s, 5), 3); // mid ─ → snap back
         assert_eq!(floor_char_boundary(s, 6), 6); // start of 'd'
+    }
+
+    #[test]
+    fn component_symbol_has_no_content() {
+        let source = "<template><p>hello there, a nice long template body</p></template>\n";
+        let sym = cartog_core::Symbol::new(
+            "App",
+            cartog_core::SymbolKind::Component,
+            "src/App.vue",
+            1,
+            2,
+            0,
+            source.len() as u32,
+            None,
+        );
+        assert!(extract_symbol_content(source, &sym).is_none());
     }
 
     #[test]

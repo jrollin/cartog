@@ -12,6 +12,7 @@
 //! extractor emits component-usage edges (see `js_shared::is_jsx_component`).
 
 use anyhow::Result;
+use cartog_core::{Symbol, SymbolKind};
 use tree_sitter::{Language, Node, Parser};
 
 use super::{js_shared, ExtractionResult, Extractor};
@@ -147,6 +148,42 @@ fn find_astro_scripts(root: Node, source: &str) -> Vec<ScriptSpan> {
     spans
 }
 
+/// True when the envelope root holds nothing but error nodes, i.e. the input is
+/// not an SFC at all. A localized parse error elsewhere leaves the root usable.
+fn root_is_all_error(root: Node) -> bool {
+    let mut cursor = root.walk();
+    let mut saw_child = false;
+    for child in root.children(&mut cursor) {
+        saw_child = true;
+        if !child.is_error() {
+            return false;
+        }
+    }
+    saw_child
+}
+
+/// Component name for an SFC file: the file stem, PascalCased when it is
+/// kebab- or snake-cased (`login-form.vue` → `LoginForm`), else verbatim.
+fn component_name(file_path: &str) -> String {
+    let file_name = file_path.rsplit(['/', '\\']).next().unwrap_or(file_path);
+    let stem = file_name
+        .rsplit_once('.')
+        .map_or(file_name, |(before, _)| before);
+    if !stem.contains(['-', '_']) {
+        return stem.to_string();
+    }
+    stem.split(['-', '_'])
+        .filter(|seg| !seg.is_empty())
+        .map(|seg| {
+            let mut chars = seg.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
 /// Parses the envelope, locates script regions, delegates per region to JS/TS,
 /// and remaps offsets. Owns its parsers/queries so they're built once and
 /// reused across files (the [`Extractor`] trait takes `&mut self` for this).
@@ -243,6 +280,25 @@ impl SfcExtractor {
 
             out.symbols.append(&mut sub.symbols);
             out.edges.append(&mut sub.edges);
+        }
+
+        // One synthetic whole-file symbol per SFC, so `import X from './X.vue'`
+        // and `<X/>` usage have a resolvable target named after the file. Skipped
+        // for an all-error envelope (a non-SFC file; a localized template typo
+        // still yields one) and for a separator-only stem, which names nothing.
+        let name = component_name(file_path);
+        if !source.is_empty() && !name.is_empty() && !root_is_all_error(tree.root_node()) {
+            let end_line = source.lines().count().max(1) as u32;
+            out.symbols.push(Symbol::new(
+                name,
+                SymbolKind::Component,
+                file_path,
+                1,
+                end_line,
+                0,
+                source.len() as u32,
+                None,
+            ));
         }
         Ok(out)
     }
@@ -468,6 +524,71 @@ mod tests {
         // No lang attribute → JS.
         assert!(!start_tag_is_ts("<script setup>"));
         assert!(!start_tag_is_ts("<script lang=\"js\">"));
+    }
+
+    fn component_of(result: &ExtractionResult) -> &cartog_core::Symbol {
+        result
+            .symbols
+            .iter()
+            .find(|s| s.kind == SymbolKind::Component)
+            .expect("component symbol")
+    }
+
+    #[test]
+    fn sfc_emits_whole_file_component_symbol() {
+        let vue =
+            "<template><p>hi</p></template>\n<script setup>\nfunction greet() {}\n</script>\n";
+        let result = VueExtractor::new()
+            .extract(vue, "src/LoginForm.vue")
+            .unwrap();
+        let c = component_of(&result);
+        assert_eq!(c.name, "LoginForm");
+        assert_eq!(c.start_byte, 0);
+        assert_eq!(c.end_byte, vue.len() as u32);
+        assert_eq!(c.start_line, 1);
+        assert_eq!(c.end_line, vue.lines().count() as u32);
+        assert_eq!(c.parent_id, None);
+
+        let svelte = "<script>\nlet x = 1;\n</script>\n<p>x</p>\n";
+        let result = SvelteExtractor::new()
+            .extract(svelte, "ui/Badge.svelte")
+            .unwrap();
+        assert_eq!(component_of(&result).name, "Badge");
+
+        let astro = "---\nconst a = 1;\n---\n<div/>\n";
+        let result = AstroExtractor::new()
+            .extract(astro, "pages/Home.astro")
+            .unwrap();
+        let c = component_of(&result);
+        assert_eq!(c.name, "Home");
+        assert_eq!(c.end_byte, astro.len() as u32);
+    }
+
+    #[test]
+    fn empty_source_yields_no_component_symbol() {
+        for ext in [
+            &mut VueExtractor::new() as &mut dyn Extractor,
+            &mut SvelteExtractor::new(),
+            &mut AstroExtractor::new(),
+        ] {
+            assert!(ext.extract("", "Empty.vue").unwrap().symbols.is_empty());
+        }
+    }
+
+    #[test]
+    fn component_name_normalizes_kebab_and_underscore_stems() {
+        assert_eq!(component_name("src/login-form.vue"), "LoginForm");
+        assert_eq!(component_name("user_badge.svelte"), "UserBadge");
+        assert_eq!(component_name("App.vue"), "App");
+        assert_eq!(component_name("myWidget.vue"), "myWidget");
+    }
+
+    #[test]
+    fn template_only_sfc_still_emits_component_symbol() {
+        let src = "<template><p>no script here</p></template>\n";
+        let result = VueExtractor::new().extract(src, "Static.vue").unwrap();
+        assert_eq!(result.symbols.len(), 1);
+        assert_eq!(component_of(&result).name, "Static");
     }
 
     #[test]

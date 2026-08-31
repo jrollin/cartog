@@ -82,6 +82,7 @@ impl Database {
                        WHEN 'method'   THEN 0
                        WHEN 'class'    THEN 0
                        WHEN 'macro'    THEN 0
+                       WHEN 'component' THEN 0
                        WHEN 'variable' THEN 3
                        WHEN 'import'   THEN 6
                        ELSE                 3
@@ -97,6 +98,7 @@ impl Database {
                         WHEN 'function' THEN 0
                         WHEN 'method'   THEN 1
                         WHEN 'class'    THEN 2
+                        WHEN 'component' THEN 2
                         ELSE                 3
                       END,
                       file_path, start_line

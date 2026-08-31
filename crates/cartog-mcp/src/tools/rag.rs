@@ -49,7 +49,7 @@ impl CartogServer {
                 Some(s) => {
                     let kind = s.parse::<cartog_core::SymbolKind>().map_err(|_| {
                         mcp_err(
-                            "invalid symbol kind. Valid: function, class, method, variable, import, interface, enum, type-alias, trait, module, document, all",
+                            "invalid symbol kind. Valid: function, class, method, variable, import, interface, enum, enum_member, type_alias, trait, module, document, macro, component, all",
                         )
                     })?;
                     rag::search::KindFilter::Exact(kind)

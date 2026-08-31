@@ -4,6 +4,7 @@
     "description": "What's in src/components/UserBadge.svelte?",
     "query": "outline src/components/UserBadge.svelte",
     "expected": [
+      { "name": "UserBadge", "kind": "component" },
       { "name": "AuthService", "kind": "import" },
       { "name": "token", "kind": "variable" },
       { "name": "auth", "kind": "variable" },

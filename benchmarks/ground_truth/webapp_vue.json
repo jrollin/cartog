@@ -4,6 +4,7 @@
     "description": "What's in src/components/LoginForm.vue?",
     "query": "outline src/components/LoginForm.vue",
     "expected": [
+      { "name": "LoginForm", "kind": "component" },
       { "name": "ref", "kind": "import" },
       { "name": "AuthService", "kind": "import" },
       { "name": "name", "kind": "variable" },

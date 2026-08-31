@@ -187,11 +187,13 @@ pub enum SymbolKind {
     Document,
     /// A preprocessor or macro definition (C/C++ `#define`, Rust `macro_rules!`).
     Macro,
+    /// A Vue/Svelte/Astro single-file component: one per SFC file, spanning the file.
+    Component,
 }
 
 /// Every [`SymbolKind`] variant. Kept complete by the wildcard-free match in
 /// `SymbolKind::is_listed`, so adding a variant fails to compile until it is listed.
-pub const ALL_SYMBOL_KINDS: [SymbolKind; 13] = [
+pub const ALL_SYMBOL_KINDS: [SymbolKind; 14] = [
     SymbolKind::Function,
     SymbolKind::Class,
     SymbolKind::Method,
@@ -205,6 +207,7 @@ pub const ALL_SYMBOL_KINDS: [SymbolKind; 13] = [
     SymbolKind::Module,
     SymbolKind::Document,
     SymbolKind::Macro,
+    SymbolKind::Component,
 ];
 
 impl SymbolKind {
@@ -228,6 +231,7 @@ impl SymbolKind {
             Self::Module => listed(Self::Module),
             Self::Document => listed(Self::Document),
             Self::Macro => listed(Self::Macro),
+            Self::Component => listed(Self::Component),
         }
     }
 
@@ -247,6 +251,7 @@ impl SymbolKind {
             Self::Module => "module",
             Self::Document => "document",
             Self::Macro => "macro",
+            Self::Component => "component",
         }
     }
 }
@@ -269,6 +274,7 @@ impl std::str::FromStr for SymbolKind {
             "module" => Ok(Self::Module),
             "document" => Ok(Self::Document),
             "macro" => Ok(Self::Macro),
+            "component" => Ok(Self::Component),
             _ => Err(anyhow::anyhow!("unknown symbol kind: '{s}'")),
         }
     }
@@ -638,7 +644,7 @@ mod tests {
     use proptest::prelude::*;
 
     /// Every [`SymbolKind`] variant, shared with the rest of the workspace.
-    const ALL_KINDS: [SymbolKind; 13] = ALL_SYMBOL_KINDS;
+    const ALL_KINDS: [SymbolKind; 14] = ALL_SYMBOL_KINDS;
 
     /// Exercises the wildcard-free guard that keeps [`ALL_SYMBOL_KINDS`] complete.
     #[test]

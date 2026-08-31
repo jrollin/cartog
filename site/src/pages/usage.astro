@@ -562,7 +562,7 @@ cartog rag search "deployment architecture" --kind document</pre>
         """Verify authentication token and attach user context."""
         validate_request(request)</pre>
         <p>Combines keyword (BM25/FTS5) and vector similarity, merged via RRF, then re-ranked by a cross-encoder. By default, returns code only; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
-        <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>enum-member</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>, <code>macro</code>, <code>all</code>.</p>
+        <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>enum-member</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>, <code>macro</code>, <code>component</code>, <code>all</code>.</p>
 
         <!-- ── Integration ───────────────────────── -->
 
@@ -884,7 +884,7 @@ function  validate_login     validators/user.py:41
 function  validate_email     validators/common.py:15
 method    _validate_payment  services/payment/processor.py:122
 document  Validate           README.md:8</pre>
-        <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>enum-member</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>, <code>macro</code>.</p>
+        <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>enum-member</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>, <code>macro</code>, <code>component</code>.</p>
 
         <h2 id="cmd-outline"><code>cartog outline &lt;file&gt;</code></h2>
         <p>Show all symbols in a file with types, signatures, and line ranges. Use this instead of reading a file when you need structure.</p>
