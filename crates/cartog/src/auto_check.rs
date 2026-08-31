@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+use crate::semver::{compare_stable_versions, parse_release_tag};
 use crate::state::State;
 use crate::time_fmt::{parse_rfc3339_secs, rfc3339_now};
 
@@ -261,41 +262,6 @@ fn fetch_latest_tag(url: &str) -> Result<String, CheckOnceError> {
         .map_err(|e| CheckOnceError::Network(e.to_string()))?;
     parse_release_tag(&body)
         .ok_or_else(|| CheckOnceError::Parse("no stable release tag in response".to_string()))
-}
-
-/// Pull `tag_name` from the JSON payload. Strips a leading `v`, rejects
-/// any prerelease suffix.
-fn parse_release_tag(json: &str) -> Option<String> {
-    let parsed: serde_json::Value = serde_json::from_str(json).ok()?;
-    let tag = parsed.get("tag_name")?.as_str()?;
-    let trimmed = tag.strip_prefix('v').unwrap_or(tag);
-    if trimmed.contains('-') {
-        return None;
-    }
-    if !is_stable_semver(trimmed) {
-        return None;
-    }
-    Some(trimmed.to_string())
-}
-
-fn is_stable_semver(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('.').collect();
-    parts.len() == 3
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-}
-
-fn compare_stable_versions(a: &str, b: &str) -> std::cmp::Ordering {
-    let parse = |s: &str| -> [u64; 3] {
-        let mut parts = s.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
-        [
-            parts.next().unwrap_or(0),
-            parts.next().unwrap_or(0),
-            parts.next().unwrap_or(0),
-        ]
-    };
-    parse(a).cmp(&parse(b))
 }
 
 #[cfg(test)]
