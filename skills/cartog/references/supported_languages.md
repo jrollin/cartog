@@ -41,7 +41,7 @@
 - Functions, structs, enums, traits, type aliases, constants/statics
 - Use declarations (use statements)
 - Function calls, macro invocations (tracked as `name!`)
-- Trait implementations (impl Trait for Type -> inherits edge)
+- Trait implementations (impl Trait for Type → inherits edge)
 - Type references in function signatures (parameter types, return types, generic types)
 - Async functions
 - Doc comments (///)
@@ -192,17 +192,20 @@
 - `lang="ts"` / `lang="typescript"` → TypeScript extractor; otherwise JavaScript
 - Same symbols/edges as the delegated JS/TS extractor (functions, classes, methods, variables, imports; calls, imports, inherits, type refs)
 - Byte/line offsets remapped back to the full `.vue` file
+- One whole-file `component` symbol per file, named after the file stem (`login-form.vue` → `LoginForm`), so component imports and `<X/>` usages resolve to it
 - Template markup and `<style>` blocks are not indexed
 
 ### Svelte (.svelte)
 - Symbols + edges from the `<script>` block(s), including `<script context="module">`
 - `lang="ts"` → TypeScript extractor; otherwise JavaScript
 - Same symbols/edges as the delegated JS/TS extractor
+- One whole-file `component` symbol per file, named after the file stem (`user-badge.svelte` → `UserBadge`), so component imports and `<X/>` usages resolve to it
 - Markup and `<style>` blocks are not indexed
 
 ### Astro (.astro)
 - Symbols + edges from the `---` frontmatter (always TypeScript) plus any client-side `<script>` blocks
 - Same symbols/edges as the delegated JS/TS extractor
+- One whole-file `component` symbol per file, named after the file stem (`user-badge.astro` → `UserBadge`), so component imports and `<X/>` usages resolve to it
 - HTML/template markup is not indexed
 
 ### Markdown (.md)

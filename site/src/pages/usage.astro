@@ -1299,13 +1299,13 @@ cartog --tokens 200 outline src/db.rs</pre>
             <tr><td>Dart</td><td>.dart</td><td>classes, mixins, extensions, enums, methods, functions, typedefs, imports</td><td>calls, imports, inherits, implements, type refs</td></tr>
             <tr><td>Swift</td><td>.swift</td><td>classes, structs, actors, protocols, enums, extensions, methods, functions, typealiases</td><td>calls, imports, inherits, implements, type refs</td></tr>
             <tr><td>Kotlin</td><td>.kt, .kts</td><td>classes, data/sealed classes, interfaces, enums, objects, methods, functions, typealiases</td><td>calls, imports, inherits, implements, type refs</td></tr>
-            <tr><td>Vue</td><td>.vue</td><td>&lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
-            <tr><td>Svelte</td><td>.svelte</td><td>&lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
-            <tr><td>Astro</td><td>.astro</td><td>frontmatter + &lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
+            <tr><td>Vue</td><td>.vue</td><td>whole-file component symbol + &lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
+            <tr><td>Svelte</td><td>.svelte</td><td>whole-file component symbol + &lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
+            <tr><td>Astro</td><td>.astro</td><td>whole-file component symbol + frontmatter + &lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
             <tr><td>Markdown</td><td>.md</td><td>document sections (chunked by heading)</td><td>—</td></tr>
           </tbody>
         </table>
-        <p>Vue, Svelte, and Astro index only the <code>&lt;script&gt;</code> block (Astro: the <code>---</code> frontmatter too). Template markup and component tags in the template are not extracted; the symbols and edges above — including JSX usage — refer to code inside those script/frontmatter sections.</p>
+        <p>Vue, Svelte, and Astro index the <code>&lt;script&gt;</code> block (Astro: the <code>---</code> frontmatter too), plus one whole-file <code>component</code> symbol per file named after the file stem (<code>login-form.vue</code> becomes <code>LoginForm</code>), which is what component imports and <code>&lt;X/&gt;</code> usages resolve to. Template markup and component tags in the template are not extracted; the other symbols and edges above — including JSX usage — refer to code inside those script/frontmatter sections.</p>
 
         <h2 id="performance">Performance</h2>
         <p>Indexing: <strong>69 files / 4k LOC in 95ms</strong> (Python fixture, release build).</p>
