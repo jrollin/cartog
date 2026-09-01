@@ -255,8 +255,24 @@ pub struct EmbeddingFingerprint {
 }
 
 /// Metadata keys for the embedding fingerprint.
-const EMBED_PROVIDER_KEY: &str = "embedding_provider";
-const EMBED_MODEL_KEY: &str = "embedding_model";
+///
+/// Public so out-of-crate readers naming the same rows this crate writes — a
+/// caller probing a closed DB via [`read_metadata_at`] to report on someone
+/// else's index — do it by constant instead of retyping the literal, which is
+/// how the two silently drift apart. In-crate callers use these two; see
+/// [`EMBED_DIMENSION_KEY`] for the one that is documentation-only.
+pub const EMBED_PROVIDER_KEY: &str = "embedding_provider";
+/// See [`EMBED_PROVIDER_KEY`].
+pub const EMBED_MODEL_KEY: &str = "embedding_model";
+/// See [`EMBED_PROVIDER_KEY`].
+///
+/// Unlike its two siblings this key has no in-crate callers: every writer of
+/// the `embedding_dimension` row inlines the literal in its SQL
+/// (`handle_embedding_dimension`, and `reconcile_embedding_fingerprint`, which
+/// writes it alongside the provider and model). The constant exists for
+/// out-of-crate readers, so editing its value changes nothing in this crate —
+/// which is exactly why a test pins it against the row the store writes.
+pub const EMBED_DIMENSION_KEY: &str = "embedding_dimension";
 
 /// SQL to create the sqlite-vec virtual table with the given embedding dimension.
 fn rag_vec_schema(dim: usize) -> String {

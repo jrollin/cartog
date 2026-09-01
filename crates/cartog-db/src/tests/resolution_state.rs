@@ -1109,6 +1109,50 @@ fn read_metadata_at_returns_none_when_row_absent() {
     assert_eq!(read_metadata_at(&db_path, "last_commit").unwrap(), None);
 }
 
+/// The three `EMBED_*_KEY` constants are `pub` so out-of-crate readers name
+/// the same rows this crate writes. A typo in one is invisible to every
+/// in-crate caller (they all use the constant), so pin each against the row
+/// the store actually produces — reached the way an out-of-crate reader would,
+/// via `read_metadata_at` on a closed file.
+#[test]
+fn embed_dimension_key_names_the_row_the_store_writes() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    // Database::open writes the dimension via handle_embedding_dimension,
+    // whose SQL inlines the literal rather than using the constant.
+    let _db = Database::open(&db_path, 384).unwrap();
+
+    assert_eq!(
+        read_metadata_at(&db_path, EMBED_DIMENSION_KEY).unwrap(),
+        Some("384".to_string()),
+        "EMBED_DIMENSION_KEY must match the literal handle_embedding_dimension writes"
+    );
+}
+
+#[test]
+fn embed_provider_and_model_keys_name_the_rows_the_store_writes() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    {
+        let db = Database::open(&db_path, 384).unwrap();
+        db.reconcile_embedding_fingerprint(&EmbeddingFingerprint {
+            provider: "local".to_string(),
+            model: "BAAI/bge-small-en-v1.5".to_string(),
+            dimension: 384,
+        })
+        .unwrap();
+    }
+
+    assert_eq!(
+        read_metadata_at(&db_path, EMBED_PROVIDER_KEY).unwrap(),
+        Some("local".to_string())
+    );
+    assert_eq!(
+        read_metadata_at(&db_path, EMBED_MODEL_KEY).unwrap(),
+        Some("BAAI/bge-small-en-v1.5".to_string())
+    );
+}
+
 #[test]
 fn read_metadata_at_returns_none_for_non_cartog_sqlite() {
     let dir = tempfile::TempDir::new().unwrap();
