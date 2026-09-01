@@ -21,6 +21,15 @@ pub use cartog_lsp as lsp;
 #[doc(hidden)]
 pub use cartog_process_lock as process_lock;
 
+/// The user-global cartog registry: state-directory resolution, PID-lock slot
+/// derivation, and the machine-local project registry.
+///
+/// Hidden from rustdoc: internal CLI plumbing re-exported only so integration
+/// tests can reach it without importing `cartog-registry` directly. Not a
+/// stable public API.
+#[doc(hidden)]
+pub use cartog_registry as registry;
+
 /// Predicate gating the daily background update check.
 ///
 /// Hidden from rustdoc: internal CLI plumbing exposed via the lib facade

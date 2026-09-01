@@ -33,6 +33,8 @@ cartog-process-lock  (tier 0 — no internal deps; libc/windows-sys only)
 ├── cartog-rag       (tier 2 — db + core)
 ├── cartog-lsp       (tier 2 — db + core, default feature)
 │
+├── cartog-registry  (tier 1 — process-lock only; user-global state dir + slots)
+│
 ├── cartog-watch     (tier 3 — db + indexer + rag + core + process-lock)
 ├── cartog-mcp       (tier 3 — db + indexer + rag + watch + core + process-lock)
 │
@@ -54,6 +56,7 @@ Each link goes to that crate's `README.md`, which has the detailed responsibilit
 - **[cartog-watch](../crates/cartog-watch/README.md)** — debounced file watcher (`notify-debouncer-mini`), incremental re-index, deferred RAG embedding (auto-enabled when the repo already has embeddings).
 - **[cartog-mcp](../crates/cartog-mcp/README.md)** — MCP server over stdio (`rmcp`). 16 tool handlers, single-writer election (primary + read-only attach + promotion).
 - **[cartog-process-lock](../crates/cartog-process-lock/README.md)** — cross-platform PID-file locks (`<state_dir>/{slot}.pid`). Two-line format with `is_same_process(pid, start_time)` to close the PID-reuse window. Used by `cartog serve`, `cartog watch`, and `cartog self update`.
+- **[cartog-registry](../crates/cartog-registry/README.md)** — user-global state: platform state-directory resolution (`default_state_dir`), PID-lock slot derivation (`slot_for_db`), and live-peer detection. Owns everything per-user rather than per-project. A machine-local project registry is proposed on top of it in [explanation/project-registry.md](explanation/project-registry.md).
 - **[cartog](../crates/cartog/README.md)** — binary crate: 27 top-level CLI commands via clap (including `cartog trace`/`context` for call paths and task-context bundles, `cartog push`/`pull` for S3 index sync, and `cartog self update/version/rollback/migrate-db`), config resolution, logging, tokio runtime for `cartog serve`, daily background update probe.
 - **[cartog-loom-models](../crates/cartog-loom-models/README.md)** — test-only (`publish = false`), empty unless built with `--cfg loom`. Loom harnesses that model-check the in-process concurrency of `cartog-mcp`'s single-writer promoter; complements the design-level TLA+ specs in `specs/tla/`. Run via `make loom`.
 

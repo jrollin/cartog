@@ -309,6 +309,7 @@ dependencies = [
  "cartog-mcp",
  "cartog-process-lock",
  "cartog-rag",
+ "cartog-registry",
  "cartog-watch",
  "clap",
  "clap_complete",
@@ -478,6 +479,17 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "cartog-registry"
+version = "0.33.0"
+dependencies = [
+ "cartog-process-lock",
+ "directories",
+ "serial_test",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

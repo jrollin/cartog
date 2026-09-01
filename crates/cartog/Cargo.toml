@@ -23,6 +23,7 @@ cartog-lsp = { workspace = true, optional = true }
 cartog-watch = { workspace = true }
 cartog-mcp = { workspace = true }
 cartog-process-lock = { workspace = true }
+cartog-registry = { workspace = true }
 anyhow = { workspace = true }
 ctrlc = { workspace = true }
 clap = { workspace = true }

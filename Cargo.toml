@@ -20,6 +20,7 @@ cartog-lsp = { path = "crates/cartog-lsp", version = "0.33.0" }
 cartog-watch = { path = "crates/cartog-watch", version = "0.33.0" }
 cartog-mcp = { path = "crates/cartog-mcp", version = "0.33.0" }
 cartog-process-lock = { path = "crates/cartog-process-lock", version = "0.33.0" }
+cartog-registry = { path = "crates/cartog-registry", version = "0.33.0" }
 
 # Shared external dependencies
 anyhow = "1"

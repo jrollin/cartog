@@ -2,7 +2,7 @@
 
 ## Project
 
-cartog — code graph indexer for LLM coding agents. Cargo workspace (10 published crates + `cartog-loom-models`, a test-only model-checking crate), tree-sitter parsing, SQLite storage.
+cartog — code graph indexer for LLM coding agents. Cargo workspace (11 published crates + `cartog-loom-models`, a test-only model-checking crate), tree-sitter parsing, SQLite storage.
 
 See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/tech.md) for architecture decisions, [docs/structure.md](docs/structure.md) for module layout, [docs/usage.md](docs/usage.md) for CLI commands and MCP/skill setup.
 
@@ -11,7 +11,7 @@ See [docs/product.md](docs/product.md) for product context, [docs/tech.md](docs/
 ```bash
 cargo build              # debug build
 cargo build --release    # release build
-cargo test --workspace   # run all tests (~600 tests across the 10 published crates)
+cargo test --workspace   # run all tests (~600 tests across the 11 published crates)
 cargo fmt --check        # check formatting
 cargo clippy --all-targets -- -D warnings  # lint
 ```
@@ -95,7 +95,8 @@ crates/cartog/         (binary — CLI dispatch, config, self-update)
 ├── cartog-lsp         (LSP-based edge resolution — default feature)
 ├── cartog-watch       (debounced re-index + deferred RAG)
 ├── cartog-mcp         (MCP server over stdio, 16 tools)
-└── cartog-process-lock (PID-file locks for serve/watch peers)
+├── cartog-process-lock (PID-file locks for serve/watch peers)
+└── cartog-registry    (user-global state dir, PID-lock slots, live-peer detection)
 
 cartog-loom-models     (test-only, not published — Loom model-checking
                         harnesses for the in-process concurrency in

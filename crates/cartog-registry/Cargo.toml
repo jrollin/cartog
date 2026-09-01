@@ -1,0 +1,26 @@
+[package]
+name = "cartog-registry"
+description = "User-global cartog state: state-directory resolution, PID-lock slot derivation, and live-peer detection."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["code-analysis", "registry", "state", "llm", "code-intelligence"]
+categories = ["development-tools"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+cartog-process-lock = { workspace = true }
+directories = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

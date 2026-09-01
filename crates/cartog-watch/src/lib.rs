@@ -68,7 +68,7 @@ pub struct WatchConfig {
     /// is also `None` (untracked mode used by tests).
     ///
     /// In the cartog binary the slot is derived via
-    /// `cartog::state::slot_for_db("watch", db_path)`. Library
+    /// `cartog_registry::slot_for_db("watch", db_path)`. Library
     /// embedders should follow the same shape: `<prefix>-<16 hex chars>`
     /// where the hex is a SHA-256 prefix of the canonicalized DB path.
     pub pid_lock_slot: Option<String>,
@@ -153,7 +153,7 @@ impl WatchConfig {
 /// Legacy fallback slot used in untracked mode (`pid_lock_dir = None`,
 /// `pid_lock_slot = None`). When `pid_lock_dir` is set, callers must
 /// provide a DB-scoped slot via
-/// `cartog::state::slot_for_db("watch", db_path)` — see
+/// `cartog_registry::slot_for_db("watch", db_path)` — see
 /// [`WatchConfig::pid_lock_slot`].
 pub const WATCH_LOCK_SLOT: &str = "watch";
 
@@ -275,7 +275,7 @@ fn validate_pid_lock_config(config: &WatchConfig) -> Result<()> {
         (true, false) => anyhow::bail!(
             "WatchConfig::pid_lock_dir is set but pid_lock_slot is None; \
              refusing to claim the global watch slot — pass a DB-scoped slot \
-             (e.g. `cartog::state::slot_for_db(\"watch\", db_path)`)"
+             (e.g. `cartog_registry::slot_for_db(\"watch\", db_path)`)"
         ),
         (false, true) => anyhow::bail!(
             "WatchConfig::pid_lock_slot is set but pid_lock_dir is None; \

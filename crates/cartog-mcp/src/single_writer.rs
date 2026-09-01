@@ -6,7 +6,7 @@
 use super::*;
 
 /// Legacy un-scoped serve PID slot (untracked mode). Scoped peers use
-/// `serve-<hash>` via `cartog::state::slot_for_db`; see [`ServerOptions::pid_lock_slot`].
+/// `serve-<hash>` via `cartog_registry::slot_for_db`; see [`ServerOptions::pid_lock_slot`].
 pub const SERVE_LOCK_SLOT: &str = "serve";
 
 /// Convert a serve-family slot (legacy `"serve"` or DB-scoped
@@ -35,7 +35,7 @@ pub(crate) fn serve_to_watch_slot(serve_slot: &str) -> anyhow::Result<String> {
     Err(anyhow::anyhow!(
         "ServerOptions::pid_lock_slot {serve_slot:?} is not a serve-family slot; \
          expected `serve` or `serve-<hex>`. Library embedders should derive the slot \
-         via `cartog::state::slot_for_db(\"serve\", db_path)` so the watcher's slot \
+         via `cartog_registry::slot_for_db(\"serve\", db_path)` so the watcher's slot \
          can be scoped to the same DB."
     ))
 }
@@ -59,7 +59,7 @@ pub struct ServerOptions {
     /// is also `None` (untracked mode used by tests).
     ///
     /// In the cartog binary the slot is derived via
-    /// `cartog::state::slot_for_db("serve", db_path)`. Library
+    /// `cartog_registry::slot_for_db("serve", db_path)`. Library
     /// embedders should follow the same shape: `<prefix>-<16 hex chars>`
     /// where the hex is a SHA-256 prefix of the canonicalized DB path.
     pub pid_lock_slot: Option<String>,
@@ -127,12 +127,12 @@ pub fn acquire_serve_lock(opts: &ServerOptions) -> anyhow::Result<ServeLockOutco
     // embedder claim `serve.pid` while a CLI peer on the same DB derives
     // `serve-<hash>.pid`, producing two primaries on the same DB. Require
     // the caller to opt into a slot explicitly (use
-    // `cartog::state::slot_for_db("serve", db_path)` from the bin crate).
+    // `cartog_registry::slot_for_db("serve", db_path)`).
     let slot: &str = opts.pid_lock_slot.as_deref().ok_or_else(|| {
         anyhow::anyhow!(
             "ServerOptions::pid_lock_dir is set but pid_lock_slot is None; \
              refusing to claim the global serve slot — pass a DB-scoped slot \
-             (e.g. `cartog::state::slot_for_db(\"serve\", db_path)`)"
+             (e.g. `cartog_registry::slot_for_db(\"serve\", db_path)`)"
         )
     })?;
     if !single_writer_election_enabled() {
