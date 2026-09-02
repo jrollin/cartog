@@ -84,7 +84,9 @@ are opened (default 10, clamped to 1..=50), most-symbols-first, and the response
 reports `elided_by_cap` so a partial answer never reads as complete. A project
 that cannot be read is listed in `unreadable` **with the reason** rather than
 silently dropped — a schema drift, a corrupt file and a permission error need
-different fixes. `under` accepts `~`.
+different fixes. When *no* candidate could be read, the text says the search
+could not run rather than reporting a no-match, which an agent would otherwise
+take as "the symbol exists nowhere else". `under` accepts `~`.
 
 Like `cartog_list_projects`, it is gated by **neither** `refuse_if_degraded` nor
 `refuse_if_read_only`: it never touches *this* project's index, and a server with

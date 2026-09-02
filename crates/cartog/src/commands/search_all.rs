@@ -310,23 +310,51 @@ fn describe(filter: &FanoutFilter) -> String {
 }
 
 fn render(r: &FederatedResults, query: &str) -> String {
-    if r.projects.is_empty() {
-        return format!(
-            "No symbols matching '{query}' in {} other project{}.\n",
-            r.queried,
-            if r.queried == 1 { "" } else { "s" },
-        );
-    }
+    // Builds the header, then *falls through* to the unreadable/elided
+    // sections rather than returning. Returning early here reported "no
+    // symbols matched" when in truth no database had been read successfully —
+    // a false negative that reads as "the symbol is not there".
+    let mut out = if r.projects.is_empty() {
+        let searched = r.queried.saturating_sub(r.unreadable.len());
+        if searched == 0 && r.queried > 0 {
+            format!(
+                "No project could be searched for '{query}' — none of the {} candidate{} \
+                 could be read.\n",
+                r.queried,
+                if r.queried == 1 { "" } else { "s" },
+            )
+        } else {
+            format!(
+                "No symbols matching '{query}' in {searched} other project{}.\n",
+                if searched == 1 { "" } else { "s" },
+            )
+        }
+    } else {
+        header(r, query)
+    };
 
-    let mut out = format!(
+    if !r.projects.is_empty() {
+        out.push_str(&hits(r));
+    }
+    out.push_str(&diagnostics(r));
+    out
+}
+
+/// The "N matches across M projects" line.
+fn header(r: &FederatedResults, query: &str) -> String {
+    format!(
         "{} match{} for '{query}' across {} of {} project{}:\n",
         r.total_matches,
         if r.total_matches == 1 { "" } else { "es" },
         r.projects.len(),
         r.queried,
         if r.queried == 1 { "" } else { "s" },
-    );
+    )
+}
 
+/// One block per project that returned matches.
+fn hits(r: &FederatedResults) -> String {
+    let mut out = String::new();
     for p in &r.projects {
         out.push('\n');
         out.push_str(&format!("{} ({})\n", p.name, p.root));
@@ -342,7 +370,15 @@ fn render(r: &FederatedResults, query: &str) -> String {
         // The actionable field: this is what the reader passes to --db next.
         out.push_str(&format!("  --db {}\n", p.db_path));
     }
+    out
+}
 
+/// Why an answer may be partial: unreadable projects and the project cap.
+///
+/// Appended whether or not anything matched — a search that read nothing, or
+/// stopped at the cap, must say so even when the match list is empty.
+fn diagnostics(r: &FederatedResults) -> String {
+    let mut out = String::new();
     if !r.unreadable.is_empty() {
         out.push_str(&format!(
             "\n{} project{} could not be read:\n",
@@ -580,6 +616,86 @@ mod tests {
             kept.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
             vec!["in"],
             "a tilde in --under must expand to $HOME"
+        );
+    }
+
+    fn results(
+        projects: Vec<ProjectHits>,
+        unreadable: Vec<UnreadableJson>,
+        queried: usize,
+        elided_by_cap: usize,
+    ) -> FederatedResults {
+        let total_matches = projects.iter().map(|p| p.symbols.len()).sum();
+        FederatedResults {
+            projects,
+            unreadable,
+            queried,
+            elided_by_cap,
+            total_matches,
+        }
+    }
+
+    fn unreadable(name: &str, reason: &str) -> UnreadableJson {
+        UnreadableJson {
+            name: name.to_string(),
+            reason: reason.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_search_where_every_candidate_was_unreadable_does_not_claim_no_match() {
+        // "No symbols matching X" implies the projects were searched. When
+        // none could be read, that is a false negative: the reader concludes
+        // the symbol is not there.
+        let r = results(
+            Vec::new(),
+            vec![unreadable(
+                "svc-old",
+                "schema_version mismatch: expects 8, DB has 3",
+            )],
+            1,
+            0,
+        );
+
+        let out = render(&r, "CreateShipment");
+
+        assert!(
+            out.contains("could not be searched") || out.contains("could not be read"),
+            "must say the search could not run, got: {out}"
+        );
+        assert!(
+            !out.contains("No symbols matching"),
+            "must not claim a genuine no-match, got: {out}"
+        );
+        assert!(
+            out.contains("svc-old") && out.contains("schema_version"),
+            "the reason must survive an empty match list, got: {out}"
+        );
+    }
+
+    #[test]
+    fn an_empty_result_still_reports_projects_elided_by_the_cap() {
+        // A capped search that matched nothing must not read as complete.
+        let r = results(Vec::new(), Vec::new(), 2, 7);
+
+        let out = render(&r, "Widget");
+
+        assert!(
+            out.contains('7') && out.contains("--max-projects"),
+            "the elision notice must survive an empty match list, got: {out}"
+        );
+    }
+
+    #[test]
+    fn a_readable_project_with_no_hit_still_reports_a_genuine_no_match() {
+        // The complement: don't over-correct into never saying "no match".
+        let r = results(Vec::new(), Vec::new(), 3, 0);
+
+        let out = render(&r, "Nope");
+
+        assert!(
+            out.contains("No symbols matching"),
+            "a real no-match must still read as one, got: {out}"
         );
     }
 

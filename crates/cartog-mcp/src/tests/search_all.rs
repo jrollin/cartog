@@ -183,3 +183,70 @@ fn under_expands_a_leading_tilde() {
         "a tilde in `under` must expand to $HOME"
     );
 }
+
+// ── the renderer must not turn an unsearchable fan-out into "no match" ──
+
+use crate::tools::search::render_search_all;
+use crate::types::{ProjectMatches, SearchAllResult};
+
+fn result(
+    projects: Vec<ProjectMatches>,
+    unreadable: Vec<String>,
+    queried: usize,
+    elided_by_cap: usize,
+) -> SearchAllResult {
+    SearchAllResult {
+        registry_available: true,
+        projects,
+        queried,
+        unreadable,
+        elided_by_cap,
+    }
+}
+
+#[test]
+fn a_search_where_every_candidate_was_unreadable_does_not_claim_no_match() {
+    // "No symbols matching X" implies the projects were searched. When none
+    // could be read, that is a false negative — an agent would conclude the
+    // symbol does not exist in any other project.
+    let r = result(
+        Vec::new(),
+        vec!["svc-old: schema_version mismatch: expects 8, DB has 3".to_string()],
+        1,
+        0,
+    );
+
+    let out = render_search_all(&r, "CreateShipment");
+
+    assert!(
+        !out.contains("No symbols matching"),
+        "must not claim a genuine no-match, got: {out}"
+    );
+    assert!(
+        out.contains("svc-old") && out.contains("schema_version"),
+        "the reason must survive an empty match list, got: {out}"
+    );
+}
+
+#[test]
+fn an_empty_result_still_reports_projects_elided_by_the_cap() {
+    let r = result(Vec::new(), Vec::new(), 2, 7);
+
+    let out = render_search_all(&r, "Widget");
+
+    assert!(
+        out.contains('7') && out.contains("max_projects"),
+        "the elision notice must survive an empty match list, got: {out}"
+    );
+}
+
+#[test]
+fn a_readable_project_with_no_hit_still_reports_a_genuine_no_match() {
+    // The complement: don't over-correct into never saying "no match".
+    let r = result(Vec::new(), Vec::new(), 3, 0);
+
+    assert!(
+        render_search_all(&r, "Nope").contains("No symbols matching"),
+        "a real no-match must still read as one"
+    );
+}

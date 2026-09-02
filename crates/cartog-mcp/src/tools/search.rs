@@ -471,20 +471,33 @@ fn canonical_path(p: &Path) -> std::path::PathBuf {
     expanded.canonicalize().unwrap_or(expanded)
 }
 
-fn render_search_all(result: &SearchAllResult, query: &str) -> String {
-    if result.projects.is_empty() {
-        return format!(
-            "No symbols matching '{query}' in {} other project(s).\n",
-            result.queried
-        );
-    }
-    let total: usize = result.projects.iter().map(|p| p.symbols.len()).sum();
-    let mut out = format!(
-        "{total} match(es) for '{query}' across {} of {} project(s). Ranked within each \
-         project; cross-project relevance is not comparable.\n",
-        result.projects.len(),
-        result.queried,
-    );
+/// `pub(crate)` for `tests/search_all.rs`, which drives this pure renderer
+/// directly; no production caller outside this module.
+pub(crate) fn render_search_all(result: &SearchAllResult, query: &str) -> String {
+    // Builds the header, then *falls through* to the unreadable/elided
+    // sections rather than returning. Returning early here reported "no
+    // symbols matched" when in truth no database had been read successfully —
+    // a false negative that reads as "the symbol is not there".
+    let mut out = if result.projects.is_empty() {
+        let searched = result.queried.saturating_sub(result.unreadable.len());
+        if searched == 0 && result.queried > 0 {
+            format!(
+                "No project could be searched for '{query}' — none of the {} candidate(s) \
+                 could be read.\n",
+                result.queried,
+            )
+        } else {
+            format!("No symbols matching '{query}' in {searched} other project(s).\n")
+        }
+    } else {
+        let total: usize = result.projects.iter().map(|p| p.symbols.len()).sum();
+        format!(
+            "{total} match(es) for '{query}' across {} of {} project(s). Ranked within each \
+             project; cross-project relevance is not comparable.\n",
+            result.projects.len(),
+            result.queried,
+        )
+    };
     for p in &result.projects {
         out.push_str(&format!("\n{} ({})\n", p.name, p.root));
         if let Some(d) = &p.description {

@@ -95,7 +95,9 @@ on its own, and results stay grouped under the project they came from. So:
 how many databases are opened, most-symbols-first; when the cap elides
 candidates the output says so. A project that cannot be read is listed with the
 **reason** (a schema drift, a corrupt file and a permission error need different
-fixes) rather than silently skipped. `--under` accepts `~`, and composes with
+fixes) rather than silently skipped — including when *nothing* could be read, in
+which case the output says the search could not run rather than reporting a
+no-match that would read as "the symbol is not there". `--under` accepts `~`, and composes with
 `--lang` as an AND.
 
 `--file` is **not** combinable with `--all`: a path in one project means nothing
