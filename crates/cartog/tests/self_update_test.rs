@@ -1277,6 +1277,24 @@ fn apply_pending_does_not_wait_on_a_foreign_peer_without_the_test_seam() {
     )
     .unwrap();
 
+    // Warm-up spawn, timing discarded. This is often the first execution of the
+    // binary in a test run, so the first spawn pays cold-start (page-cache and
+    // dyld) cost: measured 1634-1926 ms against 260-272 ms for an identical
+    // second spawn, a ~6x difference. That cost is unrelated to the peer-wait
+    // budget under test but lands in the same measurement, and under
+    // full-suite load it stretched to 4067 ms — which is what made the previous
+    // 5 s ceiling flake roughly one run in two.
+    //
+    // Discarding one spawn removes the confound rather than widening the bound
+    // to accommodate it. Its exit code is not asserted here: the measured run
+    // below makes the identical call and asserts it.
+    let _warm_up = run_self_update_mode(
+        "--apply-pending",
+        dir.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+
     let start = std::time::Instant::now();
     let out = run_self_update_mode(
         "--apply-pending",
@@ -1292,16 +1310,27 @@ fn apply_pending_does_not_wait_on_a_foreign_peer_without_the_test_seam() {
         "live foreign peer must exit 6; stderr={}",
         String::from_utf8_lossy(&out.stderr),
     );
-    // Half of APPLY_PEER_WAIT (10 s, `pub(crate)` in commands::self_cmd::update
-    // so not nameable here). A correct run waits APPLY_FOREIGN_PEER_WAIT (ZERO)
-    // and spends its time on process startup plus one connection-refused round
-    // trip — measured ~1.9 s, so the bound sits ~3 s above a correct run and 5 s
-    // below the regression it guards.
-    let bound = std::time::Duration::from_secs(5);
+    // Bounded at half the tier it separates.
+    //
+    // A foreign peer must select APPLY_FOREIGN_PEER_WAIT (ZERO). The nearest
+    // regression is the next tier up, APPLY_OWN_PEER_GRACE at 2 s — not the
+    // full 10 s APPLY_PEER_WAIT, because a foreign peer that stops being
+    // recognised falls to the own-peer grace first, and a bound placed to catch
+    // only 10 s would let that land silently (the previous 5 s bound did). All
+    // three constants are `pub(crate)` in commands::self_cmd::update, so none
+    // can be named from an integration test.
+    //
+    // Measured on a warm spawn, 4+ runs each:
+    //   correct   (0 s budget) -> 260-272 ms
+    //   regressed (2 s tier)   -> ~2075 ms
+    // 1 s is half the 2 s tier: ~3.7x above the correct cluster and ~2x below
+    // the regressed one, so neither load jitter nor the regression sits near
+    // the line.
+    let bound = std::time::Duration::from_secs(1);
     assert!(
         elapsed < bound,
-        "took {elapsed:?} (bound {bound:?}); an unclearable foreign lock must not \
-         wait out the full 10s peer budget"
+        "took {elapsed:?} (bound {bound:?}, half the 2 s own-peer grace); an unclearable \
+         foreign lock must wait out no peer budget at all"
     );
     let text = std::fs::read_to_string(&state_path).unwrap();
     assert!(
