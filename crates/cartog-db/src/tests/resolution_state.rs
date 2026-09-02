@@ -1176,6 +1176,21 @@ fn read_database_facts_at_reads_the_whole_fingerprint_in_one_call() {
 }
 
 #[test]
+fn schema_version_key_names_the_row_the_store_writes() {
+    // `SCHEMA_VERSION_KEY` has no in-crate callers — every writer inlines the
+    // literal in its SQL — so a typo in the constant is invisible except here.
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let _db = Database::open(&db_path, 384).unwrap();
+
+    assert_eq!(
+        read_metadata_at(&db_path, SCHEMA_VERSION_KEY).unwrap(),
+        Some(CURRENT_SCHEMA_VERSION.to_string()),
+        "SCHEMA_VERSION_KEY must match the literal the store writes"
+    );
+}
+
+#[test]
 fn read_database_facts_at_reports_no_schema_version_for_a_foreign_file() {
     // `read_schema_version_at` returns Ok(0) for a non-cartog file; storing 0
     // would render as a real version and misleadingly flag `stale-schema`.

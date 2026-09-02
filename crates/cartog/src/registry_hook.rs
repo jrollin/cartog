@@ -37,9 +37,19 @@ pub fn record_indexed(db: &Database, db_path: &Path, root: &Path) {
 /// otherwise would make `projects list` report a stale graph as freshly
 /// indexed. Reads only the embedding count, never `stats()`.
 pub fn record_embedded(db: &Database, db_path: &Path, root: &Path) {
-    let mut facts = ProjectFacts::identity_only(db_path, root);
-    facts.embedding_count = db.embedding_count().ok();
-    read_fingerprint_into(&mut facts, db_path);
+    // Records the graph counts too, not just `embedding_count`.
+    //
+    // `cartog rag index` runs a full `index_directory` pass before embedding,
+    // so on a project whose only ever cartog invocation is `rag index` this is
+    // the write that creates the row. Supplying `embedding_count` alone left
+    // `symbol_count`/`languages` NULL — and because the fingerprint then
+    // matched, every later identity-only write took the skip path and never
+    // filled them in. The project rendered as `? symbols` with no languages
+    // forever, which in phase 1 (routing keys on name + languages + size) made
+    // it unroutable.
+    //
+    // Still carries no `last_indexed`: see the doc comment above.
+    let facts = facts_with_counts(db, db_path, root);
     cartog_registry::record_project(&facts);
 }
 

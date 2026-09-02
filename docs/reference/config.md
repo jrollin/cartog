@@ -449,7 +449,7 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 | `CARTOG_EMBED_CONCURRENCY` | `4` | In-flight HTTP embed requests for ollama/openai (clamped `1..=16`). Overrides `[embedding] max_concurrent_requests`. Ignored for local. |
 | `CARTOG_WATCH_RAG` | unset | Force watcher auto-embed; overrides `[embedding] auto_embed` and `--rag`:<br>`1` = force on<br>`0` = force off<br>unset = auto-detect from the DB |
 | `CARTOG_SINGLE_WRITER` | `1` | `0` disables MCP single-writer election (every `cartog serve` opens read-write). |
-| `CARTOG_REGISTRY` | `<state_dir>/projects.sqlite` | Path to the machine-local project registry read by `cartog projects`. Must be **absolute** — a relative value is refused (it would give each directory its own registry). Set to an **empty** value to disable the registry entirely: both reads and writes become no-ops. |
+| `CARTOG_REGISTRY` | `<state_dir>/projects.sqlite` | Path to the machine-local project registry read by `cartog projects`. Must be **absolute** — a relative value is refused (it would give each directory its own registry). Set to an **empty** value to disable the registry entirely: both reads and writes become no-ops. `cartog doctor` prints the resolved path, or names which of the three causes disabled it. |
 | `CARTOG_MCP_MAX_BYTES` | `65536` | Max bytes per MCP tool response before truncation. |
 | `CARTOG_MCP_COMPACT` | `1` (on) | MCP tools strip heavy fields by default (symbol cache hashes + docstrings; `cartog_rag_search`/`cartog_trace` bodies bounded to a ~500-byte snippet; `cartog_context` keeps budgeted bodies). Set `0`/`false`/`no`/`off` to return full bodies. |
 | `CARTOG_NO_UPDATE_CHECK` | unset | Set to skip the background self-update check. |

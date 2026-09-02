@@ -274,6 +274,14 @@ pub const EMBED_MODEL_KEY: &str = "embedding_model";
 /// which is exactly why a test pins it against the row the store writes.
 pub const EMBED_DIMENSION_KEY: &str = "embedding_dimension";
 
+/// Metadata key holding the graph-schema version.
+///
+/// Public for the same reason as the `EMBED_*` keys: an out-of-crate reader
+/// probing a closed database should name the row by constant. Like
+/// [`EMBED_DIMENSION_KEY`], the in-crate readers inline the literal in their
+/// SQL, so a test pins this against the row the store writes.
+pub const SCHEMA_VERSION_KEY: &str = "schema_version";
+
 /// The embedding fingerprint and schema version of a **closed** cartog
 /// database, as an out-of-crate reader sees them.
 ///
@@ -305,13 +313,52 @@ pub struct DatabaseFacts {
 /// this stops the logic drifting.
 #[must_use]
 pub fn read_database_facts_at(path: &std::path::Path) -> DatabaseFacts {
-    let metadata = |key: &str| read_metadata_at(path, key).ok().flatten();
-    DatabaseFacts {
-        schema_version: read_schema_version_at(path).ok().filter(|v| *v > 0),
-        embed_provider: metadata(EMBED_PROVIDER_KEY),
-        embed_model: metadata(EMBED_MODEL_KEY),
-        embed_dim: metadata(EMBED_DIMENSION_KEY).and_then(|v| v.parse().ok()),
+    // ONE connection reading four rows, not four connections reading one each.
+    // This runs on every registry write — every `cartog index`, every `serve`
+    // startup and promotion, every debounced watcher pass — so the naive
+    // composition of `read_schema_version_at` + 3× `read_metadata_at` was four
+    // file opens where one suffices.
+    let Ok(conn) = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    ) else {
+        // Absent or unreadable: "not known", never an error. This is a
+        // diagnostic read about someone else's database.
+        return DatabaseFacts::default();
+    };
+
+    let mut facts = DatabaseFacts::default();
+    let mut stmt = match conn.prepare("SELECT key, value FROM metadata WHERE key IN (?1,?2,?3,?4)")
+    {
+        Ok(s) => s,
+        // No `metadata` table (not a cartog database) — all-`None`.
+        Err(_) => return facts,
+    };
+    let rows = stmt.query_map(
+        rusqlite::params![
+            SCHEMA_VERSION_KEY,
+            EMBED_PROVIDER_KEY,
+            EMBED_MODEL_KEY,
+            EMBED_DIMENSION_KEY
+        ],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    );
+    let Ok(rows) = rows else {
+        return facts;
+    };
+    for (key, value) in rows.filter_map(Result::ok) {
+        let Some(value) = value else { continue };
+        match key.as_str() {
+            // `> 0`: a foreign file reports 0, and storing that would render as
+            // a real version and misleadingly flag `stale-schema`.
+            SCHEMA_VERSION_KEY => facts.schema_version = value.parse().ok().filter(|v| *v > 0),
+            EMBED_PROVIDER_KEY => facts.embed_provider = Some(value),
+            EMBED_MODEL_KEY => facts.embed_model = Some(value),
+            EMBED_DIMENSION_KEY => facts.embed_dim = value.parse().ok(),
+            _ => {}
+        }
     }
+    facts
 }
 
 /// SQL to create the sqlite-vec virtual table with the given embedding dimension.

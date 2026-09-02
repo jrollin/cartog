@@ -353,6 +353,7 @@ pub async fn run_server(
                     primary,
                     pinned,
                     watch_requested: watch,
+                    register_on_promotion: true,
                     rag_override,
                     rag_config,
                     redact: server.redact,
@@ -448,6 +449,17 @@ pub(crate) struct PromoterArgs {
     /// upgraded the schema or swapped the embedding stack under us.
     pub(crate) pinned: Option<PinnedAttach>,
     pub(crate) watch_requested: bool,
+    /// Whether a successful promotion records the project in the machine-local
+    /// registry. Always `true` in production; `false` in tests, whose fixtures
+    /// are temp-dir databases that would otherwise leave dangling rows in the
+    /// developer's own user-global registry.
+    ///
+    /// A field rather than a `CARTOG_REGISTRY` override: the env var is
+    /// process-global, and this crate has two independent test-serialization
+    /// mechanisms (`#[serial]` and the tokio `SERIAL` mutex), so tests under
+    /// one can interleave with tests under the other and an RAII restore can
+    /// write back the wrong value — un-disabling the registry mid-test.
+    pub(crate) register_on_promotion: bool,
     /// Auto-embed override for the post-promotion watcher; `None` = auto-detect.
     pub(crate) rag_override: Option<bool>,
     pub(crate) rag_config: rag::EmbeddingProviderConfig,
@@ -694,7 +706,9 @@ pub(crate) async fn promoter_task(args: PromoterArgs) {
         // would go unlisted for the rest of the session. A promoted server has
         // a real on-disk database by construction — the promoter only commits
         // after `open_existing_rw` succeeded — so there is no degraded case.
-        register_served_project(&args.db_path);
+        if args.register_on_promotion {
+            register_served_project(&args.db_path);
+        }
 
         info!("promoted to primary for {}", args.db_path.display());
         return;

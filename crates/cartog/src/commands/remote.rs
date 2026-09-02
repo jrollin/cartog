@@ -773,18 +773,18 @@ mod imp {
         // Best-effort: a pulled index that cannot be re-opened is still a
         // successful pull, so a failure here leaves the row stale rather than
         // failing the command.
-        // `open_existing_rw` skips migrations: registering a pulled index must
-        // never migrate it as a side effect. A future-schema pull is refused
-        // earlier; an older one is the user's to migrate deliberately.
-        match cartog_db::Database::open_existing_rw(db_path) {
-            Ok(db) => {
-                let root = cartog_registry::infer_root_from_db_path(db_path);
-                crate::registry_hook::record_indexed(&db, db_path, &root);
-            }
+        // Read-only, deliberately. A read-write open creates `-wal`/`-shm`
+        // sidecars and can write to the bytes we just verified by SHA-256 and
+        // whose stale sidecars we just removed — mutating a verified artifact
+        // as a side effect of bookkeeping. Read-only gives the same counts.
+        // (It also skips migrations, which registration must never trigger.)
+        let root = cartog_registry::infer_root_from_db_path(db_path);
+        match cartog_db::Database::open_readonly(db_path) {
+            Ok(db) => crate::registry_hook::record_indexed(&db, db_path, &root),
             Err(e) => tracing::warn!(
                 db = %db_path.display(),
                 error = %e,
-                "pulled index could not be re-opened to refresh the project registry"
+                "pulled index could not be read to refresh the project registry"
             ),
         }
 

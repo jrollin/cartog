@@ -1045,7 +1045,7 @@ impl CartogServer {
     /// another cartog process owns the `serve` PID lock. Skips schema
     /// migrations and the embedding-fingerprint reconcile (the primary
     /// owns both); the 2 DB-write tools return a clear error at dispatch
-    /// time. The other 12 tools (11 read + `cartog_update`, which arms a
+    /// time. The other 15 tools (14 read + `cartog_update`, which arms a
     /// machine-level deferred update, not a DB write) work normally.
     ///
     /// Absent on-disk DB ⇒ the lock-holding primary is itself degraded

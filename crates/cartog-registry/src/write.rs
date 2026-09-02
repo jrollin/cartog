@@ -101,31 +101,61 @@ fn try_record(registry: &Path, facts: &ProjectFacts) -> rusqlite::Result<()> {
 /// the upsert is about to refresh. Failure is logged and ignored — a leftover
 /// duplicate is untidy, not incorrect, and must never fail the caller's index.
 fn retire_drifted_rows(conn: &Connection, keep_id: &str, db_path: &Path) {
-    let path = db_path.to_string_lossy();
-    let rekeyed = conn.execute(
-        "UPDATE OR IGNORE projects SET id = ?2 WHERE db_path = ?1 AND id != ?2",
-        rusqlite::params![path, keep_id],
-    );
-    if let Err(e) = rekeyed {
-        tracing::warn!(
-            project = %db_path.display(),
-            error = %e,
-            "could not re-key a drifted registry row; the project may list twice"
-        );
-        return;
+    for id in drifted_ids(conn, keep_id, db_path) {
+        // Re-key; `OR IGNORE` so a collision with an existing `keep_id` row
+        // leaves this one to be deleted below rather than failing.
+        if let Err(e) = conn.execute(
+            "UPDATE OR IGNORE projects SET id = ?2 WHERE id = ?1",
+            rusqlite::params![id, keep_id],
+        ) {
+            tracing::warn!(
+                project = %db_path.display(),
+                error = %e,
+                "could not re-key a drifted registry row; the project may list twice"
+            );
+            continue;
+        }
+        // Still on the old id? It lost the UPDATE to an existing `keep_id` row,
+        // which is authoritative — so this one is a true duplicate.
+        if let Err(e) = conn.execute(
+            "DELETE FROM projects WHERE id = ?1 AND ?1 != ?2",
+            rusqlite::params![id, keep_id],
+        ) {
+            tracing::warn!(
+                project = %db_path.display(),
+                error = %e,
+                "could not drop a duplicate registry row; the project may list twice"
+            );
+        }
     }
-    // Anything still on a foreign id lost the UPDATE to an existing row at
-    // keep_id. That row is authoritative, so the loser is a true duplicate.
-    if let Err(e) = conn.execute(
-        "DELETE FROM projects WHERE db_path = ?1 AND id != ?2",
-        rusqlite::params![path, keep_id],
-    ) {
-        tracing::warn!(
-            project = %db_path.display(),
-            error = %e,
-            "could not drop a duplicate registry row; the project may list twice"
-        );
-    }
+}
+
+/// Ids of rows that describe the same physical database as `db_path` but sit
+/// under a different key.
+///
+/// Compares by **recomputed slot**, not by `db_path` string. A stored path can
+/// legitimately differ in text while naming the same file: `absolutize`
+/// canonicalizes only when the path exists, so a row written while the database
+/// was absent keeps the non-canonical form (`/var/…` where the canonical form
+/// is `/private/var/…` on macOS). A string match missed exactly that case, and
+/// the upsert then created a second row for one project — the duplicate this
+/// function exists to prevent. `slot_for_db` canonicalizes both sides, so it
+/// sees through the difference.
+fn drifted_ids(conn: &Connection, keep_id: &str, db_path: &Path) -> Vec<String> {
+    let Ok(mut stmt) = conn.prepare("SELECT id, db_path FROM projects WHERE id != ?1") else {
+        return Vec::new();
+    };
+    let target = slot_for_db("serve", db_path);
+    let rows = stmt.query_map(rusqlite::params![keep_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    });
+    let Ok(rows) = rows else {
+        return Vec::new();
+    };
+    rows.filter_map(Result::ok)
+        .filter(|(_, stored)| slot_for_db("serve", Path::new(stored)) == target)
+        .map(|(id, _)| id)
+        .collect()
 }
 
 /// Refresh only `last_seen` on an otherwise-unchanged row.
@@ -541,6 +571,52 @@ mod tests {
             listing.projects[0].id,
             slot_for_db("serve", &db),
             "the surviving row must carry the reproducible id"
+        );
+    }
+
+    #[test]
+    fn a_row_stored_under_a_non_canonical_path_converges_instead_of_duplicating() {
+        // The drift that a `db_path` string match missed: `absolutize`
+        // canonicalizes only when the path exists, so a row written while the
+        // database was absent keeps the non-canonical form (`/var/…` where the
+        // canonical form is `/private/var/…` on macOS). Different string, same
+        // file — the old dedup matched neither row and the upsert added a
+        // second one.
+        //
+        // The sibling test seeds drift by editing only the `id`, keeping
+        // `db_path` byte-identical, so it cannot catch this.
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        let canonical = db.to_string_lossy().into_owned();
+        let non_canonical = canonical.replace("/private/var/", "/var/");
+        if non_canonical == canonical {
+            // Not macOS, or no such prefix: the case under test cannot arise.
+            return;
+        }
+        {
+            let conn = crate::open::open_read_write(&f.registry).unwrap();
+            let stale = ProjectFacts {
+                // Bypass `absolutize` to reproduce what a DB-absent write stored.
+                db_path: std::path::PathBuf::from(&non_canonical),
+                ..counted(&db, &root, 8134)
+            };
+            upsert(&conn, "serve-stale0000000000", &stale, Some("stale-fp")).unwrap();
+        }
+
+        f.record(&ProjectFacts::identity_only(&db, &root));
+
+        let listing = crate::read::list_projects_at(&f.registry, None, 8);
+        assert_eq!(
+            listing.projects.len(),
+            1,
+            "one physical database must never occupy two rows, even when the \
+             stored paths differ textually"
+        );
+        assert_eq!(listing.projects[0].id, slot_for_db("serve", &db));
+        assert_eq!(
+            listing.projects[0].symbol_count,
+            Some(8134),
+            "the re-keyed row must keep the counts it accumulated"
         );
     }
 

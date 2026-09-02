@@ -114,10 +114,15 @@ pub fn cmd_index(
     // Gated on the pass having changed something: `record_indexed` pays a
     // `db.stats()` — five scans — and a no-op pass has nothing new to record.
     // A changed pass just wrote those tables, so their pages are warm.
+    //
+    // Nothing indexable at all registers nothing, matching the rule a degraded
+    // `serve` already follows: advertising an empty project to every other
+    // session on the machine is worse than omitting it. A later index that does
+    // find symbols registers it then.
     let changed = result.files_indexed > 0 || result.files_removed > 0;
     if changed {
         crate::registry_hook::record_indexed(&db, db_path, root);
-    } else {
+    } else if matches!(db.is_empty(), Ok(false)) {
         crate::registry_hook::record_opened(db_path, root);
     }
 

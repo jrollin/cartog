@@ -567,6 +567,29 @@ fn check_paths(config_path: Option<&Path>, db_path: &Path, project_root: &Path) 
         || "none (using defaults)".to_string(),
         |p| p.display().to_string(),
     );
+    // `registry_path()` collapses three causes into `None`; a user debugging
+    // "why is my registry empty" needs to know which one, since the fixes
+    // differ (unset the env var vs. make it absolute vs. no $HOME at all).
+    fn registry_path_display() -> String {
+        if let Some(path) = cartog_registry::registry_path() {
+            return path.display().to_string();
+        }
+        match std::env::var_os(cartog_registry::REGISTRY_ENV) {
+            Some(v) if v.is_empty() => {
+                format!(
+                    "disabled ({} is set to an empty value)",
+                    cartog_registry::REGISTRY_ENV
+                )
+            }
+            Some(v) => format!(
+                "disabled ({} is {:?}, which is not an absolute path)",
+                cartog_registry::REGISTRY_ENV,
+                v.to_string_lossy()
+            ),
+            None => "unavailable (no state directory could be resolved)".to_string(),
+        }
+    }
+
     let details = vec![
         format!("project root:  {}", project_root.display()),
         format!("config:        {config}"),
@@ -575,13 +598,7 @@ fn check_paths(config_path: Option<&Path>, db_path: &Path, project_root: &Path) 
             "state file:    {}",
             show(crate::state::default_state_file())
         ),
-        format!(
-            "registry:      {}",
-            // `None` here means the registry is disabled (an empty or relative
-            // CARTOG_REGISTRY), which is a real configuration a user may be
-            // debugging — worth showing, not hiding.
-            show(cartog_registry::registry_path())
-        ),
+        format!("registry:      {}", registry_path_display()),
         format!("model cache:   {}", rag::model_cache_dir().display()),
         format!(
             "install:       {} ({})",

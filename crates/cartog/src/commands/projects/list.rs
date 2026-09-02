@@ -7,9 +7,13 @@ use cartog_registry::{Listing, ProjectRow};
 
 /// A project as `--json` reports it.
 ///
-/// Shaped to match the `cartog_list_projects` MCP tool so one contract is
-/// tested from two directions. `db_path` is the field that matters: with it a
-/// consumer runs any cartog command against another project via `--db`.
+/// A superset of the `cartog_list_projects` MCP tool's shape: this one also
+/// carries the embedding fingerprint and `resolution_rate`, which help a human
+/// debug their setup but give an agent nothing to act on. See `ProjectEntry`
+/// in `cartog-mcp`.
+///
+/// `db_path` is the field that matters: with it a consumer runs any cartog
+/// command against another project via `--db`.
 #[derive(Debug, Serialize)]
 pub(crate) struct ProjectJson {
     pub id: String,

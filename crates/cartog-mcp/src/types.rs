@@ -234,9 +234,15 @@ pub(crate) struct UpdateResult {
 
 /// One project as `cartog_list_projects` reports it.
 ///
-/// Deliberately mirrors `cartog projects list --json` so one contract is tested
-/// from two directions. `db_path` is the field that matters: with it an agent
-/// runs any cartog CLI command against another project via `--db`.
+/// A deliberate subset of `cartog projects list --json`: an agent gets the
+/// routing and identity fields, not the embedding-fingerprint diagnostics
+/// (`embed_provider`/`embed_model`/`embed_dim`, `resolution_rate`, `last_seen`)
+/// that only a human debugging their setup needs. `embed_mismatch` carries the
+/// one bit of that an agent can act on. Plus `current`, which the CLI has no
+/// use for.
+///
+/// `db_path` is the field that matters: with it an agent runs any cartog CLI
+/// command against another project via `--db`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub(crate) struct ProjectEntry {
     /// Registry id (the project's serve slot). Stable across re-indexes.

@@ -1,6 +1,6 @@
 [package]
 name = "cartog-registry"
-description = "User-global cartog state: state-directory resolution, PID-lock slot derivation, and live-peer detection."
+description = "Machine-local registry of indexed cartog projects, plus the user-global state directory and PID-lock slots it is keyed on."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
