@@ -764,6 +764,30 @@ mod imp {
         // Installed — the file now lives at `db_path`, not `.partial`.
         guard.disarm();
 
+        // A pull replaces the whole index, so every cached count in the
+        // registry is now wrong about this project. Re-read them: unlike the
+        // index hooks this opens a database of its own, which is affordable
+        // precisely because a pull just finished a network transfer. Held
+        // locks make this race-free — no peer can be writing.
+        //
+        // Best-effort: a pulled index that cannot be re-opened is still a
+        // successful pull, so a failure here leaves the row stale rather than
+        // failing the command.
+        // `open_existing_rw` skips migrations: registering a pulled index must
+        // never migrate it as a side effect. A future-schema pull is refused
+        // earlier; an older one is the user's to migrate deliberately.
+        match cartog_db::Database::open_existing_rw(db_path) {
+            Ok(db) => {
+                let root = cartog_registry::infer_root_from_db_path(db_path);
+                crate::registry_hook::record_indexed(&db, db_path, &root);
+            }
+            Err(e) => tracing::warn!(
+                db = %db_path.display(),
+                error = %e,
+                "pulled index could not be re-opened to refresh the project registry"
+            ),
+        }
+
         let size = std::fs::metadata(db_path)?.len();
         if json {
             // serde serialization escapes every field; git_commit is null when absent.

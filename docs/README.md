@@ -19,9 +19,9 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 
 ## Reference
 
-- [reference/cli.md](reference/cli.md) — all 27 commands and global flags
+- [reference/cli.md](reference/cli.md) — all 28 commands and global flags
 - [reference/config.md](reference/config.md) — all `.cartog.toml` keys and environment variables
-- [reference/mcp-tools.md](reference/mcp-tools.md) — 16 MCP tools, progress, cancellation, logging
+- [reference/mcp-tools.md](reference/mcp-tools.md) — 17 MCP tools, progress, cancellation, logging
 - [reference/exit-codes.md](reference/exit-codes.md) — `cartog self` exit codes and state file
 - [updates.md](updates.md) — full `cartog self update` surface (canonical reference; procedures are in [how-to/update-cartog.md](how-to/update-cartog.md))
 
@@ -31,7 +31,7 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 - [explanation/rag-pipeline.md](explanation/rag-pipeline.md) — hybrid search, embedding models, provider architecture
 - [explanation/incremental-indexing.md](explanation/incremental-indexing.md) — three-layer change detection, Merkle invariants
 - [explanation/concurrency.md](explanation/concurrency.md) — rayon / tokio / std::thread models
-- [explanation/project-registry.md](explanation/project-registry.md) — *proposal* — user-global project registry and cross-project discovery
+- [explanation/project-registry.md](explanation/project-registry.md) — user-global project registry (`cartog projects`, shipped) and the proposed later phases
 - [explanation/cross-project-queries.md](explanation/cross-project-queries.md) — *proposal* — federated search and cross-service edges
 
 ## Background docs

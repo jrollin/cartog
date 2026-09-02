@@ -45,7 +45,9 @@ pub use config_display::cmd_config;
 mod doctor;
 pub use doctor::cmd_doctor;
 
+mod projects;
 mod self_cmd;
+pub use projects::{cmd_projects_forget, cmd_projects_list, cmd_projects_prune};
 pub use self_cmd::{
     cmd_self_migrate_db, cmd_self_rollback, cmd_self_update, cmd_self_version, UpdateMode,
 };

@@ -575,6 +575,13 @@ fn check_paths(config_path: Option<&Path>, db_path: &Path, project_root: &Path) 
             "state file:    {}",
             show(crate::state::default_state_file())
         ),
+        format!(
+            "registry:      {}",
+            // `None` here means the registry is disabled (an empty or relative
+            // CARTOG_REGISTRY), which is a real configuration a user may be
+            // debugging — worth showing, not hiding.
+            show(cartog_registry::registry_path())
+        ),
         format!("model cache:   {}", rag::model_cache_dir().display()),
         format!(
             "install:       {} ({})",

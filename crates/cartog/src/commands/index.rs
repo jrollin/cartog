@@ -106,6 +106,21 @@ pub fn cmd_index(
         }
     }
 
+    // Record the project in the machine-local registry. Placed after the last
+    // early return above (cancellation rolls the whole pass back, so a
+    // cancelled run must register nothing) and after the indexer's transaction
+    // committed, never inside it.
+    //
+    // Gated on the pass having changed something: `record_indexed` pays a
+    // `db.stats()` — five scans — and a no-op pass has nothing new to record.
+    // A changed pass just wrote those tables, so their pages are warm.
+    let changed = result.files_indexed > 0 || result.files_removed > 0;
+    if changed {
+        crate::registry_hook::record_indexed(&db, db_path, root);
+    } else {
+        crate::registry_hook::record_opened(db_path, root);
+    }
+
     // No-op run: nothing was added or removed this pass. The delta counters
     // are all zero, so the standard "0 symbols, 0 edges" line reads like a
     // failure. Report DB state instead — "up to date" when the index has

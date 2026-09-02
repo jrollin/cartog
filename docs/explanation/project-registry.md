@@ -1,6 +1,63 @@
 # Project registry
 
-**Status:** design proposal, not implemented.
+**Status:** step 1 (the registry, its write hooks, and `cartog projects`)
+**implemented**. Step 2 (`cartog_list_projects`) and steps 3–7 remain proposed;
+steps 4–7 are deliberately gated on evidence this registry exists to produce.
+
+Phase 1 keys agent routing on **name + languages + counts** only. There is no
+`description` until step 3, so the honest phase-1 capability is *"discover the
+other indexed projects and their `--db` paths"*, not *"route by intent"*.
+
+## Corrections the implementation forced
+
+Five claims below were disproved while building step 1. They are corrected in
+place, but recorded here so the reasoning is not lost:
+
+1. **`cartog index` registration is not free.** The trigger table originally
+   said "none — `cmd_index` already calls `db.stats()`". It does not: `stats()`
+   runs only on the no-op branch, itself gated on `!json`. Registering costs a
+   real `stats()` — and that is **5 scans, not 3** (`files`, `symbols`, `edges`,
+   plus `GROUP BY language` and `GROUP BY kind`). Measured on this repo (12,458
+   symbols / 48,550 edges): ~11 ms, ~3% of a warm incremental pass. Gated on the
+   pass having changed something, so a no-op pass pays nothing.
+2. **P2 ("a drift-free probe") already existed.** `read_schema_version_at` and
+   `read_metadata_at` were already `pub` and already drift-free. The only real
+   gap was that the fingerprint *keys* were private, and `embedding_dimension`
+   had no constant at all.
+3. **`PRAGMA data_version` cannot be the fingerprint**, though this doc proposed
+   it as the fix for `(mtime, size)`. Measured: it does not change on the
+   writing connection's own commit, and it reads back as `2` on every fresh
+   connection — so a short-lived registry writer sees a constant and skips
+   forever. The doc was right that main-file `(mtime, size)` alone is
+   insufficient under WAL (measured: byte-identical after a committed insert;
+   only `-wal` grew). The implementation uses a tuple over **main + `-wal`**,
+   measured to change on commit, change on checkpoint, and stay equal when idle.
+4. **Corruption and contention must be handled oppositely.** This doc listed
+   "lock contention" and "corrupt file" in one parenthetical under write
+   failure. A literal reading yields quarantine-on-`SQLITE_BUSY`, which under a
+   burst of concurrent index passes has every process racing to rename the file
+   out from under the others — a data-loss bug in the one module whose purpose
+   is not losing data. Only `SQLITE_NOTADB`/`SQLITE_CORRUPT` quarantine.
+5. **`serve` startup must not read counts.** Two sections of this doc
+   contradicted each other on whether it should. The trigger table is right:
+   identity only, no `stats()`. The counts-on-insert argument was defending
+   against a bare-row case that only arises with backfill, which is out of
+   scope — and it would have put a 5-scan read on the startup path of a process
+   the plugin launches every session.
+
+Two behaviours the implementation added beyond this doc, both because the
+alternative was a real bug:
+
+- **A drifted id is re-keyed, not duplicated.** `slot_for_db` canonicalizes
+  fully only when the path exists, so a row written while the database was
+  absent carries an id a later call will not reproduce. The read side was
+  designed to tolerate that; the write side, left alone, inserted a *second*
+  row for one physical database and `projects list` showed it twice. Re-keying
+  rather than deleting preserves the counts that row accumulated.
+- **An ambiguous `forget` target drops nothing.** Names are non-unique by
+  construction: two workspaces each holding an `api` directory produce two rows
+  named `api`. Acting on both from one unambiguous-looking argument would
+  deregister a project the user never named.
 
 A user-global registry of the cartog projects on a machine, so a single MCP
 session can *discover* the other indexed projects — where their databases are,

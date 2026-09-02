@@ -572,6 +572,8 @@ fn watch_loop(
     // RAG timer seed. `initial_pending` already folds in a pending format upgrade.
     let mut rag_pending = initial_pending > 0;
     let mut last_index_time: Option<Instant> = rag_pending.then(Instant::now);
+    // Debounce for machine-local registry writes; see REGISTRY_WRITE_DEBOUNCE.
+    let mut last_registry_write: Option<Instant> = None;
 
     loop {
         if shutdown.load(Ordering::SeqCst) {
@@ -662,6 +664,17 @@ fn watch_loop(
                             }
                             if let (Some(s), Some(seq)) = (&config.stale, caught_up_to) {
                                 s.note_reindex(seq, pending_count);
+                            }
+                            // Refresh the machine-local registry, but not on
+                            // every keystroke-driven pass: a watcher can
+                            // re-index many times a minute, and each
+                            // registration pays a `stats()`. Debounced, and
+                            // only when the pass actually changed the graph.
+                            if (r.files_indexed > 0 || r.files_removed > 0)
+                                && registry_debounce_elapsed(last_registry_write)
+                            {
+                                record_watched_project(&db, db_path, root);
+                                last_registry_write = Some(Instant::now());
                             }
                         }
                         Err(e) => {
@@ -963,6 +976,60 @@ fn is_relevant_path(path: &Path, root: &Path, exclude: &indexer::ExcludeGlobs) -
     }
 
     true
+}
+
+/// Minimum gap between registry writes from a watcher.
+///
+/// A watcher can re-index many times a minute while a person edits, and each
+/// registration pays a `stats()` (five scans). The registry is a coarse
+/// "what is on this machine" view, so a minute of staleness costs nothing.
+const REGISTRY_WRITE_DEBOUNCE: Duration = Duration::from_secs(60);
+
+/// Whether enough time has passed since the last registry write.
+///
+/// `None` (no write yet this session) always passes: the first pass after a
+/// watcher starts is exactly when the registry is most likely to be stale.
+fn registry_debounce_elapsed(last: Option<Instant>) -> bool {
+    // `map_or`, not `is_none_or`: the latter is stable only from Rust 1.82 and
+    // this workspace's MSRV is 1.80.
+    last.map_or(true, |t| t.elapsed() >= REGISTRY_WRITE_DEBOUNCE)
+}
+
+/// Record the watched project in the machine-local registry.
+///
+/// Mirrors `cartog index`'s registration: full counts plus a `last_indexed`,
+/// because a watcher pass *is* an indexing pass. Never fails the watcher — the
+/// registry's write path logs and returns.
+fn record_watched_project(db: &Database, db_path: &str, root: &Path) {
+    let path = Path::new(db_path);
+    let mut facts = cartog_registry::ProjectFacts::identity_only(path, root);
+    if let Ok(stats) = db.stats() {
+        facts.file_count = Some(stats.num_files);
+        facts.symbol_count = Some(stats.num_symbols);
+        facts.edge_count = Some(stats.num_edges);
+        facts.resolved_count = Some(stats.num_resolved);
+        facts.languages = Some(stats.languages);
+    }
+    facts.embedding_count = db.embedding_count().ok();
+    facts.schema_version = cartog_db::read_schema_version_at(path)
+        .ok()
+        .filter(|v| *v > 0);
+    facts.embed_provider = cartog_db::read_metadata_at(path, cartog_db::EMBED_PROVIDER_KEY)
+        .ok()
+        .flatten();
+    facts.embed_model = cartog_db::read_metadata_at(path, cartog_db::EMBED_MODEL_KEY)
+        .ok()
+        .flatten();
+    facts.embed_dim = cartog_db::read_metadata_at(path, cartog_db::EMBED_DIMENSION_KEY)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok());
+    facts.last_indexed = Some(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64),
+    );
+    cartog_registry::record_project(&facts);
 }
 
 #[cfg(test)]

@@ -34,6 +34,26 @@ Windows: %LOCALAPPDATA%\cartog\
   `cartog serve` holding a given database's serve lock. Used by
   `cartog index` to defer its LSP pass to a peer's warm language servers.
 
+- **The project registry** — `projects.sqlite` in the state directory, one row
+  per indexed project. It lets a session in one repository discover the *other*
+  indexed projects on the machine — where their databases live, and a summary
+  of what each holds:
+
+```text
+record_project(&facts)     record a project after an index pass commits
+list_projects(schema_ver)  every registered project, with staleness markers
+forget_project_at(..)      drop one row; never touches the project's index
+prune_projects_at(..)      drop rows whose database file is gone
+```
+
+  It stores paths, counts, languages and the embedding fingerprint — never any
+  code. `CARTOG_REGISTRY` relocates the file (absolute paths only); set it to
+  an empty value to disable reads and writes entirely.
+
+  A registry write never fails its caller: registration is bookkeeping riding
+  on an index pass, so an unwritable state directory, a contended file or a
+  corrupt registry costs the caller a log line and nothing else.
+
 ## Why it is a separate crate
 
 These helpers began in the `cartog` binary crate, which made them unreachable
@@ -42,11 +62,9 @@ lock on, since the binary depends on them and not the reverse. Both crates
 documented the binary's function as the way to build a slot while being unable
 to call it. Extracting them here makes that reference real.
 
-A machine-local registry of indexed projects (`projects.sqlite`), letting one
-session discover the other indexed projects on the machine, is proposed on top
-of this crate in
+The design rationale, and the later phases built on top of this one (project
+descriptions, federated queries), are in
 [docs/explanation/project-registry.md](https://github.com/jrollin/cartog/blob/main/docs/explanation/project-registry.md).
-It is not implemented yet.
 
 ## License
 

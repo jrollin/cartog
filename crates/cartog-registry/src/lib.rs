@@ -10,20 +10,44 @@
 //!   filesystem-safe slot name `cartog-process-lock` writes as `<slot>.pid`.
 //! - [`detect_live_serve_peer`] — finds a running `cartog serve` holding a
 //!   given database's serve lock.
+//! - [`record_project`] / [`list_projects`] / [`forget_project_at`] /
+//!   [`prune_projects_at`] — the machine-local project registry
+//!   (`projects.sqlite`): one row per indexed project, so a session in one
+//!   repository can discover the *other* indexed projects on the machine —
+//!   their database paths, languages and sizes — without merging their code
+//!   graphs. It records where each index lives and a summary of what it
+//!   holds, never any code. [`REGISTRY_ENV`] relocates it, or disables it
+//!   entirely when set to an empty value.
 //!
-//! These began in the `cartog` binary crate, where `cartog-mcp` and
-//! `cartog-watch` — the crates that derive the slots they lock on — could not
-//! reach them. Extracting them here makes the reference those crates already
-//! documented an actual, callable one.
+//! The state-directory and slot helpers began in the `cartog` binary crate,
+//! where `cartog-mcp` and `cartog-watch` — the crates that derive the slots
+//! they lock on — could not reach them. Extracting them here makes the
+//! reference those crates already documented an actual, callable one.
 //!
-//! A machine-local registry of indexed projects (`projects.sqlite`) is
-//! proposed on top of this crate in `docs/explanation/project-registry.md`;
-//! it is not implemented yet.
+//! The registry deliberately does **not** depend on `cartog-db`. The few
+//! values it needs from the graph schema (its version, the embedding
+//! fingerprint) are read by callers that already depend on that crate and
+//! passed in as plain primitives, so a graph-schema bump never forces a
+//! registry migration and a registry bump never forces a re-index.
 #![doc = ""]
 #![doc = include_str!("../README.md")]
 
+mod corrupt;
+mod fingerprint;
+mod maintain;
+mod model;
+mod open;
+mod path;
+mod read;
+mod schema;
 mod slot;
 mod state_dir;
+mod write;
 
+pub use maintain::{forget_project_at, prune_projects_at, Removed};
+pub use model::{infer_root_from_db_path, Listing, Markers, ProjectFacts, ProjectRow};
+pub use path::{registry_path, REGISTRY_ENV};
+pub use read::{list_projects, list_projects_at};
 pub use slot::{detect_live_serve_peer, slot_for_db};
 pub use state_dir::{default_state_dir, default_state_file};
+pub use write::record_project;

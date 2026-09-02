@@ -16,7 +16,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dependencies]
 cartog-process-lock = { workspace = true }
 directories = { workspace = true }
+rusqlite = { workspace = true }
 sha2 = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 serial_test = { workspace = true }

@@ -2,6 +2,7 @@ mod cli;
 mod commands;
 mod config;
 use cartog::auto_check::{self, CommandKind, MaybeSpawnInput};
+use cartog::registry_hook;
 use cartog::state;
 
 use anyhow::Result;
@@ -11,7 +12,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::time::SystemTime;
 
-use cli::{Cli, Command, RagCommand, SelfCommand};
+use cli::{Cli, Command, ProjectsCommand, RagCommand, SelfCommand};
 
 /// Public-default GitHub latest-release endpoint for the daily background
 /// check. Override via `CARTOG_GITHUB_API_URL` (used by integration tests).
@@ -504,6 +505,16 @@ fn main() -> Result<()> {
                 &provider_config,
                 &search_tuning,
             ),
+        },
+        // `cartog projects` reads the machine-local registry, never a project
+        // index — so it takes no `db_path` and works from any directory,
+        // including one that was never indexed. That is the point of a
+        // machine-global listing, and it is why `Projects` is absent from
+        // `indexes_with_config` (and therefore from the consent gate).
+        Command::Projects(sub) => match sub {
+            ProjectsCommand::List => commands::cmd_projects_list(cli.json, token_budget),
+            ProjectsCommand::Forget { target } => commands::cmd_projects_forget(&target, cli.json),
+            ProjectsCommand::Prune { dry_run } => commands::cmd_projects_prune(dry_run, cli.json),
         },
         Command::Completions { shell } => {
             use clap::CommandFactory;

@@ -45,6 +45,12 @@ pub mod auto_check;
 #[doc(hidden)]
 pub mod state;
 
+/// Bridging `cartog-db` values into project-registry rows.
+///
+/// Hidden from rustdoc: internal CLI plumbing. Not a stable public API.
+#[doc(hidden)]
+pub mod registry_hook;
+
 /// RFC3339 ↔ Unix-seconds helpers used by `state.toml` writers and
 /// `auto_check`. Internal — exposed via the lib facade only so the bin
 /// target's `commands::self_cmd` can reach it without a duplicate copy.

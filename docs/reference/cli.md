@@ -368,6 +368,7 @@ cartog doctor
       config:        /home/user/project/.cartog.toml
       database:      /home/user/project/.cartog/db.sqlite
       state file:    /home/user/.local/state/cartog/state.toml
+      registry:      /home/user/.local/state/cartog/projects.sqlite
       model cache:   /home/user/.cache/cartog/models
       install:       release-tarball (x86_64-unknown-linux-gnu)
   [+] database: 42 files, 387 symbols at /home/user/project/.cartog/db.sqlite
@@ -406,7 +407,7 @@ case on a blackholed network. Set `CARTOG_NO_UPDATE_CHECK=1` to skip the
 request entirely, or `CARTOG_GITHUB_API_URL` to point at a mirror.
 
 **`paths`** is informational: it collects every location a bug report needs
-(project root, config, database, state file, model cache, install source and
+(project root, config, database, state file, project registry, model cache, install source and
 target triple) into one block. In `--json` these are discrete strings under
 `details`, not a newline-joined message.
 
@@ -463,9 +464,9 @@ When `--watch` is passed, a background file watcher keeps the code graph up to d
 
 Opening two Claude Code windows on the same project (or running `cartog serve` in a terminal while a Claude Code window has its own MCP child) is supported via **single-writer election**:
 
-- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 16 MCP tools. The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
-- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 14 of 16 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) and `cartog_update` (which arms a machine-level deferred update, not a DB write) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
-- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 16 tools become available on what was the secondary.
+- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 17 MCP tools. The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
+- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 15 of 17 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) and `cartog_update` (which arms a machine-level deferred update, not a DB write) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
+- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 17 tools become available on what was the secondary.
 
 Escape hatches:
 
@@ -584,6 +585,56 @@ man cartog
 
 On macOS the path is the same. On Linux distros some packagers prefer
 `/usr/share/man/man1/`; either works as long as it is on `MANPATH`.
+
+### `cartog projects <list|forget|prune>`
+
+Inspect the machine-local registry of indexed cartog projects. This is how a session in one
+repository discovers the *other* projects indexed on the same machine — where their databases
+live and roughly what they hold — without merging their code graphs.
+
+Every `cartog index`, `cartog rag index`, `cartog pull`, `cartog watch` re-index, and
+`cartog serve` startup records its project here. Nothing is recorded for a project cartog was
+not allowed to index (see the [index-creation consent gate](config.md#index-creation-consent-gate))
+or for a `serve` running degraded.
+
+```bash
+cartog projects list                # every indexed project on this machine
+cartog projects list --json         # same, machine-readable
+cartog projects forget <target>     # drop one row; the project's index is untouched
+cartog projects prune               # drop rows whose database file is gone
+cartog projects prune --dry-run     # report what would be dropped, change nothing
+```
+
+`cartog projects` is a **read** command over the registry, not over any project index: it takes
+no `--db`, never creates a `.cartog/`, and works from any directory — including one that was
+never indexed.
+
+`forget` accepts a project id, root path, database path, or name. A **name** is only acted on
+when it identifies exactly one project: two workspaces each holding an `api` directory produce
+two rows named `api`, so an ambiguous name drops nothing and lists the candidate ids instead.
+
+**Markers** shown beside each project:
+
+| Marker | Meaning |
+|--------|---------|
+| `live` | A `cartog serve` / `cartog watch` peer currently holds this project's lock. Advisory only. |
+| `stale-schema vN` | The index was written at schema vN, not this binary's. It still lists — the cached counts are the last thing known true — but querying it needs a re-index. |
+| `missing` | The database file is gone. A `prune` candidate. |
+| `embed-mismatch` | This project's embedding provider/model/dimension differs from the majority of your other projects, so its vectors are not comparable with theirs. |
+
+An unknown count renders as `?`, never `0`: the registry caches what each trigger happened to
+know, and "not known" is a different fact from "empty".
+
+**Cross-project queries.** `db_path` is the actionable field — pass it to any cartog command:
+
+```bash
+DB=$(cartog projects list --json | jq -r '.projects[] | select(.name=="svc-shipping").db_path')
+cartog search CreateShipment --db "$DB"
+cartog outline ship.go --db "$DB"
+```
+
+Set `CARTOG_REGISTRY` to relocate the registry (absolute paths only), or to an empty value to
+disable it entirely — both reads and writes. See [config.md](config.md#environment-variables).
 
 ### `cartog self <update|version|rollback|migrate-db>`
 

@@ -144,6 +144,12 @@ pub fn cmd_rag_index(
         Err(e) => return Err(e),
     };
 
+    // Refresh the project's embedding state in the machine-local registry.
+    // After the last cancellation return above: a cancelled embed pass has
+    // flushed only whole batches, so its count is not what the user asked for.
+    // Carries no `last_indexed` — embedding is not a graph index pass.
+    crate::registry_hook::record_embedded(&db, db_path, root);
+
     output(&result, json, None, |r| {
         format!(
             "Embedded {} symbols ({} skipped, {} total with content)\n",

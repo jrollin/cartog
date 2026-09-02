@@ -459,6 +459,10 @@ pub enum Command {
     #[command(subcommand)]
     Rag(RagCommand),
 
+    /// Inspect the machine-local registry of indexed cartog projects
+    #[command(subcommand)]
+    Projects(ProjectsCommand),
+
     /// Manage the cartog installation: upgrade, inspect, roll back
     #[command(name = "self", subcommand)]
     Self_(SelfCommand),
@@ -475,6 +479,25 @@ pub enum Command {
     ///
     /// Example: `cartog manpage > cartog.1 && man ./cartog.1`
     Manpage,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProjectsCommand {
+    /// List every indexed project on this machine, with staleness markers
+    List,
+
+    /// Drop one project's registry row. Never touches its index.
+    Forget {
+        /// Project id, root path, database path, or name (from `projects list`)
+        target: String,
+    },
+
+    /// Drop registry rows whose database file no longer exists
+    Prune {
+        /// Report what would be dropped without changing the registry
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
