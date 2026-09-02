@@ -79,6 +79,8 @@ Three steps, each shippable alone:
 | 1 | `projects.sqlite` registry + `cartog projects list/forget/prune` — **implemented** |
 | 2 | `cartog_list_projects` MCP tool, served from the existing per-project server — **implemented** |
 | 3 | Self-populated `description`, so routing by intent works — **implemented** |
+| 3b | `cartog projects add` / `scan` — backfill for an index no write has ridden since — **implemented** |
+| 4 | `cartog search --all` / `cartog_search_all` — federated exact-symbol search — **implemented** |
 
 Explicitly **not** in scope (each has its own reasons, see
 [Non-goals](#non-goals)): merging graphs into one database, federated search,
@@ -1396,7 +1398,7 @@ than silently combined.
 |---|---|
 | Merging graphs into one global DB | A deliberate choice, **not a prohibition** — see [Why metadata-only rather than a merged graph](#why-metadata-only-rather-than-a-merged-graph). Metadata-only keeps every query reading live per-repo data and avoids a second staleness surface, and preserves per-repo `.cartog/` deletability, gitignore, and per-project S3 sync. |
 | Federated `rag_search` | `hybrid_search` binds to one `Database`. RRF ranks and in-degree centrality are per-graph, and the embedding fingerprint (`embedding_provider`/`embedding_model`/`embedding_dimension` in `metadata`) is per-DB — two projects embedded differently hold vectors in different spaces, so merging their scores is meaningless. Needs a cross-DB normalization proven against the RAG relevancy benchmark. |
-| Federated exact-symbol `search` | Tractable (names match or they don't, no score merging), but out of scope here. Step 2 already enables it via `--db`. |
+| Federated exact-symbol `search` | Tractable (names match or they don't, no score merging). Was out of scope for phase 1; **now implemented** as step 4 (`cartog search --all` / `cartog_search_all`) — fan-out to each project's DB, grouped per project, no merged ranking and no merged database. See [cross-project queries](cross-project-queries.md#step-4--federated-exact-symbol-search). |
 | Cross-service edges (endpoint → handler) | The prize for microservices, and a separate feature: needs a contract layer (OpenAPI/protobuf) as the join key. A per-repo graph sees only a URL string on one side and a route handler on the other. |
 | Shared multi-project MCP server | Its only real benefit is sharing loaded models across projects. Gated on measuring N × idle RSS, since it trades away crash isolation, per-DB election, and LSP isolation. Steps 1-3 do not need it. |
 | Mutating another project's index | A registry entry grants discovery, not write access. |
@@ -1458,7 +1460,7 @@ Mandatory in the same change, per the docs + site-sync rule:
 - `crates/cartog/src/config/load.rs` — `KNOWN_CONFIG_SECTIONS` gains `"project"`
 - `.cartog.toml.example` at the repo root **and** `init.rs` `TOML_TEMPLATE` —
   both, or the template-parity test fails
-- `docs/reference/mcp-tools.md` — `cartog_list_projects` (16 → 17 tools)
+- `docs/reference/mcp-tools.md` — `cartog_list_projects` (16 → 18 tools)
 - `docs/explanation/project-registry.md` — this document
 - `docs/explanation/README.md` **and** `docs/README.md` — both indexes list every
   explanation doc; the convention requires keeping them in sync when adding one

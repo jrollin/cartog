@@ -117,6 +117,8 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
 | `cartog stats [--savings]` | `cartog_stats` | — |
 | `cartog projects list` | `cartog_list_projects` | — |
+| `cartog search <q> --all` | `cartog_search_all` | Other projects only; grouped per project |
+| `cartog projects add/scan` | — | CLI only (registry maintenance) |
 | `cartog projects forget/prune` | — (CLI only) | — |
 | `cartog savings` | — (CLI only — alias for `cartog stats --savings`) | — |
 | `cartog doctor` | — (CLI only) | — |
@@ -367,6 +369,24 @@ service, a shared library. Take that project's `db_path` and pass it to any cart
 ```bash
 cartog search CreateShipment --db /path/to/other/.cartog/db.sqlite
 ```
+
+If a project you know is indexed does not appear, registration simply has not run for it yet
+(it rides on an index/serve write). `cartog projects add <path>` registers it from its existing
+index without re-indexing — it refuses when there is genuinely no index there, so it is safe to
+try. Do not run `cartog index` on another repository just to make it listable.
+
+When you know the **symbol** but not which repository defines it, search them all at once
+instead of listing then guessing:
+
+```bash
+cartog search CreateShipment --all                     # every eligible project
+cartog search Shift --all --under ~/work --lang ruby   # narrow the fan-out
+```
+
+Results are grouped per project and ranked **within** each one — cross-project relevance is not
+comparable, so there is no merged ranking. Take a group's `--db` path to drill in. `--limit`
+applies per project; `--max-projects` (default 10) bounds how many databases are opened. There
+is no `--all` for `rag search`: no federated semantic search exists.
 
 Each entry carries a `description` (from that project's `[project] description` or its
 `README.md`) — route on that when present, since it says what the project is for. Treat a bare

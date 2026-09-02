@@ -4,7 +4,7 @@
 
 ## Overview
 
-`cartog serve` runs cartog as an MCP server over stdio, exposing 17 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 14 query tools are read-only (including `cartog_trace` for call paths, `cartog_context` for one-shot task bundles, and `cartog_list_projects` for discovering the other indexed projects on this machine); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones.
+`cartog serve` runs cartog as an MCP server over stdio, exposing 18 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 15 query tools are read-only (including `cartog_trace` for call paths, `cartog_context` for one-shot task bundles, `cartog_list_projects` for discovering the other indexed projects on this machine, and `cartog_search_all` for searching them); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones.
 
 When `cartog serve --watch` is running and a file changes (or RAG embeddings are still catching up — including symbols whose body was just edited and not yet re-embedded), affected read-tool responses are prefixed with a `⚠️` staleness banner so the agent knows the answer may be momentarily behind the working tree. Read-only secondaries and `cartog serve` without `--watch` never show the banner.
 
@@ -45,12 +45,57 @@ with three controls, highest precedence first: `CARTOG_WATCH_RAG` (env) override
 | `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search (write) |
 | `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
 | `cartog_list_projects` | — | The other cartog-indexed projects on this machine, with each one's `db_path` |
+| `cartog_search_all` | `query`, `kind?`, `limit?`, `under?`, `lang?`, `max_projects?` | Find a symbol by name across the *other* indexed projects, grouped per project |
 | `cartog_update` | `version?` | Arm a deferred self-update (write; touches the state file, not the index) |
 
 Read tools (everything except `cartog_index`, `cartog_rag_index`, and `cartog_update`)
 carry an `outputSchema` and return `structuredContent`. All tool responses also include a JSON text block.
 
 **Path restriction**: `cartog_index` and `cartog_rag_index` reject paths outside the project directory (CWD subtree). Agents cannot index arbitrary filesystem locations.
+
+### Federated symbol search (`cartog_search_all`)
+
+`cartog_search_all` answers "which project defines this symbol?" when the
+project is not known up front. `cartog_list_projects` tells an agent *where*
+projects are; this searches them.
+
+```
+cartog_search_all { "query": "CreateShipment" }
+cartog_search_all { "query": "Shift", "under": "/home/u/work", "lang": "ruby" }
+```
+
+**It fans out; it does not consolidate.** The registry supplies the candidate
+database paths, each is opened **read-only** and queried on its own, and results
+stay grouped under the project they came from. Three deliberate consequences:
+
+- **No merged database.** Merging graphs is a
+  [non-goal](../explanation/project-registry.md#non-goals): every hit is read
+  live from the project that owns it, so there is no second staleness surface.
+- **No merged ranking.** `in_degree` centrality is per-graph, so a flat
+  cross-project ordering cannot be justified without a ranking benchmark that
+  does not exist. Ranking is **within** a project only.
+- **No writes.** A registry row grants discovery, not write access; the
+  read-only open enforces it.
+
+`limit` applies **per project**, so a response holds at most
+`limit x max_projects` symbols. Narrow the fan-out with `under` (a directory
+subtree) or `lang`; `max_projects` (default 10, max 50) caps how many databases
+are opened (default 10, clamped to 1..=50), most-symbols-first, and the response
+reports `elided_by_cap` so a partial answer never reads as complete. A project
+that cannot be read is listed in `unreadable` **with the reason** rather than
+silently dropped — a schema drift, a corrupt file and a permission error need
+different fixes. `under` accepts `~`.
+
+Like `cartog_list_projects`, it is gated by **neither** `refuse_if_degraded` nor
+`refuse_if_read_only`: it never touches *this* project's index, and a server with
+no index of its own is exactly when searching the projects that do have one
+matters most. Unlike `cartog_list_projects`, it *does* open foreign databases, so
+its cost scales with the number of projects queried — hence the cap.
+
+There is no federated *semantic* search: embedding vectors from projects with
+different providers/models/dimensions live in different spaces, so merging their
+scores would be meaningless. See
+[cross-project queries](../explanation/cross-project-queries.md).
 
 ### Cross-project discovery (`cartog_list_projects`)
 

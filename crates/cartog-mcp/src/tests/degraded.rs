@@ -446,21 +446,23 @@ fn a_large_project_list_is_trimmed_and_says_so() {
     );
 }
 
-/// The MCP surface is 17 tools. Pinned so a router that silently loses a block
+/// The MCP surface is 18 tools. Pinned so a router that silently loses a block
 /// (a `mod` line dropped, a `+ Self::x_router()` removed) fails here rather
 /// than by a client mysteriously not seeing a tool.
 #[test]
-fn the_tool_router_exposes_seventeen_tools() {
+fn the_tool_router_exposes_eighteen_tools() {
     let tools = CartogServer::tool_router().list_all();
     assert_eq!(
         tools.len(),
-        17,
-        "expected 17 MCP tools, got {}: {:?}",
+        18,
+        "expected 18 MCP tools, got {}: {:?}",
         tools.len(),
         tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>()
     );
-    assert!(
-        tools.iter().any(|t| t.name == "cartog_list_projects"),
-        "cartog_list_projects must be routed"
-    );
+    for expected in ["cartog_list_projects", "cartog_search_all"] {
+        assert!(
+            tools.iter().any(|t| t.name == expected),
+            "{expected} must be routed"
+        );
+    }
 }

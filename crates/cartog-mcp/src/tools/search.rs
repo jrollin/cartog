@@ -1,4 +1,4 @@
-//! MCP search/overview tools: search, stats, map, changes.
+//! MCP search/overview tools: search, search_all, stats, map, changes.
 
 use std::sync::Arc;
 
@@ -245,4 +245,271 @@ impl CartogServer {
         .await
         .map_err(|e| mcp_err(format!("task join failed: {e}")))?
     }
+}
+
+#[tool_router(router = search_all_router, vis = "pub(crate)")]
+impl CartogServer {
+    /// Federated exact-symbol search across the machine's other projects.
+    ///
+    /// Gated by **neither** `refuse_if_degraded` nor `refuse_if_read_only`, for
+    /// the same reason as `cartog_list_projects`: it never touches *this*
+    /// project's index. It reads the registry, then opens each selected
+    /// project's database **read-only** — a registry row grants discovery, not
+    /// write access, and the read-only open is the enforcement rather than a
+    /// convention. A degraded server is exactly when searching the projects
+    /// that *are* indexed matters most.
+    ///
+    /// Unlike `cartog_list_projects`, this **does** open foreign databases, so
+    /// its cost scales with the number of projects queried — hence the
+    /// `max_projects` cap and the `under`/`lang` filters.
+    #[tool(
+        description = "Find a symbol by name across the OTHER cartog-indexed projects on this \
+                       machine (not the current one — use cartog_search for that). Use when the \
+                       symbol's project is unknown: a sibling service, a shared library. Narrow \
+                       with `under` (a directory subtree) or `lang`. Results are grouped per \
+                       project and ranked within it — cross-project relevance is NOT comparable, \
+                       so there is no merged ranking. Take a result's db_path and pass it as the \
+                       `db` argument of another tool to drill in. Not for: natural-language \
+                       discovery (no federated semantic search exists). Returns: \
+                       {registry_available, projects[{name, db_path, symbols[]}], queried}.",
+        annotations(
+            title = "Search all projects",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            // Reads only local databases this machine already wrote.
+            open_world_hint = false
+        ),
+        output_schema = output_schema_for::<SearchAllResult>()
+    )]
+    pub(crate) async fn cartog_search_all(
+        &self,
+        Parameters(params): Parameters<SearchAllParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            debug!("search_all: {}", params.query);
+            if params.query.is_empty() {
+                return Err(mcp_err("query cannot be empty"));
+            }
+            let kind = params
+                .kind
+                .as_deref()
+                .map(|s| {
+                    s.parse::<cartog_core::SymbolKind>()
+                        .map_err(|_| mcp_err("invalid symbol kind"))
+                })
+                .transpose()?;
+            let limit = params.limit.unwrap_or(10).min(MAX_SEARCH_LIMIT);
+
+            let listing = cartog_registry::list_projects(cartog_db::CURRENT_SCHEMA_VERSION);
+            if !listing.available {
+                // A distinct, honest answer: there is no registry, which is not
+                // the same as "no other project matched".
+                let empty = SearchAllResult {
+                    registry_available: false,
+                    projects: Vec::new(),
+                    queried: 0,
+                    unreadable: Vec::new(),
+                    elided_by_cap: 0,
+                };
+                let structured = serde_json::to_value(&empty).ok();
+                return Ok(success_result(
+                    "No project registry on this machine, so there are no other projects to \
+                     search. Nothing has been indexed yet, or CARTOG_REGISTRY is disabled.\n"
+                        .to_string(),
+                    structured,
+                ));
+            }
+
+            let (candidates, elided_by_cap) = select_fanout_candidates(
+                listing.projects,
+                &db_path,
+                params.under.as_deref(),
+                params.lang.as_deref(),
+                params.max_projects.unwrap_or(10),
+            );
+            let queried = candidates.len();
+
+            let mut projects = Vec::new();
+            let mut unreadable = Vec::new();
+            for row in candidates {
+                match query_project(&row, &params.query, kind, limit) {
+                    Ok(symbols) if symbols.is_empty() => {}
+                    Ok(symbols) => projects.push(ProjectMatches {
+                        name: row.display_name().to_string(),
+                        root: row.root.display().to_string(),
+                        db_path: row.db_path.display().to_string(),
+                        description: row.description.as_ref().map(|d| d.text.clone()),
+                        symbols,
+                    }),
+                    // Carry the root cause: schema drift, a corrupt file, an
+                    // EACCES and a SQLITE_BUSY need different fixes, so one
+                    // guessed cause sends the reader after the wrong one.
+                    Err(e) => {
+                        unreadable.push(format!("{}: {}", row.display_name(), e.root_cause()))
+                    }
+                }
+            }
+
+            // Trim whole projects at the element level so the text block and
+            // `structuredContent` are bounded together — an outputSchema tool
+            // must always return structuredContent, so capping only the text
+            // would leave the structured half unbounded (cf. PR #151).
+            let (projects, omitted) = fit_to_budget(projects, mcp_list_budget());
+
+            let result = SearchAllResult {
+                registry_available: true,
+                projects,
+                queried,
+                unreadable,
+                elided_by_cap,
+            };
+            let mut text = render_search_all(&result, &params.query);
+            if omitted > 0 {
+                text.push_str(&format!(
+                    "\n({omitted} more project(s) with matches omitted to fit the response \
+                     budget.)\n"
+                ));
+            }
+            let structured = serde_json::to_value(&result).ok();
+            Ok(success_result(text, structured))
+        })
+        .await
+        .map_err(|e| mcp_err(format!("search_all task panicked: {e}")))?
+    }
+}
+
+/// Choose which projects a fan-out queries, and count what the cap left out.
+///
+/// Mirrors `select_candidates` in `crates/cartog/src/commands/search_all.rs`. The
+/// logic is duplicated rather than shared because no existing crate can host
+/// it: `cartog-registry` deliberately carries no `cartog-db` dependency (so a
+/// graph-schema bump never forces a registry migration) and `cartog-db`
+/// depends only on `cartog-core`. Keep the two in step.
+///
+/// Excludes the caller's own project — `cartog_search` covers that, and
+/// including it would double-report every hit. Orders most-symbols-first so
+/// the cap keeps substantial projects rather than registry order.
+pub(crate) fn select_fanout_candidates(
+    rows: Vec<cartog_registry::ProjectRow>,
+    current_db: &Path,
+    under: Option<&str>,
+    lang: Option<&str>,
+    max_projects: usize,
+) -> (Vec<cartog_registry::ProjectRow>, usize) {
+    let current = (!current_db.as_os_str().is_empty())
+        .then(|| cartog_registry::slot_for_db("serve", current_db));
+    let under = under.map(|u| canonical_path(Path::new(u)));
+
+    let mut kept: Vec<cartog_registry::ProjectRow> = rows
+        .into_iter()
+        .filter(|r| {
+            let slot = cartog_registry::slot_for_db("serve", &r.db_path);
+            current.as_deref() != Some(slot.as_str()) && current.as_deref() != Some(r.id.as_str())
+        })
+        .filter(|r| !r.markers.missing)
+        .filter(|r| match &under {
+            Some(u) => canonical_path(&r.root).starts_with(u),
+            None => true,
+        })
+        .filter(|r| match lang {
+            Some(l) => r
+                .languages
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(l)),
+            None => true,
+        })
+        .collect();
+
+    kept.sort_by(|a, b| {
+        b.symbol_count
+            .unwrap_or(0)
+            .cmp(&a.symbol_count.unwrap_or(0))
+            .then_with(|| a.display_name().cmp(b.display_name()))
+    });
+
+    let cap = max_projects.clamp(1, 50);
+    let elided = kept.len().saturating_sub(cap);
+    kept.truncate(cap);
+    (kept, elided)
+}
+
+/// Query one foreign project, read-only.
+///
+/// `open_readonly` also refuses a schema this binary does not own, which is the
+/// right outcome: a drifted graph's rows cannot be trusted, so the project is
+/// reported unreadable rather than half-answered.
+fn query_project(
+    row: &cartog_registry::ProjectRow,
+    query: &str,
+    kind: Option<cartog_core::SymbolKind>,
+    limit: u32,
+) -> anyhow::Result<Vec<cartog_core::Symbol>> {
+    let db = cartog_db::Database::open_readonly(&row.db_path)?;
+    let mut symbols = db.search(query, kind, None, limit)?;
+    if mcp_compact() {
+        symbols.compact_in_place();
+    }
+    Ok(symbols)
+}
+
+/// `canonicalize` when the path exists, else the path as given, so a filter
+/// still behaves sensibly for a project whose database has been removed.
+fn canonical_path(p: &Path) -> std::path::PathBuf {
+    // Expand `~` first: an agent may pass `~/work` literally, and
+    // `canonicalize` leaves it alone — so the `starts_with` test would match
+    // nothing and the fan-out would silently return zero projects. Mirrors
+    // `canonical` in the CLI's search_all.rs.
+    let expanded = match p.strip_prefix("~") {
+        Ok(rest) => match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            Some(home) => std::path::PathBuf::from(home).join(rest),
+            None => p.to_path_buf(),
+        },
+        Err(_) => p.to_path_buf(),
+    };
+    expanded.canonicalize().unwrap_or(expanded)
+}
+
+fn render_search_all(result: &SearchAllResult, query: &str) -> String {
+    if result.projects.is_empty() {
+        return format!(
+            "No symbols matching '{query}' in {} other project(s).\n",
+            result.queried
+        );
+    }
+    let total: usize = result.projects.iter().map(|p| p.symbols.len()).sum();
+    let mut out = format!(
+        "{total} match(es) for '{query}' across {} of {} project(s). Ranked within each \
+         project; cross-project relevance is not comparable.\n",
+        result.projects.len(),
+        result.queried,
+    );
+    for p in &result.projects {
+        out.push_str(&format!("\n{} ({})\n", p.name, p.root));
+        if let Some(d) = &p.description {
+            out.push_str(&format!("  {d}\n"));
+        }
+        for s in &p.symbols {
+            out.push_str(&format!(
+                "  {} — {}:{}\n",
+                s.name, s.file_path, s.start_line
+            ));
+        }
+        out.push_str(&format!("  db: {}\n", p.db_path));
+    }
+    if !result.unreadable.is_empty() {
+        out.push_str(&format!(
+            "\nCould not read {} project(s):\n  {}\n",
+            result.unreadable.len(),
+            result.unreadable.join("\n  "),
+        ));
+    }
+    if result.elided_by_cap > 0 {
+        out.push_str(&format!(
+            "\n{} more project(s) matched but were not queried — raise max_projects.\n",
+            result.elided_by_cap,
+        ));
+    }
+    out
 }

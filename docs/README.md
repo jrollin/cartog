@@ -22,7 +22,7 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 
 - [reference/cli.md](reference/cli.md) — all 28 commands and global flags
 - [reference/config.md](reference/config.md) — all `.cartog.toml` keys and environment variables
-- [reference/mcp-tools.md](reference/mcp-tools.md) — 17 MCP tools, progress, cancellation, logging
+- [reference/mcp-tools.md](reference/mcp-tools.md) — 18 MCP tools, progress, cancellation, logging
 - [reference/exit-codes.md](reference/exit-codes.md) — `cartog self` exit codes and state file
 - [updates.md](updates.md) — full `cartog self update` surface (canonical reference; procedures are in [how-to/update-cartog.md](how-to/update-cartog.md))
 

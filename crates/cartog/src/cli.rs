@@ -308,12 +308,38 @@ pub enum Command {
         kind: Option<SymbolKindFilter>,
 
         /// Filter to a specific file path
-        #[arg(long)]
+        ///
+        /// Scoped to this project, so it cannot combine with `--all` (a path in
+        /// one project means nothing in another).
+        #[arg(long, conflicts_with = "all")]
         file: Option<String>,
 
         /// Maximum results to return (capped at 100)
+        ///
+        /// With `--all` this applies **per project**, so the output holds at
+        /// most `limit x max-projects` symbols.
         #[arg(long, default_value = "30")]
         limit: u32,
+
+        /// Search this machine's OTHER indexed projects instead of this one
+        ///
+        /// Results stay grouped per project and ranked within it — cross-project
+        /// relevance is not comparable, so no merged ranking is attempted. Each
+        /// project's database is opened read-only; nothing is ever written.
+        #[arg(long)]
+        all: bool,
+
+        /// With --all: only projects whose root is inside this directory
+        #[arg(long, requires = "all")]
+        under: Option<String>,
+
+        /// With --all: only projects that indexed this language (e.g. typescript)
+        #[arg(long, requires = "all")]
+        lang: Option<String>,
+
+        /// With --all: how many projects to query (default 10)
+        #[arg(long, requires = "all")]
+        max_projects: Option<usize>,
     },
 
     /// Token-budget-aware codebase summary (file tree + top symbols by centrality)

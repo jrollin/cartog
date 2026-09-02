@@ -737,3 +737,21 @@ fn backfill_keeps_a_declared_identity_when_the_config_is_unreadable() {
         rows[0]
     );
 }
+
+#[test]
+fn search_all_refuses_to_combine_with_the_project_scoped_file_filter() {
+    // A path in one project means nothing in another, so `--file` cannot scope
+    // a fan-out. Silently ignoring it returned unfiltered results.
+    let sb = Sandbox::new();
+    let out = sb.cmd(&["search", "main", "--all", "--file", "src/lib.rs"]);
+
+    assert!(
+        !out.status.success(),
+        "--all with --file must be rejected, not silently ignored"
+    );
+    assert!(
+        stderr(&out).contains("cannot be used with"),
+        "the error must name the conflict: {}",
+        stderr(&out)
+    );
+}

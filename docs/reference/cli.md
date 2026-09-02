@@ -31,7 +31,7 @@ On a TTY a spinner shows the live phase with a climbing counter (`parsing M/N fi
 
 **Consent gate.** On a project with no `.cartog.toml` and no existing index, `cartog index` (and `cartog rag index`, `cartog watch`) refuse rather than create a `.cartog/` for a project you haven't opted into. Run `cartog init` first (then index), or set `CARTOG_AUTO_INIT=1` to index with defaults without writing a config file. An existing index, or any present `.cartog.toml`, also grants consent. See [config.md § Index-creation consent gate](config.md#index-creation-consent-gate).
 
-### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N]`
+### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N] [--all]`
 
 Find symbols by partial name — use this when you know roughly what you're looking for but need the exact name before calling `refs`, `callees`, or `impact`.
 
@@ -51,6 +51,60 @@ function  validate_user     services/user.py:12
 Results ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
 
 Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `enum-member`, `type-alias`, `trait`, `module`, `document`, `macro`, `component`.
+
+#### Searching the machine's other projects (`--all`)
+
+`--all` answers "which project defines this?" when you do not know which
+repository to look in. It searches this machine's **other** indexed projects
+(the current one is covered by a plain `cartog search`):
+
+```bash
+cartog search CreateShipment --all                          # every eligible project
+cartog search Shift --all --under ~/work                    # only that subtree
+cartog search Shift --all --under ~/work --lang ruby        # and only Ruby projects
+cartog search Widget --all --max-projects 25                # raise the project cap
+```
+
+```text
+3 matches for 'CreateShipment' across 2 of 7 projects:
+
+svc-shipping (/home/u/work/svc-shipping)
+  Shipment creation, tracking, and carrier integration.
+  CreateShipment              internal/ship/ship.go:41
+  --db /home/u/work/svc-shipping/.cartog/db.sqlite
+
+svc-bff (/home/u/work/svc-bff)
+  CreateShipmentInput         src/graphql/shipment.ts:18
+  --db /home/u/work/svc-bff/.cartog/db.sqlite
+```
+
+**Fan-out, not consolidation.** The [registry](#cartog-projects-listaddscanforgetprune)
+supplies the candidate database paths; each is opened **read-only** and queried
+on its own, and results stay grouped under the project they came from. So:
+
+- **Ranking is within a project only.** `in_degree` centrality is per-graph, so
+  a flat cross-project ordering cannot be justified without a ranking benchmark
+  that does not exist. The grouped output sidesteps the question rather than
+  guessing.
+- **Nothing is merged and nothing is written.** No combined database (a
+  documented [non-goal](../explanation/project-registry.md#non-goals)), and a
+  registry row grants discovery, not write access.
+
+`--limit` applies **per project**, so output is bounded by
+`limit x max-projects`. `--max-projects` (default 10, clamped to 1..=50) caps
+how many databases are opened, most-symbols-first; when the cap elides
+candidates the output says so. A project that cannot be read is listed with the
+**reason** (a schema drift, a corrupt file and a permission error need different
+fixes) rather than silently skipped. `--under` accepts `~`, and composes with
+`--lang` as an AND.
+
+`--file` is **not** combinable with `--all`: a path in one project means nothing
+in another, so cartog rejects the pair rather than silently ignoring the filter.
+
+There is no `--all` for semantic search: vectors from projects embedded with
+different providers/models/dimensions live in different spaces, so merging their
+scores would be meaningless. See
+[cross-project queries](../explanation/cross-project-queries.md).
 
 ### `cartog outline <file>`
 
@@ -471,9 +525,9 @@ When `--watch` is passed, a background file watcher keeps the code graph up to d
 
 Opening two Claude Code windows on the same project (or running `cartog serve` in a terminal while a Claude Code window has its own MCP child) is supported via **single-writer election**:
 
-- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 17 MCP tools. The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
-- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 15 of 17 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) and `cartog_update` (which arms a machine-level deferred update, not a DB write) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
-- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 17 tools become available on what was the secondary.
+- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 18 MCP tools. The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
+- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 16 of 18 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) and `cartog_update` (which arms a machine-level deferred update, not a DB write) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
+- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 18 tools become available on what was the secondary.
 
 Escape hatches:
 

@@ -7,6 +7,7 @@ mod handlers;
 mod lsp_gate;
 mod read_tools;
 mod schema;
+mod search_all;
 mod single_writer;
 mod update;
 mod validation;

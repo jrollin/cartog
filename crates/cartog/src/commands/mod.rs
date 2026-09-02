@@ -27,6 +27,7 @@ mod index;
 mod manage;
 mod rag;
 mod search;
+mod search_all;
 
 pub use graph::{
     cmd_callees, cmd_deps, cmd_hierarchy, cmd_impact, cmd_outline, cmd_refs, cmd_trace,
@@ -35,6 +36,7 @@ pub use index::cmd_index;
 pub use manage::{cmd_changes, cmd_map, cmd_pull, cmd_push, cmd_stats, cmd_watch};
 pub use rag::{cmd_context, cmd_rag_index, cmd_rag_search, cmd_rag_setup};
 pub use search::cmd_search;
+pub use search_all::{cmd_search_all, FanoutFilter, OutputOpts};
 
 pub mod ide;
 pub mod init;

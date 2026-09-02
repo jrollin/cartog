@@ -1335,6 +1335,7 @@ impl CartogServer {
             + Self::rag_router()
             + Self::manage_router()
             + Self::projects_router()
+            + Self::search_all_router()
     }
 }
 

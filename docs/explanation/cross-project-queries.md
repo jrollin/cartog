@@ -44,6 +44,25 @@ Step 5 does not inherit these (it touches the indexer, not cross-DB reads).
 
 ## Step 4 — federated exact-symbol search
 
+> **Status: implemented.** `cartog search --all` (CLI) and `cartog_search_all`
+> (the 18th MCP tool). Resolved as designed below: fan out to each project's
+> database read-only, group results per project, no merged ranking and no
+> merged database. [Open question 1](#open-questions) was settled by taking the
+> grouped presentation, which needs no ranking benchmark. Filters are
+> `--under <path>` and `--lang <lang>`, both keyed on columns the registry
+> already stores (so no schema change), with `--max-projects` (default 10)
+> bounding the fan-out.
+>
+> The select-and-query logic is **duplicated** between
+> `crates/cartog/src/commands/search_all.rs` and
+> `crates/cartog-mcp/src/tools/search.rs`: no existing crate can host it, since
+> `cartog-registry` deliberately carries no `cartog-db` dependency and
+> `cartog-db` depends only on `cartog-core`. Keep the two in step.
+>
+> Measured on a real 53-project fleet: a full fan-out opens every database
+> read-only in ~117 ms, so the cap and filters are about relevance and response
+> size rather than latency.
+
 ### Why this one is tractable
 
 Symbol search ranks by a **deterministic, absolute formula**, not a per-DB
@@ -713,12 +732,101 @@ problem, not gaps in the plan:
    [The serve/watch lock topology](#the-servewatch-lock-topology-corrected).
 2. **The embedding-fingerprint diagnostic** in `cartog projects list` — a few
    lines, and it tells you whether step 6 is even reachable.
-3. **Step 4** (federated `search`) — real value, tractable because the rank
-   formula is absolute.
+3. ~~**Step 4** (federated `search`)~~ — **shipped.** Grouped-per-project
+   output, so the cross-graph ranking question never had to be answered.
 4. **Step 5** (contract edges) — the differentiating feature; scope to one
    protocol behind a flag. Independent of 4, 6, 7.
 5. **Step 6 / step 7** — only on evidence. Step 6 needs matching fingerprints
    plus a benchmark; step 7 needs users who actually run many projects at once.
+
+## Entry conditions: what evidence unblocks each step
+
+Steps 4-7 are gated "on evidence" throughout this document, which is only
+actionable if the evidence is named and someone is collecting it. Phase 1 (the
+registry), step 3 (descriptions) and step 3b (backfill) all shipped, so the
+instruments now exist. This section states what each step is waiting for, and
+what would falsify it.
+
+**Nothing here is a commitment to build.** A step whose entry condition is never
+met is a step that was correctly not built, and this section is as much a record
+of how to decide *against* one.
+
+### The instrument that has to run first
+
+Every condition below is a fact about how people actually use the registry, and
+none of it is knowable from the code. What is missing is not analysis but
+observation: **routing has to be used in earnest before its failures mean
+anything.** Concretely, that means using `cartog_list_projects` + `--db` as the
+normal way to answer a cross-repo question for long enough to accumulate cases
+where it was awkward, and keeping the cases rather than the impression.
+
+Until then, every step below is a hypothesis about a problem nobody has
+demonstrated having. The registry cost ~11ms per changed pass to build; the
+next step should not cost more than that on the strength of a guess.
+
+### Step 4 — federated exact-symbol search — **built**
+
+Built without waiting for its entry condition, on an explicit instruction to
+implement it. Recorded plainly because the reasoning still stands: step 4 was
+the cheapest of the four and the only one whose value does not depend on the
+others, and it was also the one most likely to be *unnecessary* — descriptions
+exist so the project is usually known before the query, and step 4's premise is
+that they sometimes are not enough.
+
+**The falsification test therefore still applies, after the fact:** if in
+practice the project is nearly always known before the search, `--all` will go
+unused and that is the answer. What to watch is simply whether it gets reached
+for. It cost no schema change and no new crate, so an unused `--all` is a small
+loss; the note is here so a future reader does not mistake "shipped" for
+"validated".
+
+### Step 5 — cross-service contract edges
+
+| | |
+|---|---|
+| **Entry condition** | Concrete cases of "who calls this endpoint?" that the per-project graph cannot answer, in a fleet where the contract is actually declared somewhere machine-readable (OpenAPI, protobuf, a schema registry). |
+| **Evidence to keep** | The contract artifact, and whether producer and consumer both reference it in a form a parser could join on. |
+| **Falsified if** | The join key does not exist in practice — contracts are prose, hand-rolled clients, or drifted from the code. Then the edges would be derived from something untrue, which is worse than absent. |
+| **Blocked on** | [Open question 2](#open-questions) (where contract operations live), which this document calls step 5's central unresolved question. |
+
+This is the differentiating feature and the one whose entry condition is
+hardest to satisfy honestly. The failure mode is not "we built it and it was
+slow" but "we built it and it was confidently wrong", which is why the
+falsification test is about the join key existing rather than about demand.
+
+### Step 6 — federated semantic search
+
+| | |
+|---|---|
+| **Entry condition** | Two things, both mechanical: the `embed-mismatch` marker is *absent* across the projects in question (matching provider/model/dimension — vectors in different spaces cannot be merged meaningfully), **and** rerank-the-union beats per-project search on `make bench-rag`. |
+| **Evidence to keep** | The marker distribution across a real fleet, then the benchmark delta. |
+| **Falsified if** | Fleets are heterogeneously embedded in practice, or the union does not beat the parts. The benchmark is the arbiter, not the argument. |
+| **Blocked on** | The marker survey, which needs no new code — `cartog projects list` already reports it. |
+
+The [cheap check that might delete this step](#the-cheap-check-that-might-delete-this-step)
+is the right first move here, and it is now runnable: backfill (step 3b) is what
+makes a *whole fleet's* markers visible without re-indexing each project, which
+is exactly the survey this step needs.
+
+### Step 7 — shared read-only multi-project server
+
+| | |
+|---|---|
+| **Entry condition** | Evidence that several projects are genuinely served *at once*, often enough that their combined idle footprint matters. [Open question 4](#open-questions) names the registry as the instrument. |
+| **Evidence to keep** | Concurrent `live` marker counts over time, and the memory that actually costs. |
+| **Falsified if** | The realistic concurrent count is two or three. `make bench-memory` already guards the idle footprint, so a handful of peers is a solved problem and step 7 is a large change buying nothing. |
+| **Blocked on** | The observation itself. `live` markers make it countable; nothing samples them over time yet. |
+
+Note the asymmetry: step 7 is the largest change of the four and has the
+weakest entry condition, because "how many projects does one person serve
+concurrently" is a question about people, not code. It should stay last.
+
+### Why this is not scheduled
+
+Each condition needs elapsed time using the shipped feature, not a work item.
+The registry, its descriptions and its backfill are the instruments; the next
+decision point is whichever condition trips first, and the honest answer today
+is that none has.
 
 ## Open questions
 

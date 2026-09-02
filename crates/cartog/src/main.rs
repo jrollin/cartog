@@ -400,17 +400,42 @@ fn main() -> Result<()> {
             kind,
             file,
             limit,
-        } => commands::cmd_search(
-            &db_path,
-            &query,
-            kind,
-            file.as_deref(),
-            limit,
-            cli.json,
-            compact,
-            token_budget,
-            embedding_dim,
-        ),
+            all,
+            under,
+            lang,
+            max_projects,
+        } => {
+            if all {
+                commands::cmd_search_all(
+                    &db_path,
+                    &query,
+                    kind,
+                    limit,
+                    &commands::FanoutFilter {
+                        under: under.map(Into::into),
+                        lang,
+                        max_projects,
+                    },
+                    commands::OutputOpts {
+                        json: cli.json,
+                        compact,
+                        token_budget,
+                    },
+                )
+            } else {
+                commands::cmd_search(
+                    &db_path,
+                    &query,
+                    kind,
+                    file.as_deref(),
+                    limit,
+                    cli.json,
+                    compact,
+                    token_budget,
+                    embedding_dim,
+                )
+            }
+        }
         Command::Map { tokens, mermaid } => {
             commands::cmd_map(&db_path, tokens, cli.json, compact, mermaid, embedding_dim)
         }
