@@ -143,6 +143,20 @@ a one-line parse smoke test against the workspace core before writing the extrac
 
 11. README, `docs/{product,structure,tech,usage}.md`, this file (AGENTS.md / CLAUDE.md), `skills/cartog/SKILL.md` + `skills/cartog/references/supported_languages.md`, and the site (`site/src/pages/index.astro` + `usage.astro`): add a `lang-tag` whose icon is an `<img>` pointing at a new `site/public/assets/{lang}.svg` brand mark (24×24, white/brand fill legible on dark), matching the existing language chips. Edit the `.astro` source only; the Pages workflow rebuilds `site/dist`. See the site-sync note under **Documentation Convention**.
 
+## Adding an MCP Tool
+
+The surface is wider than it looks — the `cartog_list_projects` addition touched 25 sites.
+In order:
+
+1. `crates/cartog-mcp/src/tools/<concern>.rs` — a `#[tool_router(router = <concern>_router, vis = "pub(crate)")] impl CartogServer` block. New concern = new file + a `mod` line in the **logic-free** `tools/mod.rs` (keep every module private; widen a helper to `pub(crate)` only for tests, and say why at the item).
+2. `crates/cartog-mcp/src/types.rs` — the result type, deriving `Serialize + JsonSchema` for `output_schema_for::<T>()`.
+3. `crates/cartog-mcp/src/lib.rs` — add `+ Self::<concern>_router()` to the hand-written `tool_router()` combinator, and name the tool in `with_instructions` if it is an entry point.
+4. **Bound the output**: a list-returning tool needs `fit_to_budget` at the handler. Note `tool_response_named`'s final clamp truncates **text only** — `structuredContent` is never re-clamped, so the element trim is its only bound. Budget against the *envelope*: nesting an array one level deeper in pretty-printed JSON measured ~9% larger.
+5. **Gating**: `refuse_if_degraded` / `refuse_if_read_only` gate tools that touch the **index DB**. Applying them to a tool that doesn't is a category error (see `cartog_update`, `cartog_list_projects`).
+6. Bump the count everywhere, including **derived** phrasings a find-and-replace misses: `docs/{README,usage,troubleshooting,agent-snippet}.md`, `docs/reference/{cli,mcp-tools,README}.md`, `docs/{explanation,architecture}/concurrency.md`, `docs/structure.md`, `README.md`, this file, `skills/cartog/SKILL.md`, and both `.astro` pages. Watch for "N of M tools", "N query tools", "N read-only tools", "and N more".
+7. Add the tool to `docs/reference/mcp-tools.md`'s table, `skills/cartog/SKILL.md`'s CLI↔MCP table, and the site's tool table. A tool with a user-facing workflow also needs a **how-to** (`docs/how-to/`) and **troubleshooting** entries — Diataxis is only satisfied when all four quadrants are covered, not just reference + explanation.
+8. Pin the count in a test (`the_tool_router_exposes_N_tools`) so a dropped `mod` or router term fails there rather than by a client silently not seeing the tool.
+
 ## CI/CD
 
 - **CI** (`.github/workflows/ci.yml`): runs on push/PR to `main` — check, fmt, clippy, test, coverage (cargo-llvm-cov → Codecov). CI runs **raw `cargo`, not `make check`**, and gates the **default and `--no-default-features` builds separately** for both clippy (`cargo clippy --all-targets [--no-default-features] -- -D warnings`) and test (`cargo test [--no-default-features]`). `make check-rust` only runs the default-feature pass, so before pushing also run `cargo clippy --all-targets --no-default-features -- -D warnings` and `cargo test --no-default-features`, or CI fails on a gate you didn't see locally.

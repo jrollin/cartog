@@ -52,7 +52,13 @@ pub fn cmd_projects_forget(target: &str, json: bool) -> Result<()> {
     let payload = to_json(&removed, false);
     super::super::shared::output(&payload, json, None, |_| {
         if removed.unavailable {
-            return "The project registry could not be opened; nothing was dropped.\n".to_string();
+            // `unavailable` here almost always means "there is no registry"
+            // (nothing indexed on this machine yet, or it is disabled), not a
+            // fault — say so, since "could not be opened" reads like an error
+            // the user should chase.
+            return "No project registry on this machine — nothing has been indexed yet, \
+                    or CARTOG_REGISTRY is disabled. Nothing was dropped.\n"
+                .to_string();
         }
         match removed.dropped.len() {
             0 => format!("No registered project matches '{target}'.\n"),

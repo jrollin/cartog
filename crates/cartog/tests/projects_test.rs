@@ -335,6 +335,48 @@ fn forget_removes_the_row_and_leaves_the_index_on_disk() {
 }
 
 #[test]
+fn maintenance_on_a_machine_with_no_registry_explains_rather_than_erroring() {
+    // "could not be opened" reads like a fault the user should chase; the
+    // actual situation is almost always "there is no registry yet".
+    let sb = Sandbox::new();
+
+    let forget = sb.cmd(&["projects", "forget", "anything"]);
+    assert!(
+        forget.status.success(),
+        "an absent registry is not an error"
+    );
+    assert!(
+        stdout(&forget).contains("No project registry on this machine"),
+        "got: {}",
+        stdout(&forget)
+    );
+
+    let prune = sb.cmd(&["projects", "prune"]);
+    assert!(prune.status.success());
+    assert!(
+        stdout(&prune).contains("No project registry"),
+        "got: {}",
+        stdout(&prune)
+    );
+}
+
+#[test]
+fn forget_never_creates_the_registry_it_was_asked_to_remove_from() {
+    // Regression: `forget` opened the registry read-write (which creates it)
+    // before knowing whether anything matched, so forgetting on a machine with
+    // no registry left an empty one behind.
+    let sb = Sandbox::new();
+
+    let _ = sb.cmd(&["projects", "forget", "nosuch"]);
+    let _ = sb.cmd(&["projects", "prune"]);
+
+    assert!(
+        find_registry(sb.home.path()).is_none(),
+        "no maintenance command may create the registry"
+    );
+}
+
+#[test]
 fn forget_an_unknown_target_reports_no_match_and_changes_nothing() {
     let sb = Sandbox::new();
     assert!(sb.index().status.success());

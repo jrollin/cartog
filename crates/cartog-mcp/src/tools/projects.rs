@@ -85,6 +85,11 @@ impl CartogServer {
 /// no dependence on the process-global `CARTOG_REGISTRY`. That matters because
 /// this crate has two independent test-serialization mechanisms, so an
 /// env-mutating test can never be reliably isolated from the other.
+/// `pub(crate)` for `tests/degraded.rs`, which drives this directly rather
+/// than through the process-global `CARTOG_REGISTRY` — this crate has two
+/// independent test-serialization mechanisms (`#[serial]` and the tokio
+/// `SERIAL` mutex), so an env-mutating test cannot be reliably isolated from
+/// the other set. No production caller outside this module.
 pub(crate) fn build_result(
     listing: &cartog_registry::Listing,
     db_path: &Path,
