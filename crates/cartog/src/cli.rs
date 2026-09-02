@@ -486,6 +486,33 @@ pub enum ProjectsCommand {
     /// List every indexed project on this machine, with staleness markers
     List,
 
+    /// Register an already-indexed project without re-indexing it.
+    ///
+    /// Use this to make a project cartog indexed a while ago show up in
+    /// `projects list` again. It refuses when there is no index at the path —
+    /// it registers an existing one, it never creates one.
+    Add {
+        /// Project root to register (defaults to the current directory)
+        #[arg(default_value = ".")]
+        path: String,
+    },
+
+    /// Register every already-indexed project under a directory
+    ///
+    /// Walks only the directory you name — never `$HOME` by default.
+    Scan {
+        /// Directory to search for indexed projects
+        dir: String,
+
+        /// How many levels below `dir` to search
+        #[arg(long, default_value = "2")]
+        depth: u32,
+
+        /// Report what would be registered without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Drop one project's registry row. Never touches its index.
     Forget {
         /// Project id, root path, database path, or name — either the declared

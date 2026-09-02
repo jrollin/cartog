@@ -192,6 +192,15 @@ pub(crate) fn did_you_mean(db: &Database, name: &str) -> String {
     format!(" — did you mean: {}?", names.join(", "))
 }
 
+/// `skip_serializing_if` predicate for counters that are absent when zero.
+///
+/// A zero count is noise in `--json`: "nothing was elided" and "nothing was
+/// skipped" are the uninteresting default, and omitting the field keeps a
+/// consumer from having to special-case it.
+pub(crate) fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -269,7 +269,7 @@ with `cartog rag index --force`.
 This was the pre-Phase-2 symptom of two cartog processes racing on the
 embedding-dimension migration. As of v0.17 cartog uses single-writer
 election: the first `cartog serve` is the primary, the second attaches
-read-only and exposes 15 of 17 MCP tools (`cartog_index` and
+read-only and exposes 16 of 18 MCP tools (`cartog_index` and
 `cartog_rag_index` return a clear refusal pointing at the primary). If the
 primary process dies, the secondary takes over within ~10s.
 
@@ -468,10 +468,24 @@ The `--json` output distinguishes them via `registry_available`.
 
 ### A project I indexed is not listed
 
-Registration follows the index-creation consent gate, so a project cartog was refused
-permission to index is not registered either. Index it (`cartog init`, or `CARTOG_AUTO_INIT=1`)
-and it appears. A `cartog serve` running **degraded** — no `.cartog.toml`, no index — also
-registers nothing, by design.
+Most often it was indexed **before** the registry existed, or a while ago and untouched since:
+registration rides on a write, so nothing has recorded it yet. Opening the project again is
+enough (the plugin launches `cartog serve --watch`, and a `serve` startup records it). To make
+it appear now, without re-indexing:
+
+```bash
+cartog projects add /path/to/that/project   # one project
+cartog projects scan ~/work --dry-run       # a whole tree, preview first
+```
+
+Both read the existing index rather than rebuilding it, so the row shows the real counts but
+reads `never` for last-indexed until the project's next real `cartog index`.
+
+If `add` answers `no cartog index at ...`, the project genuinely has no database — index it
+first. Registration also follows the index-creation consent gate, so a project cartog was
+refused permission to index is not registered either: index it (`cartog init`, or
+`CARTOG_AUTO_INIT=1`) and it appears. A `cartog serve` running **degraded** — no
+`.cartog.toml`, no index — registers nothing, by design.
 
 ### A project is listed as `missing`
 

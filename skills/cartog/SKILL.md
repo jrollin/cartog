@@ -358,6 +358,7 @@ Validates git repo, config, key paths, database, LSP servers, embedding provider
 ```bash
 cartog projects list          # every indexed project, with db_path
 cartog projects list --json   # machine-readable
+cartog projects add <path>    # a project you know is indexed but is not listed
 ```
 
 Use when the question is about a **different repository** than the current one — a sibling

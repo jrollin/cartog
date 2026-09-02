@@ -996,3 +996,89 @@ fn unknown_project_key_is_salvaged_without_costing_the_index() {
         IndexConsent::Granted
     );
 }
+
+// ── resolve_project_at: root-relative resolution for `projects scan` ──
+
+#[test]
+fn resolve_project_at_reads_the_named_roots_own_config_not_the_cwd() {
+    // `projects scan` visits many roots in one process, so resolution must not
+    // key off the working directory the way `resolve_db_path` does.
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    fs::write(
+        root.join(".cartog.toml"),
+        "[project]\nname = \"Alpha\"\ndescription = \"Does alpha things.\"\n",
+    )
+    .unwrap();
+
+    let resolved = resolve_project_at(root);
+
+    assert_eq!(
+        resolved.declared,
+        DeclaredAtRoot::Known {
+            name: Some("Alpha".to_string()),
+            description: Some("Does alpha things.".to_string()),
+        }
+    );
+    assert_eq!(
+        resolved.db_path,
+        root.join(cartog_db::DB_DIR).join(cartog_db::DB_FILENAME),
+        "the default db path must be resolved under the named root"
+    );
+}
+
+#[test]
+fn resolve_project_at_treats_a_relative_database_path_as_relative_to_that_root() {
+    // A relative `[database] path` declared by a scanned root means "inside
+    // that root". Joining it to the scanning process's cwd instead would point
+    // the registry row at a database that does not exist.
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    fs::write(
+        root.join(".cartog.toml"),
+        "[database]\npath = \"custom/g.db\"\n",
+    )
+    .unwrap();
+
+    assert_eq!(resolve_project_at(root).db_path, root.join("custom/g.db"));
+}
+
+#[test]
+fn resolve_project_at_still_resolves_a_db_path_when_the_config_is_unreadable() {
+    // A rejected config is not a reason to claim the project has no index —
+    // the same rule the consent gate applies.
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    fs::write(root.join(".cartog.toml"), "this is not = = valid toml\n").unwrap();
+
+    let resolved = resolve_project_at(root);
+
+    assert_eq!(
+        resolved.db_path,
+        root.join(cartog_db::DB_DIR).join(cartog_db::DB_FILENAME)
+    );
+    // `Unreadable`, not `Known { name: None }`: a config that fails to parse
+    // declares *nothing*, and a writer conflating the two erases a name and
+    // description an earlier working config stored.
+    assert_eq!(
+        resolved.declared,
+        DeclaredAtRoot::Unreadable,
+        "a rejected config must be distinguishable from one declaring nothing"
+    );
+}
+
+#[test]
+fn resolve_project_at_declares_nothing_for_a_root_with_no_config() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let resolved = resolve_project_at(dir.path());
+
+    // Absent, not rejected: there is nothing to fail to parse, so the values
+    // are legitimately known to be unset.
+    assert_eq!(
+        resolved.declared,
+        DeclaredAtRoot::Known {
+            name: None,
+            description: None,
+        }
+    );
+}

@@ -593,7 +593,7 @@ man cartog
 On macOS the path is the same. On Linux distros some packagers prefer
 `/usr/share/man/man1/`; either works as long as it is on `MANPATH`.
 
-### `cartog projects <list|forget|prune>`
+### `cartog projects <list|add|scan|forget|prune>`
 
 Inspect the machine-local registry of indexed cartog projects. This is how a session in one
 repository discovers the *other* projects indexed on the same machine — where their databases
@@ -607,14 +607,44 @@ or for a `serve` running degraded.
 ```bash
 cartog projects list                # every indexed project on this machine
 cartog projects list --json         # same, machine-readable
+cartog projects add [PATH]          # register an existing index without re-indexing it
+cartog projects scan <DIR>          # register every indexed project under DIR
+cartog projects scan <DIR> --dry-run  # report what would be registered, write nothing
 cartog projects forget <target>     # drop one row; the project's index is untouched
 cartog projects prune               # drop rows whose database file is gone
 cartog projects prune --dry-run     # report what would be dropped, change nothing
 ```
 
-`cartog projects` is a **read** command over the registry, not over any project index: it takes
-no `--db`, never creates a `.cartog/`, and works from any directory — including one that was
-never indexed.
+`list`, `forget` and `prune` are **read/maintenance** commands over the registry, not over any
+project index: they take no `--db`, never create a `.cartog/`, and work from any directory —
+including one that was never indexed.
+
+#### Backfilling projects indexed earlier (`add` / `scan`)
+
+Because registration rides on a write, **a project indexed a while ago and untouched since does
+not appear**. Opening it again in an editor re-registers it for free (the plugin launches
+`cartog serve --watch`, and a `serve` startup records the project). `add` and `scan` are for
+making a whole fleet visible now instead of repo-by-repo:
+
+- **`add [PATH]`** registers one project (default: the current directory). It reads the counts
+  off the index that is already there and **refuses when there is no index** — it registers an
+  existing index, it never creates one, so it cannot put a row in the registry describing
+  nothing.
+- **`scan <DIR>`** walks **only the directory you name** — never `$HOME` by default — and
+  registers every indexed project it finds. `--depth N` bounds the walk (default `2`), and
+  `--dry-run` prints what it would register without writing. Symlinked directories are not
+  followed, and dependency/build sinks (`node_modules`, `target`, `vendor`, dotdirs, …) are
+  skipped.
+
+Both open the project's database **read-only**: a backfill never migrates a schema and never
+takes a write lock on a project you have open elsewhere. A database on an older graph schema
+cannot be measured, so its row is written from the metadata alone — it appears with `?` counts
+and a `stale-schema` marker (see the marker table below), which is precisely when
+being able to find it matters.
+
+Neither stamps `last_indexed`: nothing here indexed anything, so the row reads `never` rather
+than claiming a month-old graph is fresh. The counts, languages, name and description are all
+recorded, so a backfilled project is immediately routable.
 
 Each project shows its **display name** — `[project] name` from that project's `.cartog.toml`
 if set, else the root directory's basename — and, when known, a one-line **description**,

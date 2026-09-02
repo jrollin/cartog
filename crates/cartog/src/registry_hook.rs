@@ -54,6 +54,39 @@ pub fn record_embedded(db: &Database, db_path: &Path, root: &Path, declared: Dec
     // it unroutable.
     //
     // Still carries no `last_indexed`: see the doc comment above.
+    record_measured_without_indexing(db, db_path, root, declared);
+}
+
+/// Record a project the user asked to register, without indexing it.
+///
+/// The backfill writer behind `cartog projects add` / `scan`. It reads the
+/// counts off an index that already exists, so the row is immediately useful,
+/// but carries **no `last_indexed`**: nothing here indexed anything, and
+/// stamping "now" would report a month-old graph as freshly indexed. The
+/// listing renders the resulting `NULL` as `never`, which is the honest
+/// answer — this row's writer never indexed, exactly as for a `serve` startup
+/// row.
+///
+/// Carrying no `last_indexed` also means the fingerprint fast path applies: a
+/// re-`add` of an unchanged project refreshes `last_seen` and the declared
+/// identity without paying `stats()` twice.
+pub fn record_backfilled(db: &Database, db_path: &Path, root: &Path, declared: DeclaredUpdate) {
+    record_measured_without_indexing(db, db_path, root, declared);
+}
+
+/// Record full counts for a project that was **not** indexed by this caller.
+///
+/// The shared body of [`record_embedded`] and [`record_backfilled`]: both
+/// measure an index someone else built, so both must record every count and
+/// leave `last_indexed` alone. Sharing one body is deliberate, exactly as
+/// [`record_opened`] delegates to [`record_declared`] — the omission of
+/// `last_indexed` is the invariant, and two copies could drift on it.
+fn record_measured_without_indexing(
+    db: &Database,
+    db_path: &Path,
+    root: &Path,
+    declared: DeclaredUpdate,
+) {
     let facts = ProjectFacts {
         declared,
         ..facts_with_counts(db, db_path, root)

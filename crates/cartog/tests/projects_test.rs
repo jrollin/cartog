@@ -487,3 +487,253 @@ fn rag_index_does_not_claim_the_graph_was_re_indexed() {
         "rag index must never move last_indexed"
     );
 }
+
+// ── backfill: `projects add` / `scan` ──
+
+#[test]
+fn add_registers_an_index_that_already_exists() {
+    // The gap backfill closes: a project indexed while the registry was
+    // disabled is invisible until its next index. `add` makes it visible
+    // without re-indexing it.
+    let sb = Sandbox::new();
+    let indexed = sb.cmd_env(
+        &["index", "--no-lsp", "."],
+        &[("CARTOG_AUTO_INIT", "1"), ("CARTOG_REGISTRY", "")],
+    );
+    assert!(indexed.status.success(), "{}", stderr(&indexed));
+    assert!(
+        sb.rows().is_empty(),
+        "an index written with the registry disabled must leave no row"
+    );
+
+    let out = sb.cmd(&["projects", "add", "."]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let rows = sb.rows();
+    assert_eq!(rows.len(), 1, "add must register exactly one project");
+    assert!(
+        rows[0]["symbol_count"].as_u64().is_some_and(|n| n > 0),
+        "a backfilled row must carry the counts it read off the existing index: {:?}",
+        rows[0]
+    );
+}
+
+#[test]
+fn add_refuses_a_root_with_no_index_and_writes_no_row() {
+    // Registering a project cartog has never indexed would put a row in the
+    // registry describing nothing.
+    let sb = Sandbox::new();
+    let out = sb.cmd(&["projects", "add", "."]);
+
+    assert!(
+        !out.status.success(),
+        "add must refuse when there is no index"
+    );
+    assert!(
+        stderr(&out).contains("no cartog index"),
+        "the refusal must say why: {}",
+        stderr(&out)
+    );
+    assert!(
+        sb.rows().is_empty(),
+        "a refused add must leave the registry untouched"
+    );
+}
+
+#[test]
+fn add_never_creates_an_index() {
+    // `add` is a registry write, not an index write: it must not materialize a
+    // `.cartog/` for a project that has none, which is the consent gate's rule.
+    let sb = Sandbox::new();
+    let _ = sb.cmd(&["projects", "add", "."]);
+
+    assert!(
+        !sb.repo.path().join(".cartog").exists(),
+        "a refused add must not create a .cartog/ directory"
+    );
+}
+
+#[test]
+fn a_backfilled_row_reports_last_indexed_as_never() {
+    // Nothing here indexed anything. Stamping "now" would report a month-old
+    // graph as freshly indexed — the one thing a backfilled row must not do.
+    let sb = Sandbox::new();
+    assert!(sb
+        .cmd_env(
+            &["index", "--no-lsp", "."],
+            &[("CARTOG_AUTO_INIT", "1"), ("CARTOG_REGISTRY", "")],
+        )
+        .status
+        .success());
+    assert!(sb.cmd(&["projects", "add", "."]).status.success());
+
+    assert!(
+        sb.rows()[0]["last_indexed"].is_null(),
+        "a backfilled row must carry no last_indexed: {:?}",
+        sb.rows()[0]
+    );
+    assert!(
+        stdout(&sb.cmd(&["projects", "list"])).contains("never"),
+        "the listing must render it as 'never', not as fresh"
+    );
+}
+
+#[test]
+fn scan_registers_every_indexed_project_under_the_named_directory() {
+    let sb = Sandbox::new();
+    let one = sb.sibling("svc-one");
+    let two = sb.sibling("svc-two");
+    for dir in [&one, &two] {
+        let out = sb.cmd_in(
+            dir,
+            &["index", "--no-lsp", "."],
+            &[("CARTOG_AUTO_INIT", "1"), ("CARTOG_REGISTRY", "")],
+        );
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    assert!(sb.rows().is_empty());
+
+    let parent = one.parent().unwrap().to_path_buf();
+    let out = sb.cmd(&["projects", "scan", parent.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let names: Vec<String> = sb
+        .rows()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        names.contains(&"svc-one".to_string()) && names.contains(&"svc-two".to_string()),
+        "scan must register both projects, got {names:?}"
+    );
+}
+
+#[test]
+fn scan_dry_run_reports_what_it_would_add_and_writes_nothing() {
+    let sb = Sandbox::new();
+    let one = sb.sibling("svc-dry");
+    assert!(sb
+        .cmd_in(
+            &one,
+            &["index", "--no-lsp", "."],
+            &[("CARTOG_AUTO_INIT", "1"), ("CARTOG_REGISTRY", "")],
+        )
+        .status
+        .success());
+
+    let parent = one.parent().unwrap().to_path_buf();
+    let out = sb.cmd(&["projects", "scan", parent.to_str().unwrap(), "--dry-run"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert!(
+        stdout(&out).contains("svc-dry"),
+        "a dry run must name what it would register: {}",
+        stdout(&out)
+    );
+    assert!(sb.rows().is_empty(), "a dry run must write no registry row");
+}
+
+#[test]
+fn scan_skips_a_directory_that_holds_no_index() {
+    // A scan the user pointed at a directory of ordinary repos must register
+    // nothing rather than inventing rows.
+    let sb = Sandbox::new();
+    let plain = sb.sibling("not-indexed");
+    let parent = plain.parent().unwrap().to_path_buf();
+
+    let out = sb.cmd(&["projects", "scan", parent.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "an empty scan is not an error: {}",
+        stderr(&out)
+    );
+    assert!(sb.rows().is_empty());
+}
+
+#[test]
+fn scan_honours_the_depth_bound() {
+    // The consent story is that the user typed the path, so the walk must stay
+    // inside the depth they asked for.
+    let sb = Sandbox::new();
+    let deep = sb.home.path().join("a").join("b").join("c").join("deep");
+    fs::create_dir_all(deep.join(".git")).unwrap();
+    fs::write(deep.join("x.rs"), "pub fn x() {}\n").unwrap();
+    assert!(sb
+        .cmd_in(
+            &deep,
+            &["index", "--no-lsp", "."],
+            &[("CARTOG_AUTO_INIT", "1"), ("CARTOG_REGISTRY", "")],
+        )
+        .status
+        .success());
+
+    let base = sb.home.path().join("a");
+    let shallow = sb.cmd(&["projects", "scan", base.to_str().unwrap(), "--depth", "1"]);
+    assert!(shallow.status.success(), "{}", stderr(&shallow));
+    assert!(
+        sb.rows().is_empty(),
+        "depth 1 must not reach a project three levels down"
+    );
+
+    let deeper = sb.cmd(&["projects", "scan", base.to_str().unwrap(), "--depth", "3"]);
+    assert!(deeper.status.success(), "{}", stderr(&deeper));
+    assert_eq!(sb.rows().len(), 1, "depth 3 must reach it: {:?}", sb.rows());
+}
+
+#[test]
+fn a_backfilled_row_carries_the_description_the_repository_declares() {
+    // Backfill runs the same declared-identity resolution as `index`, so a
+    // project registered this way is routable, not just present.
+    let sb = Sandbox::new();
+    fs::write(
+        sb.repo.path().join(".cartog.toml"),
+        "[project]\nname = \"Billing Service\"\ndescription = \"Reconciles invoices.\"\n",
+    )
+    .unwrap();
+    assert!(sb
+        .cmd_env(&["index", "--no-lsp", "."], &[("CARTOG_REGISTRY", "")])
+        .status
+        .success());
+
+    assert!(sb.cmd(&["projects", "add", "."]).status.success());
+
+    let rows = sb.rows();
+    assert_eq!(rows[0]["name"], "Billing Service");
+    assert_eq!(rows[0]["description"], "Reconciles invoices.");
+}
+
+#[test]
+fn backfill_keeps_a_declared_identity_when_the_config_is_unreadable() {
+    // A rejected config declares nothing — it does not declare "no name". The
+    // stored values came from a config that parsed; a typo must not erase them,
+    // which is the invariant `ProjectSource::Rejected -> DeclaredUpdate::Keep`
+    // exists to protect and which `cartog index` already honours.
+    let sb = Sandbox::new();
+    fs::write(
+        sb.repo.path().join(".cartog.toml"),
+        "[project]\nname = \"Billing\"\ndescription = \"Reconciles invoices.\"\n",
+    )
+    .unwrap();
+    assert!(sb.cmd(&["index", "--no-lsp", "."]).status.success());
+    assert_eq!(sb.rows()[0]["name"], "Billing");
+
+    // Break the config, then backfill.
+    fs::write(
+        sb.repo.path().join(".cartog.toml"),
+        "[project]\nname = = \"Billing\"\n",
+    )
+    .unwrap();
+    assert!(sb.cmd(&["projects", "add", "."]).status.success());
+
+    let rows = sb.rows();
+    assert_eq!(
+        rows[0]["name"], "Billing",
+        "an unparseable config must not erase the declared name: {:?}",
+        rows[0]
+    );
+    assert_eq!(
+        rows[0]["description"], "Reconciles invoices.",
+        "nor the declared description: {:?}",
+        rows[0]
+    );
+}

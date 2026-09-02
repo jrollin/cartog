@@ -20,6 +20,40 @@ Every `cartog index`, `cartog rag index`, `cartog pull`, watcher re-index, and `
 startup records its project, so anything you have indexed on this machine is already listed.
 There is nothing to enable.
 
+## When the other project is not listed
+
+Registration rides on a write, so a project you indexed a while ago and have not touched since
+may not appear yet. Opening it again is enough — the plugin launches `cartog serve --watch`, and
+a `serve` startup records the project. To make one (or a whole fleet) visible without waiting:
+
+```bash
+cartog projects add ~/work/svc-shipping    # register one existing index
+cartog projects scan ~/work                # register every indexed project under ~/work
+cartog projects scan ~/work --dry-run      # see what that would register first
+```
+
+Neither re-indexes anything: they read the index that is already there, so the project lists
+with its real counts and description but shows `never` for last-indexed until its next real
+`cartog index`. `add` refuses a path with no index rather than registering an empty row, and
+`scan` walks only the directory you name (`--depth`, default 2). See
+[`cartog projects`](../reference/cli.md#cartog-projects-listaddscanforgetprune) for details.
+
+## When you know the symbol but not the project
+
+Searching every indexed project at once is one command, and avoids listing then guessing:
+
+```bash
+cartog search CreateShipment --all                     # every eligible project
+cartog search Shift --all --under ~/work               # only that subtree
+cartog search Shift --all --under ~/work --lang ruby   # and only Ruby projects
+```
+
+Results are grouped per project and ranked within each one, and each group prints the `--db`
+path to drill in with. `--limit` applies per project; `--max-projects` (default 10) bounds how
+many databases are opened. Only `search` federates — there is no `--all` for `rag search`,
+because vectors from differently-embedded projects are not comparable. See
+[`cartog search --all`](../reference/cli.md#searching-the-machines-other-projects---all).
+
 ## Finding the path programmatically
 
 `--json` gives a stable shape for scripts and agents:

@@ -525,6 +525,12 @@ fn main() -> Result<()> {
         // `indexes_with_config` (and therefore from the consent gate).
         Command::Projects(sub) => match sub {
             ProjectsCommand::List => commands::cmd_projects_list(cli.json, token_budget),
+            ProjectsCommand::Add { path } => commands::cmd_projects_add(&path, cli.json),
+            ProjectsCommand::Scan {
+                dir,
+                depth,
+                dry_run,
+            } => commands::cmd_projects_scan(&dir, depth, dry_run, cli.json),
             ProjectsCommand::Forget { target } => commands::cmd_projects_forget(&target, cli.json),
             ProjectsCommand::Prune { dry_run } => commands::cmd_projects_prune(dry_run, cli.json),
         },

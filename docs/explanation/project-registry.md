@@ -764,16 +764,37 @@ cartog projects scan <DIR> [--depth N] [--dry-run]
   registering a project cartog has never indexed would put a row in the registry
   describing nothing.
 - **`scan`** walks a directory **the user names**. Never `$HOME` by default,
-  bounded `--depth`, and `--dry-run` prints what it would add. The consent story
-  is that the user typed the path.
+  bounded `--depth` (default 2), and `--dry-run` prints what it would add. The
+  consent story is that the user typed the path. Symlinked directories are not
+  followed, so a scan cannot escape the tree the user pointed at.
+
+Both are **implemented**. Two details settled during implementation:
+
+- **Resolution is root-relative, not cwd-relative.** `resolve_db_path` and
+  `load_config` both key off the working directory, which is right for every
+  command acting on "the project I am in" and wrong for `scan`, which visits
+  many roots in one process. `config::resolve_project_at` is the root-relative
+  counterpart, and it reads each root's own `[project]` name/description — so a
+  backfilled row is routable rather than merely present.
+- **The database is opened read-only.** `open_existing` would run migrations on
+  a project the user never asked to touch, and `open_readonly` refuses a drifted
+  schema outright — so backfill takes the read-only open and, when it fails,
+  still writes the row from the migration-free metadata probe alone. A
+  stale-schema project therefore appears with `?` counts and its `stale-schema`
+  marker instead of being silently skipped or silently migrated.
 
 ### A backfilled row must be honest about what it does not know
 
 A row created without indexing knows the DB's counts but not whether they
 reflect current code:
 
-- **`last_indexed`** comes from the DB if recoverable, else stays `NULL` and the
-  listing renders `never (backfilled)` rather than implying freshness.
+- **`last_indexed`** stays `NULL`, and the listing renders it as `never` rather
+  than implying freshness. This design originally specified a distinct
+  `never (backfilled)`; that was dropped on implementation. A `serve`-startup
+  row already writes `NULL` for exactly the same reason and renders the same
+  way, so the two are one state — "this row's writer never indexed" — and a
+  separate label would have needed a stored column to express a distinction
+  that does not exist.
 - **The `stale-schema` check still applies.** A month-old DB is the most likely
   to be on an older schema — so backfill is precisely the scenario where the P2
   version probe earns its keep, since `open_readonly` would refuse and the cached
@@ -1404,8 +1425,8 @@ Unit (`cartog` crate):
 - `serve` startup against an already-registered DB updates `last_seen` only and
   does **not** call `stats()`
 - `projects add` on a path with no index refuses and writes no row
-- a backfilled row with no recoverable index time renders as `never
-  (backfilled)`, not as fresh
+- a backfilled row carries no `last_indexed` and renders as `never`, not as
+  fresh
 - a registry on a filesystem that rejects the WAL pragma falls back to
   `journal_mode=DELETE` and still round-trips a row
 - an already-WAL registry file is never live-downgraded
