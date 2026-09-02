@@ -54,7 +54,7 @@ Both `cartog init` and `cartog index` are safe to run via Bash during an active 
 
 If MCP runs with `--watch`, the watcher will also re-index on file changes (and re-embed when the repo already has embeddings). A manual `cartog index .` is still safe; it just shares the write-queue.
 
-When two `cartog serve` instances run against the same DB (e.g. two Claude Code windows on the same project), single-writer election picks one as **primary** and the others attach **read-only**. Read-only secondaries refuse `cartog_index` / `cartog_rag_index` with a clear message but serve the other 14 MCP tools normally (the 2 write tools are gated; the remaining 14 include `cartog_update`, which arms a machine-level deferred update rather than a DB write, so it is served even though only 13 tools carry `readOnlyHint = true`). The secondary auto-promotes to primary within ~10s if the primary process dies.
+When two `cartog serve` instances run against the same DB (e.g. two Claude Code windows on the same project), single-writer election picks one as **primary** and the others attach **read-only**. Read-only secondaries refuse `cartog_index` / `cartog_rag_index` with a clear message but serve the other 15 MCP tools normally (the 2 write tools are gated; the remaining 15 include `cartog_update`, which arms a machine-level deferred update rather than a DB write, so it is served even though only 14 tools carry `readOnlyHint = true`). The secondary auto-promotes to primary within ~10s if the primary process dies.
 
 If `cartog_index` or `cartog_rag_index` fails with a read-only error, call `cartog_stats` and check `role` (`primary` vs `read-only`) and `watcher_active` (whether the primary is auto-reindexing). That tells you whether to wait for promotion (~10s) or whether the primary's watcher will pick up changes on its own.
 
@@ -116,6 +116,8 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | `cartog context "<task>"` | `cartog_context` | `task`, `tokens?` |
 | `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
 | `cartog stats [--savings]` | `cartog_stats` | — |
+| `cartog projects list` | `cartog_list_projects` | — |
+| `cartog projects forget/prune` | — (CLI only) | — |
 | `cartog savings` | — (CLI only — alias for `cartog stats --savings`) | — |
 | `cartog doctor` | — (CLI only) | — |
 | `cartog init` | — (CLI only) | — |
@@ -351,6 +353,25 @@ cartog doctor                            # check all requirements
 cartog --json doctor                     # structured JSON output
 ```
 Validates git repo, config, key paths, database, LSP servers, embedding provider, reranker, the remote, and the release version. Returns OK / Warn / Error per check and exits with code 1 if any error. Run this when commands fail unexpectedly or after first setup to verify everything is working.
+
+### Projects (other indexed repos on this machine)
+```bash
+cartog projects list          # every indexed project, with db_path
+cartog projects list --json   # machine-readable
+```
+
+Use when the question is about a **different repository** than the current one — a sibling
+service, a shared library. Take that project's `db_path` and pass it to any cartog command:
+
+```bash
+cartog search CreateShipment --db /path/to/other/.cartog/db.sqlite
+```
+
+Routing signal is **name + languages + size only** — this does not describe what each project
+does, so treat a name match as a hint. `current: true` marks the project you are already in;
+use the normal commands for that one, not `--db`.
+
+`cartog projects forget <target>` / `prune` clean up the registry; neither touches an index.
 
 ### Stats (index summary, savings retention hook)
 ```bash

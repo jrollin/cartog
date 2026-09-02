@@ -78,19 +78,11 @@ fn facts_with_counts(db: &Database, db_path: &Path, root: &Path) -> ProjectFacts
 /// check. A probe failure leaves the field `None` — "not known" — never an
 /// error.
 fn read_fingerprint_into(facts: &mut ProjectFacts, db_path: &Path) {
-    facts.schema_version = cartog_db::read_schema_version_at(db_path)
-        .ok()
-        .filter(|v| *v > 0);
-    facts.embed_provider = cartog_db::read_metadata_at(db_path, cartog_db::EMBED_PROVIDER_KEY)
-        .ok()
-        .flatten();
-    facts.embed_model = cartog_db::read_metadata_at(db_path, cartog_db::EMBED_MODEL_KEY)
-        .ok()
-        .flatten();
-    facts.embed_dim = cartog_db::read_metadata_at(db_path, cartog_db::EMBED_DIMENSION_KEY)
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse().ok());
+    let probed = cartog_db::read_database_facts_at(db_path);
+    facts.schema_version = probed.schema_version;
+    facts.embed_provider = probed.embed_provider;
+    facts.embed_model = probed.embed_model;
+    facts.embed_dim = probed.embed_dim;
 }
 
 fn now_unix() -> i64 {

@@ -47,9 +47,11 @@ impl ProjectFacts {
     /// they read it from a different working directory than the writer had.
     #[must_use]
     pub fn identity_only(db_path: impl Into<PathBuf>, root: impl Into<PathBuf>) -> Self {
+        let db_path = absolutize(db_path.into());
+        let root = reconcile_root(absolutize(root.into()), &db_path);
         Self {
-            db_path: absolutize(db_path.into()),
-            root: absolutize(root.into()),
+            db_path,
+            root,
             schema_version: None,
             file_count: None,
             symbol_count: None,
@@ -103,6 +105,71 @@ pub fn infer_root_from_db_path(db_path: &Path) -> PathBuf {
         Some(p) => p.to_path_buf(),
         None => db_path.to_path_buf(),
     }
+}
+
+/// Format a registry timestamp (Unix seconds) as `YYYY-MM-DDTHH:MM:SSZ`.
+///
+/// Lives here because the registry is what stores these timestamps, and both
+/// consumers — the `cartog projects` CLI and the `cartog_list_projects` MCP
+/// tool — need the same rendering. `cartog-mcp` cannot reach the binary's
+/// `time_fmt` (the binary depends on it, not the reverse), so without a shared
+/// home the two grew independent date implementations.
+///
+/// A pre-epoch value (a corrupted stored timestamp) clamps to the epoch rather
+/// than panicking: a bad row must not crash a listing.
+#[must_use]
+pub fn format_timestamp(secs: i64) -> String {
+    let secs = secs.max(0);
+    let (h, m, s) = {
+        let rem = secs % 86_400;
+        (rem / 3600, (rem % 3600) / 60, rem % 60)
+    };
+    let (y, mo, d) = civil_from_days(secs / 86_400);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+/// Days since the Unix epoch → `(year, month, day)`.
+///
+/// Howard Hinnant's `civil_from_days`, the standard branch-free algorithm —
+/// correct across leap years and century non-leap boundaries.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Reduce an indexed path to the *project* root.
+///
+/// Every index command takes a path, and it need not be the project root:
+/// `cartog index src` inside `myproj` indexes a subdirectory while writing to
+/// `myproj/.cartog/db.sqlite`. Storing `src` as the root would name the project
+/// `src` — and since phase-1 routing keys on the name, an agent would be told
+/// the project is called `src`.
+///
+/// The database's location is the authority on where the project is, so when
+/// the given root is not an ancestor of `db_path`, prefer the root inferred
+/// from `db_path`. An `--db` pointing outside the indexed tree entirely (an
+/// unusual but legal setup) keeps the caller's root, since then neither path
+/// can vouch for the other.
+fn reconcile_root(root: PathBuf, db_path: &Path) -> PathBuf {
+    let inferred = infer_root_from_db_path(db_path);
+    // The common case: the caller's root IS the project root, or an ancestor
+    // of the DB — keep it, it is the more authoritative of the two.
+    if db_path.starts_with(&root) {
+        return root;
+    }
+    // The caller indexed a subdirectory of the project the DB belongs to.
+    if root.starts_with(&inferred) {
+        return inferred;
+    }
+    root
 }
 
 /// Make `p` absolute, resolving symlinks where the path exists.
@@ -292,6 +359,65 @@ mod tests {
             infer_root_from_db_path(Path::new("/.cartog/db.sqlite")),
             Path::new("/")
         );
+    }
+
+    #[test]
+    fn timestamps_format_correctly_across_leap_and_century_boundaries() {
+        assert_eq!(format_timestamp(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_timestamp(1_700_000_000), "2023-11-14T22:13:20Z");
+        // A leap day, the case naive date math gets wrong.
+        assert_eq!(format_timestamp(1_709_164_800), "2024-02-29T00:00:00Z");
+        // 2100 is NOT a leap year (century rule).
+        assert_eq!(format_timestamp(4_107_542_400), "2100-03-01T00:00:00Z");
+    }
+
+    #[test]
+    fn a_pre_epoch_timestamp_clamps_rather_than_panicking() {
+        // A corrupted stored value must not crash a listing.
+        assert_eq!(format_timestamp(-1), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn indexing_a_subdirectory_still_names_the_project_after_its_root() {
+        // Regression: `cartog index src` inside `myproj` stored root=".../src"
+        // and therefore name="src". Phase-1 routing keys on the name, so an
+        // agent was told the project is called `src`.
+        let dir = tempfile::TempDir::new().unwrap();
+        let proj = dir.path().join("myproj");
+        std::fs::create_dir_all(proj.join(".cartog")).unwrap();
+        std::fs::create_dir_all(proj.join("src")).unwrap();
+        let db = proj.join(".cartog").join("db.sqlite");
+        std::fs::write(&db, b"").unwrap();
+
+        let f = ProjectFacts::identity_only(&db, proj.join("src"));
+
+        assert_eq!(f.name(), "myproj", "the project is myproj, not src");
+        assert_eq!(f.root, proj.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn indexing_the_project_root_keeps_the_callers_root() {
+        // The common case must be untouched: the caller's root is the more
+        // authoritative of the two when it is an ancestor of the DB.
+        let dir = tempfile::TempDir::new().unwrap();
+        let proj = dir.path().join("myproj");
+        std::fs::create_dir_all(proj.join(".cartog")).unwrap();
+        let db = proj.join(".cartog").join("db.sqlite");
+        std::fs::write(&db, b"").unwrap();
+
+        let f = ProjectFacts::identity_only(&db, &proj);
+
+        assert_eq!(f.root, proj.canonicalize().unwrap());
+        assert_eq!(f.name(), "myproj");
+    }
+
+    #[test]
+    fn a_db_outside_the_indexed_tree_keeps_the_callers_root() {
+        // `--db /elsewhere/x.sqlite` while indexing /work/proj: neither path
+        // can vouch for the other, so trust the caller.
+        let f = ProjectFacts::identity_only("/elsewhere/x.sqlite", "/work/proj");
+        assert_eq!(f.root, Path::new("/work/proj"));
+        assert_eq!(f.name(), "proj");
     }
 
     #[test]

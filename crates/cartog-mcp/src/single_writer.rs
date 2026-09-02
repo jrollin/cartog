@@ -799,20 +799,14 @@ async fn wait_for_sigterm() {
 /// `db_path` and no root.
 fn register_served_project(db_path: &std::path::Path) {
     let root = cartog_registry::infer_root_from_db_path(db_path);
-    let mut facts = cartog_registry::ProjectFacts::identity_only(db_path, root);
-    facts.schema_version = cartog_db::read_schema_version_at(db_path)
-        .ok()
-        .filter(|v| *v > 0);
-    facts.embed_provider = cartog_db::read_metadata_at(db_path, cartog_db::EMBED_PROVIDER_KEY)
-        .ok()
-        .flatten();
-    facts.embed_model = cartog_db::read_metadata_at(db_path, cartog_db::EMBED_MODEL_KEY)
-        .ok()
-        .flatten();
-    facts.embed_dim = cartog_db::read_metadata_at(db_path, cartog_db::EMBED_DIMENSION_KEY)
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse().ok());
+    let probed = cartog_db::read_database_facts_at(db_path);
+    let facts = cartog_registry::ProjectFacts {
+        schema_version: probed.schema_version,
+        embed_provider: probed.embed_provider,
+        embed_model: probed.embed_model,
+        embed_dim: probed.embed_dim,
+        ..cartog_registry::ProjectFacts::identity_only(db_path, root)
+    };
     cartog_registry::record_project(&facts);
 }
 

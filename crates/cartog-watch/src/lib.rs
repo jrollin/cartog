@@ -1011,19 +1011,11 @@ fn record_watched_project(db: &Database, db_path: &str, root: &Path) {
         facts.languages = Some(stats.languages);
     }
     facts.embedding_count = db.embedding_count().ok();
-    facts.schema_version = cartog_db::read_schema_version_at(path)
-        .ok()
-        .filter(|v| *v > 0);
-    facts.embed_provider = cartog_db::read_metadata_at(path, cartog_db::EMBED_PROVIDER_KEY)
-        .ok()
-        .flatten();
-    facts.embed_model = cartog_db::read_metadata_at(path, cartog_db::EMBED_MODEL_KEY)
-        .ok()
-        .flatten();
-    facts.embed_dim = cartog_db::read_metadata_at(path, cartog_db::EMBED_DIMENSION_KEY)
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse().ok());
+    let probed = cartog_db::read_database_facts_at(path);
+    facts.schema_version = probed.schema_version;
+    facts.embed_provider = probed.embed_provider;
+    facts.embed_model = probed.embed_model;
+    facts.embed_dim = probed.embed_dim;
     facts.last_indexed = Some(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

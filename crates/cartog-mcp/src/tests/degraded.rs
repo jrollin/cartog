@@ -371,6 +371,50 @@ fn fake_row(name: &str, db_path: &str) -> cartog_registry::ProjectRow {
     }
 }
 
+/// A registry holding many projects must not blow the response budget.
+///
+/// Both halves matter: the text block AND `structuredContent`. Trimming only
+/// the text would leave the structured half unbounded, which is the defect
+/// PR #151 fixed for the other outputSchema tools.
+#[test]
+fn a_large_project_list_is_trimmed_and_says_so() {
+    let listing = cartog_registry::Listing {
+        projects: (0..400)
+            .map(|i| {
+                fake_row(
+                    &format!("project-{i}"),
+                    &format!("/w/p{i}/.cartog/db.sqlite"),
+                )
+            })
+            .collect(),
+        available: true,
+    };
+
+    let result = crate::tools::projects::build_result(&listing, std::path::Path::new(""));
+    let total = result.projects.len();
+    assert_eq!(total, 400, "precondition: all rows convert");
+
+    // Call the handler's own trim, so removing it from the handler fails here.
+    let mut trimmed = result;
+    let omitted = crate::tools::projects::trim_to_budget(&mut trimmed);
+
+    assert!(omitted > 0, "400 projects must exceed the list budget");
+    assert_eq!(
+        trimmed.projects.len() + omitted,
+        total,
+        "nothing may be lost silently"
+    );
+
+    // The structured half is bounded by the same trim, so it cannot diverge —
+    // and it is never re-clamped downstream, so this is its only bound.
+    let structured = serde_json::to_string_pretty(&trimmed).unwrap();
+    assert!(
+        structured.len() <= crate::mcp_max_bytes(),
+        "structuredContent must stay under the response cap, got {} bytes",
+        structured.len()
+    );
+}
+
 /// The MCP surface is 17 tools. Pinned so a router that silently loses a block
 /// (a `mod` line dropped, a `+ Self::x_router()` removed) fails here rather
 /// than by a client mysteriously not seeing a tool.

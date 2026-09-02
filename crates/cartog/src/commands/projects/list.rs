@@ -123,9 +123,12 @@ pub(crate) fn resolution_rate(resolved: Option<u32>, edges: Option<u32>) -> Opti
     }
 }
 
-/// Render a unix timestamp as RFC3339, matching `state.toml`'s convention.
+/// Render a registry timestamp as RFC3339.
+///
+/// Delegates to `cartog-registry`, which owns these timestamps, so the CLI and
+/// the `cartog_list_projects` MCP tool render them identically.
 fn format_unix(secs: i64) -> String {
-    cartog::time_fmt::format_rfc3339(secs)
+    cartog_registry::format_timestamp(secs)
 }
 
 /// Human-readable listing, one line per project.

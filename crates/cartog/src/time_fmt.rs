@@ -19,17 +19,6 @@ pub fn rfc3339_now() -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
-/// RFC3339 timestamp for an arbitrary Unix second, formatted as
-/// `YYYY-MM-DDTHH:MM:SSZ`.
-///
-/// Shares [`utc_breakdown`] with [`rfc3339_now`] so a leap-year fix cannot
-/// drift between them. A negative input (a clock before the epoch, or a
-/// corrupted stored value) formats as the epoch rather than panicking.
-pub fn format_rfc3339(secs: i64) -> String {
-    let (year, month, day, hour, minute, second) = utc_breakdown(secs.max(0) as u64);
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
-}
-
 /// A coarse "how long ago" for human output: `3m ago`, `4h ago`, `2d ago`.
 ///
 /// Deliberately coarse — the registry records when a project was last indexed,
@@ -165,27 +154,6 @@ pub fn is_leap(year: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn format_rfc3339_matches_the_now_formatter_shape() {
-        // Both must produce the same strict subset, or state.toml round-trips
-        // written by one and parsed by the other would break.
-        let formatted = format_rfc3339(1_700_000_000);
-        assert_eq!(formatted, "2023-11-14T22:13:20Z");
-        assert!(parse_rfc3339_secs(&formatted).is_some());
-    }
-
-    #[test]
-    fn format_rfc3339_round_trips_through_the_parser() {
-        let secs = 1_700_000_000i64;
-        let round = parse_rfc3339_secs(&format_rfc3339(secs)).unwrap();
-        assert_eq!(round as i64, secs);
-    }
-
-    #[test]
-    fn format_rfc3339_clamps_a_pre_epoch_value_instead_of_panicking() {
-        // A corrupted stored timestamp must not crash a listing.
-        assert_eq!(format_rfc3339(-1), "1970-01-01T00:00:00Z");
-    }
 
     #[test]
     fn format_relative_buckets_by_magnitude() {

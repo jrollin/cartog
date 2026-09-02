@@ -454,6 +454,55 @@ similar names exist, cartog appends `— did you mean: A, B, C?`. Use one of the
 suggestions, or run `cartog search X` (fuzzy: prefix + substring) to find the
 exact name first. The MCP tools surface the same suggestion in their response.
 
+## Project registry (`cartog projects`)
+
+### `cartog projects list` says there is no registry
+
+Nothing has been indexed on this machine yet, or the registry is switched off. Check
+`CARTOG_REGISTRY`: an **empty** value disables reads and writes, and a **relative** value is
+refused (it would give each directory its own registry). `cartog doctor` prints the resolved
+path, or `unavailable` when disabled.
+
+An *empty list* on an available registry is different: the registry exists and holds no rows.
+The `--json` output distinguishes them via `registry_available`.
+
+### A project I indexed is not listed
+
+Registration follows the index-creation consent gate, so a project cartog was refused
+permission to index is not registered either. Index it (`cartog init`, or `CARTOG_AUTO_INIT=1`)
+and it appears. A `cartog serve` running **degraded** — no `.cartog.toml`, no index — also
+registers nothing, by design.
+
+### A project is listed as `missing`
+
+Its database file is gone (deleted, or the project was moved). `cartog projects prune` drops
+those rows; `--dry-run` shows them first. Pruning never touches an index that still exists.
+
+### A project is listed twice
+
+Should not happen — a write re-keys a row whose id no longer reproduces rather than adding
+one. If you see it, the two rows have different `db_path` values (e.g. one via a symlink that
+no longer resolves). `cartog projects forget <the stale db_path>` removes the wrong one.
+
+### `cartog projects forget <name>` says the name is ambiguous
+
+Two projects share that directory basename (`~/w1/api` and `~/w2/api`). Deleting both from one
+argument would deregister a project you did not name, so cartog drops nothing and prints the
+candidate ids — re-run with the id you want.
+
+### The counts show `?`
+
+"Not known", not zero. The registry caches whatever the writing command measured: a
+`cartog serve` startup records identity without counting, so a project only ever opened by a
+server has no counts until its next index.
+
+### `cartog: the project registry at ... was unreadable`
+
+The file was not valid SQLite. cartog moved it to `projects.sqlite.corrupt.<timestamp>` and
+started fresh — the original bytes are preserved, never truncated. Re-indexing your projects
+repopulates it. Lock contention is *not* treated as corruption, so a busy registry is never
+quarantined.
+
 ## Logging and signals
 
 ### Info-level lines appear as `[ERROR]` in my MCP client debug log

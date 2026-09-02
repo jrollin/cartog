@@ -51,10 +51,26 @@ impl CartogServer {
         tokio::task::spawn_blocking(move || {
             debug!("list_projects");
             let listing = cartog_registry::list_projects(cartog_db::CURRENT_SCHEMA_VERSION);
-            let result = build_result(&listing, &db_path);
-            let text = render_projects(&result);
-            // Bound text and structured content together: an outputSchema tool
-            // must always return structuredContent, so the two cannot diverge.
+            let mut result = build_result(&listing, &db_path);
+
+            // Trim at the element level, then render — so the text block and
+            // `structuredContent` are bounded *together* and cannot diverge.
+            // An outputSchema tool must always return structuredContent, so
+            // capping only the text would leave the structured half unbounded
+            // (the defect PR #151 fixed for the other list tools).
+            //
+            // A machine with many registered projects is exactly the case this
+            // tool exists for, so the list is genuinely unbounded in principle.
+            let omitted = trim_to_budget(&mut result);
+
+            let mut text = render_projects(&result);
+            if omitted > 0 {
+                // Say so rather than silently showing a subset: an agent
+                // concluding "that's every project" would route wrongly.
+                text.push_str(&format!(
+                    "\n({omitted} more project(s) omitted to fit the response budget.)\n"
+                ));
+            }
             let structured = serde_json::to_value(&result).ok();
             Ok(success_result(text, structured))
         })
@@ -105,7 +121,7 @@ pub(crate) fn build_result(
                 resolved_count: row.resolved_count,
                 embedding_count: row.embedding_count,
                 schema_version: row.schema_version,
-                last_indexed: row.last_indexed.map(format_unix_rfc3339),
+                last_indexed: row.last_indexed.map(cartog_registry::format_timestamp),
                 current,
                 live: row.markers.live,
                 stale_schema: row.markers.stale_schema,
@@ -119,6 +135,25 @@ pub(crate) fn build_result(
         registry_available: listing.available,
         projects,
     }
+}
+
+/// Trim the project list so **both** the text block and `structuredContent`
+/// fit the response cap, returning how many were dropped.
+///
+/// Budgets against the *envelope*, not the bare array: pretty-printed JSON
+/// re-indents every line when the array sits one level deeper inside
+/// `ListProjectsResult`, measured ~9% larger — enough that a list trimmed to
+/// the bare-array budget still overshot the cap.
+///
+/// This bound matters more here than for the other list tools because
+/// `tool_response_named`'s final clamp truncates only the text; the structured
+/// half is never re-clamped, so this trim is the only thing bounding it.
+pub(crate) fn trim_to_budget(result: &mut ListProjectsResult) -> usize {
+    let envelope_budget = mcp_list_budget().saturating_sub(mcp_list_budget() / 8);
+    let projects = std::mem::take(&mut result.projects);
+    let (kept, omitted) = fit_to_budget(projects, envelope_budget);
+    result.projects = kept;
+    omitted
 }
 
 /// Human-readable rendering, kept compact: an agent pays for every token.
@@ -177,55 +212,9 @@ fn render_projects(result: &ListProjectsResult) -> String {
     out
 }
 
-/// RFC3339 from a unix second. Local to this crate so the tool does not depend
-/// on the binary's `time_fmt`.
-fn format_unix_rfc3339(secs: i64) -> String {
-    // Delegates to the same conversion the CLI uses, via chrono-free math.
-    let secs = secs.max(0);
-    let days = secs / 86_400;
-    let rem = secs % 86_400;
-    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    let (y, mo, d) = civil_from_days(days);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
-}
-
-/// Days since the Unix epoch → `(year, month, day)`. Howard Hinnant's
-/// `civil_from_days`, the standard branch-free algorithm; handles leap years.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_rfc3339_formatter_agrees_with_known_timestamps() {
-        // Two independent date implementations now exist (this one and the
-        // binary's time_fmt). Pin this one against known values so they cannot
-        // silently disagree about what a registry timestamp means.
-        assert_eq!(format_unix_rfc3339(0), "1970-01-01T00:00:00Z");
-        assert_eq!(format_unix_rfc3339(1_700_000_000), "2023-11-14T22:13:20Z");
-        // A leap day, the case naive date math gets wrong.
-        assert_eq!(format_unix_rfc3339(1_709_164_800), "2024-02-29T00:00:00Z");
-        // A century non-leap year boundary.
-        assert_eq!(format_unix_rfc3339(4_107_542_400), "2100-03-01T00:00:00Z");
-    }
-
-    #[test]
-    fn a_pre_epoch_timestamp_clamps_rather_than_panicking() {
-        // A corrupted stored value must not crash a tool call.
-        assert_eq!(format_unix_rfc3339(-1), "1970-01-01T00:00:00Z");
-    }
 
     #[test]
     fn an_unavailable_registry_renders_an_explanation_not_an_empty_list() {

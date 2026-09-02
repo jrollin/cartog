@@ -45,7 +45,9 @@ mod state_dir;
 mod write;
 
 pub use maintain::{forget_project_at, prune_projects_at, Removed};
-pub use model::{infer_root_from_db_path, Listing, Markers, ProjectFacts, ProjectRow};
+pub use model::{
+    format_timestamp, infer_root_from_db_path, Listing, Markers, ProjectFacts, ProjectRow,
+};
 pub use path::{registry_path, REGISTRY_ENV};
 pub use read::{list_projects, list_projects_at};
 pub use slot::{detect_live_serve_peer, slot_for_db};

@@ -59,6 +59,14 @@ impl Removed {
 /// forgetting where it is, never destroying it.
 #[must_use]
 pub fn forget_project_at(registry: &Path, target: &str) -> Removed {
+    // Check existence first: `open_read_write` creates the file. A *removal*
+    // command must never materialize machine-global state — `forget` on a
+    // machine with no registry left a fresh empty one behind. (`prune` was
+    // already correct: it reads through `list_projects_at`, which guards on
+    // existence.)
+    if !registry.exists() {
+        return Removed::unavailable();
+    }
     let Ok(conn) = open_read_write(registry) else {
         return Removed::unavailable();
     };
@@ -417,9 +425,24 @@ mod tests {
     fn maintenance_on_an_absent_registry_reports_unavailable() {
         let f = Fixture::new();
         assert!(prune_projects_at(&f.registry, false).unavailable);
-        // forget creates the file (open_read_write) but finds nothing; that is
-        // an empty result, not unavailable.
-        let out = forget_project_at(&f.registry, "x");
-        assert!(out.dropped.is_empty());
+        assert!(forget_project_at(&f.registry, "x").unavailable);
+    }
+
+    #[test]
+    fn neither_maintenance_command_creates_a_registry_that_did_not_exist() {
+        // Regression: `forget` opened read-write before checking for a match,
+        // and `open_read_write` creates the file — so forgetting a project on a
+        // machine with no registry left an empty 20 KB one behind. A removal
+        // command must not materialize machine-global state.
+        let f = Fixture::new();
+
+        let _ = forget_project_at(&f.registry, "nosuch");
+        let _ = prune_projects_at(&f.registry, false);
+        let _ = prune_projects_at(&f.registry, true);
+
+        assert!(
+            !f.registry.exists(),
+            "no maintenance command may create the registry"
+        );
     }
 }

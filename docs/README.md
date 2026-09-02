@@ -12,6 +12,7 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 ## How-to
 
 - [how-to/configure-lsp-servers.md](how-to/configure-lsp-servers.md) — LSP server overrides and concurrency
+- [how-to/query-another-project.md](how-to/query-another-project.md) — query another indexed project on this machine with `--db`
 - [how-to/switch-embedding-provider.md](how-to/switch-embedding-provider.md) — local ONNX, Ollama, OpenAI-compatible
 - [how-to/set-up-s3-sync.md](how-to/set-up-s3-sync.md) — remote push/pull via S3-compatible storage
 - [how-to/update-cartog.md](how-to/update-cartog.md) — upgrade, rollback, deferred updates

@@ -609,12 +609,13 @@ cartog serve --watch --rag    <span class="comment"># force auto-embed even on a
             <tr><td><code>cartog_changes</code></td><td>read</td><td>Symbols affected by recent git changes</td></tr>
             <tr><td><code>cartog_rag_index</code></td><td>write</td><td>Build embedding index</td></tr>
             <tr><td><code>cartog_rag_search</code></td><td>read</td><td>Semantic search</td></tr>
+            <tr><td><code>cartog_list_projects</code></td><td>read</td><td>The other cartog-indexed projects on this machine, each with its <code>db_path</code></td></tr>
             <tr><td><code>cartog_update</code></td><td>write</td><td>Arm a deferred self-update</td></tr>
           </tbody>
         </table>
 
         <h3 id="mcp-tool-shape">Tool metadata &amp; output</h3>
-        <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 13 read-only tools (plus <code>cartog_update</code>) declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
+        <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 14 read-only tools (plus <code>cartog_update</code>) declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
 
         <table>
           <thead>
@@ -1375,6 +1376,8 @@ cartog --tokens 200 outline src/db.rs</pre>
             <tr><td>MCP "Connection closed" on a 2nd editor window</td><td>Expected: single-writer election makes the 2nd instance read-only (15 of 17 tools). Ensure <code>cartog --version</code> is ≥ 0.17 and <code>CARTOG_SINGLE_WRITER</code> is unset.</td></tr>
             <tr><td><code>.cartog.toml</code> is ignored</td><td>Cartog walks up to the git root; with no <code>.git</code>, put it in the cwd or pass <code>--db</code>. <code>cartog config</code> prints the resolved paths.</td></tr>
             <tr><td>Missing symbols / low recall</td><td>Wait for the watcher (or run <code>cartog index</code>); check the file's language is supported and not <code>.gitignore</code>d. A language server on PATH lifts edge resolution from ~25% to up to ~81%.</td></tr>
+            <tr><td><code>cartog projects list</code> shows no registry</td><td>Nothing indexed on this machine yet, or <code>CARTOG_REGISTRY</code> is empty (disabled) / relative (refused). <code>cartog doctor</code> prints the resolved path.</td></tr>
+            <tr><td>A project is listed <code>missing</code></td><td>Its database file is gone. <code>cartog projects prune</code> drops those rows (<code>--dry-run</code> previews); an index that still exists is never touched.</td></tr>
             <tr><td>Anything else</td><td>Run <code>cartog doctor</code> — it checks git, config, database, and model status.</td></tr>
           </tbody>
         </table>

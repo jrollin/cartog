@@ -1154,6 +1154,69 @@ fn embed_provider_and_model_keys_name_the_rows_the_store_writes() {
 }
 
 #[test]
+fn read_database_facts_at_reads_the_whole_fingerprint_in_one_call() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    {
+        let db = Database::open(&db_path, 384).unwrap();
+        db.reconcile_embedding_fingerprint(&EmbeddingFingerprint {
+            provider: "local".to_string(),
+            model: "bge-small".to_string(),
+            dimension: 384,
+        })
+        .unwrap();
+    }
+
+    let facts = read_database_facts_at(&db_path);
+
+    assert_eq!(facts.schema_version, Some(CURRENT_SCHEMA_VERSION));
+    assert_eq!(facts.embed_provider.as_deref(), Some("local"));
+    assert_eq!(facts.embed_model.as_deref(), Some("bge-small"));
+    assert_eq!(facts.embed_dim, Some(384));
+}
+
+#[test]
+fn read_database_facts_at_reports_no_schema_version_for_a_foreign_file() {
+    // `read_schema_version_at` returns Ok(0) for a non-cartog file; storing 0
+    // would render as a real version and misleadingly flag `stale-schema`.
+    let dir = tempfile::TempDir::new().unwrap();
+    let foreign = dir.path().join("foreign.db");
+    std::fs::write(&foreign, b"not a database").unwrap();
+
+    let facts = read_database_facts_at(&foreign);
+
+    assert_eq!(
+        facts,
+        DatabaseFacts::default(),
+        "all-None for a foreign file"
+    );
+}
+
+#[test]
+fn read_database_facts_at_reports_no_embeddings_for_a_never_embedded_db() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let _db = Database::open(&db_path, 384).unwrap();
+
+    let facts = read_database_facts_at(&db_path);
+
+    assert_eq!(facts.schema_version, Some(CURRENT_SCHEMA_VERSION));
+    assert_eq!(facts.embed_provider, None);
+    assert_eq!(facts.embed_model, None);
+    // The dimension IS written at open, so it is known even with no vectors.
+    assert_eq!(facts.embed_dim, Some(384));
+}
+
+#[test]
+fn read_database_facts_at_never_fails_on_an_absent_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert_eq!(
+        read_database_facts_at(&dir.path().join("nope.db")),
+        DatabaseFacts::default()
+    );
+}
+
+#[test]
 fn read_metadata_at_returns_none_for_non_cartog_sqlite() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("foreign.db");

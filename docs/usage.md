@@ -337,10 +337,25 @@ Pre-flight analysis before changing a symbol, module, or file. Maps the full bla
 claude --agent refactoring-scout
 ```
 
+## Multiple Projects
+
+cartog indexes one project per database. When a question spans two repositories, you do not
+need a merged index — you need the other project's database path:
+
+```bash
+cartog projects list                 # every indexed project on this machine
+cartog search Foo --db /path/to/other/.cartog/db.sqlite
+```
+
+Every index, `rag index`, `pull`, watcher re-index, and `serve` startup registers its project,
+so there is nothing to enable. Agents get the same rows from the `cartog_list_projects` MCP
+tool. Full walkthrough: **[how-to/query-another-project.md](how-to/query-another-project.md)**.
+
 ## Commands and Configuration
 
 - All CLI commands and flags: **[reference/cli.md](reference/cli.md)**
 - All `.cartog.toml` keys and env vars: **[reference/config.md](reference/config.md)**
 - MCP tools, progress, cancellation, logging: **[reference/mcp-tools.md](reference/mcp-tools.md)**
 - Self-update exit codes and state file: **[reference/exit-codes.md](reference/exit-codes.md)**
+- Why the registry stores metadata rather than merging graphs: **[explanation/project-registry.md](explanation/project-registry.md)**
 

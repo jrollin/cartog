@@ -274,6 +274,46 @@ pub const EMBED_MODEL_KEY: &str = "embedding_model";
 /// which is exactly why a test pins it against the row the store writes.
 pub const EMBED_DIMENSION_KEY: &str = "embedding_dimension";
 
+/// The embedding fingerprint and schema version of a **closed** cartog
+/// database, as an out-of-crate reader sees them.
+///
+/// Every field is independently optional: a database that was never embedded
+/// has no provider/model/dimension, and a file that is not a cartog database
+/// has no schema version either. Absent means "not known", never zero.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DatabaseFacts {
+    /// Graph-schema version, or `None` when the file is not a cartog database.
+    /// Never `Some(0)`: [`read_schema_version_at`] reports 0 for a foreign
+    /// file, and storing that would render as a real version.
+    pub schema_version: Option<u32>,
+    pub embed_provider: Option<String>,
+    pub embed_model: Option<String>,
+    pub embed_dim: Option<u32>,
+}
+
+/// Read [`DatabaseFacts`] from a closed database file, best-effort.
+///
+/// Companion to [`read_schema_version_at`] / [`read_metadata_at`] for callers
+/// that must *report on* a database rather than open it: skips migrations and
+/// the drift check, and never fails — an unreadable or foreign file yields
+/// all-`None`.
+///
+/// Exists because three separate cartog crates (the binary's index hooks, the
+/// MCP server's serve/promotion hooks, and the watcher) each need exactly this
+/// set of values for the project registry, and had copied the same four probe
+/// calls verbatim. The `EMBED_*_KEY` constants stopped the literals drifting;
+/// this stops the logic drifting.
+#[must_use]
+pub fn read_database_facts_at(path: &std::path::Path) -> DatabaseFacts {
+    let metadata = |key: &str| read_metadata_at(path, key).ok().flatten();
+    DatabaseFacts {
+        schema_version: read_schema_version_at(path).ok().filter(|v| *v > 0),
+        embed_provider: metadata(EMBED_PROVIDER_KEY),
+        embed_model: metadata(EMBED_MODEL_KEY),
+        embed_dim: metadata(EMBED_DIMENSION_KEY).and_then(|v| v.parse().ok()),
+    }
+}
+
 /// SQL to create the sqlite-vec virtual table with the given embedding dimension.
 fn rag_vec_schema(dim: usize) -> String {
     format!("CREATE VIRTUAL TABLE IF NOT EXISTS symbol_vec USING vec0(embedding float[{dim}])")

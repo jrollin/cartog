@@ -77,6 +77,11 @@ fn try_record(registry: &Path, facts: &ProjectFacts) -> rusqlite::Result<()> {
     retire_drifted_rows(&conn, &id, &facts.db_path);
 
     if facts.last_indexed.is_none() && is_unchanged(&conn, &id, fingerprint.as_deref()) {
+        // The heavy write is redundant, but `last_seen` is not: a "last seen"
+        // that does not update when the project is seen is useless, and three
+        // doc comments promised a `serve` startup refreshes it. One cheap
+        // single-column UPDATE, no COALESCE dance needed.
+        touch_last_seen(&conn, &id);
         return Ok(());
     }
 
@@ -120,6 +125,19 @@ fn retire_drifted_rows(conn: &Connection, keep_id: &str, db_path: &Path) {
             error = %e,
             "could not drop a duplicate registry row; the project may list twice"
         );
+    }
+}
+
+/// Refresh only `last_seen` on an otherwise-unchanged row.
+///
+/// Failure is logged and ignored: a stale `last_seen` is cosmetic, and this
+/// runs on a path whose whole point is that nothing important changed.
+fn touch_last_seen(conn: &Connection, id: &str) {
+    if let Err(e) = conn.execute(
+        "UPDATE projects SET last_seen = ?2 WHERE id = ?1",
+        rusqlite::params![id, now_unix()],
+    ) {
+        tracing::warn!(id = %id, error = %e, "could not refresh registry last_seen");
     }
 }
 
@@ -254,6 +272,7 @@ pub(crate) fn upsert_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn languages_round_trip() {
@@ -421,6 +440,37 @@ mod tests {
     }
 
     #[test]
+    fn a_skipped_write_still_refreshes_last_seen() {
+        // Three doc comments promise a `serve` startup refreshes `last_seen`.
+        // The fingerprint skip used to short-circuit the whole upsert, so on an
+        // idle database it refreshed nothing — the opposite of the contract.
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        f.record(&counted(&db, &root, 100));
+        // Backdate so a refresh is observable regardless of clock resolution.
+        {
+            let conn = crate::open::open_read_write(&f.registry).unwrap();
+            conn.execute("UPDATE projects SET last_seen = 1", [])
+                .unwrap();
+        }
+
+        // Identity-only on an unchanged DB: the skip path.
+        f.record(&ProjectFacts::identity_only(&db, &root));
+
+        let row = f.row(&db).unwrap();
+        assert!(
+            row.last_seen > 1,
+            "a skipped write must still refresh last_seen, got {}",
+            row.last_seen
+        );
+        assert_eq!(
+            row.symbol_count,
+            Some(100),
+            "and must still not disturb the counts"
+        );
+    }
+
+    #[test]
     fn a_changed_database_is_re_recorded() {
         let f = WriteFixture::new();
         let (root, db) = f.project("a");
@@ -535,11 +585,19 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn recording_never_fails_its_caller_when_the_registry_is_unwritable() {
         // The whole failure contract: registration is bookkeeping riding on an
         // index pass, so it must cost the caller nothing but a log line.
+        //
+        // `record_project` resolves the registry from the environment, so this
+        // test MUST redirect it. Without the guard it inserted a row into the
+        // developer's own user-global registry on every `cargo test` — pointing
+        // at a `TempDir` that is deleted moments later. `#[serial]` because the
+        // override is process-global.
         let f = WriteFixture::new();
         let (root, db) = f.project("a");
+        let _env = RegistryEnvGuard::redirect(&f.dir.path().join("redirected.sqlite"));
         // A directory where the registry file should be: every open fails.
         let blocked = f.dir.path().join("blocked");
         std::fs::create_dir_all(blocked.join("projects.sqlite")).unwrap();
@@ -548,6 +606,56 @@ mod tests {
         assert!(try_record(&blocked.join("projects.sqlite"), &counted(&db, &root, 1)).is_err());
         // The public entry point must not panic or propagate.
         record_project(&counted(&db, &root, 1));
+    }
+
+    #[test]
+    #[serial]
+    fn recording_is_a_no_op_when_the_registry_is_disabled() {
+        // The kill switch must reach the public entry point, not just
+        // `registry_path()`: `record_project` is what every hook calls.
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        let _env = RegistryEnvGuard::disable();
+
+        record_project(&counted(&db, &root, 1));
+
+        // Nothing was written anywhere — including the fixture's own registry.
+        assert!(
+            f.row(&db).is_none(),
+            "a disabled registry must swallow the write entirely"
+        );
+    }
+
+    /// RAII redirect of `CARTOG_REGISTRY`, restoring the previous value on drop.
+    ///
+    /// Any test that calls the public `record_project` needs this: it resolves
+    /// the registry from the live environment, so an unguarded test writes into
+    /// the developer's real user-global registry.
+    struct RegistryEnvGuard(Option<std::ffi::OsString>);
+
+    impl RegistryEnvGuard {
+        fn set(value: &std::ffi::OsStr) -> Self {
+            let prev = std::env::var_os(crate::path::REGISTRY_ENV);
+            std::env::set_var(crate::path::REGISTRY_ENV, value);
+            Self(prev)
+        }
+
+        fn redirect(path: &Path) -> Self {
+            Self::set(path.as_os_str())
+        }
+
+        fn disable() -> Self {
+            Self::set(std::ffi::OsStr::new(""))
+        }
+    }
+
+    impl Drop for RegistryEnvGuard {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var(crate::path::REGISTRY_ENV, v),
+                None => std::env::remove_var(crate::path::REGISTRY_ENV),
+            }
+        }
     }
 
     #[test]
