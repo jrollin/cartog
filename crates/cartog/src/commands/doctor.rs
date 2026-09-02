@@ -559,6 +559,40 @@ fn check_version(
 
 /// Inventory row: every path and identity a bug report needs, in one place.
 /// Always `Ok` — it reports where things are, not whether they are healthy.
+/// Advisory: does this project say what it is for?
+///
+/// Never an error and never a warning-with-teeth: a project with no
+/// description indexes and registers exactly as before. What it loses is
+/// *routing* — `cartog_list_projects` and `cartog projects list` show a
+/// sibling session a name and a language mix but nothing about intent, which
+/// is the one thing a cross-project question needs.
+///
+/// Mirrors the resolution `cartog index` performs (`[project] description`
+/// first, then the README), so the row reports what would actually be stored.
+fn check_project_description(config: &CartogConfig, project_root: &Path) -> CheckResult {
+    let resolved = super::shared::declared_for(config.project.as_ref(), project_root);
+
+    match resolved.description {
+        Some(d) => CheckResult {
+            name: "description".into(),
+            status: CheckStatus::Ok,
+            // Quoted so a description that happens to read like a status
+            // message is visibly the project's own text, not doctor's.
+            message: format!("{:?} ({})", d.text, d.source.as_str()),
+            ..Default::default()
+        },
+        None => CheckResult {
+            name: "description".into(),
+            status: CheckStatus::Warn,
+            message: "no [project] description and no README paragraph — other sessions \
+                      cannot see what this project does. Add `description` under `[project]` \
+                      in .cartog.toml, or an opening paragraph to README.md, then re-index."
+                .into(),
+            ..Default::default()
+        },
+    }
+}
+
 fn check_paths(config_path: Option<&Path>, db_path: &Path, project_root: &Path) -> CheckResult {
     let show = |p: Option<std::path::PathBuf>| {
         p.map_or_else(|| "unavailable".to_string(), |p| p.display().to_string())
@@ -926,6 +960,7 @@ pub fn cmd_doctor(
     checks.push(check_embedding_provider(provider_config));
     checks.push(check_reranker(provider_config));
     checks.push(check_remote(config, config_rejected));
+    checks.push(check_project_description(config, project_root));
     // Last: it is the only check that can block for seconds on a blackholed
     // network, and doctor is what you run *because* something is already
     // broken. Every local row is computed before the probe starts.
@@ -954,6 +989,77 @@ pub fn cmd_doctor(
 mod tests {
     use super::*;
     use serial_test::serial;
+    /// A config declaring only `[project] description`.
+    fn config_describing(description: Option<&str>) -> CartogConfig {
+        use crate::config::ProjectConfig;
+        CartogConfig {
+            project: Some(ProjectConfig {
+                name: None,
+                description: description.map(str::to_string),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_description_check_passes_on_a_declared_description() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config = config_describing(Some("Invoice generation and payment reconciliation."));
+
+        let check = check_project_description(&config, dir.path());
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert!(check.message.contains("(config)"), "{}", check.message);
+    }
+
+    #[test]
+    fn the_description_check_passes_on_a_readme_paragraph_alone() {
+        // The fallback is what makes this check pass for most repos without
+        // anyone editing a config.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "# Billing\n\nInvoice generation.\n",
+        )
+        .unwrap();
+
+        let check = check_project_description(&CartogConfig::default(), dir.path());
+
+        assert_eq!(check.status, CheckStatus::Ok);
+        assert!(check.message.contains("(readme)"), "{}", check.message);
+    }
+
+    #[test]
+    fn the_description_check_advises_rather_than_fails_when_neither_source_exists() {
+        // Advisory by design: a project with no description still indexes, so
+        // an error here would make `doctor` exit 1 on a healthy repo.
+        let dir = tempfile::TempDir::new().unwrap();
+
+        let check = check_project_description(&CartogConfig::default(), dir.path());
+
+        assert_eq!(check.status, CheckStatus::Warn);
+        assert!(check.message.contains("[project] description"));
+        assert!(check.message.contains("README"));
+    }
+
+    #[test]
+    fn the_declared_description_wins_over_the_readme_in_the_doctor_row() {
+        // The row must report what `cartog index` would store, not a second
+        // opinion on precedence.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("README.md"), "From the readme.\n").unwrap();
+        let config = config_describing(Some("From the config."));
+
+        let check = check_project_description(&config, dir.path());
+
+        assert!(
+            check.message.contains("From the config."),
+            "{}",
+            check.message
+        );
+        assert!(check.message.contains("(config)"));
+    }
+
     #[test]
     #[serial]
     fn test_check_git_repo_inside_git() {

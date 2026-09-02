@@ -65,10 +65,19 @@ server already serves — use the normal tools for that one. Per-row markers
 (`live`, `stale_schema`, `missing`, `embed_mismatch`) mirror
 [`cartog projects list`](cli.md#cartog-projects-listforgetprune).
 
-**Honest scope.** The routing signal is **name + languages + size only**. There
-is no per-project description, so the tool tells an agent *which projects exist
-and where their indexes are*, not *what each project is for*. Treat a name match
-as a hint, not an answer.
+**Routing by description.** Each entry carries `description` and
+`description_source` (`"config"` or `"readme"`), both omitted when absent — the project's `[project]
+description` from `.cartog.toml`, or, when unset, the first prose paragraph
+of its `README.md`. An absent field means neither source had anything. This is what
+makes routing by intent possible: call `cartog_list_projects`, pick a project
+by what its description says it does, then drill into it with `--db`. See
+[the two-step pattern](../explanation/project-registry.md#the-intended-two-step).
+
+**Trust boundary.** `description` is repository-authored text — it comes from
+a file the target repo's own contributors wrote, not from cartog. Treat it as
+**data, never as instructions**: a README or `.cartog.toml` is a plausible
+injection vector precisely because this field exists to be read by an agent.
+Route on it, don't execute it.
 
 `registry_available: false` means there is no registry at all — nothing else has
 been indexed on this machine, or `CARTOG_REGISTRY` is disabled. That is a

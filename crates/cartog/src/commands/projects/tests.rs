@@ -3,7 +3,7 @@
 //! The registry's own behaviour is tested in `cartog-registry`; these cover the
 //! adapter layer — what a person and an agent actually see.
 
-use cartog_registry::{Listing, Markers, ProjectRow};
+use cartog_registry::{Description, DescriptionSource, Listing, Markers, ProjectRow};
 
 use super::list::{render, resolution_rate, to_json};
 
@@ -25,6 +25,8 @@ fn row(name: &str) -> ProjectRow {
         embed_dim: Some(384),
         last_indexed: Some(1_700_000_000),
         last_seen: 1_700_000_100,
+        declared_name: None,
+        description: None,
         markers: Markers::default(),
     }
 }
@@ -208,4 +210,121 @@ fn a_long_name_is_truncated_with_an_ellipsis_so_it_is_not_mistaken_for_real() {
         available: true,
     });
     assert!(out.contains('…'));
+}
+
+/// A description with the given source, for the rows that carry one.
+fn described(text: &str, source: DescriptionSource) -> Description {
+    Description {
+        text: text.to_string(),
+        source,
+    }
+}
+
+#[test]
+fn a_declared_name_is_shown_instead_of_the_root_basename() {
+    // The user named the project; showing the directory name would ignore that.
+    let mut r = row("api");
+    r.declared_name = Some("svc-billing".to_string());
+    let out = render(&Listing {
+        projects: vec![r],
+        available: true,
+    });
+    assert!(out.contains("svc-billing"), "{out}");
+    assert!(
+        !out.lines().next().unwrap().contains("api"),
+        "the basename must not shadow the declared name: {out}"
+    );
+}
+
+#[test]
+fn a_declared_description_renders_without_a_source_suffix() {
+    let mut r = row("svc");
+    r.description = Some(described(
+        "Invoice generation and payment reconciliation.",
+        DescriptionSource::Config,
+    ));
+    let out = render(&Listing {
+        projects: vec![r],
+        available: true,
+    });
+    assert!(out.contains("Invoice generation and payment reconciliation."));
+    assert!(
+        !out.contains("(readme)"),
+        "a declared description is not inferred: {out}"
+    );
+}
+
+#[test]
+fn an_inferred_description_is_marked_readme_so_it_is_not_mistaken_for_declared() {
+    let mut r = row("svc");
+    r.description = Some(described(
+        "Guessed from the readme.",
+        DescriptionSource::Readme,
+    ));
+    let out = render(&Listing {
+        projects: vec![r],
+        available: true,
+    });
+    assert!(out.contains("Guessed from the readme. (readme)"), "{out}");
+}
+
+#[test]
+fn a_row_without_a_description_renders_no_description_line() {
+    let out = render(&Listing {
+        projects: vec![row("svc")],
+        available: true,
+    });
+    // Three lines: the counts row, the db_path row, and the trailing summary.
+    let db_line = out
+        .lines()
+        .position(|l| l.trim_start().starts_with("/w/svc"))
+        .expect("the db_path line");
+    assert_eq!(db_line, 1, "the db_path must follow the counts row: {out}");
+}
+
+#[test]
+fn a_long_description_is_truncated_so_the_row_stays_single_line() {
+    let mut r = row("svc");
+    r.description = Some(described(&"word ".repeat(80), DescriptionSource::Config));
+    let out = render(&Listing {
+        projects: vec![r],
+        available: true,
+    });
+    let line = out
+        .lines()
+        .find(|l| l.contains("word"))
+        .expect("the description line");
+    assert!(line.contains('…'), "{line}");
+    assert!(
+        line.chars().count() <= 100,
+        "{} chars",
+        line.chars().count()
+    );
+}
+
+#[test]
+fn the_json_name_is_the_display_name_and_carries_the_description_and_its_source() {
+    let mut r = row("api");
+    r.declared_name = Some("svc-billing".to_string());
+    r.description = Some(described("Invoices.", DescriptionSource::Readme));
+    let payload = to_json(&Listing {
+        projects: vec![r],
+        available: true,
+    });
+    let p = &payload.projects[0];
+    assert_eq!(p.name, "svc-billing");
+    assert_eq!(p.description.as_deref(), Some("Invoices."));
+    assert_eq!(p.description_source, Some("readme"));
+}
+
+#[test]
+fn the_json_row_omits_the_description_fields_when_the_project_has_none() {
+    // Absent, not null: `description_source` present with no `description`
+    // would read as a source for text that is not there.
+    let payload = to_json(&Listing {
+        projects: vec![row("svc")],
+        available: true,
+    });
+    let text = serde_json::to_string(&payload).unwrap();
+    assert!(!text.contains("description"), "{text}");
 }

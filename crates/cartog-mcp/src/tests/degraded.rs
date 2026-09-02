@@ -367,8 +367,39 @@ fn fake_row(name: &str, db_path: &str) -> cartog_registry::ProjectRow {
         embed_dim: None,
         last_indexed: Some(1_700_000_000),
         last_seen: 1_700_000_100,
+        declared_name: None,
+        description: None,
         markers: cartog_registry::Markers::default(),
     }
+}
+
+/// The declared name and description must survive the row-to-entry mapping.
+///
+/// The routing signal an agent sees comes from `build_result`, so a mapping
+/// that dropped either field would leave the tool describing projects by
+/// directory name only — the phase-1 behaviour step 3 exists to replace.
+#[test]
+fn a_declared_name_and_description_reach_the_tool_entry() {
+    let mut r = fake_row("api", "/w/api/.cartog/db.sqlite");
+    r.declared_name = Some("svc-billing".to_string());
+    r.description = Some(cartog_registry::Description {
+        text: "Invoice generation.".to_string(),
+        source: cartog_registry::DescriptionSource::Readme,
+    });
+    let listing = cartog_registry::Listing {
+        projects: vec![r],
+        available: true,
+    };
+
+    let result = crate::tools::projects::build_result(&listing, std::path::Path::new(""));
+
+    let e = &result.projects[0];
+    assert_eq!(
+        e.name, "svc-billing",
+        "the declared name is the display name"
+    );
+    assert_eq!(e.description.as_deref(), Some("Invoice generation."));
+    assert_eq!(e.description_source.as_deref(), Some("readme"));
 }
 
 /// A registry holding many projects must not blow the response budget.

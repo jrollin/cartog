@@ -22,6 +22,66 @@ pub struct CartogConfig {
     /// LSP settings: per-language command overrides plus `max_concurrent_servers`.
     pub lsp: Option<LspConfig>,
     pub index: Option<IndexConfig>,
+    /// Identity metadata for the project registry and cross-project routing.
+    pub project: Option<ProjectConfig>,
+}
+
+/// `[project]` — identity metadata for the project registry and cross-project
+/// routing. Purely descriptive: nothing here changes how the repo is indexed,
+/// walked, embedded, or queried.
+///
+/// Both fields are optional, so a bare `[project]` header is valid and inert.
+///
+/// ```toml
+/// [project]
+/// name        = "svc-billing"
+/// description = "Invoice generation and payment reconciliation."
+/// ```
+///
+/// `description` is repository-authored text that exists to be read by an
+/// agent, which makes it the most injection-prone field in the config: every
+/// consumer treats it as data (escaped on rendering surfaces, parameterized in
+/// SQL, never interpreted as instructions).
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectConfig {
+    /// Display name in `cartog projects list` and `cartog_list_projects`.
+    /// Defaults to the project root's directory basename.
+    pub name: Option<String>,
+    /// One-line summary of what this project is for. Read by agents to route
+    /// between projects, so write it for that audience.
+    pub description: Option<String>,
+}
+
+/// Max chars accepted in `[project] name`. Over-length is a rejected config
+/// rather than a silent truncation: the user chose the value.
+pub const PROJECT_NAME_MAX_CHARS: usize = 100;
+
+/// Max chars accepted in `[project] description`. Must equal
+/// `cartog_registry::DESCRIPTION_MAX_CHARS`, the registry's write-time cap.
+pub const PROJECT_DESCRIPTION_MAX_CHARS: usize = 280;
+
+impl ProjectConfig {
+    /// The declared name with surrounding whitespace trimmed, or `None`.
+    ///
+    /// Validation has already rejected an empty/whitespace-only value, so a
+    /// trim here can only ever produce a non-empty string on a loaded config.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        self.name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// The declared description with surrounding whitespace trimmed, or `None`.
+    #[must_use]
+    pub fn description(&self) -> Option<&str> {
+        self.description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
 }
 
 /// `[lsp]` section: per-language command overrides (flattened as `[lsp.<lang>]`)

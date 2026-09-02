@@ -14,7 +14,7 @@
 use std::path::Path;
 
 use cartog_db::Database;
-use cartog_registry::ProjectFacts;
+use cartog_registry::{Declared, DeclaredUpdate, DescriptionSource, ProjectFacts};
 
 /// Record a project after an indexing pass committed.
 ///
@@ -23,9 +23,14 @@ use cartog_registry::ProjectFacts;
 /// no-op pass has nothing new to record, and paying five scans to write
 /// unchanged numbers is the one case worth avoiding. A pass that did change the
 /// graph just wrote those tables, so their pages are already warm.
-pub fn record_indexed(db: &Database, db_path: &Path, root: &Path) {
+///
+/// Takes a [`DeclaredUpdate`], not a `Declared`: the caller decides whether it
+/// *knows* the project's declared identity. A rejected config knows nothing and
+/// must pass `Keep`, or its empty default `[project]` overwrites the stored one.
+pub fn record_indexed(db: &Database, db_path: &Path, root: &Path, declared: DeclaredUpdate) {
     let facts = ProjectFacts {
         last_indexed: Some(now_unix()),
+        declared,
         ..facts_with_counts(db, db_path, root)
     };
     cartog_registry::record_project(&facts);
@@ -36,7 +41,7 @@ pub fn record_indexed(db: &Database, db_path: &Path, root: &Path) {
 /// Carries no `last_indexed`: embedding is not a graph index pass, and claiming
 /// otherwise would make `projects list` report a stale graph as freshly
 /// indexed. Reads only the embedding count, never `stats()`.
-pub fn record_embedded(db: &Database, db_path: &Path, root: &Path) {
+pub fn record_embedded(db: &Database, db_path: &Path, root: &Path, declared: DeclaredUpdate) {
     // Records the graph counts too, not just `embedding_count`.
     //
     // `cartog rag index` runs a full `index_directory` pass before embedding,
@@ -49,7 +54,10 @@ pub fn record_embedded(db: &Database, db_path: &Path, root: &Path) {
     // it unroutable.
     //
     // Still carries no `last_indexed`: see the doc comment above.
-    let facts = facts_with_counts(db, db_path, root);
+    let facts = ProjectFacts {
+        declared,
+        ..facts_with_counts(db, db_path, root)
+    };
     cartog_registry::record_project(&facts);
 }
 
@@ -59,10 +67,70 @@ pub fn record_embedded(db: &Database, db_path: &Path, root: &Path) {
 /// it, so registration costs no extra query. The registry's upsert leaves
 /// every unknown column at its stored value, so this cannot erase counts an
 /// earlier `index` recorded.
+///
+/// Delegates to [`record_declared`] with [`DeclaredUpdate::Keep`]: this caller
+/// has no config in scope, so it must not clear a declared name or description
+/// a config-aware writer stored. The two writers differ only in that update,
+/// so keeping one body means they cannot drift.
 pub fn record_opened(db_path: &Path, root: &Path) {
-    let mut facts = ProjectFacts::identity_only(db_path, root);
+    record_declared(db_path, root, DeclaredUpdate::Keep);
+}
+
+/// Refresh a project's declared identity without measuring it.
+///
+/// The no-op counterpart of [`record_indexed`]: a `cartog index` pass that
+/// changed no file still has config in scope, and a `[project] description` or
+/// README edit changes no byte of the database — so the fingerprint fast path
+/// would skip it. Editing either and re-running `index` must update what other
+/// sessions see, which is why this writer exists rather than falling through to
+/// the config-less [`record_opened`].
+///
+/// Costs no `stats()`: the counts are unchanged by definition, and the
+/// registry's skip path rewrites only the three declared columns.
+///
+/// With [`DeclaredUpdate::Keep`] this is exactly [`record_opened`], which
+/// delegates here.
+pub fn record_declared(db_path: &Path, root: &Path, declared: DeclaredUpdate) {
+    let mut facts = ProjectFacts {
+        declared,
+        ..ProjectFacts::identity_only(db_path, root)
+    };
     read_fingerprint_into(&mut facts, db_path);
     cartog_registry::record_project(&facts);
+}
+
+/// Resolve a project's declared identity from its config values and its README.
+///
+/// Takes the two `[project]` values as primitives rather than the config
+/// struct: this module lives in the library crate, and `config` is bin-only —
+/// the same reason `allow_create` and `walk_filter` reach the lower crates as
+/// primitives. Callers pass `ProjectConfig::name()` / `description()`, which
+/// have already trimmed and validated them.
+///
+/// Name comes from `[project] name` only. `None` means "not declared" rather
+/// than "unknown": the root basename is the reader's fallback, stored in the
+/// separate `name` column.
+///
+/// Description is highest-wins: the declared one (source `Config`), else the
+/// README's first prose paragraph (source `Readme`). Resolving both here rather
+/// than in each command keeps the precedence in one place, and is why a README
+/// edit shows up on the next index with no config change.
+///
+/// The result is repository-authored text destined to be read by an agent: it
+/// is data on every downstream surface, never instructions.
+#[must_use]
+pub fn resolve_declared(name: Option<&str>, description: Option<&str>, root: &Path) -> Declared {
+    let description = match description {
+        Some(text) => Some(cartog_registry::Description {
+            text: text.to_string(),
+            source: DescriptionSource::Config,
+        }),
+        None => cartog_registry::readme_description(root),
+    };
+    Declared {
+        name: name.map(str::to_string),
+        description,
+    }
 }
 
 /// Facts including a full `stats()` read.
@@ -222,6 +290,296 @@ mod tests {
         assert_eq!(facts.embedding_count, Some(0));
     }
 
+    /// RAII redirect of `CARTOG_REGISTRY`, restoring the previous value on drop.
+    ///
+    /// Mandatory for any test reaching `record_project`: it resolves the
+    /// registry from the live environment, so an unguarded test writes into the
+    /// developer's real user-global registry. Every user is `#[serial]` —
+    /// `serial_test` is this crate's only test-serialization mechanism, so
+    /// there is no second set of tests this guard can interleave with.
+    struct RegistryEnvGuard(Option<std::ffi::OsString>);
+
+    impl RegistryEnvGuard {
+        fn set(value: &std::ffi::OsStr) -> Self {
+            let prev = std::env::var_os(cartog_registry::REGISTRY_ENV);
+            std::env::set_var(cartog_registry::REGISTRY_ENV, value);
+            Self(prev)
+        }
+    }
+
+    impl Drop for RegistryEnvGuard {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var(cartog_registry::REGISTRY_ENV, v),
+                None => std::env::remove_var(cartog_registry::REGISTRY_ENV),
+            }
+        }
+    }
+
+    #[test]
+    fn the_config_description_wins_over_the_readme() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("README.md"), "Inferred from the readme.\n").unwrap();
+        let declared =
+            resolve_declared(Some("svc-billing"), Some("Declared in config."), dir.path());
+
+        assert_eq!(declared.name.as_deref(), Some("svc-billing"));
+        let d = declared.description.unwrap();
+        assert_eq!(d.text, "Declared in config.");
+        assert_eq!(d.source, DescriptionSource::Config);
+    }
+
+    #[test]
+    fn the_readme_is_used_when_the_config_declares_no_description() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "# Title\n\nInferred from the readme.\n",
+        )
+        .unwrap();
+        let declared = resolve_declared(Some("svc-billing"), None, dir.path());
+
+        assert_eq!(declared.name.as_deref(), Some("svc-billing"));
+        let d = declared.description.unwrap();
+        assert_eq!(d.text, "Inferred from the readme.");
+        assert_eq!(d.source, DescriptionSource::Readme);
+    }
+
+    #[test]
+    fn neither_source_yields_an_empty_declaration() {
+        // The empty declaration is `Set`-able: a writer that resolved nothing
+        // must still clear a stale stored description, which is why this is
+        // `Declared::default()` rather than an absent update.
+        let dir = tempfile::TempDir::new().unwrap();
+
+        assert_eq!(
+            resolve_declared(None, None, dir.path()),
+            Declared::default()
+        );
+    }
+
+    #[test]
+    fn a_config_without_a_name_leaves_the_declared_name_unset() {
+        // `None` here means "not declared" — the reader falls back to the root
+        // basename it stores separately, so this must not invent a name.
+        let dir = tempfile::TempDir::new().unwrap();
+        let declared = resolve_declared(None, Some("Only a description."), dir.path());
+
+        assert_eq!(declared.name, None);
+        assert!(declared.description.is_some());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn an_indexed_project_stores_its_declared_name_and_description() {
+        // The round trip through the real write path: `record_indexed` must
+        // reach the stored columns, not just build the facts.
+        let dir = tempfile::TempDir::new().unwrap();
+        let registry = dir.path().join("reg.sqlite");
+        let _env = RegistryEnvGuard::set(registry.as_os_str());
+        let (db, db_path) = seeded_db(dir.path());
+        let declared = resolve_declared(
+            Some("svc-billing"),
+            Some("Invoices and payments."),
+            dir.path(),
+        );
+
+        record_indexed(&db, &db_path, dir.path(), DeclaredUpdate::Set(declared));
+
+        let listing =
+            cartog_registry::list_projects_at(&registry, None, cartog_db::CURRENT_SCHEMA_VERSION);
+        let row = listing.projects.first().expect("the project was recorded");
+        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
+        assert_eq!(row.display_name(), "svc-billing");
+        let d = row.description.as_ref().expect("a stored description");
+        assert_eq!(d.text, "Invoices and payments.");
+        assert_eq!(d.source, DescriptionSource::Config);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn an_embedding_pass_refreshes_the_declared_description_too() {
+        // `rag index` is config-aware, so it resolves and writes the declared
+        // identity like `index` does; only `last_indexed` differs.
+        let dir = tempfile::TempDir::new().unwrap();
+        let registry = dir.path().join("reg.sqlite");
+        let _env = RegistryEnvGuard::set(registry.as_os_str());
+        let (db, db_path) = seeded_db(dir.path());
+        let declared = resolve_declared(None, Some("Embedded and described."), dir.path());
+
+        record_embedded(&db, &db_path, dir.path(), DeclaredUpdate::Set(declared));
+
+        let listing =
+            cartog_registry::list_projects_at(&registry, None, cartog_db::CURRENT_SCHEMA_VERSION);
+        let row = listing.projects.first().expect("the project was recorded");
+        assert_eq!(
+            row.description.as_ref().map(|d| d.text.as_str()),
+            Some("Embedded and described.")
+        );
+        assert_eq!(row.last_indexed, None, "embedding is not an index pass");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn opening_a_project_leaves_a_stored_description_intact() {
+        // `serve` startup has no config, so it must not clear what `index`
+        // stored — the Keep/Set distinction, end to end.
+        let dir = tempfile::TempDir::new().unwrap();
+        let registry = dir.path().join("reg.sqlite");
+        let _env = RegistryEnvGuard::set(registry.as_os_str());
+        let (db, db_path) = seeded_db(dir.path());
+        let declared = resolve_declared(
+            Some("svc-billing"),
+            Some("Invoices and payments."),
+            dir.path(),
+        );
+        record_indexed(&db, &db_path, dir.path(), DeclaredUpdate::Set(declared));
+
+        record_opened(&db_path, dir.path());
+
+        let listing =
+            cartog_registry::list_projects_at(&registry, None, cartog_db::CURRENT_SCHEMA_VERSION);
+        let row = listing.projects.first().expect("the project was recorded");
+        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
+        assert_eq!(
+            row.description.as_ref().map(|d| d.text.as_str()),
+            Some("Invoices and payments.")
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn removing_both_sources_clears_a_stored_description() {
+        // A `Set` with no description must overwrite, not skip: the registry
+        // would otherwise advertise a description the repo no longer makes.
+        let dir = tempfile::TempDir::new().unwrap();
+        let registry = dir.path().join("reg.sqlite");
+        let _env = RegistryEnvGuard::set(registry.as_os_str());
+        let (db, db_path) = seeded_db(dir.path());
+        let declared = resolve_declared(
+            Some("svc-billing"),
+            Some("Invoices and payments."),
+            dir.path(),
+        );
+        record_indexed(&db, &db_path, dir.path(), DeclaredUpdate::Set(declared));
+
+        record_indexed(
+            &db,
+            &db_path,
+            dir.path(),
+            DeclaredUpdate::Set(resolve_declared(None, None, dir.path())),
+        );
+
+        let listing =
+            cartog_registry::list_projects_at(&registry, None, cartog_db::CURRENT_SCHEMA_VERSION);
+        let row = listing.projects.first().expect("the project was recorded");
+        assert_eq!(row.declared_name, None);
+        assert_eq!(row.description, None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_config_edit_refreshes_the_description_on_a_no_op_pass() {
+        // Regression: a README or `[project]` edit changes no byte of the
+        // database, so the fingerprint fast path skips the row. Routing that
+        // pass through the config-less `record_opened` left every other
+        // session reading the stale description forever (caught on a live
+        // `cartog index`, not by a unit test).
+        let dir = tempfile::TempDir::new().unwrap();
+        let registry = dir.path().join("reg.sqlite");
+        let _env = RegistryEnvGuard::set(registry.as_os_str());
+        let (db, db_path) = seeded_db(dir.path());
+        std::fs::write(dir.path().join("README.md"), "From the readme.\n").unwrap();
+        record_indexed(
+            &db,
+            &db_path,
+            dir.path(),
+            DeclaredUpdate::Set(resolve_declared(None, None, dir.path())),
+        );
+
+        // No counts, no `last_indexed`: exactly what a no-op pass supplies.
+        record_declared(
+            &db_path,
+            dir.path(),
+            DeclaredUpdate::Set(resolve_declared(
+                Some("svc-widgets"),
+                Some("From the config."),
+                dir.path(),
+            )),
+        );
+
+        let listing =
+            cartog_registry::list_projects_at(&registry, None, cartog_db::CURRENT_SCHEMA_VERSION);
+        let row = listing.projects.first().expect("the project was recorded");
+        assert_eq!(row.declared_name.as_deref(), Some("svc-widgets"));
+        let d = row.description.as_ref().expect("a stored description");
+        assert_eq!(d.text, "From the config.");
+        assert_eq!(d.source, DescriptionSource::Config);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_declared_only_write_does_not_erase_the_counts_an_index_recorded() {
+        // It measures nothing, so every count column must stay put.
+        let dir = tempfile::TempDir::new().unwrap();
+        let registry = dir.path().join("reg.sqlite");
+        let _env = RegistryEnvGuard::set(registry.as_os_str());
+        let (db, db_path) = seeded_db(dir.path());
+        record_indexed(
+            &db,
+            &db_path,
+            dir.path(),
+            DeclaredUpdate::Set(Declared::default()),
+        );
+
+        record_declared(
+            &db_path,
+            dir.path(),
+            DeclaredUpdate::Set(resolve_declared(None, Some("Described later."), dir.path())),
+        );
+
+        let listing =
+            cartog_registry::list_projects_at(&registry, None, cartog_db::CURRENT_SCHEMA_VERSION);
+        let row = listing.projects.first().expect("the project was recorded");
+        assert_eq!(row.symbol_count, Some(1), "counts must survive");
+        assert!(row.last_indexed.is_some(), "last_indexed must survive");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_keep_write_leaves_a_stored_declared_identity_untouched() {
+        // A rejected `.cartog.toml` collapses to a default config, so a writer
+        // that still sent `Set` wiped the declared name and replaced the
+        // description with the README fallback: one typo anywhere in the file
+        // erased what the project says it is.
+        let dir = tempfile::TempDir::new().unwrap();
+        let registry = dir.path().join("reg.sqlite");
+        let _env = RegistryEnvGuard::set(registry.as_os_str());
+        let (db, db_path) = seeded_db(dir.path());
+        // A README exists, so a `Set` would visibly overwrite with its text.
+        std::fs::write(dir.path().join("README.md"), "The readme fallback.\n").unwrap();
+        record_indexed(
+            &db,
+            &db_path,
+            dir.path(),
+            DeclaredUpdate::Set(resolve_declared(
+                Some("svc-billing"),
+                Some("Invoices and payments."),
+                dir.path(),
+            )),
+        );
+
+        record_indexed(&db, &db_path, dir.path(), DeclaredUpdate::Keep);
+
+        let listing =
+            cartog_registry::list_projects_at(&registry, None, cartog_db::CURRENT_SCHEMA_VERSION);
+        let row = listing.projects.first().expect("the project was recorded");
+        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
+        let d = row.description.as_ref().expect("the stored description");
+        assert_eq!(d.text, "Invoices and payments.");
+        assert_eq!(d.source, DescriptionSource::Config);
+    }
+
     #[test]
     #[serial_test::serial]
     fn recording_a_project_never_panics_when_the_registry_is_disabled() {
@@ -236,8 +594,19 @@ mod tests {
         let prev = std::env::var_os(cartog_registry::REGISTRY_ENV);
         std::env::set_var(cartog_registry::REGISTRY_ENV, "");
 
-        record_indexed(&db, &db_path, dir.path());
-        record_embedded(&db, &db_path, dir.path());
+        record_indexed(
+            &db,
+            &db_path,
+            dir.path(),
+            DeclaredUpdate::Set(Declared::default()),
+        );
+        record_embedded(
+            &db,
+            &db_path,
+            dir.path(),
+            DeclaredUpdate::Set(Declared::default()),
+        );
+        record_declared(&db_path, dir.path(), DeclaredUpdate::Keep);
         record_opened(&db_path, dir.path());
 
         match prev {

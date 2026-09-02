@@ -376,9 +376,10 @@ cartog doctor
   [+] embedding: local model cached
   [+] reranker: jinaai/jina-reranker-v1-turbo-en cached
   [+] remote: not configured (local-only)
+  [+] description: "Invoice generation and payment reconciliation." (config)
   [+] version: 0.33.0 is up to date
 
-All 9 checks passed
+All 10 checks passed
 ```
 
 **Checks performed:**
@@ -393,9 +394,15 @@ All 9 checks passed
 | embedding | Local model cached / Ollama reachable | Local model not downloaded | Ollama unreachable / unknown provider |
 | reranker | Model cached / disabled | Model not downloaded | Unknown provider |
 | remote | Not configured, or the bucket is reachable | `url` empty, unreachable, or config rejected | `[remote]` set but built without `remote-s3` |
+| description | `[project] description` or a `README.md` paragraph is available | No description from either source | — |
 | version | Up to date, or the check is disabled/unreachable | A newer stable release exists | — |
 
 Exits with code 1 if any check is an error. Supports `--json` for structured output.
+
+**`description`** is advisory only, never an error: a project with no description still indexes
+and registers normally, but `cartog_list_projects` and `cartog projects list` show nothing to
+route on for it. Fix it with a `[project] description` line or a README opening paragraph, then
+`cartog index` (see [config.md § Project identity](config.md#project-identity-project)).
 
 **`version`** queries the GitHub releases API with an 800 ms timeout — much
 shorter than the 5 s `cartog self update` allows, because there waiting for an
@@ -558,7 +565,7 @@ cartog config            # human-readable
 cartog config --json     # JSON for scripts
 ```
 
-Useful for verifying `[rag]` tuning, watch debounce, and provider selection without running a full command.
+Useful for verifying `[rag]` tuning, watch debounce, and provider selection without running a full command. Also shows the resolved `[project]` name and description (or `(none)` when neither `.cartog.toml` nor `README.md` supplies one), each labeled with its source. `cartog config` bails when the config was rejected rather than showing defaults, so it never misreports a broken `[project]` section as an absent one — see [config.md § Project identity](config.md#project-identity-project).
 
 ### `cartog completions <shell>`
 
@@ -609,9 +616,20 @@ cartog projects prune --dry-run     # report what would be dropped, change nothi
 no `--db`, never creates a `.cartog/`, and works from any directory — including one that was
 never indexed.
 
-`forget` accepts a project id, root path, database path, or name. A **name** is only acted on
-when it identifies exactly one project: two workspaces each holding an `api` directory produce
-two rows named `api`, so an ambiguous name drops nothing and lists the candidate ids instead.
+Each project shows its **display name** — `[project] name` from that project's `.cartog.toml`
+if set, else the root directory's basename — and, when known, a one-line **description**,
+suffixed `(readme)` when it was inferred from `README.md` rather than declared in config. A
+project with no description from either source shows none; see
+[`cartog doctor`](#cartog-doctor) for the advisory. `--json` adds `"description"` and
+`"description_source"` (`"config"` or `"readme"`), both omitted when the project has no description; `"name"` is the display name described
+above. See [config.md § Project identity](config.md#project-identity-project) for how the name
+and description are resolved, and [project-registry.md](../explanation/project-registry.md#step-3--self-populated-description)
+for when the registry refreshes them.
+
+`forget` accepts a project id, root path, database path, or name — including the declared
+`[project] name`. A **name** is only acted on when it identifies exactly one project: two
+workspaces each holding an `api` directory produce two rows named `api`, so an ambiguous name
+drops nothing and lists the candidate ids instead.
 
 **Markers** shown beside each project:
 

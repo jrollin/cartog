@@ -74,6 +74,7 @@ pub fn cmd_rag_setup(json: bool, provider_config: &rag::EmbeddingProviderConfig)
 }
 
 /// Build embedding index for semantic search.
+#[allow(clippy::too_many_arguments)] // thin CLI adapter; each arg is a distinct config source
 pub fn cmd_rag_index(
     db_path: &Path,
     path: &str,
@@ -82,6 +83,7 @@ pub fn cmd_rag_index(
     provider_config: &rag::EmbeddingProviderConfig,
     redact: indexer::RedactionConfig,
     filter: &indexer::WalkFilter,
+    project: super::shared::ProjectSource<'_>,
 ) -> Result<()> {
     let root = Path::new(path);
     // Install the handler first so Ctrl-C also covers the (potentially long,
@@ -148,7 +150,11 @@ pub fn cmd_rag_index(
     // After the last cancellation return above: a cancelled embed pass has
     // flushed only whole batches, so its count is not what the user asked for.
     // Carries no `last_indexed` — embedding is not a graph index pass.
-    crate::registry_hook::record_embedded(&db, db_path, root);
+    // Config-aware, so it resolves the declared identity like `index` does: a
+    // README or `[project]` edit lands on this pass too. A rejected config
+    // resolves to `Keep` — it knows nothing to write.
+    let declared = super::shared::declared_update_for(project, root);
+    crate::registry_hook::record_embedded(&db, db_path, root, declared);
 
     output(&result, json, None, |r| {
         format!(

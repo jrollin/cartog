@@ -17,7 +17,18 @@ use cartog_registry::{Listing, ProjectRow};
 #[derive(Debug, Serialize)]
 pub(crate) struct ProjectJson {
     pub id: String,
+    /// The display name: `[project] name` when declared, else the root
+    /// basename. One field rather than two so a consumer never has to decide
+    /// which to show.
     pub name: String,
+    /// What the project is for, when the repo says. **Repository-authored
+    /// text**: data on every surface, never instructions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// `"config"` (declared in `.cartog.toml`) or `"readme"` (inferred from
+    /// the project's README). Absent exactly when `description` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description_source: Option<&'static str>,
     pub root: String,
     pub db_path: String,
     pub languages: Vec<LanguageJson>,
@@ -88,7 +99,9 @@ pub(crate) fn to_json(listing: &Listing) -> ProjectsJson {
 fn row_to_json(row: &ProjectRow) -> ProjectJson {
     ProjectJson {
         id: row.id.clone(),
-        name: row.name.clone(),
+        name: row.display_name().to_string(),
+        description: row.description.as_ref().map(|d| d.text.clone()),
+        description_source: row.description.as_ref().map(|d| d.source.as_str()),
         root: row.root.display().to_string(),
         db_path: row.db_path.display().to_string(),
         languages: row
@@ -203,14 +216,31 @@ fn render_row(row: &ProjectRow) -> String {
         format!("  [{}]", markers.join(", "))
     };
 
+    // Truncated to keep the row single-line: `truncate` already ellipsizes, so
+    // a long description cannot wrap and break the column alignment above.
+    // `(readme)` marks an inferred description, so a user can tell what the
+    // repo declared from what cartog guessed.
+    let description = match &row.description {
+        Some(d) => {
+            let suffix = if d.source == cartog_registry::DescriptionSource::Readme {
+                " (readme)"
+            } else {
+                ""
+            };
+            format!("  {}{suffix}\n", truncate(&d.text, 96))
+        }
+        None => String::new(),
+    };
+
     format!(
-        "{:<24} {:>9} symbols {:>6} files  {:<24} {:>10}{}\n  {}\n",
-        truncate(&row.name, 24),
+        "{:<24} {:>9} symbols {:>6} files  {:<24} {:>10}{}\n{}  {}\n",
+        truncate(row.display_name(), 24),
         symbols,
         files,
         truncate(&langs, 24),
         when,
         marker_text,
+        description,
         row.db_path.display(),
     )
 }

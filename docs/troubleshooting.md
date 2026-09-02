@@ -496,6 +496,24 @@ candidate ids — re-run with the id you want.
 `cartog serve` startup records identity without counting, so a project only ever opened by a
 server has no counts until its next index.
 
+### A project's description is missing or stale in `cartog projects list`
+
+**Missing entirely**: neither `.cartog.toml` nor `README.md` supplies one. Add a `[project]
+description` line, or write an opening prose paragraph in `README.md`, then run `cartog index`
+(any pass, including a no-op incremental one, refreshes the registry's declared columns — see
+[config.md § Project identity](reference/config.md#project-identity-project)). `cartog doctor`
+flags a project with no description from either source.
+
+**Stale**: you edited `.cartog.toml` or `README.md` but the listing still shows the old text.
+Only `cartog index`, `cartog rag index`, and `cartog pull` refresh the registry's name and
+description — `cartog serve` startup and the watcher deliberately leave them untouched (they
+have no config in scope). Run `cartog index` once and the change shows up.
+
+**Config rejected for an over-length `[project]` value**: `name` over 100 characters or
+`description` over 280 characters rejects the whole config, with a message naming the field and
+the limit. Shorten the value — there is no silent truncation for a declared value (a
+README-derived description *is* truncated, since you didn't choose that length).
+
 ### `cartog: the project registry at ... was unreadable`
 
 The file was not valid SQLite. cartog moved it to `projects.sqlite.corrupt.<timestamp>` and

@@ -382,3 +382,81 @@ fn to_search_tuning_passes_valid_values() {
     assert_eq!(t.rerank_max, 100);
     assert_eq!(t.rerank_min, 10);
 }
+
+// ── `[project]` ─────────────────────────────────────────────────────────────
+
+/// A section with no keys is valid and inert — every sibling section behaves
+/// the same way, so a user can write the header before deciding what to say.
+#[test]
+fn bare_project_header_parses_with_no_name_or_description() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    fs::write(&cfg_path, "[project]\n").unwrap();
+
+    let cfg = read_config(&cfg_path).expect("bare [project] must parse");
+
+    let project = cfg.project.expect("section present");
+    assert_eq!(project.name(), None);
+    assert_eq!(project.description(), None);
+}
+
+#[test]
+fn project_name_and_description_round_trip() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    fs::write(
+        &cfg_path,
+        "[project]\nname = \"svc-billing\"\ndescription = \"Invoice generation.\"\n",
+    )
+    .unwrap();
+
+    let cfg = read_config(&cfg_path).expect("should parse");
+
+    let project = cfg.project.unwrap();
+    assert_eq!(project.name(), Some("svc-billing"));
+    assert_eq!(project.description(), Some("Invoice generation."));
+}
+
+/// Accessors trim, so a value padded in TOML reaches the registry clean.
+#[test]
+fn project_accessors_trim_surrounding_whitespace() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    fs::write(
+        &cfg_path,
+        "[project]\nname = \"  svc-billing \"\ndescription = \"  Invoices.  \"\n",
+    )
+    .unwrap();
+
+    let cfg = read_config(&cfg_path).expect("should parse");
+
+    let project = cfg.project.unwrap();
+    assert_eq!(project.name(), Some("svc-billing"));
+    assert_eq!(project.description(), Some("Invoices."));
+}
+
+/// `deny_unknown_fields` is what turns `descriptoin = "..."` into an actionable
+/// named warning instead of a mystery empty description. Without it the key is
+/// silently ignored and the salvage path (which produces the same final config)
+/// can't tell the difference — so the raw parse is what pins it.
+#[test]
+fn unknown_key_in_project_is_named_by_the_parser() {
+    let err = toml::from_str::<CartogConfig>("[project]\ndescriptoin = \"typo\"\n")
+        .expect_err("an unknown [project] key must be rejected by the parser")
+        .to_string();
+
+    assert!(
+        err.contains("descriptoin"),
+        "error must name the key: {err}"
+    );
+}
+
+/// The registry hard-caps a stored description at the same number. A drift
+/// between the two would either reject values the registry accepts or store
+/// values the config swore were short enough. The cross-crate equality assert
+/// lives with the integration work; this pins the config side's literal.
+#[test]
+fn project_description_cap_is_280_chars() {
+    assert_eq!(PROJECT_DESCRIPTION_MAX_CHARS, 280);
+    assert_eq!(PROJECT_NAME_MAX_CHARS, 100);
+}

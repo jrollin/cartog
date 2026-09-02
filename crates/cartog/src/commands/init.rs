@@ -18,6 +18,15 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # print the active configuration. See https://github.com/jrollin/cartog
 # for the schema reference.
 
+# [project]
+# Identity metadata for the machine-wide project registry, so an agent working
+# in another repo can see what this one is for. Purely descriptive — it changes
+# nothing about how the repo is indexed.
+# name        = "my-project"        # display name; defaults to the directory name
+# description = "One line describing what this project is for."
+# Max 100 chars for name, 280 for description; both must be a single line.
+# With no description here, cartog falls back to the first paragraph of README.md.
+
 # [database]
 # path = ".cartog/db.sqlite"
 
@@ -294,6 +303,46 @@ mod tests {
                 cfg.is_ok(),
                 "{name}: key is not a real config field: {}\n--- rendered ---\n{rendered}",
                 cfg.unwrap_err()
+            );
+        }
+    }
+
+    /// Both shipped templates must teach `[project]`. It is the only section a
+    /// user must write by hand for cross-project routing to see this repo, so a
+    /// template that omits it hides the feature.
+    #[test]
+    fn both_templates_document_the_project_section() {
+        let example = fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(".cartog.toml.example"),
+        )
+        .expect("`.cartog.toml.example` must exist at the repo root");
+
+        for (name, src) in [
+            ("init.rs TOML_TEMPLATE", TOML_TEMPLATE),
+            (".cartog.toml.example", example.as_str()),
+        ] {
+            // Scoped to the section's own keys: `name`/`description` are common
+            // enough that a repo-wide substring search would pass on a template
+            // that never mentions `[project]` at all. Alignment padding is
+            // stripped, so a template may align its `=` signs.
+            let rendered = uncomment_template(src);
+            assert!(
+                rendered.contains("[project]"),
+                "{name}: no [project] header"
+            );
+            let keys: Vec<&str> = rendered
+                .lines()
+                .skip_while(|l| l.trim() != "[project]")
+                .skip(1)
+                .take_while(|l| !l.trim_start().starts_with('['))
+                .filter_map(|l| l.split_once('=').map(|(k, _)| k.trim()))
+                .collect();
+            assert!(keys.contains(&"name"), "{name}: no project name key");
+            assert!(
+                keys.contains(&"description"),
+                "{name}: no project description key"
             );
         }
     }

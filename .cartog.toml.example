@@ -10,6 +10,15 @@
 #   4. Auto-detected `.cartog.db` at the git root
 #   5. `./.cartog.db` in the current directory
 
+# ── Project identity (machine-wide registry) ─────────────────────────────────
+# Purely descriptive: lets an agent working in another repo see what this one
+# is for. Both keys are a single line of plain text (name ≤ 100 chars,
+# description ≤ 280). With no description here, the first paragraph of
+# README.md is used instead.
+[project]
+# name        = "my-project"        # display name; defaults to the directory name
+# description = "One line describing what this project is for."
+
 [database]
 # Path to the SQLite graph file. `~` is expanded to your home directory.
 # path = "~/.cache/cartog/myproject.db"

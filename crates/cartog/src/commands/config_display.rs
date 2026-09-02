@@ -43,6 +43,7 @@ pub fn cmd_config(
     let reranker = config.reranker.as_ref();
     let rag = config.rag.as_ref();
     let security = config.security.as_ref();
+    let project = config.project.as_ref();
     let tuning_defaults = cartog_rag::search::SearchTuning::default();
     // `to_search_tuning()` applies the clamps (retrieval_multiplier.max(1),
     // rerank_min.min(rerank_max)) so what we show matches what the search
@@ -58,6 +59,7 @@ pub fn cmd_config(
     let display = ConfigDisplay {
         config_file: config_path.map(|p| p.to_string_lossy().into_owned()),
         db_path: db_path.to_string_lossy().into_owned(),
+        project: resolve_project_display(project, config_path),
         embedding: EmbeddingDisplay {
             provider: ValueDisplay {
                 value: embed.map_or(DEFAULT_EMBEDDING_PROVIDER.into(), |e| {
@@ -144,6 +146,51 @@ fn format_value(v: &ValueDisplay) -> String {
     }
 }
 
+/// Resolve `[project]` exactly as the registry writers do (config, then the
+/// README fallback), so `cartog config` shows what `projects list` will show.
+///
+/// The root is the config file's directory; with no config file, cwd. A
+/// missing description is rendered as `(none)` rather than `-`: it is a state
+/// the user is meant to notice and fill in.
+fn resolve_project_display(
+    project: Option<&crate::config::ProjectConfig>,
+    config_path: Option<&Path>,
+) -> ProjectDisplay {
+    let root = config_path
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| Path::new(".").to_path_buf());
+    let declared = super::shared::declared_for(project, &root);
+    let (name, name_source) = match declared.name {
+        Some(n) => (n, "config"),
+        None => (directory_name(&root), "directory"),
+    };
+    let description_source = declared.description.as_ref().map(|d| d.source.as_str());
+    ProjectDisplay {
+        name,
+        name_source,
+        description: declared.description.map(|d| d.text),
+        description_source,
+    }
+}
+
+/// Basename of the project root, the registry's default display name.
+fn directory_name(root: &Path) -> String {
+    root.canonicalize()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| root.to_string_lossy().into_owned())
+}
+
+fn format_described(v: &Option<String>, source: Option<&str>) -> String {
+    match (v, source) {
+        (Some(s), Some(src)) => format!("{s} ({src})"),
+        (Some(s), None) => s.clone(),
+        (None, _) => "(none)".to_string(),
+    }
+}
+
 fn format_optional(v: &Option<String>) -> &str {
     match v {
         Some(s) => s.as_str(),
@@ -162,6 +209,19 @@ fn format_config_human(d: &ConfigDisplay) -> String {
     )
     .unwrap();
     writeln!(out, "Database:    {}", d.db_path).unwrap();
+
+    writeln!(out, "\n[project]").unwrap();
+    let name_note = match d.project.name_source {
+        "config" => "(config)".to_string(),
+        other => format!("(default: {other} name)"),
+    };
+    writeln!(out, "  name:              {} {name_note}", d.project.name).unwrap();
+    writeln!(
+        out,
+        "  description:       {}",
+        format_described(&d.project.description, d.project.description_source)
+    )
+    .unwrap();
 
     writeln!(out, "\n[embedding]").unwrap();
     writeln!(
@@ -260,10 +320,23 @@ fn format_config_human(d: &ConfigDisplay) -> String {
 struct ConfigDisplay {
     config_file: Option<String>,
     db_path: String,
+    project: ProjectDisplay,
     embedding: EmbeddingDisplay,
     reranker: RerankerDisplay,
     rag: RagDisplay,
     security: SecurityDisplay,
+}
+
+#[derive(Serialize)]
+struct ProjectDisplay {
+    /// Display name: `[project] name`, else the root directory's basename.
+    name: String,
+    /// `"config"` or `"directory"`.
+    name_source: &'static str,
+    description: Option<String>,
+    /// `"config"` or `"readme"`; absent when there is no description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description_source: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -323,6 +396,12 @@ mod tests {
         ConfigDisplay {
             config_file: None,
             db_path: "/tmp/test.db".into(),
+            project: ProjectDisplay {
+                name: "myrepo".into(),
+                name_source: "directory",
+                description: None,
+                description_source: None,
+            },
             embedding: EmbeddingDisplay {
                 provider: ValueDisplay {
                     value: DEFAULT_EMBEDDING_PROVIDER.into(),
@@ -409,6 +488,75 @@ mod tests {
         assert!(out.contains("ollama (default: local)"));
         assert!(out.contains("model:             nomic-embed-text"));
         assert!(out.contains("dimension:         768"));
+    }
+
+    #[test]
+    fn project_section_shows_the_directory_default_and_none_when_undeclared() {
+        let d = default_config_display();
+
+        let out = format_config_human(&d);
+
+        assert!(out.contains("[project]"));
+        assert!(out.contains("name:              myrepo (default: directory name)"));
+        assert!(out.contains("description:       (none)"));
+    }
+
+    #[test]
+    fn project_section_labels_each_value_with_its_source() {
+        let mut d = default_config_display();
+        d.project.name = "svc-billing".into();
+        d.project.name_source = "config";
+        d.project.description = Some("Invoice generation.".into());
+        d.project.description_source = Some("readme");
+
+        let out = format_config_human(&d);
+
+        assert!(out.contains("name:              svc-billing (config)"));
+        assert!(out.contains("description:       Invoice generation. (readme)"));
+    }
+
+    #[test]
+    fn project_section_serializes_to_json() {
+        let mut d = default_config_display();
+        d.project.name = "svc-billing".into();
+        d.project.name_source = "config";
+
+        let json = serde_json::to_value(&d).unwrap();
+
+        assert_eq!(json["project"]["name"], "svc-billing");
+        assert_eq!(json["project"]["name_source"], "config");
+        assert!(json["project"]["description"].is_null());
+        assert!(json["project"].get("description_source").is_none());
+    }
+
+    #[test]
+    fn resolve_project_display_falls_back_to_the_readme_beside_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "# T\n\nBills customers.\n").unwrap();
+        let config_path = dir.path().join(".cartog.toml");
+
+        let d = resolve_project_display(None, Some(&config_path));
+
+        assert_eq!(d.description.as_deref(), Some("Bills customers."));
+        assert_eq!(d.description_source, Some("readme"));
+        assert_eq!(d.name_source, "directory");
+    }
+
+    #[test]
+    fn resolve_project_display_prefers_the_config_description() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "# T\n\nFrom readme.\n").unwrap();
+        let project = crate::config::ProjectConfig {
+            name: Some("svc-billing".into()),
+            description: Some("From config.".into()),
+        };
+
+        let d = resolve_project_display(Some(&project), Some(&dir.path().join(".cartog.toml")));
+
+        assert_eq!(d.name, "svc-billing");
+        assert_eq!(d.name_source, "config");
+        assert_eq!(d.description.as_deref(), Some("From config."));
+        assert_eq!(d.description_source, Some("config"));
     }
 
     #[test]

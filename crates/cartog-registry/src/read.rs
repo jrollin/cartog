@@ -10,7 +10,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 use crate::corrupt::quarantine_if_corrupt;
-use crate::model::{Listing, Markers, ProjectRow};
+use crate::model::{Description, DescriptionSource, Listing, Markers, ProjectRow};
 use crate::open::open_read_only;
 use crate::slot::slot_for_db;
 use crate::write::decode_languages;
@@ -97,12 +97,20 @@ pub fn list_projects_at(
 /// from "no registry exists", and `prune` became a permanent no-op on exactly
 /// the row that most needed pruning.
 fn select_rows(conn: &Connection) -> rusqlite::Result<Vec<ProjectRow>> {
-    let mut stmt = conn.prepare(
+    // A not-yet-migrated v1 file has no declared columns; read them as NULL
+    // rather than failing the whole listing until some writer migrates it.
+    let declared_cols = if crate::schema::has_declared_columns(conn) {
+        "declared_name, description, description_src"
+    } else {
+        "NULL, NULL, NULL"
+    };
+    let mut stmt = conn.prepare(&format!(
         "SELECT id, db_path, root, name, languages, schema_version,
                 file_count, symbol_count, edge_count, resolved_count, embedding_count,
-                embed_provider, embed_model, embed_dim, last_indexed, last_seen
-         FROM projects",
-    )?;
+                embed_provider, embed_model, embed_dim, last_indexed, last_seen,
+                {declared_cols}
+         FROM projects"
+    ))?;
     let rows = stmt.query_map([], |row| {
         let languages: Option<String> = row.get(4)?;
         Ok(ProjectRow {
@@ -110,6 +118,8 @@ fn select_rows(conn: &Connection) -> rusqlite::Result<Vec<ProjectRow>> {
             db_path: row.get::<_, String>(1)?.into(),
             root: row.get::<_, String>(2)?.into(),
             name: row.get(3)?,
+            declared_name: row.get(16)?,
+            description: description(row.get(17)?, row.get(18)?),
             languages: languages
                 .as_deref()
                 .map(decode_languages)
@@ -140,6 +150,20 @@ fn select_rows(conn: &Connection) -> rusqlite::Result<Vec<ProjectRow>> {
         }
     }
     Ok(out)
+}
+
+/// Pair a stored description with its source.
+///
+/// An unrecognized `description_src` falls back to `Readme`, the weaker claim:
+/// mislabeling an inferred description as declared would tell a user their
+/// repo asserts something it does not.
+fn description(text: Option<String>, src: Option<String>) -> Option<Description> {
+    let text = text.filter(|t| !t.is_empty())?;
+    let source = src
+        .as_deref()
+        .and_then(DescriptionSource::parse)
+        .unwrap_or(DescriptionSource::Readme);
+    Some(Description { text, source })
 }
 
 /// Read a count column as `i64`, then narrow it, treating an out-of-range or
@@ -361,6 +385,96 @@ mod tests {
         assert_eq!(row.file_count, Some(412));
         assert_eq!(row.languages, vec![("rust".to_string(), 412)]);
         assert_eq!(row.last_indexed, Some(1_700_000_000));
+    }
+
+    #[test]
+    fn a_declared_name_and_description_round_trip_with_their_source() {
+        let f = Fixture::new();
+        let dir = f._dir.path().to_path_buf();
+        let db = touch_db(&dir, "api");
+        f.seed(&ProjectFacts {
+            declared: crate::model::DeclaredUpdate::Set(crate::model::Declared {
+                name: Some("svc-billing".to_string()),
+                description: Some(Description {
+                    text: "Invoice generation.".to_string(),
+                    source: DescriptionSource::Readme,
+                }),
+            }),
+            ..facts(&db, &dir.join("api"))
+        });
+
+        let row = &f.list().projects[0];
+        assert_eq!(row.name, "api", "name stays the root basename");
+        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
+        let d = row.description.as_ref().expect("a description");
+        assert_eq!(d.text, "Invoice generation.");
+        assert_eq!(d.source, DescriptionSource::Readme);
+    }
+
+    #[test]
+    fn the_display_name_prefers_the_declared_name_on_a_read_row() {
+        let f = Fixture::new();
+        let dir = f._dir.path().to_path_buf();
+        let db = touch_db(&dir, "api");
+        f.seed(&ProjectFacts {
+            declared: crate::model::DeclaredUpdate::Set(crate::model::Declared {
+                name: Some("svc-billing".to_string()),
+                description: None,
+            }),
+            ..facts(&db, &dir.join("api"))
+        });
+
+        assert_eq!(f.list().projects[0].display_name(), "svc-billing");
+    }
+
+    #[test]
+    fn an_unrecognized_description_source_reads_back_as_inferred() {
+        // The weaker claim: calling an unknown source "config" would tell a
+        // user their repo asserts something it does not.
+        let f = Fixture::new();
+        let dir = f._dir.path().to_path_buf();
+        let db = touch_db(&dir, "api");
+        f.seed(&facts(&db, &dir.join("api")));
+        {
+            let conn = crate::open::open_read_write(&f.registry).unwrap();
+            conn.execute(
+                "UPDATE projects SET description = 'x', description_src = 'wikipedia'",
+                [],
+            )
+            .unwrap();
+        }
+
+        let d = f.list().projects[0].description.clone().unwrap();
+        assert_eq!(d.source, DescriptionSource::Readme);
+    }
+
+    #[test]
+    fn a_not_yet_migrated_v1_registry_still_lists_its_projects() {
+        let fx = Fixture::new();
+        let conn = Connection::open(&fx.registry).unwrap();
+        conn.execute_batch(crate::schema::V1_SCHEMA).unwrap();
+        drop(conn);
+
+        let listing = fx.list();
+
+        assert!(listing.available);
+        assert_eq!(listing.projects.len(), 1);
+        let row = &listing.projects[0];
+        assert_eq!(row.name, "svc");
+        assert_eq!(row.declared_name, None);
+        assert_eq!(row.description, None);
+        assert_eq!(row.symbol_count, Some(8134));
+    }
+
+    #[test]
+    fn reading_a_v1_registry_does_not_migrate_it() {
+        let fx = Fixture::new();
+        let conn = Connection::open(&fx.registry).unwrap();
+        conn.execute_batch(crate::schema::V1_SCHEMA).unwrap();
+
+        fx.list();
+
+        assert!(!crate::schema::has_declared_columns(&conn));
     }
 
     #[test]

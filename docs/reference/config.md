@@ -49,6 +49,54 @@ cartog --db /tmp/x.db stats
 cartog --db /tmp/x.db map
 ```
 
+## Project identity (`[project]`)
+
+A 9th top-level section. It is purely descriptive: nothing here changes how
+the repo is indexed, walked, embedded, or queried.
+
+```toml
+[project]
+name        = "svc-billing"                                    # optional, <= 100 chars, defaults to the root dir name
+description = "Invoice generation and payment reconciliation."  # optional, <= 280 chars, one line
+```
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `name` | project root's directory basename | Display name in `cartog projects list` and `cartog_list_projects`. |
+| `description` | none (falls back to `README.md`) | One-line summary read by agents to route between projects. |
+
+Both fields are optional, so a bare `[project]` header is valid and inert.
+
+**Precedence** (each resolves independently, highest wins):
+
+- **Name:** `[project] name` → project root's directory basename.
+- **Description:** `[project] description` → first prose paragraph of
+  `README.md` (also `README.markdown`, `README`), plain text, truncated to
+  280 characters at a word boundary → none.
+
+No env-var override for either field — a project's identity is not the kind
+of per-machine knob the other sections' env vars exist for.
+
+**Validation**, at config load (a violation rejects the config, with a
+message naming the field and the limit):
+
+- `name` over 100 characters, or `description` over 280 characters.
+- Either field empty or whitespace-only.
+- Either field containing a control character or a newline.
+
+An unknown key inside `[project]` is salvaged like any other section: the
+config still loads and the index still proceeds, but the description or name
+it would have set is lost. See [unknown config keys](#cartog-warning-unknown-field-x-in-my-config)
+in the troubleshooting guide.
+
+This section is only read by config-aware writers (`cartog index`,
+`cartog rag index`, `cartog pull`) to refresh the [project registry](../explanation/project-registry.md#step-3--self-populated-description);
+`cartog serve` startup and the watcher leave the registry's stored name and
+description untouched. A **rejected** config also leaves them untouched: its
+`[project]` could not be read, so cartog keeps whatever a working config last
+stored rather than replacing it with the README fallback. `cartog config` and `cartog doctor` also read it — see
+[cli.md](cli.md#cartog-config) and [cli.md](cli.md#cartog-doctor).
+
 ## Index-creation consent gate
 
 cartog will not create a `.cartog/` index for a project on its own. A fresh,

@@ -2,6 +2,82 @@
 
 use std::path::{Path, PathBuf};
 
+/// Where a project's description came from.
+///
+/// Stored so `cartog projects list` can show that a description was *inferred*
+/// from a README rather than declared by the project's author.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DescriptionSource {
+    /// `[project] description` in `.cartog.toml`.
+    Config,
+    /// The first prose paragraph of the project's README.
+    Readme,
+}
+
+impl DescriptionSource {
+    /// The stored/serialized form: `"config"` or `"readme"`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Readme => "readme",
+        }
+    }
+
+    /// Parse the stored form, or `None` for anything else.
+    ///
+    /// A hand-edited or future value reads as "unknown source", never as an
+    /// error: the description itself is still usable.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "config" => Some(Self::Config),
+            "readme" => Some(Self::Readme),
+            _ => None,
+        }
+    }
+}
+
+/// A project description plus the source that won.
+///
+/// The text is **repository-authored, untrusted input**: it exists to be read
+/// by an agent, which makes it the most injection-prone value the registry
+/// stores. Every consumer treats it as data — escaped on any rendering
+/// surface, parameterized in SQL, never interpreted as instructions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Description {
+    /// Plain text, at most `describe::DESCRIPTION_MAX_CHARS` characters.
+    pub text: String,
+    /// Which of the two sources produced `text`.
+    pub source: DescriptionSource,
+}
+
+/// What a config-aware writer resolved for this project's declared identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Declared {
+    /// `[project] name`, or `None` to fall back to the root basename.
+    pub name: Option<String>,
+    /// The resolved description, or `None` when neither source produced one.
+    pub description: Option<Description>,
+}
+
+/// Whether a writer looked at the project's declared identity at all.
+///
+/// The distinction is load-bearing: `cartog serve` startup and the watcher have
+/// no config in scope, so they must leave a declared name and description
+/// alone. Only a config-aware writer (`index`, `rag index`, `pull`) can
+/// legitimately clear them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum DeclaredUpdate {
+    /// Writer had no config in scope: stored values are kept as-is.
+    #[default]
+    Keep,
+    /// Writer resolved name + description; both stored columns are
+    /// overwritten, `NULL` included — so removing `[project] description` and
+    /// the README paragraph clears the row.
+    Set(Declared),
+}
+
 /// Facts a trigger supplies about a project it just wrote to.
 ///
 /// Every field beyond `db_path`/`root` is optional, and `None` means "I don't
@@ -33,6 +109,9 @@ pub struct ProjectFacts {
     /// presence also defeats the fingerprint skip: a caller that indexed has
     /// new information by construction.
     pub last_indexed: Option<i64>,
+    /// Whether this writer resolved the project's declared name/description.
+    /// [`DeclaredUpdate::Keep`] for any writer without config in scope.
+    pub declared: DeclaredUpdate,
 }
 
 impl ProjectFacts {
@@ -63,14 +142,16 @@ impl ProjectFacts {
             embed_model: None,
             embed_dim: None,
             last_indexed: None,
+            declared: DeclaredUpdate::Keep,
         }
     }
 
-    /// The project's display name: the root directory's basename.
+    /// The project's root name: the root directory's basename.
     ///
-    /// Phase 1 has no `[project] name` config, so the basename is the only
-    /// source. Falls back to the `db_path` basename, then to `"unknown"`, so
-    /// the `NOT NULL` column always has a value.
+    /// This feeds the `NOT NULL` `name` column and always means "basename" —
+    /// a declared `[project] name` is stored separately (see
+    /// [`ProjectRow::display_name`]). Falls back to the `db_path` basename,
+    /// then to `"unknown"`, so the column always has a value.
     #[must_use]
     pub fn name(&self) -> String {
         basename(&self.root)
@@ -208,7 +289,14 @@ pub struct ProjectRow {
     pub id: String,
     pub db_path: PathBuf,
     pub root: PathBuf,
+    /// The project root's basename. Always present; never the declared name.
     pub name: String,
+    /// `[project] name`, when the project declared one.
+    pub declared_name: Option<String>,
+    /// The stored description and its source, when one is known.
+    ///
+    /// Repository-authored, untrusted text — see [`Description`].
+    pub description: Option<Description>,
     pub languages: Vec<(String, u32)>,
     pub schema_version: Option<u32>,
     pub file_count: Option<u32>,
@@ -222,6 +310,14 @@ pub struct ProjectRow {
     pub last_indexed: Option<i64>,
     pub last_seen: i64,
     pub markers: Markers,
+}
+
+impl ProjectRow {
+    /// The name to show a user: `declared_name` when present, else `name`.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.declared_name.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// Diagnostic flags computed at read time, never stored — so a stale row can
@@ -418,6 +514,65 @@ mod tests {
         let f = ProjectFacts::identity_only("/elsewhere/x.sqlite", "/work/proj");
         assert_eq!(f.root, Path::new("/work/proj"));
         assert_eq!(f.name(), "proj");
+    }
+
+    /// A row with only the fields these tests care about.
+    fn row(name: &str, declared_name: Option<&str>) -> ProjectRow {
+        ProjectRow {
+            id: "serve-0".to_string(),
+            db_path: PathBuf::from("/r/.cartog/db.sqlite"),
+            root: PathBuf::from("/r"),
+            name: name.to_string(),
+            declared_name: declared_name.map(str::to_string),
+            description: None,
+            languages: Vec::new(),
+            schema_version: None,
+            file_count: None,
+            symbol_count: None,
+            edge_count: None,
+            resolved_count: None,
+            embedding_count: None,
+            embed_provider: None,
+            embed_model: None,
+            embed_dim: None,
+            last_indexed: None,
+            last_seen: 1,
+            markers: Markers::default(),
+        }
+    }
+
+    #[test]
+    fn the_display_name_prefers_the_declared_name() {
+        assert_eq!(
+            row("api", Some("svc-billing")).display_name(),
+            "svc-billing"
+        );
+    }
+
+    #[test]
+    fn the_display_name_falls_back_to_the_root_basename() {
+        assert_eq!(row("api", None).display_name(), "api");
+    }
+
+    #[test]
+    fn identity_only_facts_keep_the_declared_identity() {
+        // A writer with no config in scope must never clear a declared name or
+        // description: `serve` startup and the watcher both go through here.
+        let f = ProjectFacts::identity_only("/d/db.sqlite", "/r");
+        assert_eq!(f.declared, DeclaredUpdate::Keep);
+    }
+
+    #[test]
+    fn description_sources_round_trip_through_their_stored_form() {
+        for source in [DescriptionSource::Config, DescriptionSource::Readme] {
+            assert_eq!(DescriptionSource::parse(source.as_str()), Some(source));
+        }
+    }
+
+    #[test]
+    fn an_unknown_description_source_parses_as_none() {
+        assert_eq!(DescriptionSource::parse("wikipedia"), None);
+        assert_eq!(DescriptionSource::parse(""), None);
     }
 
     #[test]

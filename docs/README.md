@@ -32,7 +32,7 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 - [explanation/rag-pipeline.md](explanation/rag-pipeline.md) — hybrid search, embedding models, provider architecture
 - [explanation/incremental-indexing.md](explanation/incremental-indexing.md) — three-layer change detection, Merkle invariants
 - [explanation/concurrency.md](explanation/concurrency.md) — rayon / tokio / std::thread models
-- [explanation/project-registry.md](explanation/project-registry.md) — user-global project registry (`cartog projects`, shipped) and the proposed later phases
+- [explanation/project-registry.md](explanation/project-registry.md) — user-global project registry: `cartog projects`, `cartog_list_projects`, and self-populated descriptions (shipped), and the proposed later phases
 - [explanation/cross-project-queries.md](explanation/cross-project-queries.md) — *proposal* — federated search and cross-service edges
 
 ## Background docs

@@ -19,6 +19,8 @@ mod shared;
 mod test_support;
 
 pub use progress::SpinnerSafeWriter;
+/// What a run may learn about `[project]`, for the registry writers.
+pub use shared::ProjectSource;
 
 mod graph;
 mod index;

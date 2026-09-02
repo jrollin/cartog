@@ -197,6 +197,15 @@ fn main() -> Result<()> {
                 .display(),
         );
     }
+    // What this run may learn about `[project]`. A rejected config collapsed to
+    // defaults above, so its empty `[project]` is *unknown*, not absent —
+    // sending it as a registry write would erase the stored declared name and
+    // description on a single parse error anywhere in the file.
+    let project_source = if config_rejected {
+        commands::ProjectSource::Rejected
+    } else {
+        commands::ProjectSource::Config(cartog_config.project.as_ref())
+    };
     let provider_config = config::to_provider_config(&cartog_config);
     let redact = config::to_redaction_config(&cartog_config);
     // read_config already validated this, so it only re-builds a known-good
@@ -281,6 +290,7 @@ fn main() -> Result<()> {
                 redact,
                 &lsp_overrides,
                 &filter,
+                project_source,
             )
         }
         Command::Outline { file } => commands::cmd_outline(
@@ -362,6 +372,7 @@ fn main() -> Result<()> {
         } => commands::cmd_pull(
             &db_path,
             &cartog_config,
+            project_source,
             remote.as_deref(),
             force,
             no_sign_request,
@@ -493,6 +504,7 @@ fn main() -> Result<()> {
                 &provider_config,
                 redact,
                 &walk_filter,
+                project_source,
             ),
             RagCommand::Search { query, kind, limit } => commands::cmd_rag_search(
                 &db_path,

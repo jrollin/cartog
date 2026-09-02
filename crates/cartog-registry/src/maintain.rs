@@ -45,11 +45,14 @@ impl Removed {
 }
 
 /// Drop one project's row, identified by its registry id, root path, database
-/// path, or name.
+/// path, root name, or declared `[project] name`.
 ///
-/// Accepting all four is what makes the command usable: the id is what
+/// Accepting all of them is what makes the command usable: the id is what
 /// `projects list --json` reports, the path or name is what a person
-/// remembers. A name matches only when it identifies exactly one project —
+/// remembers — and the name they *see* in a listing is the declared one when
+/// the project has one, so matching only the root basename would reject the
+/// argument the listing just showed them. A name matches only when it
+/// identifies exactly one project —
 /// two workspaces each holding an `api` directory produce two rows named
 /// `api`, and deleting both from one unambiguous-looking argument would
 /// deregister a project the user never named. Such a target drops nothing and
@@ -73,9 +76,10 @@ pub fn forget_project_at(registry: &Path, target: &str) -> Removed {
     if ensure_schema(&conn).is_err() {
         return Removed::unavailable();
     }
-    let matches: Vec<String> = match conn
-        .prepare("SELECT id FROM projects WHERE id = ?1 OR root = ?1 OR db_path = ?1 OR name = ?1")
-    {
+    let matches: Vec<String> = match conn.prepare(
+        "SELECT id FROM projects
+          WHERE id = ?1 OR root = ?1 OR db_path = ?1 OR name = ?1 OR declared_name = ?1",
+    ) {
         Ok(mut stmt) => stmt
             .query_map(rusqlite::params![target], |row| row.get::<_, String>(0))
             .map(|rows| rows.filter_map(Result::ok).collect())
@@ -217,6 +221,27 @@ mod tests {
         let out = forget_project_at(&f.registry, "svc-billing");
 
         assert_eq!(out.dropped.len(), 1);
+    }
+
+    #[test]
+    fn forget_by_the_declared_name_drops_the_row() {
+        // Users type the name they see in `projects list`, which is the
+        // declared one when the project has one.
+        let f = Fixture::new();
+        let (_, db) = f.add("api");
+        {
+            let conn = open_read_write(&f.registry).unwrap();
+            conn.execute(
+                "UPDATE projects SET declared_name = 'svc-billing' WHERE id = ?1",
+                rusqlite::params![slot_for_db("serve", &db)],
+            )
+            .unwrap();
+        }
+
+        let out = forget_project_at(&f.registry, "svc-billing");
+
+        assert_eq!(out.dropped, vec![slot_for_db("serve", &db)]);
+        assert!(f.ids().is_empty());
     }
 
     #[test]

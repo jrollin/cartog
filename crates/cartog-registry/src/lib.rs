@@ -18,6 +18,9 @@
 //!   graphs. It records where each index lives and a summary of what it
 //!   holds, never any code. [`REGISTRY_ENV`] relocates it, or disables it
 //!   entirely when set to an empty value.
+//! - [`readme_description`] — the first prose paragraph of a project's
+//!   `README.md`, the fallback source for a registry row's description when
+//!   `.cartog.toml` declares no `[project] description`.
 //!
 //! The state-directory and slot helpers began in the `cartog` binary crate,
 //! where `cartog-mcp` and `cartog-watch` — the crates that derive the slots
@@ -33,6 +36,7 @@
 #![doc = include_str!("../README.md")]
 
 mod corrupt;
+mod describe;
 mod fingerprint;
 mod maintain;
 mod model;
@@ -44,9 +48,11 @@ mod slot;
 mod state_dir;
 mod write;
 
+pub use describe::{readme_description, DESCRIPTION_MAX_CHARS};
 pub use maintain::{forget_project_at, prune_projects_at, Removed};
 pub use model::{
-    format_timestamp, infer_root_from_db_path, Listing, Markers, ProjectFacts, ProjectRow,
+    format_timestamp, infer_root_from_db_path, Declared, DeclaredUpdate, Description,
+    DescriptionSource, Listing, Markers, ProjectFacts, ProjectRow,
 };
 pub use path::{registry_path, REGISTRY_ENV};
 pub use read::{list_projects, list_projects_at};

@@ -237,6 +237,7 @@ pub(crate) const KNOWN_CONFIG_SECTIONS: &[&str] = &[
     "security",
     "lsp",
     "index",
+    "project",
 ];
 
 /// Collect top-level keys that are not a recognized config section.
@@ -381,7 +382,61 @@ pub(crate) fn read_config(path: &Path) -> Option<CartogConfig> {
         return None;
     }
 
+    // Reject an over-long or control-character-bearing `[project]` value before
+    // it reaches the registry and every single-line surface that renders it.
+    if let Err(msg) = validate_project(&parsed) {
+        eprintln!("cartog: error in {}: {msg}", path.display());
+        return None;
+    }
+
     Some(parsed)
+}
+
+/// Reject an unusable `[project]` name/description.
+///
+/// Caps are enforced here rather than at write time so an over-long value the
+/// user *chose* is reported instead of silently truncated (the README fallback
+/// truncates, because there the length was not a choice). Control characters —
+/// newlines and tabs included — are refused because the value flows into
+/// single-line terminal output, JSON, and potentially HTML. An
+/// empty/whitespace-only value is a mistake, not a way to mean "unset": that is
+/// what omitting the key is for.
+pub(crate) fn validate_project(config: &CartogConfig) -> Result<(), String> {
+    let Some(project) = config.project.as_ref() else {
+        return Ok(());
+    };
+    check_project_field("name", project.name.as_deref(), PROJECT_NAME_MAX_CHARS)?;
+    check_project_field(
+        "description",
+        project.description.as_deref(),
+        PROJECT_DESCRIPTION_MAX_CHARS,
+    )
+}
+
+/// Validate one `[project]` field. Char counts, not bytes: the cap is about what
+/// a reader sees, and a byte cap would reject a short accented name.
+fn check_project_field(field: &str, value: Option<&str>, max_chars: usize) -> Result<(), String> {
+    let Some(raw) = value else {
+        return Ok(());
+    };
+    if raw.trim().is_empty() {
+        return Err(format!(
+            "[project] {field} is empty; omit the key instead of setting it to a blank value"
+        ));
+    }
+    if let Some(c) = raw.chars().find(|c| c.is_control()) {
+        return Err(format!(
+            "[project] {field} contains a control character ({}); it must be a single line of plain text",
+            c.escape_debug()
+        ));
+    }
+    let count = raw.trim().chars().count();
+    if count > max_chars {
+        return Err(format!(
+            "[project] {field} exceeds {max_chars} characters (got {count})"
+        ));
+    }
+    Ok(())
 }
 
 /// Reject an invalid `[lsp.<lang>]` block: an empty `command` (no executable to

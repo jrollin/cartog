@@ -488,7 +488,8 @@ pub enum ProjectsCommand {
 
     /// Drop one project's registry row. Never touches its index.
     Forget {
-        /// Project id, root path, database path, or name (from `projects list`)
+        /// Project id, root path, database path, or name — either the declared
+        /// `[project] name` or the directory basename (from `projects list`)
         target: String,
     },
 

@@ -6,7 +6,7 @@
 
 use crate::config::{
     CartogConfig, DatabaseConfig, EmbeddingConfig, IndexConfig, LocalEmbeddingConfig, OllamaConfig,
-    OpenAiConfig, RagConfig, RerankerConfig, SecurityConfig,
+    OpenAiConfig, ProjectConfig, RagConfig, RerankerConfig, SecurityConfig,
 };
 
 /// Whether a TOML error is serde's `deny_unknown_fields` rejection (a typo)
@@ -151,6 +151,10 @@ fn strip_section_by_name(name: &str, section: &mut toml::value::Table) {
         "rag" => strip_unknown_in_section::<RagConfig>(section),
         "security" => strip_unknown_in_section::<SecurityConfig>(section),
         "index" => strip_unknown_in_section::<IndexConfig>(section),
+        // A `descriptoin` typo must cost the description, never the index: a
+        // rejected config would still grant consent, but the user would lose
+        // every other setting over one misspelling.
+        "project" => strip_unknown_in_section::<ProjectConfig>(section),
         // `remote` / `lsp` rejected above; unknown sections already warned.
         _ => {}
     }

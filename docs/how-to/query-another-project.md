@@ -62,6 +62,25 @@ old-thing             ? symbols        ?     —                 never   [missin
 A `?` count means "not known", not zero — the registry caches whatever the writing command
 happened to measure.
 
+## Give your project a description so agents can route to it
+
+Routing works better when there is something to route on. Add a one-line description to
+`.cartog.toml`:
+
+```toml
+[project]
+name        = "svc-shipping"
+description = "Shipment creation, tracking, and carrier integration."
+```
+
+No config? cartog falls back to the first prose paragraph of `README.md`, truncated to 280
+characters. Either way, the description shows up the next time you `cartog index` — even a
+no-op incremental pass refreshes it, since the registry compares config and README content
+independently of whether any code changed.
+
+`cartog doctor` flags a project with no description from either source (advisory, not an
+error) — see [config.md § Project identity](../reference/config.md#project-identity-project).
+
 ## Housekeeping
 
 ```bash
@@ -93,5 +112,6 @@ directory its own registry, which defeats the purpose.
   index is independent. Ask each project separately.
 - **No searching every project at once.** One `--db` per command, by design: it keeps the
   cost of a listing independent of how many projects you have.
-- **No description of what each project is for.** The routing signal is name, languages, and
-  size. Treat a name match as a hint.
+- **No description for a project that never wrote one.** Routing by intent depends on a
+  `[project] description` or a README opening paragraph existing in the target repo. Without
+  either, the signal falls back to name, languages, and size.

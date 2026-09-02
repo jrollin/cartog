@@ -1,12 +1,14 @@
 # Project registry
 
-**Status:** step 1 (the registry, its write hooks, and `cartog projects`)
-**implemented**. Step 2 (`cartog_list_projects`) and steps 3–7 remain proposed;
-steps 4–7 are deliberately gated on evidence this registry exists to produce.
+**Status:** steps 1–3 **implemented**: the registry, its write hooks,
+`cartog projects`, `cartog_list_projects`, and the self-populated
+`description` (the `[project]` config section, the `README.md` fallback, and
+registry schema v2). Steps 4–7 remain proposed and are deliberately gated on
+evidence this registry exists to produce.
 
-Phase 1 keys agent routing on **name + languages + counts** only. There is no
-`description` until step 3, so the honest phase-1 capability is *"discover the
-other indexed projects and their `--db` paths"*, not *"route by intent"*.
+Phase 1 keyed agent routing on **name + languages + counts** only. Step 3
+adds `description`, so routing can now go on intent, not just name — see
+[Step 3 — self-populated description](#step-3--self-populated-description).
 
 ## Corrections the implementation forced
 
@@ -74,9 +76,9 @@ Three steps, each shippable alone:
 
 | Step | Deliverable |
 |------|-------------|
-| 1 | `projects.sqlite` registry + `cartog projects list/forget/prune` |
-| 2 | `cartog_list_projects` MCP tool, served from the existing per-project server |
-| 3 | Self-populated `description`, so routing by intent works |
+| 1 | `projects.sqlite` registry + `cartog projects list/forget/prune` — **implemented** |
+| 2 | `cartog_list_projects` MCP tool, served from the existing per-project server — **implemented** |
+| 3 | Self-populated `description`, so routing by intent works — **implemented** |
 
 Explicitly **not** in scope (each has its own reasons, see
 [Non-goals](#non-goals)): merging graphs into one database, federated search,
@@ -174,8 +176,9 @@ CREATE TABLE IF NOT EXISTS projects (
     db_path         TEXT NOT NULL,     -- resolved, canonical where possible
     root            TEXT NOT NULL,     -- indexed project root
     name            TEXT,              -- defaults to root's basename
-    description     TEXT,              -- step 3
-    description_src TEXT,              -- 'config' | 'readme', step 3
+    declared_name   TEXT,              -- step 3: `[project] name`, else NULL
+    description     TEXT,              -- step 3: config or README, else NULL
+    description_src TEXT,              -- step 3: 'config' | 'readme' | NULL
     languages       TEXT,              -- JSON: [["rust",412],["markdown",30]]
     schema_version  INTEGER,
     symbol_count    INTEGER,
@@ -454,6 +457,63 @@ Rules:
   labeled as repository-authored content in the MCP output.
 - Truncation is a hard cap enforced at write time, so the registry cannot grow
   unbounded from one pathological file.
+
+### Implementation notes (decided during step 3)
+
+Two decisions the design above left implicit, made explicit during
+implementation:
+
+1. **`declared_name` is a separate nullable column, not a reuse of `name`.**
+   The existing `name` column is `NOT NULL` and always means "root basename" —
+   it is written by every trigger, including a config-less `serve` startup
+   (see [the trigger table](#when-rows-are-written)). Overloading it with
+   `[project] name` would mean a config-less writer (`serve`, the watcher)
+   either has to re-derive the basename to avoid clobbering a declared name it
+   never saw, or risks reverting one. A second column,
+   `declared_name TEXT` (NULL unless `[project] name` is set), avoids the
+   ambiguity: readers show `declared_name` when present, else `name`, and a
+   writer with no config in scope simply never touches `declared_name`.
+2. **A `DeclaredUpdate::Keep | Set(Declared)` enum, not an `Option<Declared>`
+   parameter.** A writer must distinguish *"I have no config, don't touch the
+   declared columns"* (`Keep` — `serve` startup, the watcher) from *"I
+   resolved this project's identity and it has no description"* (`Set` with
+   `description: None` — `cartog index` on a project whose `[project]
+   description` and README were both removed). Both cases pass no
+   description, but only the second must **clear** a previously-stored one.
+   An `Option<Declared>` cannot express that difference; a two-variant enum
+   can. `Set` overwrites `declared_name`, `description`, and `description_src`
+   exactly as resolved, NULL included; `Keep` never writes them, on insert or
+   update.
+3. **A rejected `.cartog.toml` sends `Keep`, not an empty `Set`.** A rejected
+   config collapses to a *default* config, whose empty `[project]` is
+   indistinguishable at the type level from "no config file at all". Passing
+   that on as a write meant one parse error anywhere in the file (or an
+   over-long `[project] description`) wiped the stored declared name and
+   replaced the description with the README fallback. The writers therefore
+   take a `ProjectSource::{Config(Option<&ProjectConfig>), Rejected}` rather
+   than an `Option<&ProjectConfig>`, and `Rejected` maps to `Keep`: the config
+   never knew the declared values, so it must not overwrite them. The
+   read-only diagnostics (`cartog doctor`, `cartog config`) are unaffected —
+   they report what a working config would store and already refuse to run
+   against a rejected one.
+
+Registry schema `REGISTRY_VERSION` moved 1 → 2 with an additive
+`ALTER TABLE projects ADD COLUMN` migration (`declared_name`, `description`,
+`description_src`) — existing rows survive, migrated in place by the first
+**writer** that opens the file. Readers (`projects list`, `cartog_list_projects`)
+open read-only and never migrate, so they detect a not-yet-migrated v1 file via
+`PRAGMA table_info` and read the three columns as NULL instead of failing the
+listing. Without that branch every project vanished from `projects list`
+between upgrading the binary and the next `cartog index`, which the live smoke
+caught and a unit test now pins.
+
+The [fingerprint-unchanged fast path](#skip-an-unchanged-row-by-content-hash)
+still refreshes these three columns even when `source_fingerprint` matches:
+editing `README.md` or `.cartog.toml` changes no byte of the DB file, so a
+writer that skipped on fingerprint alone would never pick up a README or
+config edit. A `Set(d)` write compares `d` against the stored triple and
+updates only when it differs (plus `last_seen`); `Keep` behaves as on any
+other pass — the counts-and-fingerprint skip is unaffected either way.
 
 ## The `[project]` config section
 

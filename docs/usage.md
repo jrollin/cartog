@@ -348,8 +348,10 @@ cartog search Foo --db /path/to/other/.cartog/db.sqlite
 ```
 
 Every index, `rag index`, `pull`, watcher re-index, and `serve` startup registers its project,
-so there is nothing to enable. Agents get the same rows from the `cartog_list_projects` MCP
-tool. Full walkthrough: **[how-to/query-another-project.md](how-to/query-another-project.md)**.
+so there is nothing to enable. Each entry carries a one-line description — from `.cartog.toml`'s
+`[project] description`, or the target repo's `README.md` — so an agent can route by intent, not
+just by name. Agents get the same rows from the `cartog_list_projects` MCP tool. Full
+walkthrough: **[how-to/query-another-project.md](how-to/query-another-project.md)**.
 
 ## Commands and Configuration
 

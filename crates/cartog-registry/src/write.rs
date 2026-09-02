@@ -11,8 +11,9 @@ use std::path::Path;
 use rusqlite::Connection;
 
 use crate::corrupt::quarantine_if_corrupt;
+use crate::describe::{truncate_at_word_boundary, DESCRIPTION_MAX_CHARS};
 use crate::fingerprint::source_fingerprint;
-use crate::model::ProjectFacts;
+use crate::model::{Declared, DeclaredUpdate, ProjectFacts};
 use crate::open::open_read_write;
 use crate::schema::{ensure_schema, read_registry_version, REGISTRY_VERSION};
 use crate::slot::slot_for_db;
@@ -81,7 +82,15 @@ fn try_record(registry: &Path, facts: &ProjectFacts) -> rusqlite::Result<()> {
         // that does not update when the project is seen is useless, and three
         // doc comments promised a `serve` startup refreshes it. One cheap
         // single-column UPDATE, no COALESCE dance needed.
+        //
+        // The declared identity is the exception to the skip: editing
+        // `README.md` or `.cartog.toml` changes no byte of the graph database,
+        // so the fingerprint cannot see it. A config-aware writer's `Set`
+        // therefore still lands here.
         touch_last_seen(&conn, &id);
+        if let DeclaredUpdate::Set(declared) = &facts.declared {
+            write_declared_if_changed(&conn, &id, declared);
+        }
         return Ok(());
     }
 
@@ -171,6 +180,52 @@ fn touch_last_seen(conn: &Connection, id: &str) {
     }
 }
 
+/// Update the declared columns on the fingerprint-skip path, if they differ.
+///
+/// Compared before writing so a repeated no-op pass stays a single
+/// `last_seen` update: the point of the skip path is that it is cheap.
+/// Failure is logged and ignored, like every other write on this path.
+fn write_declared_if_changed(conn: &Connection, id: &str, declared: &Declared) {
+    let (name, text, src) = declared_params(declared);
+    let stored: Option<(Option<String>, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT declared_name, description, description_src FROM projects WHERE id = ?1",
+            rusqlite::params![id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .ok();
+    if stored.as_ref() == Some(&(name.clone(), text.clone(), src.map(str::to_string))) {
+        return;
+    }
+    if let Err(e) = conn.execute(
+        "UPDATE projects
+            SET declared_name = ?2, description = ?3, description_src = ?4
+          WHERE id = ?1",
+        rusqlite::params![id, name, text, src],
+    ) {
+        tracing::warn!(
+            id = %id,
+            error = %e,
+            "could not refresh the project's declared name/description"
+        );
+    }
+}
+
+/// The three declared columns as bind values.
+///
+/// The description text is hard-capped here regardless of source: config
+/// validation caps it too, but the registry must not be able to grow
+/// unbounded from a caller that skipped it.
+fn declared_params(declared: &Declared) -> (Option<String>, Option<String>, Option<&'static str>) {
+    let name = declared.name.clone();
+    let text = declared
+        .description
+        .as_ref()
+        .map(|d| truncate_at_word_boundary(&d.text, DESCRIPTION_MAX_CHARS));
+    let src = declared.description.as_ref().map(|d| d.source.as_str());
+    (name, text, src)
+}
+
 /// True when the stored fingerprint equals the current one, so the row already
 /// describes this database's state.
 fn is_unchanged(conn: &Connection, id: &str, fingerprint: Option<&str>) -> bool {
@@ -196,6 +251,11 @@ fn is_unchanged(conn: &Connection, id: &str, fingerprint: Option<&str>) -> bool 
 /// `COALESCE(excluded.x, projects.x)` is what makes "write only what you know"
 /// safe — a `serve` startup refreshing `last_seen` cannot null out counts an
 /// `index` recorded.
+///
+/// The three declared columns cannot use `COALESCE`: `Set(None)` must *clear*
+/// them, which `COALESCE` would read as "unknown, keep". They are gated on the
+/// `?18` flag instead — 1 for [`DeclaredUpdate::Set`], 0 for `Keep`, which
+/// keeps whatever is stored (`NULL` on a fresh insert).
 fn upsert(
     conn: &Connection,
     id: &str,
@@ -206,17 +266,29 @@ fn upsert(
         .languages
         .as_ref()
         .map(|langs| encode_languages(langs));
+    let (declared_name, description, description_src) = match &facts.declared {
+        DeclaredUpdate::Set(d) => declared_params(d),
+        DeclaredUpdate::Keep => (None, None, None),
+    };
+    let set_declared = matches!(facts.declared, DeclaredUpdate::Set(_));
     conn.execute(
         "INSERT INTO projects (
              id, db_path, root, name, languages, schema_version,
              file_count, symbol_count, edge_count, resolved_count, embedding_count,
              embed_provider, embed_model, embed_dim,
-             source_fingerprint, last_indexed, last_seen
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+             source_fingerprint, last_indexed, last_seen,
+             declared_name, description, description_src
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?19,?20,?21)
          ON CONFLICT(id) DO UPDATE SET
              db_path            = excluded.db_path,
              root               = excluded.root,
              name               = excluded.name,
+             declared_name      = CASE WHEN ?18 THEN excluded.declared_name
+                                       ELSE projects.declared_name END,
+             description        = CASE WHEN ?18 THEN excluded.description
+                                       ELSE projects.description END,
+             description_src    = CASE WHEN ?18 THEN excluded.description_src
+                                       ELSE projects.description_src END,
              languages          = COALESCE(excluded.languages,          projects.languages),
              schema_version     = COALESCE(excluded.schema_version,     projects.schema_version),
              file_count         = COALESCE(excluded.file_count,         projects.file_count),
@@ -248,6 +320,10 @@ fn upsert(
             fingerprint,
             facts.last_indexed,
             now_unix(),
+            set_declared,
+            declared_name,
+            description,
+            description_src,
         ],
     )?;
     Ok(())
@@ -661,6 +737,26 @@ mod tests {
     }
 
     #[test]
+    fn a_v2_binary_still_refuses_to_write_a_v3_registry() {
+        // The version gate must survive the v1 → v2 migration: the next bump is
+        // the case it exists for, not a distant 99.
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        {
+            let conn = crate::open::open_read_write(&f.registry).unwrap();
+            conn.execute(
+                "UPDATE metadata SET value = '3' WHERE key = 'registry_version'",
+                [],
+            )
+            .unwrap();
+        }
+
+        f.record(&counted(&db, &root, 100));
+
+        assert!(f.row(&db).is_none());
+    }
+
+    #[test]
     #[serial]
     fn recording_never_fails_its_caller_when_the_registry_is_unwritable() {
         // The whole failure contract: registration is bookkeeping riding on an
@@ -732,6 +828,237 @@ mod tests {
                 None => std::env::remove_var(crate::path::REGISTRY_ENV),
             }
         }
+    }
+
+    fn declared(name: Option<&str>, text: Option<&str>) -> DeclaredUpdate {
+        DeclaredUpdate::Set(Declared {
+            name: name.map(str::to_string),
+            description: text.map(|t| crate::model::Description {
+                text: t.to_string(),
+                source: crate::model::DescriptionSource::Config,
+            }),
+        })
+    }
+
+    #[test]
+    fn a_set_declared_write_stores_the_name_description_and_source() {
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+
+        f.record(&ProjectFacts {
+            declared: declared(Some("svc-billing"), Some("Invoices.")),
+            ..counted(&db, &root, 100)
+        });
+
+        let row = f.row(&db).unwrap();
+        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
+        let d = row.description.expect("a description");
+        assert_eq!(d.text, "Invoices.");
+        assert_eq!(d.source, crate::model::DescriptionSource::Config);
+    }
+
+    #[test]
+    fn a_set_with_no_description_clears_a_previously_stored_one() {
+        // Removing `[project] description` and the README paragraph must clear
+        // the row — this is why the declared columns cannot use COALESCE.
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        f.record(&ProjectFacts {
+            declared: declared(Some("svc-billing"), Some("Invoices.")),
+            ..counted(&db, &root, 100)
+        });
+
+        f.record(&ProjectFacts {
+            declared: declared(None, None),
+            ..counted(&db, &root, 101)
+        });
+
+        let row = f.row(&db).unwrap();
+        assert_eq!(row.description, None, "an emptied Set must clear it");
+        assert_eq!(row.declared_name, None);
+    }
+
+    #[test]
+    fn a_keep_write_leaves_the_declared_columns_untouched() {
+        // `serve` startup and the watcher have no config in scope, so they must
+        // never clear a name/description an index pass resolved.
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        f.record(&ProjectFacts {
+            declared: declared(Some("svc-billing"), Some("Invoices.")),
+            ..counted(&db, &root, 100)
+        });
+        // Change the DB so the fingerprint skip does not hide the merge.
+        std::fs::write(&db, b"seed plus a change so the write is not skipped").unwrap();
+
+        f.record(&ProjectFacts::identity_only(&db, &root));
+
+        let row = f.row(&db).unwrap();
+        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
+        assert_eq!(
+            row.description.map(|d| d.text).as_deref(),
+            Some("Invoices.")
+        );
+    }
+
+    #[test]
+    fn a_keep_write_on_a_fresh_insert_leaves_the_declared_columns_null() {
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+
+        f.record(&ProjectFacts::identity_only(&db, &root));
+
+        let row = f.row(&db).unwrap();
+        assert_eq!(row.declared_name, None);
+        assert_eq!(row.description, None);
+    }
+
+    #[test]
+    fn a_changed_description_lands_even_when_the_database_is_unchanged() {
+        // Editing README.md or .cartog.toml changes no byte of the graph DB, so
+        // the fingerprint cannot see it. The skip path must still compare and
+        // rewrite the declared columns, or a description could never be updated
+        // without a re-index that happened to change the file.
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        f.record(&ProjectFacts {
+            declared: declared(Some("old-name"), Some("Old summary.")),
+            ..counted(&db, &root, 100)
+        });
+
+        // No last_indexed and identical DB bytes: the skip path.
+        f.record(&ProjectFacts {
+            declared: declared(Some("new-name"), Some("New summary.")),
+            ..ProjectFacts::identity_only(&db, &root)
+        });
+
+        let row = f.row(&db).unwrap();
+        assert_eq!(row.declared_name.as_deref(), Some("new-name"));
+        assert_eq!(
+            row.description.map(|d| d.text).as_deref(),
+            Some("New summary.")
+        );
+    }
+
+    #[test]
+    fn an_identical_set_on_the_unchanged_path_writes_nothing_but_last_seen() {
+        // The skip path must stay cheap: an unchanged description is not a
+        // reason to rewrite anything.
+        //
+        // Observed through `total_changes` on a witness connection rather than
+        // through the stored values, which are identical either way and so
+        // cannot tell a skipped UPDATE from a redundant one.
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        f.record(&ProjectFacts {
+            declared: declared(Some("svc"), Some("Same summary.")),
+            ..counted(&db, &root, 100)
+        });
+        {
+            let conn = crate::open::open_read_write(&f.registry).unwrap();
+            conn.execute("UPDATE projects SET name = 'SENTINEL', last_seen = 1", [])
+                .unwrap();
+        }
+
+        let changes = changed_rows_during(&f, || {
+            f.record(&ProjectFacts {
+                declared: declared(Some("svc"), Some("Same summary.")),
+                ..ProjectFacts::identity_only(&db, &root)
+            });
+        });
+
+        assert_eq!(
+            changes, 1,
+            "only the last_seen touch may write; the declared UPDATE must be skipped"
+        );
+        let row = f.row(&db).unwrap();
+        assert_eq!(row.name, "SENTINEL", "an identical Set must not re-upsert");
+        assert!(row.last_seen > 1, "but last_seen must still refresh");
+    }
+
+    #[test]
+    fn a_differing_set_on_the_unchanged_path_does_write_the_declared_columns() {
+        // The complement of the skip: the compare must not suppress a real
+        // change, so the same counter shows two writes rather than one.
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        f.record(&ProjectFacts {
+            declared: declared(Some("svc"), Some("Old summary.")),
+            ..counted(&db, &root, 100)
+        });
+
+        let changes = changed_rows_during(&f, || {
+            f.record(&ProjectFacts {
+                declared: declared(Some("svc"), Some("New summary.")),
+                ..ProjectFacts::identity_only(&db, &root)
+            });
+        });
+
+        assert_eq!(changes, 2, "last_seen plus the declared UPDATE");
+    }
+
+    /// How many `UPDATE`s land on `projects` while `op` runs.
+    ///
+    /// Counted with a temporary audit trigger: `total_changes` is
+    /// per-connection and `op` writes on its own, so no counter this test
+    /// holds would see them. Distinguishing a skipped write from a redundant
+    /// one is the whole point — the stored values are identical either way.
+    fn changed_rows_during(f: &WriteFixture, op: impl FnOnce()) -> i64 {
+        let conn = crate::open::open_read_write(&f.registry).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS audit (n INTEGER);
+             DELETE FROM audit;
+             CREATE TRIGGER IF NOT EXISTS audit_updates AFTER UPDATE ON projects
+             BEGIN INSERT INTO audit (n) VALUES (1); END;",
+        )
+        .unwrap();
+        drop(conn);
+
+        op();
+
+        let conn = crate::open::open_read_write(&f.registry).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM audit", [], |r| r.get(0))
+            .unwrap();
+        conn.execute_batch("DROP TRIGGER audit_updates").unwrap();
+        n
+    }
+
+    #[test]
+    fn a_description_over_the_cap_is_truncated_at_write_time() {
+        // Defense in depth: config validation caps it too, but the registry
+        // must not be able to grow unbounded from a caller that skipped it.
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        let long = "word ".repeat(200);
+
+        f.record(&ProjectFacts {
+            declared: declared(None, Some(&long)),
+            ..counted(&db, &root, 100)
+        });
+
+        let text = f.row(&db).unwrap().description.unwrap().text;
+        assert!(
+            text.chars().count() <= DESCRIPTION_MAX_CHARS,
+            "{} chars stored",
+            text.chars().count()
+        );
+    }
+
+    #[test]
+    fn a_description_over_the_cap_is_truncated_on_the_unchanged_path_too() {
+        // Both write paths must enforce the cap, not just the upsert.
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        f.record(&counted(&db, &root, 100));
+
+        f.record(&ProjectFacts {
+            declared: declared(None, Some(&"word ".repeat(200))),
+            ..ProjectFacts::identity_only(&db, &root)
+        });
+
+        let text = f.row(&db).unwrap().description.unwrap().text;
+        assert!(text.chars().count() <= DESCRIPTION_MAX_CHARS);
     }
 
     #[test]
