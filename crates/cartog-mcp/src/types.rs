@@ -231,3 +231,70 @@ pub(crate) struct UpdateResult {
     /// Human-readable summary for display.
     pub(crate) message: String,
 }
+
+/// One project as `cartog_list_projects` reports it.
+///
+/// Deliberately mirrors `cartog projects list --json` so one contract is tested
+/// from two directions. `db_path` is the field that matters: with it an agent
+/// runs any cartog CLI command against another project via `--db`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct ProjectEntry {
+    /// Registry id (the project's serve slot). Stable across re-indexes.
+    pub(crate) id: String,
+    /// Project name — the root directory's basename. Phase 1 has no
+    /// configured name or description, so this plus `languages` is the whole
+    /// routing signal.
+    pub(crate) name: String,
+    pub(crate) root: String,
+    /// Path to this project's index. Pass it as `--db <path>` to query the
+    /// project without leaving the current session.
+    pub(crate) db_path: String,
+    /// Languages by symbol count, most-populous first.
+    pub(crate) languages: Vec<ProjectLanguage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) file_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) symbol_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) edge_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) resolved_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) embedding_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) schema_version: Option<u32>,
+    /// RFC3339 timestamp of the last indexing pass, absent if never indexed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_indexed: Option<String>,
+    /// True when this is the project **this server** is serving. An agent must
+    /// not re-route to itself.
+    pub(crate) current: bool,
+    /// A `cartog serve`/`watch` peer holds this project's lock. Advisory.
+    pub(crate) live: bool,
+    /// The index was written at a different schema version than this binary's,
+    /// so querying it needs a re-index. Its cached counts still describe the
+    /// last known state.
+    pub(crate) stale_schema: bool,
+    /// The database file is gone; `cartog projects prune` drops the row.
+    pub(crate) missing: bool,
+    /// This project's embedding provider/model/dimension differs from most
+    /// others, so its vectors are not comparable with theirs.
+    pub(crate) embed_mismatch: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct ProjectLanguage {
+    pub(crate) language: String,
+    pub(crate) symbols: u32,
+}
+
+/// Result of `cartog_list_projects`.
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct ListProjectsResult {
+    /// False when there is no registry at all — nothing has been indexed on
+    /// this machine, or `CARTOG_REGISTRY` is disabled. An empty `projects`
+    /// list means something different in each case, so never infer one from
+    /// the other.
+    pub(crate) registry_available: bool,
+    pub(crate) projects: Vec<ProjectEntry>,
+}

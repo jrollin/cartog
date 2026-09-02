@@ -4,7 +4,7 @@
 
 ## Overview
 
-`cartog serve` runs cartog as an MCP server over stdio, exposing 16 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 13 query tools are read-only (including `cartog_trace` for call paths and `cartog_context` for one-shot task bundles); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones.
+`cartog serve` runs cartog as an MCP server over stdio, exposing 17 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 14 query tools are read-only (including `cartog_trace` for call paths, `cartog_context` for one-shot task bundles, and `cartog_list_projects` for discovering the other indexed projects on this machine); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones.
 
 When `cartog serve --watch` is running and a file changes (or RAG embeddings are still catching up — including symbols whose body was just edited and not yet re-embedded), affected read-tool responses are prefixed with a `⚠️` staleness banner so the agent knows the answer may be momentarily behind the working tree. Read-only secondaries and `cartog serve` without `--watch` never show the banner.
 
@@ -44,12 +44,40 @@ with three controls, highest precedence first: `CARTOG_WATCH_RAG` (env) override
 | `cartog_changes` | `commits?`, `kind?` | Symbols affected by recent git changes |
 | `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search (write) |
 | `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
+| `cartog_list_projects` | — | The other cartog-indexed projects on this machine, with each one's `db_path` |
 | `cartog_update` | `version?` | Arm a deferred self-update (write; touches the state file, not the index) |
 
 Read tools (everything except `cartog_index`, `cartog_rag_index`, and `cartog_update`)
 carry an `outputSchema` and return `structuredContent`. All tool responses also include a JSON text block.
 
 **Path restriction**: `cartog_index` and `cartog_rag_index` reject paths outside the project directory (CWD subtree). Agents cannot index arbitrary filesystem locations.
+
+### Cross-project discovery (`cartog_list_projects`)
+
+`cartog_list_projects` reads the machine-local project registry
+(`<state_dir>/projects.sqlite`) and returns the other cartog-indexed projects on
+this machine. It **opens no project database**, so its cost is independent of how
+many projects are registered and it cannot contend with another project's writer.
+
+`db_path` is the actionable field: pass it to any cartog CLI command as
+`--db <path>` to query that project. `current: true` marks the project this
+server already serves — use the normal tools for that one. Per-row markers
+(`live`, `stale_schema`, `missing`, `embed_mismatch`) mirror
+[`cartog projects list`](cli.md#cartog-projects-listforgetprune).
+
+**Honest scope.** The routing signal is **name + languages + size only**. There
+is no per-project description, so the tool tells an agent *which projects exist
+and where their indexes are*, not *what each project is for*. Treat a name match
+as a hint, not an answer.
+
+`registry_available: false` means there is no registry at all — nothing else has
+been indexed on this machine, or `CARTOG_REGISTRY` is disabled. That is a
+different fact from an empty `projects` list; never infer one from the other.
+
+Gated by **neither** the degraded nor the read-only guard, for the same reason
+`cartog_update` is not: it does not touch the index database. A degraded server
+(no index for the current project) is exactly when discovering the machine's
+other projects is most useful.
 
 ## Progress notifications
 

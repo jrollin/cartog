@@ -913,6 +913,16 @@ pub struct CartogServer {
     /// also starts degraded if it found no DB on disk (its primary is degraded).
     /// Immutable for the process lifetime — set once at construction, never swapped.
     degraded: bool,
+    /// Path this server's index was opened from, as given to the constructor.
+    ///
+    /// Kept so `cartog_list_projects` can mark which registry row is *this*
+    /// project — an agent must not re-route to itself. Compared by slot rather
+    /// than by string, so a relative or symlinked path still matches. `cwd` is
+    /// the wrong key: the plugin launches `serve` with no `--db`, and a session
+    /// in a subdirectory has a cwd that is not the project root.
+    ///
+    /// Empty for an in-memory database (a degraded server or a test).
+    db_path: Arc<Path>,
 }
 
 /// Role of this MCP server instance under single-writer election.
@@ -1027,6 +1037,7 @@ impl CartogServer {
             filter,
             Role::Primary,
             degraded,
+            db_path,
         )
     }
 
@@ -1073,6 +1084,7 @@ impl CartogServer {
                 filter,
                 Role::Primary,
                 true,
+                db_path,
             );
         }
         let db = Database::open_readonly(db_path)
@@ -1089,6 +1101,7 @@ impl CartogServer {
             filter,
             Role::ReadOnly,
             false, // an existing DB was found on disk
+            db_path,
         )
     }
 
@@ -1139,6 +1152,7 @@ impl CartogServer {
         filter: indexer::WalkFilter,
         role: Role,
         degraded: bool,
+        db_path: &Path,
     ) -> anyhow::Result<Self> {
         let cwd = Self::cwd()?;
         // Consumed only by the `lsp` feature's warm manager; keep the param
@@ -1165,6 +1179,7 @@ impl CartogServer {
             redact,
             walk_filter: Arc::new(filter),
             degraded,
+            db_path: Arc::from(db_path),
         })
     }
 
@@ -1212,6 +1227,7 @@ impl CartogServer {
             filter,
             role,
             degraded,
+            db_path,
         )
     }
 
@@ -1235,6 +1251,9 @@ impl CartogServer {
             filter,
             Role::Primary,
             true,
+            // A degraded server has no on-disk database, so it has no identity
+            // in the project registry — and registers nothing.
+            std::path::Path::new(""),
         )
     }
 
@@ -1315,6 +1334,7 @@ impl CartogServer {
             + Self::search_router()
             + Self::rag_router()
             + Self::manage_router()
+            + Self::projects_router()
     }
 }
 
@@ -1329,7 +1349,9 @@ impl ServerHandler for CartogServer {
                  Prefer cartog tools over Grep/Glob/Read for code navigation — each \
                  tool's description tells you when to use it and what it returns. \
                  Default entry points: cartog_map (orient in a new repo), \
-                 cartog_rag_search (find code by concept), cartog_search (look up an exact symbol name). \
+                 cartog_rag_search (find code by concept), cartog_search (look up an exact symbol name), \
+                 cartog_list_projects (for a question about a DIFFERENT repository on this \
+                 machine — it returns each project's db_path to pass as --db). \
                  Languages: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, C, C++, C#, Vue, Svelte, Astro, Markdown. \
                  Frameworks: React, Vue, Svelte, Astro — JSX/SFC component-usage edges.",
             )

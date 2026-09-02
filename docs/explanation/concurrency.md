@@ -100,7 +100,7 @@ roughly 30–50% on the inference pass.
 
 ## 4. MCP tool handlers — `tokio::task::spawn_blocking`
 
-**Where:** `crates/cartog-mcp/src/lib.rs` (all 16 tool handlers); runtime is
+**Where:** `crates/cartog-mcp/src/lib.rs` (all 17 tool handlers); runtime is
 `tokio` with `rt-multi-thread`.
 
 **Usage.** `cartog serve` is an async MCP server over stdio. Every tool handler

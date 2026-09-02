@@ -4,5 +4,6 @@
 mod graph;
 mod index;
 mod manage;
+pub(crate) mod projects;
 mod rag;
 mod search;

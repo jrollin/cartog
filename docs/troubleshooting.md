@@ -269,7 +269,7 @@ with `cartog rag index --force`.
 This was the pre-Phase-2 symptom of two cartog processes racing on the
 embedding-dimension migration. As of v0.17 cartog uses single-writer
 election: the first `cartog serve` is the primary, the second attaches
-read-only and exposes 14 of 16 MCP tools (`cartog_index` and
+read-only and exposes 15 of 17 MCP tools (`cartog_index` and
 `cartog_rag_index` return a clear refusal pointing at the primary). If the
 primary process dies, the secondary takes over within ~10s.
 

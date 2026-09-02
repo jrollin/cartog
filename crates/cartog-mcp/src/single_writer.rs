@@ -281,6 +281,20 @@ pub async fn run_server(
         .map_err(|e| anyhow::anyhow!("server construction task panicked: {e}"))??
     };
 
+    // Record this project in the machine-local registry so a session in
+    // another repository can discover it.
+    //
+    // Primary only, and never when degraded: a degraded server holds an empty
+    // in-memory database for a project that was never indexed, so registering
+    // it would advertise a project with nothing in it — and, because the
+    // upsert refreshes `last_seen`, would keep resurfacing it. Read-only
+    // secondaries also skip: the read-only flag is about *their project's*
+    // database, not this separate file, but two peers racing one row buys
+    // nothing when the primary already wrote it.
+    if role == Role::Primary && !server.is_degraded() {
+        register_served_project(db_path);
+    }
+
     // Reflect initial watcher state on the server's flag so `cartog_stats`
     // surfaces it accurately from request #1. Will be updated by the
     // promoter on a successful post-promotion watcher spawn.
@@ -674,6 +688,14 @@ pub(crate) async fn promoter_task(args: PromoterArgs) {
         }
         args.role.store(Role::Primary);
 
+        // A promotion is a second writer moment: this process attached
+        // read-only (and so registered nothing at startup) and now owns the
+        // database. Register here, or a project whose original primary died
+        // would go unlisted for the rest of the session. A promoted server has
+        // a real on-disk database by construction — the promoter only commits
+        // after `open_existing_rw` succeeded — so there is no degraded case.
+        register_served_project(&args.db_path);
+
         info!("promoted to primary for {}", args.db_path.display());
         return;
     }
@@ -764,6 +786,34 @@ async fn wait_for_sigterm() {
 #[cfg(not(any(unix, windows)))]
 async fn wait_for_sigterm() {
     std::future::pending::<()>().await;
+}
+
+/// Record the project this server is serving in the machine-local registry.
+///
+/// Identity only — no counts. The server opened the database but never counted
+/// it, so registration costs no extra query; the registry's upsert leaves every
+/// unknown column at its stored value, so this cannot erase counts an earlier
+/// `cartog index` recorded.
+///
+/// The root is inferred from the database path: `run_server` is handed a
+/// `db_path` and no root.
+fn register_served_project(db_path: &std::path::Path) {
+    let root = cartog_registry::infer_root_from_db_path(db_path);
+    let mut facts = cartog_registry::ProjectFacts::identity_only(db_path, root);
+    facts.schema_version = cartog_db::read_schema_version_at(db_path)
+        .ok()
+        .filter(|v| *v > 0);
+    facts.embed_provider = cartog_db::read_metadata_at(db_path, cartog_db::EMBED_PROVIDER_KEY)
+        .ok()
+        .flatten();
+    facts.embed_model = cartog_db::read_metadata_at(db_path, cartog_db::EMBED_MODEL_KEY)
+        .ok()
+        .flatten();
+    facts.embed_dim = cartog_db::read_metadata_at(db_path, cartog_db::EMBED_DIMENSION_KEY)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok());
+    cartog_registry::record_project(&facts);
 }
 
 /// Test-only call counter for `validate_pinned_state`. Lets the promoter

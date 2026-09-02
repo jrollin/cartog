@@ -276,7 +276,7 @@ fn promoter_args_for_test(
     state_dir: std::path::PathBuf,
     primary: cartog_process_lock::ActiveLock,
     pinned: Option<PinnedAttach>,
-) -> PromoterArgs {
+) -> (PromoterArgs, RegistryRedirect) {
     promoter_args_with_slot(
         db,
         role,
@@ -288,6 +288,43 @@ fn promoter_args_for_test(
     )
 }
 
+/// Point the user-global project registry at a throwaway file for this test.
+///
+/// A promotion registers the promoted project — correct in production, but
+/// these tests promote against temp-dir databases that are gone by the next
+/// run, so without redirection every promoter test leaves a dangling row in the
+/// **developer's own** registry.
+///
+/// Returns a guard that restores the previous value on drop. A bare
+/// process-wide `set_var` would be simpler but leaks into whichever test runs
+/// next — including the `cartog_list_projects` tests, which assert on registry
+/// contents and would then see a disabled registry. The guard's lifetime is the
+/// `PromoterArgs`, which each test holds for its duration.
+#[must_use]
+struct RegistryRedirect {
+    prev: Option<std::ffi::OsString>,
+    _dir: tempfile::TempDir,
+}
+
+impl Drop for RegistryRedirect {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(v) => std::env::set_var(cartog_registry::REGISTRY_ENV, v),
+            None => std::env::remove_var(cartog_registry::REGISTRY_ENV),
+        }
+    }
+}
+
+fn redirect_registry_for_promoter_test() -> RegistryRedirect {
+    let dir = tempfile::TempDir::new().expect("temp dir for a throwaway registry");
+    let prev = std::env::var_os(cartog_registry::REGISTRY_ENV);
+    std::env::set_var(
+        cartog_registry::REGISTRY_ENV,
+        dir.path().join("projects.sqlite"),
+    );
+    RegistryRedirect { prev, _dir: dir }
+}
+
 fn promoter_args_with_slot(
     db: Arc<Mutex<Database>>,
     role: Arc<AtomicRole>,
@@ -296,35 +333,39 @@ fn promoter_args_with_slot(
     primary: cartog_process_lock::ActiveLock,
     pinned: Option<PinnedAttach>,
     serve_slot: &str,
-) -> PromoterArgs {
+) -> (PromoterArgs, RegistryRedirect) {
+    let registry = redirect_registry_for_promoter_test();
     // Test embedding provider: the reconcile step on promotion needs
     // SOMETHING to fingerprint. The promoter-test DBs are opened fresh and
     // never reconciled, so reconcile takes the harmless backfill branch
     // (stamps mock provider/model) rather than wiping a populated index.
     // Mock avoids loading the real ONNX model.
-    PromoterArgs {
-        db,
-        role,
-        lock_cell: Arc::new(Mutex::new(None)),
-        watch_cell: Arc::new(Mutex::new(None)),
-        stale_cell: Arc::new(Mutex::new(None)),
-        watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        embedding_provider: Arc::new(Mutex::new(test_provider())),
-        db_path: db_path.clone(),
-        state_dir,
-        serve_slot: serve_slot.to_string(),
-        watch_slot: serve_to_watch_slot(serve_slot).expect("test slot must be valid"),
-        cwd: std::env::current_dir().unwrap(),
-        primary,
-        pinned,
-        watch_requested: false,
-        rag_override: Some(false),
-        rag_config: rag::EmbeddingProviderConfig::default(),
-        redact: indexer::RedactionConfig::disabled(),
-        walk_filter: indexer::WalkFilter::unrestricted(),
-        // Very short for tests so the loop responds quickly.
-        poll_interval: std::time::Duration::from_millis(20),
-    }
+    (
+        PromoterArgs {
+            db,
+            role,
+            lock_cell: Arc::new(Mutex::new(None)),
+            watch_cell: Arc::new(Mutex::new(None)),
+            stale_cell: Arc::new(Mutex::new(None)),
+            watcher_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            embedding_provider: Arc::new(Mutex::new(test_provider())),
+            db_path: db_path.clone(),
+            state_dir,
+            serve_slot: serve_slot.to_string(),
+            watch_slot: serve_to_watch_slot(serve_slot).expect("test slot must be valid"),
+            cwd: std::env::current_dir().unwrap(),
+            primary,
+            pinned,
+            watch_requested: false,
+            rag_override: Some(false),
+            rag_config: rag::EmbeddingProviderConfig::default(),
+            redact: indexer::RedactionConfig::disabled(),
+            walk_filter: indexer::WalkFilter::unrestricted(),
+            // Very short for tests so the loop responds quickly.
+            poll_interval: std::time::Duration::from_millis(20),
+        },
+        registry,
+    )
 }
 
 #[tokio::test]
@@ -354,7 +395,7 @@ async fn promoter_abort_cancels_the_polling_task() {
         pid: std::process::id(),
         start_time: cartog_process_lock::process_start_time(std::process::id()),
     };
-    let args = promoter_args_for_test(db, role, db_path, state_dir, primary, pinned);
+    let (args, _registry) = promoter_args_for_test(db, role, db_path, state_dir, primary, pinned);
     let handle = tokio::task::spawn(promoter_task(args));
 
     // Let it poll a few times.
@@ -502,7 +543,7 @@ async fn promoter_acquires_db_scoped_slot_from_args() {
         start_time: None,
     };
 
-    let args = promoter_args_with_slot(
+    let (args, _registry) = promoter_args_with_slot(
         Arc::clone(&db),
         Arc::clone(&role),
         db_path,
@@ -578,7 +619,7 @@ async fn promoter_spawns_watcher_with_db_scoped_watch_slot() {
         start_time: None,
     };
 
-    let mut args = promoter_args_with_slot(
+    let (mut args, _registry) = promoter_args_with_slot(
         Arc::clone(&db),
         Arc::clone(&role),
         db_path,
@@ -664,7 +705,7 @@ async fn promoter_aborts_when_state_diverges_after_acquire() {
         mutator.set_metadata("schema_version", "9999").unwrap();
     }
 
-    let args = promoter_args_for_test(
+    let (args, _registry) = promoter_args_for_test(
         Arc::clone(&db),
         Arc::clone(&role),
         db_path,
@@ -722,7 +763,7 @@ async fn promoter_loops_on_transient_open_failure() {
         start_time: None,
     };
 
-    let args = promoter_args_for_test(
+    let (args, _registry) = promoter_args_for_test(
         Arc::clone(&db),
         Arc::clone(&role),
         db_path.clone(),
@@ -792,7 +833,7 @@ async fn promoter_runs_validate_pinned_state_both_before_and_after_acquire() {
         start_time: None,
     };
 
-    let args = promoter_args_for_test(
+    let (args, _registry) = promoter_args_for_test(
         Arc::clone(&db),
         Arc::clone(&role),
         db_path,
