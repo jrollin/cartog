@@ -659,9 +659,19 @@ mod tests {
         // missing slots return timeout Errs in input order.
         let r2 = framed(r#"{"jsonrpc":"2.0","id":2,"result":{"v":2}}"#);
         let mut client = fake_server(&r2);
-        // Generous enough to clear process-spawn latency, tight enough that
-        // 3 × timeout would blow the assertion below.
-        let timeout = Duration::from_millis(1500);
+        // Two latencies land inside this deadline, which is why it is generous:
+        // `sh` spawn, and the receive loop's 500 ms poll granularity (the id-2
+        // frame is written before the client connects, but is only *observed*
+        // once a poll slice completes). At 1500 ms a loaded machine could
+        // exhaust the budget before id 2 surfaced, failing the assertion below
+        // intermittently — in full `--workspace` runs only, never in isolation.
+        //
+        // 4 s gives the reply ~8 poll slices. It costs 4 s of wall clock by
+        // construction (two ids never answer, so the batch always waits the
+        // deadline out), which is the price of making this test load-immune;
+        // the final assertion is a *ratio*, so a larger timeout does not weaken
+        // the invariant it checks.
+        let timeout = Duration::from_millis(4000);
         client.set_timeout(timeout);
 
         let started = Instant::now();
@@ -678,10 +688,18 @@ mod tests {
         assert!(replies[0].is_err(), "id 1 missing → timeout");
         assert_eq!(replies[1].as_ref().unwrap()["v"], 2);
         assert!(replies[2].is_err(), "id 3 missing → timeout");
-        // One shared deadline: the whole batch waits ~timeout, never 3×.
+        // One shared deadline: the whole batch waits ~1× timeout, never 3×.
+        //
+        // 2.5×, not 2×: this test necessarily burns a full `timeout`, so at 2×
+        // there was under one poll slice of headroom. The regression it guards
+        // (a per-id deadline) costs 3× = 12 s, still 2 s clear of the 10 s
+        // bound — verified by mutating `request_batch` to a per-id deadline and
+        // watching this assertion fire.
+        let bound = timeout.mul_f64(2.5);
         assert!(
-            elapsed < timeout * 2,
-            "batch took {elapsed:?}; deadline should be shared, not per-id"
+            elapsed < bound,
+            "batch took {elapsed:?} (bound {bound:?}) against a {timeout:?} timeout; \
+             the deadline should be shared, not per-id (which would cost ~3×)"
         );
     }
 

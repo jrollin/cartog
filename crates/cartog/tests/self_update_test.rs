@@ -1292,9 +1292,16 @@ fn apply_pending_does_not_wait_on_a_foreign_peer_without_the_test_seam() {
         "live foreign peer must exit 6; stderr={}",
         String::from_utf8_lossy(&out.stderr),
     );
+    // Half of APPLY_PEER_WAIT (10 s, `pub(crate)` in commands::self_cmd::update
+    // so not nameable here). A correct run waits APPLY_FOREIGN_PEER_WAIT (ZERO)
+    // and spends its time on process startup plus one connection-refused round
+    // trip — measured ~1.9 s, so the bound sits ~3 s above a correct run and 5 s
+    // below the regression it guards.
+    let bound = std::time::Duration::from_secs(5);
     assert!(
-        elapsed < std::time::Duration::from_secs(5),
-        "must not wait out the full peer budget for an unclearable foreign lock; took {elapsed:?}"
+        elapsed < bound,
+        "took {elapsed:?} (bound {bound:?}); an unclearable foreign lock must not \
+         wait out the full 10s peer budget"
     );
     let text = std::fs::read_to_string(&state_path).unwrap();
     assert!(

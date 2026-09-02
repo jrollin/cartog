@@ -32,6 +32,7 @@ make check-rust            # cargo fmt + clippy + test
 make check-fixtures        # validate all fixture codebases (py, ts, go, rs, rb, java, php, dart, swift, kt)
 make check-fixtures-docker # same, forcing the Docker fallback for every language
 make check-skill           # skill tests (ensure_indexed.sh unit tests)
+make check-flaky           # repeat the full suite 4x (N=8 for more) to surface cross-test interference
 make eval-skill            # LLM-as-judge skill evaluation (requires claude CLI)
 make eval-agents           # LLM-as-judge agent evaluation (requires claude CLI)
 make bench                 # shell benchmark suite (13 scenarios x 12 languages)
@@ -61,6 +62,32 @@ Run `make check` before committing. Run `make eval-skill` after changing skill S
 - **Visibility**: all public functions get `///` doc comments.
 - **Dependencies**: vet before adding — a new crate must clear `cargo deny check` (license/ban/source policy in `deny.toml`) and carry no open `cargo audit` advisory; surface any CVE to a human before it lands. Prefer the workspace's existing deps and pin via `[workspace.dependencies]`; both checks gate CI (see **CI/CD**).
 - **Tests**: unit tests co-located in each module (`#[cfg(test)] mod tests`), integration fixtures in `tests/fixtures/`. Every new behavior or bug fix ships a test in the same change — a bug fix starts with a failing regression test; assert public behavior, not private internals. Run the touched crate's suite green before committing (`cargo test -p <crate>`, or `--workspace` for cross-crate edges).
+- **Test isolation and timing** (each rule below cost a real bug in this repo):
+  - **Never inject a test override via a process-global env var when the call site is
+    reachable** — pass a parameter or a struct field. `cartog-mcp` has **two independent
+    serialization mechanisms** (`#[serial_test::serial]` and a tokio `SERIAL` mutex), so
+    tests under different ones interleave and an RAII restore writes back the wrong value.
+    A `CARTOG_TEST_SMOKE_TIMEOUT_MS` seam leaked a 300 ms ceiling into a sibling test
+    calling the same helper; `smoke_test_within(bin, timeout)` and
+    `PromoterArgs::register_on_promotion` are the shapes that work. Grep for
+    `SERIAL.lock`/`#[serial]` before adding any env seam.
+  - **Any test that can reach user-global state must isolate it** — override `HOME` +
+    `XDG_{CONFIG,DATA,STATE}_HOME` (the `consent_gate_test.rs`/`projects_test.rs` `Sandbox`;
+    macOS derives the state dir from `HOME`, Linux from `XDG_STATE_HOME`) or set
+    `CARTOG_REGISTRY=""`. Centralise into ONE env helper per test file — `remote_integration.rs`
+    had three ad-hoc arrays plus twelve chained `.env()` calls and leaked 36 rows into the
+    developer's own `projects.sqlite` per run. Verify by running the suite and inspecting
+    the real file, not by reading the code.
+  - **A wall-clock assertion states the ratio it is testing, with its derivation.** Bound
+    against the constant it separates (`timeout * 2.5`), not an absolute; name both
+    behaviours in the message. `cartog-lsp`'s receive loop polls in **500 ms slices**, so
+    any deadline test needs several slices of headroom — a 1500 ms budget was under one
+    slice and flaked only in full-workspace runs.
+  - **Verify a flake fix with `make check-flaky`** (repeats the full suite 4×; `N=8` for
+    more), never with an isolated re-run: every flake found here passed 5/5 — one 40/40 —
+    on its own. The target distinguishes a **build error** (`exit != 0` with zero FAILED
+    lines) from a real failure, because conflating them wasted a debugging cycle. Don't
+    edit files while it runs.
 - **Docs + site sync (mandatory)**: any change to a CLI command/flag, an MCP tool, a `.cartog.toml` config key, a supported language, or a user-facing count must update `docs/` **and** the marketing site (`site/src/pages/{index,usage}.astro`) in the same change — a new/changed config key needs both its `[section]` summary-table row and an explanation+example block on `usage.astro`. The site is not optional and not a follow-up. See **Documentation Convention** for the full surface + the `init.rs` template.
 
 ### Rust standard
