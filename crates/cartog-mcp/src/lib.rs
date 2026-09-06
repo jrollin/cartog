@@ -1,7 +1,8 @@
 //! MCP server for the cartog code graph.
 //!
 //! Exposes cartog's graph queries, indexing, semantic search, and deferred
-//! self-update as 16 MCP tools over stdio transport. Designed for Claude Code,
+//! self-update as 16 MCP tools over stdio transport (18 once the opt-in
+//! cross-project tools are enabled). Designed for Claude Code,
 //! Cursor, and other MCP clients.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc = ""]
@@ -854,11 +855,13 @@ fn tool_response_named(
 ///   `lsp_manager` → `db` → `embedding_provider` → `reranker_provider`
 #[derive(Clone)]
 pub struct CartogServer {
-    #[expect(
-        dead_code,
-        reason = "stored by convention; routing uses Self::tool_router()"
-    )]
+    /// The routes this instance serves. `#[tool_handler]` reads this field, so
+    /// a route removed here is neither listed nor callable — see
+    /// [`with_federated`](Self::with_federated).
     tool_router: ToolRouter<Self>,
+    /// Whether the two cross-project tools are exposed. Drives the entry-point
+    /// list in `get_info`, which must never name a tool this instance hides.
+    federated: bool,
     /// Shared database connection, opened once at server start.
     db: Arc<Mutex<Database>>,
     /// Canonicalized CWD captured at server start to avoid repeated syscalls.
@@ -881,7 +884,7 @@ pub struct CartogServer {
     /// Single-writer election role. `Primary` holds the `serve` PID lock
     /// and owns the RW DB connection. `ReadOnly` attached via
     /// [`Database::open_readonly`] because another cartog process owns
-    /// the slot — the 2 write tools are gated, the 14 read tools work
+    /// the slot — the 2 write tools are gated, every other tool works
     /// unchanged. Mutated atomically when the Phase 5 promoter detects
     /// the primary died and takes over.
     role: Arc<AtomicRole>,
@@ -913,6 +916,16 @@ pub struct CartogServer {
     /// also starts degraded if it found no DB on disk (its primary is degraded).
     /// Immutable for the process lifetime — set once at construction, never swapped.
     degraded: bool,
+    /// Path this server's index was opened from, as given to the constructor.
+    ///
+    /// Kept so `cartog_list_projects` can mark which registry row is *this*
+    /// project — an agent must not re-route to itself. Compared by slot rather
+    /// than by string, so a relative or symlinked path still matches. `cwd` is
+    /// the wrong key: the plugin launches `serve` with no `--db`, and a session
+    /// in a subdirectory has a cwd that is not the project root.
+    ///
+    /// Empty for an in-memory database (a degraded server or a test).
+    db_path: Arc<Path>,
 }
 
 /// Role of this MCP server instance under single-writer election.
@@ -1027,6 +1040,7 @@ impl CartogServer {
             filter,
             Role::Primary,
             degraded,
+            db_path,
         )
     }
 
@@ -1034,7 +1048,7 @@ impl CartogServer {
     /// another cartog process owns the `serve` PID lock. Skips schema
     /// migrations and the embedding-fingerprint reconcile (the primary
     /// owns both); the 2 DB-write tools return a clear error at dispatch
-    /// time. The other 12 tools (11 read + `cartog_update`, which arms a
+    /// time. The other 15 tools (14 read + `cartog_update`, which arms a
     /// machine-level deferred update, not a DB write) work normally.
     ///
     /// Absent on-disk DB ⇒ the lock-holding primary is itself degraded
@@ -1073,6 +1087,7 @@ impl CartogServer {
                 filter,
                 Role::Primary,
                 true,
+                db_path,
             );
         }
         let db = Database::open_readonly(db_path)
@@ -1089,6 +1104,7 @@ impl CartogServer {
             filter,
             Role::ReadOnly,
             false, // an existing DB was found on disk
+            db_path,
         )
     }
 
@@ -1139,6 +1155,7 @@ impl CartogServer {
         filter: indexer::WalkFilter,
         role: Role,
         degraded: bool,
+        db_path: &Path,
     ) -> anyhow::Result<Self> {
         let cwd = Self::cwd()?;
         // Consumed only by the `lsp` feature's warm manager; keep the param
@@ -1147,7 +1164,8 @@ impl CartogServer {
         #[cfg(not(feature = "lsp"))]
         let _ = lsp_overrides;
         Ok(Self {
-            tool_router: Self::tool_router(),
+            tool_router: Self::tool_router_for(false),
+            federated: false,
             db: Arc::new(Mutex::new(db)),
             embedding_provider: Arc::new(Mutex::new(provider)),
             reranker_provider: Arc::new(reranker),
@@ -1165,6 +1183,7 @@ impl CartogServer {
             redact,
             walk_filter: Arc::new(filter),
             degraded,
+            db_path: Arc::from(db_path),
         })
     }
 
@@ -1212,6 +1231,7 @@ impl CartogServer {
             filter,
             role,
             degraded,
+            db_path,
         )
     }
 
@@ -1235,6 +1255,9 @@ impl CartogServer {
             filter,
             Role::Primary,
             true,
+            // A degraded server has no on-disk database, so it has no identity
+            // in the project registry — and registers nothing.
+            std::path::Path::new(""),
         )
     }
 
@@ -1315,24 +1338,76 @@ impl CartogServer {
             + Self::search_router()
             + Self::rag_router()
             + Self::manage_router()
+            + Self::projects_router()
+            + Self::search_all_router()
+    }
+
+    /// The full router minus the cross-project tools when `federated` is off.
+    fn tool_router_for(federated: bool) -> rmcp::handler::server::router::tool::ToolRouter<Self> {
+        let mut router = Self::tool_router();
+        if !federated {
+            for name in FEDERATED_TOOLS {
+                router.remove_route(name);
+            }
+        }
+        router
+    }
+
+    /// Expose (or hide) the two cross-project tools, `cartog_list_projects` and
+    /// `cartog_search_all`.
+    ///
+    /// Off by default: they are the only tools that read other repositories'
+    /// paths and README text into this session, so surfacing them is a
+    /// per-project (`[mcp] federated = true`) or per-launch (`--federated`)
+    /// decision, never a side effect of construction. The instructions string
+    /// follows the same switch, so an agent is never pointed at a tool it
+    /// cannot call.
+    #[must_use]
+    pub fn with_federated(mut self, federated: bool) -> Self {
+        self.tool_router = Self::tool_router_for(federated);
+        self.federated = federated;
+        self
+    }
+
+    /// Whether the cross-project tools are exposed on this instance.
+    #[must_use]
+    pub fn is_federated(&self) -> bool {
+        self.federated
     }
 }
 
-#[tool_handler]
+/// The tools hidden unless [`CartogServer::with_federated`] enables them.
+pub const FEDERATED_TOOLS: [&str; 2] = ["cartog_list_projects", "cartog_search_all"];
+
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for CartogServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("cartog", env!("CARGO_PKG_VERSION")))
             .with_protocol_version(ProtocolVersion::LATEST)
-            .with_instructions(
-                "cartog is a code graph indexer with hybrid keyword + semantic search. \
-                 Prefer cartog tools over Grep/Glob/Read for code navigation — each \
-                 tool's description tells you when to use it and what it returns. \
-                 Default entry points: cartog_map (orient in a new repo), \
-                 cartog_rag_search (find code by concept), cartog_search (look up an exact symbol name). \
-                 Languages: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, C, C++, C#, Vue, Svelte, Astro, Markdown. \
-                 Frameworks: React, Vue, Svelte, Astro — JSX/SFC component-usage edges.",
-            )
+            .with_instructions(self.instructions())
+    }
+}
+
+impl CartogServer {
+    /// Server instructions, naming only entry points this instance exposes.
+    fn instructions(&self) -> String {
+        let federated_entry = if self.federated {
+            ", cartog_list_projects (for a question about a DIFFERENT repository on this \
+             machine — it returns each project's db_path to pass as --db)"
+        } else {
+            ""
+        };
+        format!(
+            "cartog is a code graph indexer with hybrid keyword + semantic search. \
+             Prefer cartog tools over Grep/Glob/Read for code navigation — each \
+             tool's description tells you when to use it and what it returns. \
+             Default entry points: cartog_map (orient in a new repo), \
+             cartog_rag_search (find code by concept), cartog_search (look up an exact symbol name)\
+             {federated_entry}. \
+             Languages: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, C, C++, C#, Vue, Svelte, Astro, Markdown. \
+             Frameworks: React, Vue, Svelte, Astro — JSX/SFC component-usage edges."
+        )
     }
 }
 

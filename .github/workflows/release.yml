@@ -251,6 +251,7 @@ jobs:
             cartog-rag
             cartog-indexer
             cartog-process-lock
+            cartog-registry
             cartog-watch
             cartog-mcp
             cartog

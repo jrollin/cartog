@@ -31,7 +31,7 @@ On a TTY a spinner shows the live phase with a climbing counter (`parsing M/N fi
 
 **Consent gate.** On a project with no `.cartog.toml` and no existing index, `cartog index` (and `cartog rag index`, `cartog watch`) refuse rather than create a `.cartog/` for a project you haven't opted into. Run `cartog init` first (then index), or set `CARTOG_AUTO_INIT=1` to index with defaults without writing a config file. An existing index, or any present `.cartog.toml`, also grants consent. See [config.md § Index-creation consent gate](config.md#index-creation-consent-gate).
 
-### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N]`
+### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N] [--all]`
 
 Find symbols by partial name — use this when you know roughly what you're looking for but need the exact name before calling `refs`, `callees`, or `impact`.
 
@@ -51,6 +51,62 @@ function  validate_user     services/user.py:12
 Results ranked: exact match → prefix → substring. Case-insensitive. Max 100 results.
 
 Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, `interface`, `enum`, `enum-member`, `type-alias`, `trait`, `module`, `document`, `macro`, `component`.
+
+#### Searching the machine's other projects (`--all`)
+
+`--all` answers "which project defines this?" when you do not know which
+repository to look in. It searches this machine's **other** indexed projects
+(the current one is covered by a plain `cartog search`):
+
+```bash
+cartog search CreateShipment --all                          # every eligible project
+cartog search Shift --all --under ~/work                    # only that subtree
+cartog search Shift --all --under ~/work --lang ruby        # and only Ruby projects
+cartog search Widget --all --max-projects 25                # raise the project cap
+```
+
+```text
+3 matches for 'CreateShipment' across 2 of 7 projects:
+
+svc-shipping (/home/u/work/svc-shipping)
+  Shipment creation, tracking, and carrier integration.
+  CreateShipment              internal/ship/ship.go:41
+  --db /home/u/work/svc-shipping/.cartog/db.sqlite
+
+svc-bff (/home/u/work/svc-bff)
+  CreateShipmentInput         src/graphql/shipment.ts:18
+  --db /home/u/work/svc-bff/.cartog/db.sqlite
+```
+
+**Fan-out, not consolidation.** The [registry](#cartog-projects-listaddscanforgetprune)
+supplies the candidate database paths; each is opened **read-only** and queried
+on its own, and results stay grouped under the project they came from. So:
+
+- **Ranking is within a project only.** `in_degree` centrality is per-graph, so
+  a flat cross-project ordering cannot be justified without a ranking benchmark
+  that does not exist. The grouped output sidesteps the question rather than
+  guessing.
+- **Nothing is merged and nothing is written.** No combined database (a
+  documented [non-goal](../explanation/project-registry.md#non-goals)), and a
+  registry row grants discovery, not write access.
+
+`--limit` applies **per project**, so output is bounded by
+`limit x max-projects`. `--max-projects` (default 10, clamped to 1..=50) caps
+how many databases are opened, most-symbols-first; when the cap elides
+candidates the output says so. A project that cannot be read is listed with the
+**reason** (a schema drift, a corrupt file and a permission error need different
+fixes) rather than silently skipped — including when *nothing* could be read, in
+which case the output says the search could not run rather than reporting a
+no-match that would read as "the symbol is not there". `--under` accepts `~`, and composes with
+`--lang` as an AND.
+
+`--file` is **not** combinable with `--all`: a path in one project means nothing
+in another, so cartog rejects the pair rather than silently ignoring the filter.
+
+There is no `--all` for semantic search: vectors from projects embedded with
+different providers/models/dimensions live in different spaces, so merging their
+scores would be meaningless. See
+[cross-project queries](../explanation/cross-project-queries.md).
 
 ### `cartog outline <file>`
 
@@ -368,6 +424,7 @@ cartog doctor
       config:        /home/user/project/.cartog.toml
       database:      /home/user/project/.cartog/db.sqlite
       state file:    /home/user/.local/state/cartog/state.toml
+      registry:      /home/user/.local/state/cartog/projects.sqlite
       model cache:   /home/user/.cache/cartog/models
       install:       release-tarball (x86_64-unknown-linux-gnu)
   [+] database: 42 files, 387 symbols at /home/user/project/.cartog/db.sqlite
@@ -375,9 +432,10 @@ cartog doctor
   [+] embedding: local model cached
   [+] reranker: jinaai/jina-reranker-v1-turbo-en cached
   [+] remote: not configured (local-only)
+  [+] description: "Invoice generation and payment reconciliation." (config)
   [+] version: 0.33.0 is up to date
 
-All 9 checks passed
+All 10 checks passed
 ```
 
 **Checks performed:**
@@ -392,9 +450,15 @@ All 9 checks passed
 | embedding | Local model cached / Ollama reachable | Local model not downloaded | Ollama unreachable / unknown provider |
 | reranker | Model cached / disabled | Model not downloaded | Unknown provider |
 | remote | Not configured, or the bucket is reachable | `url` empty, unreachable, or config rejected | `[remote]` set but built without `remote-s3` |
+| description | `[project] description` or a `README.md` paragraph is available | No description from either source | — |
 | version | Up to date, or the check is disabled/unreachable | A newer stable release exists | — |
 
 Exits with code 1 if any check is an error. Supports `--json` for structured output.
+
+**`description`** is advisory only, never an error: a project with no description still indexes
+and registers normally, but `cartog_list_projects` and `cartog projects list` show nothing to
+route on for it. Fix it with a `[project] description` line or a README opening paragraph, then
+`cartog index` (see [config.md § Project identity](config.md#project-identity-project)).
 
 **`version`** queries the GitHub releases API with an 800 ms timeout — much
 shorter than the 5 s `cartog self update` allows, because there waiting for an
@@ -406,7 +470,7 @@ case on a blackholed network. Set `CARTOG_NO_UPDATE_CHECK=1` to skip the
 request entirely, or `CARTOG_GITHUB_API_URL` to point at a mirror.
 
 **`paths`** is informational: it collects every location a bug report needs
-(project root, config, database, state file, model cache, install source and
+(project root, config, database, state file, project registry, model cache, install source and
 target triple) into one block. In `--json` these are discrete strings under
 `details`, not a newline-joined message.
 
@@ -445,7 +509,7 @@ With `--json`, every lifecycle event is emitted as one NDJSON record on stdout (
 
 Press Ctrl+C to stop. Pending RAG embeddings are flushed before exit.
 
-### `cartog serve [--watch] [--rag]`
+### `cartog serve [--watch] [--rag] [--federated]`
 
 Start cartog as an MCP server over stdio. See [mcp-tools.md](mcp-tools.md) for client configuration and tool reference.
 
@@ -453,7 +517,10 @@ Start cartog as an MCP server over stdio. See [mcp-tools.md](mcp-tools.md) for c
 cartog serve                  # MCP server only
 cartog serve --watch          # MCP server + watcher; auto-embeds if the repo has embeddings
 cartog serve --watch --rag    # force auto-embed even on a not-yet-embedded repo
+cartog serve --federated      # also expose the 2 cross-project tools (off by default)
 ```
+
+`--federated` exposes `cartog_list_projects` and `cartog_search_all`, the two tools that surface the paths and descriptions of this machine's *other* indexed projects. Off by default; `[mcp] federated = true` in `.cartog.toml` enables them for every client serving the project, and either source is sufficient. See [mcp-tools.md](mcp-tools.md#enabling-the-cross-project-tools).
 
 When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit, and (when the repo already has embeddings) refreshes RAG embeddings on a deferred timer — no `--rag` needed. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
 
@@ -463,9 +530,9 @@ When `--watch` is passed, a background file watcher keeps the code graph up to d
 
 Opening two Claude Code windows on the same project (or running `cartog serve` in a terminal while a Claude Code window has its own MCP child) is supported via **single-writer election**:
 
-- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 16 MCP tools. The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
-- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 14 of 16 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) and `cartog_update` (which arms a machine-level deferred update, not a DB write) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
-- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 16 tools become available on what was the secondary.
+- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes every MCP tool (16, or 18 with `--federated`). The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
+- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose every tool but the two indexing ones. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) and `cartog_update` (which arms a machine-level deferred update, not a DB write) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
+- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. The two indexing tools become available on what was the secondary; its tool count is otherwise unchanged.
 
 Escape hatches:
 
@@ -557,7 +624,7 @@ cartog config            # human-readable
 cartog config --json     # JSON for scripts
 ```
 
-Useful for verifying `[rag]` tuning, watch debounce, and provider selection without running a full command.
+Useful for verifying `[rag]` tuning, watch debounce, and provider selection without running a full command. Also shows `[mcp] federated` (so you can confirm from the CLI whether the cross-project tools are enabled for this project, and whether the value came from config or the default), and the resolved `[project]` name and description (or `(none)` when neither `.cartog.toml` nor `README.md` supplies one), each labeled with its source. `cartog config` bails when the config was rejected rather than showing defaults, so it never misreports a broken `[project]` section as an absent one — see [config.md § Project identity](config.md#project-identity-project).
 
 ### `cartog completions <shell>`
 
@@ -584,6 +651,97 @@ man cartog
 
 On macOS the path is the same. On Linux distros some packagers prefer
 `/usr/share/man/man1/`; either works as long as it is on `MANPATH`.
+
+### `cartog projects <list|add|scan|forget|prune>`
+
+Inspect the machine-local registry of indexed cartog projects. This is how a session in one
+repository discovers the *other* projects indexed on the same machine — where their databases
+live and roughly what they hold — without merging their code graphs.
+
+Every `cartog index`, `cartog rag index`, `cartog pull`, `cartog watch` re-index, and
+`cartog serve` startup records its project here. Nothing is recorded for a project cartog was
+not allowed to index (see the [index-creation consent gate](config.md#index-creation-consent-gate))
+or for a `serve` running degraded.
+
+```bash
+cartog projects list                # every indexed project on this machine
+cartog projects list --json         # same, machine-readable
+cartog projects add [PATH]          # register an existing index without re-indexing it
+cartog projects scan <DIR>          # register every indexed project under DIR
+cartog projects scan <DIR> --dry-run  # report what would be registered, write nothing
+cartog projects forget <target>     # drop one row; the project's index is untouched
+cartog projects prune               # drop rows whose database file is gone
+cartog projects prune --dry-run     # report what would be dropped, change nothing
+```
+
+`list`, `forget` and `prune` are **read/maintenance** commands over the registry, not over any
+project index: they take no `--db`, never create a `.cartog/`, and work from any directory —
+including one that was never indexed.
+
+#### Backfilling projects indexed earlier (`add` / `scan`)
+
+Because registration rides on a write, **a project indexed a while ago and untouched since does
+not appear**. Opening it again in an editor re-registers it for free (the plugin launches
+`cartog serve --watch`, and a `serve` startup records the project). `add` and `scan` are for
+making a whole fleet visible now instead of repo-by-repo:
+
+- **`add [PATH]`** registers one project (default: the current directory). It reads the counts
+  off the index that is already there and **refuses when there is no index** — it registers an
+  existing index, it never creates one, so it cannot put a row in the registry describing
+  nothing.
+- **`scan <DIR>`** walks **only the directory you name** — never `$HOME` by default — and
+  registers every indexed project it finds. `--depth N` bounds the walk (default `2`), and
+  `--dry-run` prints what it would register without writing. Symlinked directories are not
+  followed, and dependency/build sinks (`node_modules`, `target`, `vendor`, dotdirs, …) are
+  skipped.
+
+Both open the project's database **read-only**: a backfill never migrates a schema and never
+takes a write lock on a project you have open elsewhere. A database on an older graph schema
+cannot be measured, so its row is written from the metadata alone — it appears with `?` counts
+and a `stale-schema` marker (see the marker table below), which is precisely when
+being able to find it matters.
+
+Neither stamps `last_indexed`: nothing here indexed anything, so the row reads `never` rather
+than claiming a month-old graph is fresh. The counts, languages, name and description are all
+recorded, so a backfilled project is immediately routable.
+
+Each project shows its **display name** — `[project] name` from that project's `.cartog.toml`
+if set, else the root directory's basename — and, when known, a one-line **description**,
+suffixed `(readme)` when it was inferred from `README.md` rather than declared in config. A
+project with no description from either source shows none; see
+[`cartog doctor`](#cartog-doctor) for the advisory. `--json` adds `"description"` and
+`"description_source"` (`"config"` or `"readme"`), both omitted when the project has no description; `"name"` is the display name described
+above. See [config.md § Project identity](config.md#project-identity-project) for how the name
+and description are resolved, and [project-registry.md](../explanation/project-registry.md#step-3--self-populated-description)
+for when the registry refreshes them.
+
+`forget` accepts a project id, root path, database path, or name — including the declared
+`[project] name`. A **name** is only acted on when it identifies exactly one project: two
+workspaces each holding an `api` directory produce two rows named `api`, so an ambiguous name
+drops nothing and lists the candidate ids instead.
+
+**Markers** shown beside each project:
+
+| Marker | Meaning |
+|--------|---------|
+| `live` | A `cartog serve` / `cartog watch` peer currently holds this project's lock. Advisory only. |
+| `stale-schema vN` | The index was written at schema vN, not this binary's. It still lists — the cached counts are the last thing known true — but querying it needs a re-index. |
+| `missing` | The database file is gone. A `prune` candidate. |
+| `embed-mismatch` | This project's embedding provider/model/dimension differs from the majority of your other projects, so its vectors are not comparable with theirs. |
+
+An unknown count renders as `?`, never `0`: the registry caches what each trigger happened to
+know, and "not known" is a different fact from "empty".
+
+**Cross-project queries.** `db_path` is the actionable field — pass it to any cartog command:
+
+```bash
+DB=$(cartog projects list --json | jq -r '.projects[] | select(.name=="svc-shipping").db_path')
+cartog search CreateShipment --db "$DB"
+cartog outline ship.go --db "$DB"
+```
+
+Set `CARTOG_REGISTRY` to relocate the registry (absolute paths only), or to an empty value to
+disable it entirely — both reads and writes. See [config.md](config.md#environment-variables).
 
 ### `cartog self <update|version|rollback|migrate-db>`
 

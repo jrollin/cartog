@@ -840,3 +840,245 @@ fn existing_db_lifts_the_unknown_db_path_refusal() {
         IndexCreation::Allowed
     );
 }
+
+// ── `[project]` validation and salvage ──────────────────────────────────────
+
+/// Regression: `[project]` missing from `KNOWN_CONFIG_SECTIONS` would nag
+/// `unknown config key 'project'` on every interactive command while the
+/// section parsed fine — a silent-nag bug.
+#[test]
+fn project_is_a_known_config_section() {
+    let raw: toml::value::Table = toml::from_str("[project]\nname = \"svc-billing\"\n").unwrap();
+    assert!(unknown_sections(&raw).is_empty());
+}
+
+#[test]
+fn validate_project_rejects_an_over_length_name() {
+    let config: CartogConfig =
+        toml::from_str(&format!("[project]\nname = \"{}\"\n", "n".repeat(101))).unwrap();
+
+    let err = validate_project(&config).expect_err("101 chars must be rejected");
+
+    assert!(
+        err.contains("[project] name"),
+        "message names the field: {err}"
+    );
+    assert!(err.contains("100"), "message names the limit: {err}");
+    assert!(err.contains("101"), "message names what was given: {err}");
+}
+
+#[test]
+fn validate_project_rejects_an_over_length_description() {
+    let config: CartogConfig = toml::from_str(&format!(
+        "[project]\ndescription = \"{}\"\n",
+        "d".repeat(312)
+    ))
+    .unwrap();
+
+    let err = validate_project(&config).expect_err("312 chars must be rejected");
+
+    assert_eq!(
+        err,
+        "[project] description exceeds 280 characters (got 312)"
+    );
+}
+
+#[test]
+fn validate_project_accepts_a_value_exactly_at_the_cap() {
+    let config: CartogConfig = toml::from_str(&format!(
+        "[project]\ndescription = \"{}\"\n",
+        "d".repeat(280)
+    ))
+    .unwrap();
+
+    assert!(validate_project(&config).is_ok());
+}
+
+/// A multi-line description breaks every single-line rendering surface.
+#[test]
+fn validate_project_rejects_a_newline_in_the_description() {
+    let config: CartogConfig =
+        toml::from_str("[project]\ndescription = \"line one\\nline two\"\n").unwrap();
+
+    let err = validate_project(&config).expect_err("a newline must be rejected");
+
+    assert!(
+        err.contains("[project] description") && err.contains("control character"),
+        "{err}"
+    );
+}
+
+#[test]
+fn validate_project_rejects_a_control_character_in_the_name() {
+    let config: CartogConfig = toml::from_str("[project]\nname = \"svc\\u0007billing\"\n").unwrap();
+
+    let err = validate_project(&config).expect_err("a BEL must be rejected");
+
+    assert!(err.contains("[project] name"), "{err}");
+}
+
+#[test]
+fn validate_project_rejects_a_tab_in_the_description() {
+    let config: CartogConfig = toml::from_str("[project]\ndescription = \"one\\ttwo\"\n").unwrap();
+
+    assert!(validate_project(&config).is_err());
+}
+
+/// A blank value is a mistake, not a way to spell "unset" — omitting the key is.
+#[test]
+fn validate_project_rejects_a_whitespace_only_name() {
+    let config: CartogConfig = toml::from_str("[project]\nname = \"   \"\n").unwrap();
+
+    let err = validate_project(&config).expect_err("whitespace-only must be rejected");
+
+    assert!(
+        err.contains("[project] name") && err.contains("empty"),
+        "{err}"
+    );
+}
+
+#[test]
+fn validate_project_accepts_an_absent_section() {
+    assert!(validate_project(&CartogConfig::default()).is_ok());
+}
+
+/// A cap measured in chars, not bytes: a short accented name must not be
+/// rejected for being multi-byte.
+#[test]
+fn validate_project_counts_chars_not_bytes() {
+    let config: CartogConfig =
+        toml::from_str(&format!("[project]\nname = \"{}\"\n", "é".repeat(100))).unwrap();
+
+    assert!(validate_project(&config).is_ok());
+}
+
+/// An over-length value is a rejected config, not a silent truncation.
+#[test]
+fn read_config_rejects_an_over_length_project_description() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    fs::write(
+        &cfg_path,
+        format!("[project]\ndescription = \"{}\"\n", "d".repeat(281)),
+    )
+    .unwrap();
+
+    assert!(read_config(&cfg_path).is_none());
+}
+
+/// A `descriptoin` typo must cost the description, not the index: the config
+/// still loads, every other setting applies, and consent stays granted.
+#[test]
+fn unknown_project_key_is_salvaged_without_costing_the_index() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    fs::write(
+        &cfg_path,
+        "[project]\nname = \"svc-billing\"\ndescriptoin = \"typo\"\n[security]\nredact_secrets = false\n",
+    )
+    .unwrap();
+
+    let cfg = read_config(&cfg_path).expect("a typo must not reject the whole file");
+
+    let project = cfg.project.as_ref().expect("section survives the salvage");
+    assert_eq!(project.name(), Some("svc-billing"));
+    assert_eq!(project.description(), None);
+    assert!(
+        !cfg.security.as_ref().unwrap().redact_secrets(),
+        "a sibling section's setting still applies"
+    );
+    assert_eq!(
+        ConfigLoad::Loaded {
+            config: cfg,
+            path: cfg_path
+        }
+        .consent(),
+        IndexConsent::Granted
+    );
+}
+
+// ── resolve_project_at: root-relative resolution for `projects scan` ──
+
+#[test]
+fn resolve_project_at_reads_the_named_roots_own_config_not_the_cwd() {
+    // `projects scan` visits many roots in one process, so resolution must not
+    // key off the working directory the way `resolve_db_path` does.
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    fs::write(
+        root.join(".cartog.toml"),
+        "[project]\nname = \"Alpha\"\ndescription = \"Does alpha things.\"\n",
+    )
+    .unwrap();
+
+    let resolved = resolve_project_at(root);
+
+    assert_eq!(
+        resolved.declared,
+        DeclaredAtRoot::Known {
+            name: Some("Alpha".to_string()),
+            description: Some("Does alpha things.".to_string()),
+        }
+    );
+    assert_eq!(
+        resolved.db_path,
+        root.join(cartog_db::DB_DIR).join(cartog_db::DB_FILENAME),
+        "the default db path must be resolved under the named root"
+    );
+}
+
+#[test]
+fn resolve_project_at_treats_a_relative_database_path_as_relative_to_that_root() {
+    // A relative `[database] path` declared by a scanned root means "inside
+    // that root". Joining it to the scanning process's cwd instead would point
+    // the registry row at a database that does not exist.
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    fs::write(
+        root.join(".cartog.toml"),
+        "[database]\npath = \"custom/g.db\"\n",
+    )
+    .unwrap();
+
+    assert_eq!(resolve_project_at(root).db_path, root.join("custom/g.db"));
+}
+
+#[test]
+fn resolve_project_at_still_resolves_a_db_path_when_the_config_is_unreadable() {
+    // A rejected config is not a reason to claim the project has no index —
+    // the same rule the consent gate applies.
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path();
+    fs::write(root.join(".cartog.toml"), "this is not = = valid toml\n").unwrap();
+
+    let resolved = resolve_project_at(root);
+
+    assert_eq!(
+        resolved.db_path,
+        root.join(cartog_db::DB_DIR).join(cartog_db::DB_FILENAME)
+    );
+    // `Unreadable`, not `Known { name: None }`: a config that fails to parse
+    // declares *nothing*, and a writer conflating the two erases a name and
+    // description an earlier working config stored.
+    assert_eq!(
+        resolved.declared,
+        DeclaredAtRoot::Unreadable,
+        "a rejected config must be distinguishable from one declaring nothing"
+    );
+}
+
+#[test]
+fn resolve_project_at_declares_nothing_for_a_root_with_no_config() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let resolved = resolve_project_at(dir.path());
+
+    // Absent, not rejected: there is nothing to fail to parse, so the values
+    // are legitimately known to be unset.
+    assert_eq!(
+        resolved.declared,
+        DeclaredAtRoot::Known {
+            name: None,
+            description: None,
+        }
+    );
+}

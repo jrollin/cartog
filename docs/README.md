@@ -12,6 +12,7 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 ## How-to
 
 - [how-to/configure-lsp-servers.md](how-to/configure-lsp-servers.md) — LSP server overrides and concurrency
+- [how-to/query-another-project.md](how-to/query-another-project.md) — query another indexed project on this machine with `--db`
 - [how-to/switch-embedding-provider.md](how-to/switch-embedding-provider.md) — local ONNX, Ollama, OpenAI-compatible
 - [how-to/set-up-s3-sync.md](how-to/set-up-s3-sync.md) — remote push/pull via S3-compatible storage
 - [how-to/update-cartog.md](how-to/update-cartog.md) — upgrade, rollback, deferred updates
@@ -19,9 +20,9 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 
 ## Reference
 
-- [reference/cli.md](reference/cli.md) — all 27 commands and global flags
+- [reference/cli.md](reference/cli.md) — all 28 commands and global flags
 - [reference/config.md](reference/config.md) — all `.cartog.toml` keys and environment variables
-- [reference/mcp-tools.md](reference/mcp-tools.md) — 16 MCP tools, progress, cancellation, logging
+- [reference/mcp-tools.md](reference/mcp-tools.md) — 16 MCP tools (+2 opt-in cross-project), progress, cancellation, logging
 - [reference/exit-codes.md](reference/exit-codes.md) — `cartog self` exit codes and state file
 - [updates.md](updates.md) — full `cartog self update` surface (canonical reference; procedures are in [how-to/update-cartog.md](how-to/update-cartog.md))
 
@@ -31,6 +32,8 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 - [explanation/rag-pipeline.md](explanation/rag-pipeline.md) — hybrid search, embedding models, provider architecture
 - [explanation/incremental-indexing.md](explanation/incremental-indexing.md) — three-layer change detection, Merkle invariants
 - [explanation/concurrency.md](explanation/concurrency.md) — rayon / tokio / std::thread models
+- [explanation/project-registry.md](explanation/project-registry.md) — user-global project registry: `cartog projects`, `cartog_list_projects`, and self-populated descriptions (shipped), and the proposed later phases
+- [explanation/cross-project-queries.md](explanation/cross-project-queries.md) — *proposal* — federated search and cross-service edges
 
 ## Background docs
 

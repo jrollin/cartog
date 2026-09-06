@@ -6,7 +6,7 @@
 use super::*;
 
 /// Legacy un-scoped serve PID slot (untracked mode). Scoped peers use
-/// `serve-<hash>` via `cartog::state::slot_for_db`; see [`ServerOptions::pid_lock_slot`].
+/// `serve-<hash>` via `cartog_registry::slot_for_db`; see [`ServerOptions::pid_lock_slot`].
 pub const SERVE_LOCK_SLOT: &str = "serve";
 
 /// Convert a serve-family slot (legacy `"serve"` or DB-scoped
@@ -35,7 +35,7 @@ pub(crate) fn serve_to_watch_slot(serve_slot: &str) -> anyhow::Result<String> {
     Err(anyhow::anyhow!(
         "ServerOptions::pid_lock_slot {serve_slot:?} is not a serve-family slot; \
          expected `serve` or `serve-<hex>`. Library embedders should derive the slot \
-         via `cartog::state::slot_for_db(\"serve\", db_path)` so the watcher's slot \
+         via `cartog_registry::slot_for_db(\"serve\", db_path)` so the watcher's slot \
          can be scoped to the same DB."
     ))
 }
@@ -59,7 +59,7 @@ pub struct ServerOptions {
     /// is also `None` (untracked mode used by tests).
     ///
     /// In the cartog binary the slot is derived via
-    /// `cartog::state::slot_for_db("serve", db_path)`. Library
+    /// `cartog_registry::slot_for_db("serve", db_path)`. Library
     /// embedders should follow the same shape: `<prefix>-<16 hex chars>`
     /// where the hex is a SHA-256 prefix of the canonicalized DB path.
     pub pid_lock_slot: Option<String>,
@@ -77,6 +77,11 @@ pub struct ServerOptions {
     /// watch crate must not re-derive this: a local syntax check is blind to the
     /// schema and credential validation the binary applies.
     pub config_usable: Option<watch::ConfigUsable>,
+    /// Expose the two cross-project tools (`cartog_list_projects`,
+    /// `cartog_search_all`). Off by default: they surface other repositories'
+    /// paths and README text into this session. Set from `--federated` or
+    /// `[mcp] federated = true`.
+    pub federated: bool,
 }
 
 /// Outcome of trying to claim the `serve` lock at MCP startup.
@@ -127,12 +132,12 @@ pub fn acquire_serve_lock(opts: &ServerOptions) -> anyhow::Result<ServeLockOutco
     // embedder claim `serve.pid` while a CLI peer on the same DB derives
     // `serve-<hash>.pid`, producing two primaries on the same DB. Require
     // the caller to opt into a slot explicitly (use
-    // `cartog::state::slot_for_db("serve", db_path)` from the bin crate).
+    // `cartog_registry::slot_for_db("serve", db_path)`).
     let slot: &str = opts.pid_lock_slot.as_deref().ok_or_else(|| {
         anyhow::anyhow!(
             "ServerOptions::pid_lock_dir is set but pid_lock_slot is None; \
              refusing to claim the global serve slot — pass a DB-scoped slot \
-             (e.g. `cartog::state::slot_for_db(\"serve\", db_path)`)"
+             (e.g. `cartog_registry::slot_for_db(\"serve\", db_path)`)"
         )
     })?;
     if !single_writer_election_enabled() {
@@ -264,22 +269,40 @@ pub async fn run_server(
         let db_path = db_path.to_path_buf();
         let rag_config = rag_config.clone();
         let filter = filter.clone();
-        tokio::task::spawn_blocking(move || match role {
-            Role::Primary => CartogServer::new(
-                &db_path,
-                rag_config,
-                redact,
-                lsp_overrides,
-                filter,
-                allow_create,
-            ),
-            Role::ReadOnly => {
-                CartogServer::new_read_only(&db_path, rag_config, redact, lsp_overrides, filter)
-            }
+        let federated = opts.federated;
+        tokio::task::spawn_blocking(move || {
+            let server = match role {
+                Role::Primary => CartogServer::new(
+                    &db_path,
+                    rag_config,
+                    redact,
+                    lsp_overrides,
+                    filter,
+                    allow_create,
+                ),
+                Role::ReadOnly => {
+                    CartogServer::new_read_only(&db_path, rag_config, redact, lsp_overrides, filter)
+                }
+            };
+            server.map(|s| s.with_federated(federated))
         })
         .await
         .map_err(|e| anyhow::anyhow!("server construction task panicked: {e}"))??
     };
+
+    // Record this project in the machine-local registry so a session in
+    // another repository can discover it.
+    //
+    // Primary only, and never when degraded: a degraded server holds an empty
+    // in-memory database for a project that was never indexed, so registering
+    // it would advertise a project with nothing in it — and, because the
+    // upsert refreshes `last_seen`, would keep resurfacing it. Read-only
+    // secondaries also skip: the read-only flag is about *their project's*
+    // database, not this separate file, but two peers racing one row buys
+    // nothing when the primary already wrote it.
+    if role == Role::Primary && !server.is_degraded() {
+        register_served_project(db_path);
+    }
 
     // Reflect initial watcher state on the server's flag so `cartog_stats`
     // surfaces it accurately from request #1. Will be updated by the
@@ -339,6 +362,7 @@ pub async fn run_server(
                     primary,
                     pinned,
                     watch_requested: watch,
+                    register_on_promotion: true,
                     rag_override,
                     rag_config,
                     redact: server.redact,
@@ -434,6 +458,17 @@ pub(crate) struct PromoterArgs {
     /// upgraded the schema or swapped the embedding stack under us.
     pub(crate) pinned: Option<PinnedAttach>,
     pub(crate) watch_requested: bool,
+    /// Whether a successful promotion records the project in the machine-local
+    /// registry. Always `true` in production; `false` in tests, whose fixtures
+    /// are temp-dir databases that would otherwise leave dangling rows in the
+    /// developer's own user-global registry.
+    ///
+    /// A field rather than a `CARTOG_REGISTRY` override: the env var is
+    /// process-global, and this crate has two independent test-serialization
+    /// mechanisms (`#[serial]` and the tokio `SERIAL` mutex), so tests under
+    /// one can interleave with tests under the other and an RAII restore can
+    /// write back the wrong value — un-disabling the registry mid-test.
+    pub(crate) register_on_promotion: bool,
     /// Auto-embed override for the post-promotion watcher; `None` = auto-detect.
     pub(crate) rag_override: Option<bool>,
     pub(crate) rag_config: rag::EmbeddingProviderConfig,
@@ -674,6 +709,16 @@ pub(crate) async fn promoter_task(args: PromoterArgs) {
         }
         args.role.store(Role::Primary);
 
+        // A promotion is a second writer moment: this process attached
+        // read-only (and so registered nothing at startup) and now owns the
+        // database. Register here, or a project whose original primary died
+        // would go unlisted for the rest of the session. A promoted server has
+        // a real on-disk database by construction — the promoter only commits
+        // after `open_existing_rw` succeeded — so there is no degraded case.
+        if args.register_on_promotion {
+            register_served_project(&args.db_path);
+        }
+
         info!("promoted to primary for {}", args.db_path.display());
         return;
     }
@@ -764,6 +809,28 @@ async fn wait_for_sigterm() {
 #[cfg(not(any(unix, windows)))]
 async fn wait_for_sigterm() {
     std::future::pending::<()>().await;
+}
+
+/// Record the project this server is serving in the machine-local registry.
+///
+/// Identity only — no counts. The server opened the database but never counted
+/// it, so registration costs no extra query; the registry's upsert leaves every
+/// unknown column at its stored value, so this cannot erase counts an earlier
+/// `cartog index` recorded.
+///
+/// The root is inferred from the database path: `run_server` is handed a
+/// `db_path` and no root.
+fn register_served_project(db_path: &std::path::Path) {
+    let root = cartog_registry::infer_root_from_db_path(db_path);
+    let probed = cartog_db::read_database_facts_at(db_path);
+    let facts = cartog_registry::ProjectFacts {
+        schema_version: probed.schema_version,
+        embed_provider: probed.embed_provider,
+        embed_model: probed.embed_model,
+        embed_dim: probed.embed_dim,
+        ..cartog_registry::ProjectFacts::identity_only(db_path, root)
+    };
+    cartog_registry::record_project(&facts);
 }
 
 /// Test-only call counter for `validate_pinned_state`. Lets the promoter

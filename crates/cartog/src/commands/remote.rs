@@ -525,9 +525,11 @@ mod imp {
         Ok(Some(locks))
     }
 
+    #[allow(clippy::too_many_arguments)] // thin adapter; every arg is a distinct config source
     pub(super) fn pull_index(
         db_path: &Path,
         remote_cfg: Option<&RemoteConfig>,
+        project: crate::commands::shared::ProjectSource<'_>,
         cli_override: Option<&str>,
         force: bool,
         no_sign_request: bool,
@@ -764,6 +766,34 @@ mod imp {
         // Installed — the file now lives at `db_path`, not `.partial`.
         guard.disarm();
 
+        // A pull replaces the whole index, so every cached count in the
+        // registry is now wrong about this project. Re-read them: unlike the
+        // index hooks this opens a database of its own, which is affordable
+        // precisely because a pull just finished a network transfer. Held
+        // locks make this race-free — no peer can be writing.
+        //
+        // Best-effort: a pulled index that cannot be re-opened is still a
+        // successful pull, so a failure here leaves the row stale rather than
+        // failing the command.
+        // Read-only, deliberately. A read-write open creates `-wal`/`-shm`
+        // sidecars and can write to the bytes we just verified by SHA-256 and
+        // whose stale sidecars we just removed — mutating a verified artifact
+        // as a side effect of bookkeeping. Read-only gives the same counts.
+        // (It also skips migrations, which registration must never trigger.)
+        let root = cartog_registry::infer_root_from_db_path(db_path);
+        // The README is read at the *inferred* root, which is right: that is
+        // the project this database describes, and the config in scope is the
+        // one for the working tree the pull ran in.
+        let declared = crate::commands::shared::declared_update_for(project, &root);
+        match cartog_db::Database::open_readonly(db_path) {
+            Ok(db) => crate::registry_hook::record_indexed(&db, db_path, &root, declared),
+            Err(e) => tracing::warn!(
+                db = %db_path.display(),
+                error = %e,
+                "pulled index could not be read to refresh the project registry"
+            ),
+        }
+
         let size = std::fs::metadata(db_path)?.len();
         if json {
             // serde serialization escapes every field; git_commit is null when absent.
@@ -985,6 +1015,7 @@ pub fn push_index(
 pub fn pull_index(
     db_path: &Path,
     config: &CartogConfig,
+    project: crate::commands::shared::ProjectSource<'_>,
     cli_override: Option<&str>,
     force: bool,
     no_sign_request: bool,
@@ -993,6 +1024,7 @@ pub fn pull_index(
     imp::pull_index(
         db_path,
         config.remote.as_ref(),
+        project,
         cli_override,
         force,
         no_sign_request,
@@ -1022,6 +1054,7 @@ pub fn push_index(
 pub fn pull_index(
     _db_path: &Path,
     _config: &CartogConfig,
+    _project: crate::commands::shared::ProjectSource<'_>,
     _cli_override: Option<&str>,
     _force: bool,
     _no_sign_request: bool,

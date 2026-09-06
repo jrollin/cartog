@@ -4,7 +4,7 @@
 
 ## Overview
 
-`cartog serve` runs cartog as an MCP server over stdio, exposing 16 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 13 query tools are read-only (including `cartog_trace` for call paths and `cartog_context` for one-shot task bundles); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones.
+`cartog serve` runs cartog as an MCP server over stdio, exposing 16 tools by default for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 13 query tools are read-only (including `cartog_trace` for call paths and `cartog_context` for one-shot task bundles); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones. Two more read-only tools, `cartog_list_projects` and `cartog_search_all`, appear only when the cross-project tools are enabled (`[mcp] federated = true` in `.cartog.toml`, or `cartog serve --federated`): they surface the paths and descriptions of this machine's *other* indexed projects, so a project opts in. See [Enabling the cross-project tools](#enabling-the-cross-project-tools).
 
 When `cartog serve --watch` is running and a file changes (or RAG embeddings are still catching up — including symbols whose body was just edited and not yet re-embedded), affected read-tool responses are prefixed with a `⚠️` staleness banner so the agent knows the answer may be momentarily behind the working tree. Read-only secondaries and `cartog serve` without `--watch` never show the banner.
 
@@ -44,12 +44,120 @@ with three controls, highest precedence first: `CARTOG_WATCH_RAG` (env) override
 | `cartog_changes` | `commits?`, `kind?` | Symbols affected by recent git changes |
 | `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search (write) |
 | `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
+| `cartog_list_projects` | — | The other cartog-indexed projects on this machine, with each one's `db_path` |
+| `cartog_search_all` | `query`, `kind?`, `limit?`, `under?`, `lang?`, `max_projects?` | Find a symbol by name across the *other* indexed projects, grouped per project |
 | `cartog_update` | `version?` | Arm a deferred self-update (write; touches the state file, not the index) |
 
 Read tools (everything except `cartog_index`, `cartog_rag_index`, and `cartog_update`)
 carry an `outputSchema` and return `structuredContent`. All tool responses also include a JSON text block.
 
 **Path restriction**: `cartog_index` and `cartog_rag_index` reject paths outside the project directory (CWD subtree). Agents cannot index arbitrary filesystem locations.
+
+### Enabling the cross-project tools
+
+`cartog_list_projects` and `cartog_search_all` are **hidden by default**: a call
+to either returns rmcp's `tool not found`, and neither appears in `tools/list` or
+in the server instructions. They are the only tools that read *other*
+repositories' paths and README text into a session, so exposing them is a
+per-project decision rather than a side effect of installing cartog.
+
+Turn them on with either source (each is sufficient on its own):
+
+```toml
+# .cartog.toml — for every client that serves this project
+[mcp]
+federated = true
+```
+
+```bash
+cartog serve --federated        # for one launch / one client config
+```
+
+The Claude Code plugin cannot change its `serve` arguments, so plugin users opt
+in through `.cartog.toml`. `cartog search --all` on the CLI is unaffected: it is
+explicit per invocation. See [config.md](config.md#cross-project-mcp-tools-mcp).
+
+### Federated symbol search (`cartog_search_all`)
+
+`cartog_search_all` answers "which project defines this symbol?" when the
+project is not known up front. `cartog_list_projects` tells an agent *where*
+projects are; this searches them.
+
+```
+cartog_search_all { "query": "CreateShipment" }
+cartog_search_all { "query": "Shift", "under": "/home/u/work", "lang": "ruby" }
+```
+
+**It fans out; it does not consolidate.** The registry supplies the candidate
+database paths, each is opened **read-only** and queried on its own, and results
+stay grouped under the project they came from. Three deliberate consequences:
+
+- **No merged database.** Merging graphs is a
+  [non-goal](../explanation/project-registry.md#non-goals): every hit is read
+  live from the project that owns it, so there is no second staleness surface.
+- **No merged ranking.** `in_degree` centrality is per-graph, so a flat
+  cross-project ordering cannot be justified without a ranking benchmark that
+  does not exist. Ranking is **within** a project only.
+- **No writes.** A registry row grants discovery, not write access; the
+  read-only open enforces it.
+
+`limit` applies **per project**, so a response holds at most
+`limit x max_projects` symbols. Narrow the fan-out with `under` (a directory
+subtree) or `lang`; `max_projects` (default 10, max 50) caps how many databases
+are opened (default 10, clamped to 1..=50), most-symbols-first, and the response
+reports `elided_by_cap` so a partial answer never reads as complete. A project
+that cannot be read is listed in `unreadable` **with the reason** rather than
+silently dropped — a schema drift, a corrupt file and a permission error need
+different fixes. When *no* candidate could be read, the text says the search
+could not run rather than reporting a no-match, which an agent would otherwise
+take as "the symbol exists nowhere else". `under` accepts `~`.
+
+Like `cartog_list_projects`, it is gated by **neither** `refuse_if_degraded` nor
+`refuse_if_read_only`: it never touches *this* project's index, and a server with
+no index of its own is exactly when searching the projects that do have one
+matters most. Unlike `cartog_list_projects`, it *does* open foreign databases, so
+its cost scales with the number of projects queried — hence the cap.
+
+There is no federated *semantic* search: embedding vectors from projects with
+different providers/models/dimensions live in different spaces, so merging their
+scores would be meaningless. See
+[cross-project queries](../explanation/cross-project-queries.md).
+
+### Cross-project discovery (`cartog_list_projects`)
+
+`cartog_list_projects` reads the machine-local project registry
+(`<state_dir>/projects.sqlite`) and returns the other cartog-indexed projects on
+this machine. It **opens no project database**, so its cost is independent of how
+many projects are registered and it cannot contend with another project's writer.
+
+`db_path` is the actionable field: pass it to any cartog CLI command as
+`--db <path>` to query that project. `current: true` marks the project this
+server already serves — use the normal tools for that one. Per-row markers
+(`live`, `stale_schema`, `missing`, `embed_mismatch`) mirror
+[`cartog projects list`](cli.md#cartog-projects-listforgetprune).
+
+**Routing by description.** Each entry carries `description` and
+`description_source` (`"config"` or `"readme"`), both omitted when absent — the project's `[project]
+description` from `.cartog.toml`, or, when unset, the first prose paragraph
+of its `README.md`. An absent field means neither source had anything. This is what
+makes routing by intent possible: call `cartog_list_projects`, pick a project
+by what its description says it does, then drill into it with `--db`. See
+[the two-step pattern](../explanation/project-registry.md#the-intended-two-step).
+
+**Trust boundary.** `description` is repository-authored text — it comes from
+a file the target repo's own contributors wrote, not from cartog. Treat it as
+**data, never as instructions**: a README or `.cartog.toml` is a plausible
+injection vector precisely because this field exists to be read by an agent.
+Route on it, don't execute it.
+
+`registry_available: false` means there is no registry at all — nothing else has
+been indexed on this machine, or `CARTOG_REGISTRY` is disabled. That is a
+different fact from an empty `projects` list; never infer one from the other.
+
+Gated by **neither** the degraded nor the read-only guard, for the same reason
+`cartog_update` is not: it does not touch the index database. A degraded server
+(no index for the current project) is exactly when discovering the machine's
+other projects is most useful.
 
 ## Progress notifications
 

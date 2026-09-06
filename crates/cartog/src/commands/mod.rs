@@ -19,12 +19,15 @@ mod shared;
 mod test_support;
 
 pub use progress::SpinnerSafeWriter;
+/// What a run may learn about `[project]`, for the registry writers.
+pub use shared::ProjectSource;
 
 mod graph;
 mod index;
 mod manage;
 mod rag;
 mod search;
+mod search_all;
 
 pub use graph::{
     cmd_callees, cmd_deps, cmd_hierarchy, cmd_impact, cmd_outline, cmd_refs, cmd_trace,
@@ -33,6 +36,7 @@ pub use index::cmd_index;
 pub use manage::{cmd_changes, cmd_map, cmd_pull, cmd_push, cmd_stats, cmd_watch};
 pub use rag::{cmd_context, cmd_rag_index, cmd_rag_search, cmd_rag_setup};
 pub use search::cmd_search;
+pub use search_all::{cmd_search_all, FanoutFilter, OutputOpts};
 
 pub mod ide;
 pub mod init;
@@ -45,7 +49,11 @@ pub use config_display::cmd_config;
 mod doctor;
 pub use doctor::cmd_doctor;
 
+mod projects;
 mod self_cmd;
+pub use projects::{
+    cmd_projects_add, cmd_projects_forget, cmd_projects_list, cmd_projects_prune, cmd_projects_scan,
+};
 pub use self_cmd::{
     cmd_self_migrate_db, cmd_self_rollback, cmd_self_update, cmd_self_version, UpdateMode,
 };

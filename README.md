@@ -133,7 +133,7 @@ cartog watch . --rag             # also re-embed (deferred, non-blocking)
 ### MCP server for AI agents
 
 ```bash
-cartog serve                     # 16 tools over stdio
+cartog serve                     # 16 tools over stdio (+2 opt-in cross-project)
 cartog serve --watch --rag       # with live re-indexing + semantic search
 ```
 
@@ -663,7 +663,7 @@ Your code never leaves your machine — unless you explicitly opt in to
 |---|---|
 | **"not initialized" / no results** | Run `cartog init` then `cartog index .` in the repo first. |
 | **`cartog index` seems to hang** | Cold index of a large repo takes a few seconds; re-run with `RUST_LOG=info cartog index .` if nothing after 60s. |
-| **MCP "Connection closed" on a 2nd editor window** | Expected: single-writer election makes the 2nd instance read-only (14 of 16 tools). Ensure `cartog --version` ≥ 0.17 and `CARTOG_SINGLE_WRITER` is unset. |
+| **MCP "Connection closed" on a 2nd editor window** | Expected: single-writer election makes the 2nd instance read-only (every tool but the 2 indexing ones). Ensure `cartog --version` ≥ 0.17 and `CARTOG_SINGLE_WRITER` is unset. |
 | **`.cartog.toml` ignored** | Cartog walks up to the git root; with no `.git`, put it in the cwd or pass `--db`. `cartog config` prints the resolved paths. |
 | **Missing symbols / recall lower than expected** | Wait for the watcher (or run `cartog index`), check the file's language is supported and not `.gitignore`d. Install a language server on PATH to lift edge resolution from ~25% to up to ~81%. |
 | **Anything else** | `cartog doctor` checks git, config, key paths, DB, LSP servers, models, the remote, and the release version. |
@@ -702,7 +702,7 @@ A series on how cartog works, from the code graph to semantic search (English ·
    to re-index only changed symbols, dropping re-index time from seconds to milliseconds.
    [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-incremental-merkle-tree) ·
    [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-incremental-merkle-tree)
-5. **Exposing a code graph as an MCP server** — wiring cartog's 16 tools into the Model Context
+5. **Exposing a code graph as an MCP server** — wiring cartog's MCP tools into the Model Context
    Protocol so AI agents query structured graph results instead of flooding context with raw files.
    [🇬🇧 EN](https://www.julienrollin.com/en/posts/cartog-mcp-server) ·
    [🇫🇷 FR](https://www.julienrollin.com/posts/cartog-mcp-server)

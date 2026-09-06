@@ -1,0 +1,28 @@
+[package]
+name = "cartog-registry"
+description = "Machine-local registry of indexed cartog projects, plus the user-global state directory and PID-lock slots it is keyed on."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["code-analysis", "registry", "state", "llm", "code-intelligence"]
+categories = ["development-tools"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+cartog-process-lock = { workspace = true }
+directories = { workspace = true }
+rusqlite = { workspace = true }
+sha2 = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

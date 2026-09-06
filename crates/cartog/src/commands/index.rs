@@ -41,6 +41,7 @@ pub fn cmd_index(
     redact: indexer::RedactionConfig,
     lsp_overrides: &std::collections::HashMap<String, Vec<String>>,
     filter: &indexer::WalkFilter,
+    project: super::shared::ProjectSource<'_>,
 ) -> Result<()> {
     let root = Path::new(path);
     let db = open_db_create(db_path, embedding_dim)?;
@@ -106,6 +107,38 @@ pub fn cmd_index(
         }
     }
 
+    // Record the project in the machine-local registry. Placed after the last
+    // early return above (cancellation rolls the whole pass back, so a
+    // cancelled run must register nothing) and after the indexer's transaction
+    // committed, never inside it.
+    //
+    // Gated on the pass having changed something: `record_indexed` pays a
+    // `db.stats()` — five scans — and a no-op pass has nothing new to record.
+    // A changed pass just wrote those tables, so their pages are warm.
+    //
+    // Nothing indexable at all registers nothing, matching the rule a degraded
+    // `serve` already follows: advertising an empty project to every other
+    // session on the machine is worse than omitting it. A later index that does
+    // find symbols registers it then.
+    //
+    // The declared name/description are refreshed on **both** branches, since
+    // a `[project] description` or README edit changes no byte of the database
+    // — a no-op pass is exactly how such an edit reaches the registry. The
+    // no-op branch uses `record_declared` rather than the config-less
+    // `record_opened`, which would `Keep` the stale values, and it still pays
+    // no `stats()`.
+    //
+    // A *rejected* config resolves to `Keep`, not to an empty `Set`: it never
+    // knew the declared values, so overwriting them would let one parse error
+    // erase them.
+    let declared = super::shared::declared_update_for(project, root);
+    let changed = result.files_indexed > 0 || result.files_removed > 0;
+    if changed {
+        crate::registry_hook::record_indexed(&db, db_path, root, declared);
+    } else if matches!(db.is_empty(), Ok(false)) {
+        crate::registry_hook::record_declared(db_path, root, declared);
+    }
+
     // No-op run: nothing was added or removed this pass. The delta counters
     // are all zero, so the standard "0 symbols, 0 edges" line reads like a
     // failure. Report DB state instead — "up to date" when the index has
@@ -130,6 +163,22 @@ pub fn cmd_index(
 mod tests {
     use super::*;
     use cartog_db::Database;
+
+    /// The two caps must be the same number.
+    ///
+    /// The config side rejects over-length input; the registry side truncates
+    /// at write time. A drift either rejects text the registry would happily
+    /// have stored, or stores text the config swore was short enough. Pinned
+    /// here rather than in `registry_hook`: that module lives in the library
+    /// crate, which cannot see `config`, and this is the primary
+    /// config-to-registry call site.
+    #[test]
+    fn the_config_and_registry_description_caps_are_the_same_number() {
+        assert_eq!(
+            crate::config::PROJECT_DESCRIPTION_MAX_CHARS,
+            cartog_registry::DESCRIPTION_MAX_CHARS
+        );
+    }
 
     fn non_empty_db() -> Database {
         let db = Database::open_memory().unwrap();

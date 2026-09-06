@@ -255,8 +255,111 @@ pub struct EmbeddingFingerprint {
 }
 
 /// Metadata keys for the embedding fingerprint.
-const EMBED_PROVIDER_KEY: &str = "embedding_provider";
-const EMBED_MODEL_KEY: &str = "embedding_model";
+///
+/// Public so out-of-crate readers naming the same rows this crate writes — a
+/// caller probing a closed DB via [`read_metadata_at`] to report on someone
+/// else's index — do it by constant instead of retyping the literal, which is
+/// how the two silently drift apart. In-crate callers use these two; see
+/// [`EMBED_DIMENSION_KEY`] for the one that is documentation-only.
+pub const EMBED_PROVIDER_KEY: &str = "embedding_provider";
+/// See [`EMBED_PROVIDER_KEY`].
+pub const EMBED_MODEL_KEY: &str = "embedding_model";
+/// See [`EMBED_PROVIDER_KEY`].
+///
+/// Unlike its two siblings this key has no in-crate callers: every writer of
+/// the `embedding_dimension` row inlines the literal in its SQL
+/// (`handle_embedding_dimension`, and `reconcile_embedding_fingerprint`, which
+/// writes it alongside the provider and model). The constant exists for
+/// out-of-crate readers, so editing its value changes nothing in this crate —
+/// which is exactly why a test pins it against the row the store writes.
+pub const EMBED_DIMENSION_KEY: &str = "embedding_dimension";
+
+/// Metadata key holding the graph-schema version.
+///
+/// Public for the same reason as the `EMBED_*` keys: an out-of-crate reader
+/// probing a closed database should name the row by constant. Like
+/// [`EMBED_DIMENSION_KEY`], the in-crate readers inline the literal in their
+/// SQL, so a test pins this against the row the store writes.
+pub const SCHEMA_VERSION_KEY: &str = "schema_version";
+
+/// The embedding fingerprint and schema version of a **closed** cartog
+/// database, as an out-of-crate reader sees them.
+///
+/// Every field is independently optional: a database that was never embedded
+/// has no provider/model/dimension, and a file that is not a cartog database
+/// has no schema version either. Absent means "not known", never zero.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DatabaseFacts {
+    /// Graph-schema version, or `None` when the file is not a cartog database.
+    /// Never `Some(0)`: [`read_schema_version_at`] reports 0 for a foreign
+    /// file, and storing that would render as a real version.
+    pub schema_version: Option<u32>,
+    pub embed_provider: Option<String>,
+    pub embed_model: Option<String>,
+    pub embed_dim: Option<u32>,
+}
+
+/// Read [`DatabaseFacts`] from a closed database file, best-effort.
+///
+/// Companion to [`read_schema_version_at`] / [`read_metadata_at`] for callers
+/// that must *report on* a database rather than open it: skips migrations and
+/// the drift check, and never fails — an unreadable or foreign file yields
+/// all-`None`.
+///
+/// Exists because three separate cartog crates (the binary's index hooks, the
+/// MCP server's serve/promotion hooks, and the watcher) each need exactly this
+/// set of values for the project registry, and had copied the same four probe
+/// calls verbatim. The `EMBED_*_KEY` constants stopped the literals drifting;
+/// this stops the logic drifting.
+#[must_use]
+pub fn read_database_facts_at(path: &std::path::Path) -> DatabaseFacts {
+    // ONE connection reading four rows, not four connections reading one each.
+    // This runs on every registry write — every `cartog index`, every `serve`
+    // startup and promotion, every debounced watcher pass — so the naive
+    // composition of `read_schema_version_at` + 3× `read_metadata_at` was four
+    // file opens where one suffices.
+    let Ok(conn) = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    ) else {
+        // Absent or unreadable: "not known", never an error. This is a
+        // diagnostic read about someone else's database.
+        return DatabaseFacts::default();
+    };
+
+    let mut facts = DatabaseFacts::default();
+    let mut stmt = match conn.prepare("SELECT key, value FROM metadata WHERE key IN (?1,?2,?3,?4)")
+    {
+        Ok(s) => s,
+        // No `metadata` table (not a cartog database) — all-`None`.
+        Err(_) => return facts,
+    };
+    let rows = stmt.query_map(
+        rusqlite::params![
+            SCHEMA_VERSION_KEY,
+            EMBED_PROVIDER_KEY,
+            EMBED_MODEL_KEY,
+            EMBED_DIMENSION_KEY
+        ],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    );
+    let Ok(rows) = rows else {
+        return facts;
+    };
+    for (key, value) in rows.filter_map(Result::ok) {
+        let Some(value) = value else { continue };
+        match key.as_str() {
+            // `> 0`: a foreign file reports 0, and storing that would render as
+            // a real version and misleadingly flag `stale-schema`.
+            SCHEMA_VERSION_KEY => facts.schema_version = value.parse().ok().filter(|v| *v > 0),
+            EMBED_PROVIDER_KEY => facts.embed_provider = Some(value),
+            EMBED_MODEL_KEY => facts.embed_model = Some(value),
+            EMBED_DIMENSION_KEY => facts.embed_dim = value.parse().ok(),
+            _ => {}
+        }
+    }
+    facts
+}
 
 /// SQL to create the sqlite-vec virtual table with the given embedding dimension.
 fn rag_vec_schema(dim: usize) -> String {

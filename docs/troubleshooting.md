@@ -269,7 +269,7 @@ with `cartog rag index --force`.
 This was the pre-Phase-2 symptom of two cartog processes racing on the
 embedding-dimension migration. As of v0.17 cartog uses single-writer
 election: the first `cartog serve` is the primary, the second attaches
-read-only and exposes 14 of 16 MCP tools (`cartog_index` and
+read-only and exposes every MCP tool but two (`cartog_index` and
 `cartog_rag_index` return a clear refusal pointing at the primary). If the
 primary process dies, the secondary takes over within ~10s.
 
@@ -302,6 +302,24 @@ leaves the file behind. The next `cartog serve` / `cartog watch`
 startup runs a `sweep_stale_locks` pass that reaps every dead `.pid`
 file in the state dir (not just the slot being claimed), so leftovers
 from crashed peers disappear automatically — no manual action needed.
+
+### `cartog_list_projects` / `cartog_search_all` are missing, or return `tool not found`
+
+Expected by default. The two cross-project tools are hidden unless the project
+opts in, because they surface the paths and README text of this machine's other
+indexed projects into the agent session. Enable them with `[mcp] federated =
+true` in `.cartog.toml` (the only route for the Claude Code plugin, whose
+`serve` arguments are fixed) or launch with `cartog serve --federated`, then
+restart the MCP client so it re-reads `tools/list`. The CLI `cartog search
+--all` works regardless. See
+[reference/mcp-tools.md](reference/mcp-tools.md#enabling-the-cross-project-tools).
+
+Run `cartog config` to see the resolved value. Two cases resolve it to `false`
+without failing: a **typo** in the key (`federatd = true`) is salvaged with a
+warning, and a config **rejected** for an unrelated validation error elsewhere
+in the file falls back to defaults for every section. Under an MCP client both
+warnings go to the server's stderr log, not the chat, so `cartog config` in a
+terminal is the reliable check.
 
 ### MCP stderr is full of `[ERROR]` lines that look like info-level messages
 
@@ -453,6 +471,87 @@ These commands match an **exact** symbol name. When there's no exact match but
 similar names exist, cartog appends `— did you mean: A, B, C?`. Use one of the
 suggestions, or run `cartog search X` (fuzzy: prefix + substring) to find the
 exact name first. The MCP tools surface the same suggestion in their response.
+
+## Project registry (`cartog projects`)
+
+### `cartog projects list` says there is no registry
+
+Nothing has been indexed on this machine yet, or the registry is switched off. Check
+`CARTOG_REGISTRY`: an **empty** value disables reads and writes, and a **relative** value is
+refused (it would give each directory its own registry). `cartog doctor` prints the resolved
+path, or `unavailable` when disabled.
+
+An *empty list* on an available registry is different: the registry exists and holds no rows.
+The `--json` output distinguishes them via `registry_available`.
+
+### A project I indexed is not listed
+
+Most often it was indexed **before** the registry existed, or a while ago and untouched since:
+registration rides on a write, so nothing has recorded it yet. Opening the project again is
+enough (the plugin launches `cartog serve --watch`, and a `serve` startup records it). To make
+it appear now, without re-indexing:
+
+```bash
+cartog projects add /path/to/that/project   # one project
+cartog projects scan ~/work --dry-run       # a whole tree, preview first
+```
+
+Both read the existing index rather than rebuilding it, so the row shows the real counts but
+reads `never` for last-indexed until the project's next real `cartog index`.
+
+If `add` answers `no cartog index at ...`, the project genuinely has no database — index it
+first. Registration also follows the index-creation consent gate, so a project cartog was
+refused permission to index is not registered either: index it (`cartog init`, or
+`CARTOG_AUTO_INIT=1`) and it appears. A `cartog serve` running **degraded** — no
+`.cartog.toml`, no index — registers nothing, by design.
+
+### A project is listed as `missing`
+
+Its database file is gone (deleted, or the project was moved). `cartog projects prune` drops
+those rows; `--dry-run` shows them first. Pruning never touches an index that still exists.
+
+### A project is listed twice
+
+Should not happen — a write re-keys a row whose id no longer reproduces rather than adding
+one. If you see it, the two rows have different `db_path` values (e.g. one via a symlink that
+no longer resolves). `cartog projects forget <the stale db_path>` removes the wrong one.
+
+### `cartog projects forget <name>` says the name is ambiguous
+
+Two projects share that directory basename (`~/w1/api` and `~/w2/api`). Deleting both from one
+argument would deregister a project you did not name, so cartog drops nothing and prints the
+candidate ids — re-run with the id you want.
+
+### The counts show `?`
+
+"Not known", not zero. The registry caches whatever the writing command measured: a
+`cartog serve` startup records identity without counting, so a project only ever opened by a
+server has no counts until its next index.
+
+### A project's description is missing or stale in `cartog projects list`
+
+**Missing entirely**: neither `.cartog.toml` nor `README.md` supplies one. Add a `[project]
+description` line, or write an opening prose paragraph in `README.md`, then run `cartog index`
+(any pass, including a no-op incremental one, refreshes the registry's declared columns — see
+[config.md § Project identity](reference/config.md#project-identity-project)). `cartog doctor`
+flags a project with no description from either source.
+
+**Stale**: you edited `.cartog.toml` or `README.md` but the listing still shows the old text.
+Only `cartog index`, `cartog rag index`, and `cartog pull` refresh the registry's name and
+description — `cartog serve` startup and the watcher deliberately leave them untouched (they
+have no config in scope). Run `cartog index` once and the change shows up.
+
+**Config rejected for an over-length `[project]` value**: `name` over 100 characters or
+`description` over 280 characters rejects the whole config, with a message naming the field and
+the limit. Shorten the value — there is no silent truncation for a declared value (a
+README-derived description *is* truncated, since you didn't choose that length).
+
+### `cartog: the project registry at ... was unreadable`
+
+The file was not valid SQLite. cartog moved it to `projects.sqlite.corrupt.<timestamp>` and
+started fresh — the original bytes are preserved, never truncated. Re-indexing your projects
+repopulates it. Lock contention is *not* treated as corruption, so a busy registry is never
+quarantined.
 
 ## Logging and signals
 

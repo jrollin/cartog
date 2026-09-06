@@ -318,6 +318,8 @@ fn promoter_args_with_slot(
         primary,
         pinned,
         watch_requested: false,
+        // Temp-dir fixtures: never touch the developer's real registry.
+        register_on_promotion: false,
         rag_override: Some(false),
         rag_config: rag::EmbeddingProviderConfig::default(),
         redact: indexer::RedactionConfig::disabled(),

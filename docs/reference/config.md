@@ -49,6 +49,75 @@ cartog --db /tmp/x.db stats
 cartog --db /tmp/x.db map
 ```
 
+## Project identity (`[project]`)
+
+A 9th top-level section. It is purely descriptive: nothing here changes how
+the repo is indexed, walked, embedded, or queried.
+
+```toml
+[project]
+name        = "svc-billing"                                    # optional, <= 100 chars, defaults to the root dir name
+description = "Invoice generation and payment reconciliation."  # optional, <= 280 chars, one line
+```
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `name` | project root's directory basename | Display name in `cartog projects list` and `cartog_list_projects`. |
+| `description` | none (falls back to `README.md`) | One-line summary read by agents to route between projects. |
+
+Both fields are optional, so a bare `[project]` header is valid and inert.
+
+**Precedence** (each resolves independently, highest wins):
+
+- **Name:** `[project] name` → project root's directory basename.
+- **Description:** `[project] description` → first prose paragraph of
+  `README.md` (also `README.markdown`, `README`), plain text, truncated to
+  280 characters at a word boundary → none.
+
+No env-var override for either field — a project's identity is not the kind
+of per-machine knob the other sections' env vars exist for.
+
+**Validation**, at config load (a violation rejects the config, with a
+message naming the field and the limit):
+
+- `name` over 100 characters, or `description` over 280 characters.
+- Either field empty or whitespace-only.
+- Either field containing a control character or a newline.
+
+An unknown key inside `[project]` is salvaged like any other section: the
+config still loads and the index still proceeds, but the description or name
+it would have set is lost. See [unknown config keys](#cartog-warning-unknown-field-x-in-my-config)
+in the troubleshooting guide.
+
+This section is only read by config-aware writers (`cartog index`,
+`cartog rag index`, `cartog pull`) to refresh the [project registry](../explanation/project-registry.md#step-3--self-populated-description);
+`cartog serve` startup and the watcher leave the registry's stored name and
+description untouched. A **rejected** config also leaves them untouched: its
+`[project]` could not be read, so cartog keeps whatever a working config last
+stored rather than replacing it with the README fallback. `cartog config` and `cartog doctor` also read it — see
+[cli.md](cli.md#cartog-config) and [cli.md](cli.md#cartog-doctor).
+
+## Cross-project MCP tools (`[mcp]`)
+
+A 10th top-level section. It controls what `cartog serve` exposes; nothing here
+changes how the repo is indexed or queried.
+
+```toml
+[mcp]
+federated = true   # expose cartog_list_projects + cartog_search_all (default: false)
+```
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `federated` | `false` | Expose the two cross-project MCP tools. They surface the paths and descriptions of this machine's *other* indexed projects into the agent session, so a project opts in. |
+
+`cartog serve --federated` turns them on for one launch; either source is
+sufficient, and an explicit `false` here does not veto the flag. There is no
+environment variable: this is a per-project privacy decision, not a per-machine
+knob. The CLI's `cartog search --all` is unaffected — it is explicit per
+invocation. An unknown key inside `[mcp]` is salvaged like any other section.
+See [mcp-tools.md](mcp-tools.md#enabling-the-cross-project-tools).
+
 ## Index-creation consent gate
 
 cartog will not create a `.cartog/` index for a project on its own. A fresh,
@@ -449,6 +518,7 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 | `CARTOG_EMBED_CONCURRENCY` | `4` | In-flight HTTP embed requests for ollama/openai (clamped `1..=16`). Overrides `[embedding] max_concurrent_requests`. Ignored for local. |
 | `CARTOG_WATCH_RAG` | unset | Force watcher auto-embed; overrides `[embedding] auto_embed` and `--rag`:<br>`1` = force on<br>`0` = force off<br>unset = auto-detect from the DB |
 | `CARTOG_SINGLE_WRITER` | `1` | `0` disables MCP single-writer election (every `cartog serve` opens read-write). |
+| `CARTOG_REGISTRY` | `<state_dir>/projects.sqlite` | Path to the machine-local project registry read by `cartog projects`. Must be **absolute** — a relative value is refused (it would give each directory its own registry). Set to an **empty** value to disable the registry entirely: both reads and writes become no-ops. `cartog doctor` prints the resolved path, or names which of the three causes disabled it. |
 | `CARTOG_MCP_MAX_BYTES` | `65536` | Max bytes per MCP tool response before truncation. |
 | `CARTOG_MCP_COMPACT` | `1` (on) | MCP tools strip heavy fields by default (symbol cache hashes + docstrings; `cartog_rag_search`/`cartog_trace` bodies bounded to a ~500-byte snippet; `cartog_context` keeps budgeted bodies). Set `0`/`false`/`no`/`off` to return full bodies. |
 | `CARTOG_NO_UPDATE_CHECK` | unset | Set to skip the background self-update check. |

@@ -6,7 +6,7 @@
 //! message, and reports the degraded state in `cartog_stats`. Read tools work
 //! against the empty DB and naturally return empty results.
 
-use super::test_provider;
+use super::{test_provider, RegistryEnv};
 use crate::*;
 
 fn degraded_server() -> CartogServer {
@@ -198,4 +198,240 @@ fn production_reranker_wiring_is_lazy_at_construction() {
         "lazy_reranker must not build until first use — this is the wiring the \
          real server uses, unlike the test harness's no_reranker()"
     );
+}
+
+/// `cartog_list_projects` must work on a degraded server. A degraded server has
+/// no index for *this* project, which is exactly when knowing what else is
+/// indexed on the machine is most useful — refusing would make the tool useless
+/// precisely when it matters.
+///
+/// This is the one test here that must call the real tool end-to-end (the claim
+/// is that it does not *refuse*), so it is also the only one that touches
+/// `CARTOG_REGISTRY`. The rest drive `build_result` directly — see the note on
+/// `a_degraded_server_flags_no_project_as_current`.
+#[tokio::test]
+#[serial_test::serial]
+async fn degraded_server_still_lists_projects() {
+    let home = tempfile::TempDir::new().unwrap();
+    let _env = RegistryEnv::isolated(home.path());
+
+    let server = degraded_server();
+    let result = server
+        .cartog_list_projects()
+        .await
+        .expect("a degraded server must still answer list_projects, not refuse");
+
+    // An outputSchema tool must always return structuredContent.
+    assert!(
+        result.structured_content.is_some(),
+        "the tool declares an output schema, so structured content is mandatory"
+    );
+}
+
+/// A degraded server has no on-disk database, so it has no registry identity —
+/// nothing it lists can be flagged `current`.
+///
+/// Drives the tool's pure conversion directly rather than through
+/// `CARTOG_REGISTRY`: this crate has two independent test-serialization
+/// mechanisms (`#[serial]` and the tokio `SERIAL` mutex), so a test that mutates
+/// a process-global env var cannot be reliably isolated from the other set.
+#[test]
+fn a_degraded_server_flags_no_project_as_current() {
+    let listing = cartog_registry::Listing {
+        projects: vec![fake_row("other", "/w/other/.cartog/db.sqlite")],
+        available: true,
+    };
+
+    // A degraded server's db_path is empty (its DB is in memory).
+    let result = crate::tools::projects::build_result(&listing, std::path::Path::new(""));
+
+    assert_eq!(result.projects.len(), 1, "the row must still list");
+    assert!(
+        !result.projects[0].current,
+        "a degraded server serves no project, so nothing is `current`"
+    );
+}
+
+/// The serving project is flagged `current` so an agent does not re-route to
+/// itself, and matching is by slot so an equivalent path still matches.
+#[test]
+fn the_served_project_is_flagged_current_even_via_an_equivalent_path() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let root = dir.path().join("mine");
+    std::fs::create_dir_all(root.join(".cartog")).unwrap();
+    let db = root.join(".cartog").join("db.sqlite");
+    std::fs::write(&db, b"").unwrap();
+
+    let listing = cartog_registry::Listing {
+        projects: vec![
+            fake_row("mine", &db.to_string_lossy()),
+            fake_row("other", "/w/other/.cartog/db.sqlite"),
+        ],
+        available: true,
+    };
+
+    // Serve the same physical DB through a path with a redundant component.
+    let equivalent = root.join(".").join(".cartog").join("db.sqlite");
+    let result = crate::tools::projects::build_result(&listing, &equivalent);
+
+    let mine = result.projects.iter().find(|p| p.name == "mine").unwrap();
+    let other = result.projects.iter().find(|p| p.name == "other").unwrap();
+    assert!(
+        mine.current,
+        "an equivalent path to the served DB must still flag `current`"
+    );
+    assert!(!other.current);
+}
+
+/// An unavailable registry is reported as such, so an agent cannot misread it
+/// as "no other projects exist".
+#[test]
+fn an_unavailable_registry_is_reported_not_silently_empty() {
+    let result = crate::tools::projects::build_result(
+        &cartog_registry::Listing::unavailable(),
+        std::path::Path::new(""),
+    );
+    assert!(!result.registry_available);
+    assert!(result.projects.is_empty());
+}
+
+/// The tool must never open a foreign project's database.
+///
+/// Asserted by observable effect: a row whose `db_path` points at a file that is
+/// not valid SQLite must still convert and list. If the conversion opened
+/// project databases, this row would error or vanish.
+#[test]
+fn list_projects_opens_no_foreign_database() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let fake_db = dir.path().join("not-a-database.sqlite");
+    std::fs::write(&fake_db, b"definitely not sqlite").unwrap();
+
+    let listing = cartog_registry::Listing {
+        projects: vec![fake_row("bogus", &fake_db.to_string_lossy())],
+        available: true,
+    };
+
+    let result = crate::tools::projects::build_result(&listing, std::path::Path::new(""));
+
+    assert_eq!(result.projects.len(), 1);
+    assert_eq!(result.projects[0].name, "bogus");
+}
+
+/// A registry row with the shape the reader produces.
+fn fake_row(name: &str, db_path: &str) -> cartog_registry::ProjectRow {
+    cartog_registry::ProjectRow {
+        id: cartog_registry::slot_for_db("serve", std::path::Path::new(db_path)),
+        db_path: db_path.into(),
+        root: format!("/w/{name}").into(),
+        name: name.to_string(),
+        languages: vec![("rust".to_string(), 10)],
+        schema_version: Some(cartog_db::CURRENT_SCHEMA_VERSION),
+        file_count: Some(10),
+        symbol_count: Some(100),
+        edge_count: Some(200),
+        resolved_count: Some(150),
+        embedding_count: Some(100),
+        embed_provider: None,
+        embed_model: None,
+        embed_dim: None,
+        last_indexed: Some(1_700_000_000),
+        last_seen: 1_700_000_100,
+        declared_name: None,
+        description: None,
+        markers: cartog_registry::Markers::default(),
+    }
+}
+
+/// The declared name and description must survive the row-to-entry mapping.
+///
+/// The routing signal an agent sees comes from `build_result`, so a mapping
+/// that dropped either field would leave the tool describing projects by
+/// directory name only — the phase-1 behaviour step 3 exists to replace.
+#[test]
+fn a_declared_name_and_description_reach_the_tool_entry() {
+    let mut r = fake_row("api", "/w/api/.cartog/db.sqlite");
+    r.declared_name = Some("svc-billing".to_string());
+    r.description = Some(cartog_registry::Description {
+        text: "Invoice generation.".to_string(),
+        source: cartog_registry::DescriptionSource::Readme,
+    });
+    let listing = cartog_registry::Listing {
+        projects: vec![r],
+        available: true,
+    };
+
+    let result = crate::tools::projects::build_result(&listing, std::path::Path::new(""));
+
+    let e = &result.projects[0];
+    assert_eq!(
+        e.name, "svc-billing",
+        "the declared name is the display name"
+    );
+    assert_eq!(e.description.as_deref(), Some("Invoice generation."));
+    assert_eq!(e.description_source.as_deref(), Some("readme"));
+}
+
+/// A registry holding many projects must not blow the response budget.
+///
+/// Both halves matter: the text block AND `structuredContent`. Trimming only
+/// the text would leave the structured half unbounded, which is the defect
+/// PR #151 fixed for the other outputSchema tools.
+#[test]
+fn a_large_project_list_is_trimmed_and_says_so() {
+    let listing = cartog_registry::Listing {
+        projects: (0..400)
+            .map(|i| {
+                fake_row(
+                    &format!("project-{i}"),
+                    &format!("/w/p{i}/.cartog/db.sqlite"),
+                )
+            })
+            .collect(),
+        available: true,
+    };
+
+    let result = crate::tools::projects::build_result(&listing, std::path::Path::new(""));
+    let total = result.projects.len();
+    assert_eq!(total, 400, "precondition: all rows convert");
+
+    // Call the handler's own trim, so removing it from the handler fails here.
+    let mut trimmed = result;
+    let omitted = crate::tools::projects::trim_to_budget(&mut trimmed);
+
+    assert!(omitted > 0, "400 projects must exceed the list budget");
+    assert_eq!(
+        trimmed.projects.len() + omitted,
+        total,
+        "nothing may be lost silently"
+    );
+
+    // The structured half is bounded by the same trim, so it cannot diverge —
+    // and it is never re-clamped downstream, so this is its only bound.
+    let structured = serde_json::to_string_pretty(&trimmed).unwrap();
+    assert!(
+        structured.len() <= crate::mcp_max_bytes(),
+        "structuredContent must stay under the response cap, got {} bytes",
+        structured.len()
+    );
+}
+
+/// The full router is 18 tools. Pinned so a router that silently loses a block
+/// (a `mod` line dropped, a `+ Self::x_router()` removed) fails here rather
+/// than by a client mysteriously not seeing a tool.
+#[test]
+fn the_full_tool_router_exposes_eighteen_tools() {
+    let tools = CartogServer::tool_router().list_all();
+    assert_eq!(
+        tools.len(),
+        18,
+        "expected 18 MCP tools, got {}: {:?}",
+        tools.len(),
+        tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>()
+    );
+    for expected in FEDERATED_TOOLS {
+        assert!(
+            tools.iter().any(|t| t.name == expected),
+            "{expected} must be routed"
+        );
+    }
 }

@@ -1,5 +1,6 @@
 //! Cross-cutting helpers shared by the command modules: DB open, token-budget
-//! output, and the "no result" diagnostics (`empty_index_hint`, `did_you_mean`).
+//! output, the declared-identity bridge (`declared_for`), and the "no result"
+//! diagnostics (`empty_index_hint`, `did_you_mean`).
 //!
 //! The spinner/progress plumbing lives in [`super::progress`]; this module holds
 //! the data-path helpers that every command body reaches for.
@@ -10,6 +11,58 @@ use anyhow::Result;
 use serde::Serialize;
 
 use cartog_db::{Database, DbError};
+
+/// The project's declared identity, resolved from `[project]` plus its README.
+///
+/// The one place the bin-side `ProjectConfig` meets the library-side
+/// `registry_hook`, which cannot import it. The read-only diagnostics
+/// (`doctor`'s advisory row, `config`'s resolved view) call this directly: they
+/// report what a *working* config would store and already refuse to run against
+/// a rejected one. Registry **writers** go through [`declared_update_for`],
+/// which is what distinguishes "no `[project]`" from "unknown `[project]`".
+pub(crate) fn declared_for(
+    project: Option<&crate::config::ProjectConfig>,
+    root: &Path,
+) -> cartog_registry::Declared {
+    crate::registry_hook::resolve_declared(
+        project.and_then(crate::config::ProjectConfig::name),
+        project.and_then(crate::config::ProjectConfig::description),
+        root,
+    )
+}
+
+/// What this run may learn about `[project]`.
+///
+/// An enum, not an `Option<&ProjectConfig>`: a rejected `.cartog.toml` collapses
+/// to a *default* config, which is indistinguishable from "no config file" at
+/// the type level. Sending the resulting empty `[project]` as a write wiped the
+/// stored declared name and swapped the description for the README fallback, so
+/// one parse error anywhere in the file erased what the project says it is.
+#[derive(Debug, Clone, Copy)]
+pub enum ProjectSource<'a> {
+    /// Config loaded, or no config file: resolve name + README fallback (Set).
+    Config(Option<&'a crate::config::ProjectConfig>),
+    /// A config file exists but was rejected: its `[project]` is unknown, so
+    /// the stored identity must be left alone (Keep).
+    Rejected,
+}
+
+/// The registry update a config-aware writer should send.
+///
+/// `Keep` is not "nothing to say" — it is the only correct answer when the
+/// config could not be read, since `Set` overwrites all three declared columns
+/// including with `NULL`.
+pub(crate) fn declared_update_for(
+    source: ProjectSource<'_>,
+    root: &Path,
+) -> cartog_registry::DeclaredUpdate {
+    match source {
+        ProjectSource::Config(project) => {
+            cartog_registry::DeclaredUpdate::Set(declared_for(project, root))
+        }
+        ProjectSource::Rejected => cartog_registry::DeclaredUpdate::Keep,
+    }
+}
 
 /// Open the DB for a **read** command without ever creating a `.cartog/`.
 ///
@@ -139,10 +192,123 @@ pub(crate) fn did_you_mean(db: &Database, name: &str) -> String {
     format!(" — did you mean: {}?", names.join(", "))
 }
 
+/// `skip_serializing_if` predicate for counters that are absent when zero.
+///
+/// A zero count is noise in `--json`: "nothing was elided" and "nothing was
+/// skipped" are the uninteresting default, and omitting the field keeps a
+/// consumer from having to special-case it.
+pub(crate) fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use cartog_core::{Symbol, SymbolKind};
+
+    /// A config declaring `[project]` name and/or description.
+    fn project(name: Option<&str>, description: Option<&str>) -> crate::config::ProjectConfig {
+        crate::config::ProjectConfig {
+            name: name.map(str::to_string),
+            description: description.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn the_declared_name_reaches_the_resolved_identity() {
+        // The bridge is the only place `[project] name` crosses into the
+        // registry types, so a dropped field here is invisible everywhere else.
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg = project(Some("svc-billing"), None);
+
+        let declared = declared_for(Some(&cfg), dir.path());
+
+        assert_eq!(declared.name.as_deref(), Some("svc-billing"));
+    }
+
+    #[test]
+    fn the_declared_description_reaches_the_resolved_identity_with_its_source() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg = project(None, Some("Invoices."));
+
+        let declared = declared_for(Some(&cfg), dir.path());
+
+        let d = declared.description.expect("a resolved description");
+        assert_eq!(d.text, "Invoices.");
+        assert_eq!(d.source, cartog_registry::DescriptionSource::Config);
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_trimmed_off_both_declared_values() {
+        // The accessors trim; the bridge must use them rather than the raw
+        // fields, or a padded TOML value renders with its padding.
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg = project(Some("  svc-billing  "), Some("  Invoices.  "));
+
+        let declared = declared_for(Some(&cfg), dir.path());
+
+        assert_eq!(declared.name.as_deref(), Some("svc-billing"));
+        assert_eq!(
+            declared.description.map(|d| d.text).as_deref(),
+            Some("Invoices.")
+        );
+    }
+
+    #[test]
+    fn no_project_section_resolves_from_the_readme_alone() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("README.md"), "Only the readme.\n").unwrap();
+
+        let declared = declared_for(None, dir.path());
+
+        assert_eq!(declared.name, None);
+        let d = declared.description.expect("the readme fallback");
+        assert_eq!(d.source, cartog_registry::DescriptionSource::Readme);
+    }
+
+    #[test]
+    fn a_rejected_config_keeps_the_stored_identity_rather_than_resolving_one() {
+        // A rejected config's `[project]` is unknown, not absent: resolving a
+        // README fallback here would overwrite the declared name and
+        // description a working config had stored.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("README.md"), "A readme paragraph.\n").unwrap();
+
+        let update = declared_update_for(ProjectSource::Rejected, dir.path());
+
+        assert_eq!(update, cartog_registry::DeclaredUpdate::Keep);
+    }
+
+    #[test]
+    fn a_loaded_config_resolves_a_set_update() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg = project(Some("svc-billing"), Some("Invoices."));
+
+        let update = declared_update_for(ProjectSource::Config(Some(&cfg)), dir.path());
+
+        let cartog_registry::DeclaredUpdate::Set(declared) = update else {
+            panic!("a loaded config must resolve a Set update");
+        };
+        assert_eq!(declared.name.as_deref(), Some("svc-billing"));
+    }
+
+    #[test]
+    fn an_absent_config_file_still_resolves_a_set_update_from_the_readme() {
+        // No config file at all is a *known* empty `[project]`, unlike a
+        // rejected one — the README fallback applies and must be written.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("README.md"), "A readme paragraph.\n").unwrap();
+
+        let update = declared_update_for(ProjectSource::Config(None), dir.path());
+
+        let cartog_registry::DeclaredUpdate::Set(declared) = update else {
+            panic!("an absent config must still resolve a Set update");
+        };
+        assert_eq!(
+            declared.description.map(|d| d.text).as_deref(),
+            Some("A readme paragraph.")
+        );
+    }
 
     fn db_with_symbol(name: &str) -> Database {
         use cartog_core::FileInfo;
