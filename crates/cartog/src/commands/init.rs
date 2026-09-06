@@ -27,6 +27,12 @@ const TOML_TEMPLATE: &str = r##"# .cartog.toml — project-level configuration f
 # Max 100 chars for name, 280 for description; both must be a single line.
 # With no description here, cartog falls back to the first paragraph of README.md.
 
+# [mcp]
+# What `cartog serve` exposes. `federated` adds the two cross-project tools
+# (cartog_list_projects, cartog_search_all), which show agents the paths and
+# descriptions of this machine's OTHER indexed projects. Off by default.
+# federated = false
+
 # [database]
 # path = ".cartog/db.sqlite"
 

@@ -70,7 +70,10 @@ Any command that accepts `--db` works this way — `search`, `outline`, `refs`, 
 
 ## From an agent (MCP)
 
-The `cartog_list_projects` tool returns the same rows. An agent asked about a different
+The `cartog_list_projects` tool returns the same rows, and `cartog_search_all` mirrors
+`search --all`. Both are **hidden by default**: enable them with `[mcp] federated = true` in the
+project's `.cartog.toml` (or `cartog serve --federated`) and restart the client — see
+[mcp-tools.md](../reference/mcp-tools.md#enabling-the-cross-project-tools). An agent asked about a different
 repository should call it, take the `db_path`, and shell out with `--db` rather than guessing
 paths or reading files. `current: true` marks the project the server is already serving — use
 the normal tools for that one.
@@ -144,8 +147,8 @@ directory its own registry, which defeats the purpose.
 
 - **No cross-project edges.** A call from one repository into another is not an edge; each
   index is independent. Ask each project separately.
-- **No searching every project at once.** One `--db` per command, by design: it keeps the
-  cost of a listing independent of how many projects you have.
+- **No merged ranking across projects.** `search --all` fans out and groups results per
+  project; there is no cross-project relevance score, and no `--all` for `rag search`.
 - **No description for a project that never wrote one.** Routing by intent depends on a
   `[project] description` or a README opening paragraph existing in the target repo. Without
   either, the signal falls back to name, languages, and size.

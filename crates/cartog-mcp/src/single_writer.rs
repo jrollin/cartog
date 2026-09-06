@@ -77,6 +77,11 @@ pub struct ServerOptions {
     /// watch crate must not re-derive this: a local syntax check is blind to the
     /// schema and credential validation the binary applies.
     pub config_usable: Option<watch::ConfigUsable>,
+    /// Expose the two cross-project tools (`cartog_list_projects`,
+    /// `cartog_search_all`). Off by default: they surface other repositories'
+    /// paths and README text into this session. Set from `--federated` or
+    /// `[mcp] federated = true`.
+    pub federated: bool,
 }
 
 /// Outcome of trying to claim the `serve` lock at MCP startup.
@@ -264,18 +269,22 @@ pub async fn run_server(
         let db_path = db_path.to_path_buf();
         let rag_config = rag_config.clone();
         let filter = filter.clone();
-        tokio::task::spawn_blocking(move || match role {
-            Role::Primary => CartogServer::new(
-                &db_path,
-                rag_config,
-                redact,
-                lsp_overrides,
-                filter,
-                allow_create,
-            ),
-            Role::ReadOnly => {
-                CartogServer::new_read_only(&db_path, rag_config, redact, lsp_overrides, filter)
-            }
+        let federated = opts.federated;
+        tokio::task::spawn_blocking(move || {
+            let server = match role {
+                Role::Primary => CartogServer::new(
+                    &db_path,
+                    rag_config,
+                    redact,
+                    lsp_overrides,
+                    filter,
+                    allow_create,
+                ),
+                Role::ReadOnly => {
+                    CartogServer::new_read_only(&db_path, rag_config, redact, lsp_overrides, filter)
+                }
+            };
+            server.map(|s| s.with_federated(federated))
         })
         .await
         .map_err(|e| anyhow::anyhow!("server construction task panicked: {e}"))??

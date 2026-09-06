@@ -531,8 +531,8 @@ import { withBase } from "../lib/url";
         </div>
         <div class="why-card" data-reveal style="--reveal-delay: 0.08s;">
           <div class="why-number">02</div>
-          <h3>18 MCP tools</h3>
-          <p><code>cartog serve</code> exposes <code>cartog_map</code>, <code>cartog_search</code>, <code>cartog_refs</code>, <code>cartog_impact</code>, <code>cartog_rag_search</code>, and 12 more. Each tool description tells the agent when (and when not) to use it.</p>
+          <h3>16 MCP tools</h3>
+          <p><code>cartog serve</code> exposes <code>cartog_map</code>, <code>cartog_search</code>, <code>cartog_refs</code>, <code>cartog_impact</code>, <code>cartog_rag_search</code>, and 11 more — plus 2 opt-in cross-project tools. Each tool description tells the agent when (and when not) to use it.</p>
         </div>
         <div class="why-card" data-reveal style="--reveal-delay: 0.16s;">
           <div class="why-number">03</div>
@@ -569,7 +569,7 @@ import { withBase } from "../lib/url";
             <tr>
               <td>MCP server (manual)</td>
               <td><code>cartog serve --watch</code></td>
-              <td>18 tools over stdio, live index + auto semantic embedding</td>
+              <td>16 tools over stdio, live index + auto semantic embedding</td>
             </tr>
             <tr>
               <td>Agent skill</td>
@@ -596,7 +596,7 @@ import { withBase } from "../lib/url";
     <div class="container">
       <div class="section-label">MCP Server</div>
       <h2 class="section-heading">A code graph your agent can call.</h2>
-      <p class="section-subtitle"><code>cartog serve</code> speaks the Model Context Protocol over stdio: 18 tools any MCP client launches as a subprocess. No HTTP port, no daemon, no API keys. The graph stays on your machine.</p>
+      <p class="section-subtitle"><code>cartog serve</code> speaks the Model Context Protocol over stdio: 16 tools any MCP client launches as a subprocess. No HTTP port, no daemon, no API keys. The graph stays on your machine.</p>
 
       <div class="terminal">
         <div class="terminal-header">
@@ -612,7 +612,7 @@ import { withBase } from "../lib/url";
 <span class="highlight">+</span> <span class="output">claude-code (project, .mcp.json): created</span>
 
 <span class="comment"># the editor now spawns this on demand:</span>
-<span class="prompt">$</span> <span class="cmd">cartog serve --watch</span>   <span class="comment"># 18 tools + live re-index</span></div>
+<span class="prompt">$</span> <span class="cmd">cartog serve --watch</span>   <span class="comment"># 16 tools + live re-index</span></div>
       </div>
 
       <div class="features-grid" style="margin-top: 56px;">
@@ -621,8 +621,8 @@ import { withBase } from "../lib/url";
           <p><code>cartog ide</code> is the only verb that writes MCP configs. It merges <code>cartog serve</code> into Claude Code, Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, Claude Desktop, Antigravity, Kiro, and Hermes Agent. Existing servers preserved, dry-run-able.</p>
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.08s;">
-          <h3><span class="feature-icon">🧰</span> 18 tools, typed output</h3>
-          <p>14 read tools (<code>map</code>, <code>search</code>, <code>refs</code>, <code>impact</code>, <code>rag_search</code>, …) ship <code>readOnlyHint</code> and declare an <code>outputSchema</code>, so clients skip approval prompts and get validated <code>structuredContent</code>. 2 write tools build the index.</p>
+          <h3><span class="feature-icon">🧰</span> 16 tools, typed output</h3>
+          <p>13 read tools (<code>map</code>, <code>search</code>, <code>refs</code>, <code>impact</code>, <code>rag_search</code>, …) ship <code>readOnlyHint</code> and declare an <code>outputSchema</code>, so clients skip approval prompts and get validated <code>structuredContent</code>. 2 write tools build the index.</p>
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.16s;">
           <h3><span class="feature-icon">📡</span> Live + progress-aware</h3>
@@ -702,7 +702,7 @@ import { withBase } from "../lib/url";
           <span class="article-num">05</span>
           <div class="article-body">
             <h3><a href="https://www.julienrollin.com/en/posts/cartog-mcp-server">Exposing a code graph as an MCP server</a></h3>
-            <p>Wiring cartog's 18 tools into the Model Context Protocol so AI agents query structured graph results instead of flooding context with raw files.</p>
+            <p>Wiring cartog's MCP tools into the Model Context Protocol so AI agents query structured graph results instead of flooding context with raw files.</p>
             <div class="article-links">
               <a href="https://www.julienrollin.com/en/posts/cartog-mcp-server">🇬🇧 Read article</a>
               <a href="https://www.julienrollin.com/posts/cartog-mcp-server">🇫🇷 Lire l'article</a>

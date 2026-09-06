@@ -116,8 +116,8 @@ All examples below use CLI syntax. MCP tool names and parameters:
 | `cartog context "<task>"` | `cartog_context` | `task`, `tokens?` |
 | `cartog changes` | `cartog_changes` | `commits?`, `kind?` |
 | `cartog stats [--savings]` | `cartog_stats` | — |
-| `cartog projects list` | `cartog_list_projects` | — |
-| `cartog search <q> --all` | `cartog_search_all` | Other projects only; grouped per project |
+| `cartog projects list` | `cartog_list_projects` | Opt-in: hidden unless `[mcp] federated = true` / `serve --federated` |
+| `cartog search <q> --all` | `cartog_search_all` | Opt-in (same switch); other projects only, grouped per project |
 | `cartog projects add/scan` | — | CLI only (registry maintenance) |
 | `cartog projects forget/prune` | — (CLI only) | — |
 | `cartog savings` | — (CLI only — alias for `cartog stats --savings`) | — |
@@ -383,7 +383,9 @@ cartog search CreateShipment --all                     # every eligible project
 cartog search Shift --all --under ~/work --lang ruby   # narrow the fan-out
 ```
 
-Results are grouped per project and ranked **within** each one — cross-project relevance is not
+If `cartog_search_all` / `cartog_list_projects` are not in your tool list, the project has not
+opted in to the cross-project MCP tools; use the CLI form above, or suggest `[mcp] federated =
+true` in `.cartog.toml`. Results are grouped per project and ranked **within** each one — cross-project relevance is not
 comparable, so there is no merged ranking. Take a group's `--db` path to drill in. `--limit`
 applies per project; `--max-projects` (default 10) bounds how many databases are opened. There
 is no `--all` for `rag search`: no federated semantic search exists.

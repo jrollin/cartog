@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::config::CartogConfig;
+use crate::config::{CartogConfig, McpConfig};
 
 /// Display the current configuration with default-value indicators.
 pub fn cmd_config(
@@ -60,6 +60,10 @@ pub fn cmd_config(
         config_file: config_path.map(|p| p.to_string_lossy().into_owned()),
         db_path: db_path.to_string_lossy().into_owned(),
         project: resolve_project_display(project, config_path),
+        mcp: McpDisplay {
+            federated: config.mcp.as_ref().is_some_and(McpConfig::federated),
+            is_default: config.mcp.as_ref().and_then(|m| m.federated).is_none(),
+        },
         embedding: EmbeddingDisplay {
             provider: ValueDisplay {
                 value: embed.map_or(DEFAULT_EMBEDDING_PROVIDER.into(), |e| {
@@ -223,6 +227,16 @@ fn format_config_human(d: &ConfigDisplay) -> String {
     )
     .unwrap();
 
+    writeln!(out, "\n[mcp]").unwrap();
+    let federated_note = if d.mcp.is_default { " (default)" } else { "" };
+    writeln!(
+        out,
+        "  federated:         {}{federated_note}  # cross-project MCP tools; \
+         `cartog serve --federated` also enables them",
+        d.mcp.federated
+    )
+    .unwrap();
+
     writeln!(out, "\n[embedding]").unwrap();
     writeln!(
         out,
@@ -321,10 +335,24 @@ struct ConfigDisplay {
     config_file: Option<String>,
     db_path: String,
     project: ProjectDisplay,
+    mcp: McpDisplay,
     embedding: EmbeddingDisplay,
     reranker: RerankerDisplay,
     rag: RagDisplay,
     security: SecurityDisplay,
+}
+
+/// `[mcp]` state. Shown because `federated` is a privacy switch with two
+/// independent sources (the flag and the config key), and a rejected or
+/// salvaged config silently resolves it to `false` — so "why are the
+/// cross-project tools missing?" needs an answer the CLI can give.
+#[derive(Serialize)]
+struct McpDisplay {
+    /// Whether `[mcp] federated` is set in the config. The `--federated` flag
+    /// can still enable the tools for one `serve` launch; this is the config
+    /// half only, which is the half a user cannot otherwise inspect.
+    federated: bool,
+    is_default: bool,
 }
 
 #[derive(Serialize)]
@@ -401,6 +429,10 @@ mod tests {
                 name_source: "directory",
                 description: None,
                 description_source: None,
+            },
+            mcp: McpDisplay {
+                federated: false,
+                is_default: true,
             },
             embedding: EmbeddingDisplay {
                 provider: ValueDisplay {
@@ -499,6 +531,38 @@ mod tests {
         assert!(out.contains("[project]"));
         assert!(out.contains("name:              myrepo (default: directory name)"));
         assert!(out.contains("description:       (none)"));
+    }
+
+    /// A user whose cross-project tools are missing has no other way to tell
+    /// whether the config half resolved on: a rejected or salvaged config
+    /// silently yields `false`.
+    #[test]
+    fn mcp_section_shows_federated_and_marks_the_default() {
+        let d = default_config_display();
+        let out = format_config_human(&d);
+        assert!(out.contains("[mcp]"), "output has an [mcp] section: {out}");
+        assert!(
+            out.contains("federated:         false (default)"),
+            "an unset federated is shown as a default: {out}"
+        );
+    }
+
+    #[test]
+    fn mcp_federated_set_in_config_is_not_marked_default() {
+        let mut d = default_config_display();
+        d.mcp = McpDisplay {
+            federated: true,
+            is_default: false,
+        };
+        let out = format_config_human(&d);
+        assert!(
+            out.contains("federated:         true"),
+            "a configured federated is shown: {out}"
+        );
+        assert!(
+            !out.contains("federated:         true (default)"),
+            "an explicitly-set federated must not be labelled default: {out}"
+        );
     }
 
     #[test]

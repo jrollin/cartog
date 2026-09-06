@@ -269,7 +269,7 @@ with `cartog rag index --force`.
 This was the pre-Phase-2 symptom of two cartog processes racing on the
 embedding-dimension migration. As of v0.17 cartog uses single-writer
 election: the first `cartog serve` is the primary, the second attaches
-read-only and exposes 16 of 18 MCP tools (`cartog_index` and
+read-only and exposes every MCP tool but two (`cartog_index` and
 `cartog_rag_index` return a clear refusal pointing at the primary). If the
 primary process dies, the secondary takes over within ~10s.
 
@@ -302,6 +302,24 @@ leaves the file behind. The next `cartog serve` / `cartog watch`
 startup runs a `sweep_stale_locks` pass that reaps every dead `.pid`
 file in the state dir (not just the slot being claimed), so leftovers
 from crashed peers disappear automatically — no manual action needed.
+
+### `cartog_list_projects` / `cartog_search_all` are missing, or return `tool not found`
+
+Expected by default. The two cross-project tools are hidden unless the project
+opts in, because they surface the paths and README text of this machine's other
+indexed projects into the agent session. Enable them with `[mcp] federated =
+true` in `.cartog.toml` (the only route for the Claude Code plugin, whose
+`serve` arguments are fixed) or launch with `cartog serve --federated`, then
+restart the MCP client so it re-reads `tools/list`. The CLI `cartog search
+--all` works regardless. See
+[reference/mcp-tools.md](reference/mcp-tools.md#enabling-the-cross-project-tools).
+
+Run `cartog config` to see the resolved value. Two cases resolve it to `false`
+without failing: a **typo** in the key (`federatd = true`) is salvaged with a
+warning, and a config **rejected** for an unrelated validation error elsewhere
+in the file falls back to defaults for every section. Under an MCP client both
+warnings go to the server's stderr log, not the chat, so `cartog config` in a
+terminal is the reliable check.
 
 ### MCP stderr is full of `[ERROR]` lines that look like info-level messages
 

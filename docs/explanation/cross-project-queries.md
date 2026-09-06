@@ -45,7 +45,7 @@ Step 5 does not inherit these (it touches the indexer, not cross-DB reads).
 ## Step 4 — federated exact-symbol search
 
 > **Status: implemented.** `cartog search --all` (CLI) and `cartog_search_all`
-> (the 18th MCP tool). Resolved as designed below: fan out to each project's
+> (the 18th MCP tool, hidden unless `[mcp] federated = true` / `serve --federated`). Resolved as designed below: fan out to each project's
 > database read-only, group results per project, no merged ranking and no
 > merged database. [Open question 1](#open-questions) was settled by taking the
 > grouped presentation, which needs no ranking benchmark. Filters are

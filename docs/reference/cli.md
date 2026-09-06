@@ -509,7 +509,7 @@ With `--json`, every lifecycle event is emitted as one NDJSON record on stdout (
 
 Press Ctrl+C to stop. Pending RAG embeddings are flushed before exit.
 
-### `cartog serve [--watch] [--rag]`
+### `cartog serve [--watch] [--rag] [--federated]`
 
 Start cartog as an MCP server over stdio. See [mcp-tools.md](mcp-tools.md) for client configuration and tool reference.
 
@@ -517,7 +517,10 @@ Start cartog as an MCP server over stdio. See [mcp-tools.md](mcp-tools.md) for c
 cartog serve                  # MCP server only
 cartog serve --watch          # MCP server + watcher; auto-embeds if the repo has embeddings
 cartog serve --watch --rag    # force auto-embed even on a not-yet-embedded repo
+cartog serve --federated      # also expose the 2 cross-project tools (off by default)
 ```
+
+`--federated` exposes `cartog_list_projects` and `cartog_search_all`, the two tools that surface the paths and descriptions of this machine's *other* indexed projects. Off by default; `[mcp] federated = true` in `.cartog.toml` enables them for every client serving the project, and either source is sufficient. See [mcp-tools.md](mcp-tools.md#enabling-the-cross-project-tools).
 
 When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit, and (when the repo already has embeddings) refreshes RAG embeddings on a deferred timer — no `--rag` needed. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
 
@@ -527,9 +530,9 @@ When `--watch` is passed, a background file watcher keeps the code graph up to d
 
 Opening two Claude Code windows on the same project (or running `cartog serve` in a terminal while a Claude Code window has its own MCP child) is supported via **single-writer election**:
 
-- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes all 18 MCP tools. The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
-- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose 16 of 18 tools. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) and `cartog_update` (which arms a machine-level deferred update, not a DB write) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
-- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. All 18 tools become available on what was the secondary.
+- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes every MCP tool (16, or 18 with `--federated`). The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
+- Subsequent instances see the held lock, attach **read-only** (no migrations), and expose every tool but the two indexing ones. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) and `cartog_update` (which arms a machine-level deferred update, not a DB write) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
+- If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. The two indexing tools become available on what was the secondary; its tool count is otherwise unchanged.
 
 Escape hatches:
 
@@ -621,7 +624,7 @@ cartog config            # human-readable
 cartog config --json     # JSON for scripts
 ```
 
-Useful for verifying `[rag]` tuning, watch debounce, and provider selection without running a full command. Also shows the resolved `[project]` name and description (or `(none)` when neither `.cartog.toml` nor `README.md` supplies one), each labeled with its source. `cartog config` bails when the config was rejected rather than showing defaults, so it never misreports a broken `[project]` section as an absent one — see [config.md § Project identity](config.md#project-identity-project).
+Useful for verifying `[rag]` tuning, watch debounce, and provider selection without running a full command. Also shows `[mcp] federated` (so you can confirm from the CLI whether the cross-project tools are enabled for this project, and whether the value came from config or the default), and the resolved `[project]` name and description (or `(none)` when neither `.cartog.toml` nor `README.md` supplies one), each labeled with its source. `cartog config` bails when the config was rejected rather than showing defaults, so it never misreports a broken `[project]` section as an absent one — see [config.md § Project identity](config.md#project-identity-project).
 
 ### `cartog completions <shell>`
 

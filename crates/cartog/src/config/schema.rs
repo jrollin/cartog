@@ -24,6 +24,32 @@ pub struct CartogConfig {
     pub index: Option<IndexConfig>,
     /// Identity metadata for the project registry and cross-project routing.
     pub project: Option<ProjectConfig>,
+    /// MCP server settings: whether the cross-project tools are exposed.
+    pub mcp: Option<McpConfig>,
+}
+
+/// `[mcp]` — what the MCP server (`cartog serve`) exposes.
+///
+/// ```toml
+/// [mcp]
+/// federated = true
+/// ```
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpConfig {
+    /// Expose `cartog_list_projects` and `cartog_search_all`. Default `false`:
+    /// they read the paths and README text of this machine's other indexed
+    /// projects into the session, so a project opts in. `cartog serve
+    /// --federated` also enables them.
+    pub federated: Option<bool>,
+}
+
+impl McpConfig {
+    /// Whether the cross-project tools are exposed (default: false).
+    #[must_use]
+    pub fn federated(&self) -> bool {
+        self.federated.unwrap_or(false)
+    }
 }
 
 /// `[project]` — identity metadata for the project registry and cross-project

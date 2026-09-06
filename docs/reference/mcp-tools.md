@@ -4,7 +4,7 @@
 
 ## Overview
 
-`cartog serve` runs cartog as an MCP server over stdio, exposing 18 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 15 query tools are read-only (including `cartog_trace` for call paths, `cartog_context` for one-shot task bundles, `cartog_list_projects` for discovering the other indexed projects on this machine, and `cartog_search_all` for searching them); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones.
+`cartog serve` runs cartog as an MCP server over stdio, exposing 16 tools by default for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 13 query tools are read-only (including `cartog_trace` for call paths and `cartog_context` for one-shot task bundles); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones. Two more read-only tools, `cartog_list_projects` and `cartog_search_all`, appear only when the cross-project tools are enabled (`[mcp] federated = true` in `.cartog.toml`, or `cartog serve --federated`): they surface the paths and descriptions of this machine's *other* indexed projects, so a project opts in. See [Enabling the cross-project tools](#enabling-the-cross-project-tools).
 
 When `cartog serve --watch` is running and a file changes (or RAG embeddings are still catching up — including symbols whose body was just edited and not yet re-embedded), affected read-tool responses are prefixed with a `⚠️` staleness banner so the agent knows the answer may be momentarily behind the working tree. Read-only secondaries and `cartog serve` without `--watch` never show the banner.
 
@@ -52,6 +52,30 @@ Read tools (everything except `cartog_index`, `cartog_rag_index`, and `cartog_up
 carry an `outputSchema` and return `structuredContent`. All tool responses also include a JSON text block.
 
 **Path restriction**: `cartog_index` and `cartog_rag_index` reject paths outside the project directory (CWD subtree). Agents cannot index arbitrary filesystem locations.
+
+### Enabling the cross-project tools
+
+`cartog_list_projects` and `cartog_search_all` are **hidden by default**: a call
+to either returns rmcp's `tool not found`, and neither appears in `tools/list` or
+in the server instructions. They are the only tools that read *other*
+repositories' paths and README text into a session, so exposing them is a
+per-project decision rather than a side effect of installing cartog.
+
+Turn them on with either source (each is sufficient on its own):
+
+```toml
+# .cartog.toml — for every client that serves this project
+[mcp]
+federated = true
+```
+
+```bash
+cartog serve --federated        # for one launch / one client config
+```
+
+The Claude Code plugin cannot change its `serve` arguments, so plugin users opt
+in through `.cartog.toml`. `cartog search --all` on the CLI is unaffected: it is
+explicit per invocation. See [config.md](config.md#cross-project-mcp-tools-mcp).
 
 ### Federated symbol search (`cartog_search_all`)
 

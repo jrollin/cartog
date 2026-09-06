@@ -241,6 +241,7 @@ pub(crate) const KNOWN_CONFIG_SECTIONS: &[&str] = &[
     "lsp",
     "index",
     "project",
+    "mcp",
 ];
 
 /// Collect top-level keys that are not a recognized config section.

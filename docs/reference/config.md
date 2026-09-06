@@ -97,6 +97,27 @@ description untouched. A **rejected** config also leaves them untouched: its
 stored rather than replacing it with the README fallback. `cartog config` and `cartog doctor` also read it — see
 [cli.md](cli.md#cartog-config) and [cli.md](cli.md#cartog-doctor).
 
+## Cross-project MCP tools (`[mcp]`)
+
+A 10th top-level section. It controls what `cartog serve` exposes; nothing here
+changes how the repo is indexed or queried.
+
+```toml
+[mcp]
+federated = true   # expose cartog_list_projects + cartog_search_all (default: false)
+```
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `federated` | `false` | Expose the two cross-project MCP tools. They surface the paths and descriptions of this machine's *other* indexed projects into the agent session, so a project opts in. |
+
+`cartog serve --federated` turns them on for one launch; either source is
+sufficient, and an explicit `false` here does not veto the flag. There is no
+environment variable: this is a per-project privacy decision, not a per-machine
+knob. The CLI's `cartog search --all` is unaffected — it is explicit per
+invocation. An unknown key inside `[mcp]` is salvaged like any other section.
+See [mcp-tools.md](mcp-tools.md#enabling-the-cross-project-tools).
+
 ## Index-creation consent gate
 
 cartog will not create a `.cartog/` index for a project on its own. A fresh,

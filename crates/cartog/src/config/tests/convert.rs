@@ -373,3 +373,35 @@ fn auto_embed_none_when_no_signal_defers_to_watcher() {
     // Unparseable env falls through to the next tier.
     assert_eq!(resolve_auto_embed_with(Some("maybe"), None, false), None);
 }
+
+// ── `resolve_federated` ─────────────────────────────────────────────────────
+
+fn config_with_federated(value: Option<bool>) -> CartogConfig {
+    CartogConfig {
+        mcp: Some(McpConfig { federated: value }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn federated_is_off_with_no_flag_and_no_config() {
+    assert!(!resolve_federated(false, &CartogConfig::default()));
+    assert!(!resolve_federated(false, &config_with_federated(None)));
+}
+
+#[test]
+fn federated_flag_turns_it_on() {
+    assert!(resolve_federated(true, &CartogConfig::default()));
+}
+
+#[test]
+fn federated_config_turns_it_on_without_the_flag() {
+    assert!(resolve_federated(false, &config_with_federated(Some(true))));
+}
+
+/// Either source is sufficient; an explicit `false` in config does not veto the
+/// flag the user typed for this launch.
+#[test]
+fn federated_flag_wins_over_an_explicit_config_false() {
+    assert!(resolve_federated(true, &config_with_federated(Some(false))));
+}

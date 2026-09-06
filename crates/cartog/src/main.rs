@@ -145,9 +145,9 @@ fn main() -> Result<()> {
     if config_rejected && indexes_with_config(&cli.command) {
         if let Some(p) = &config_path {
             eprintln!(
-                "cartog: note: {} was rejected; indexing with defaults \
-                 ([database] path, [index] exclude, [security], and [lsp] \
-                 settings ignored).",
+                "cartog: note: {} was rejected; running with defaults \
+                 ([database] path, [index] exclude, [security], [lsp], and \
+                 [mcp] federated settings ignored).",
                 p.display()
             );
         }
@@ -479,7 +479,11 @@ fn main() -> Result<()> {
             dry_run,
             no_watch,
         } => commands::ide::cmd_install(clients, scope, dry_run, no_watch, cli.json),
-        Command::Serve { watch, rag } => {
+        Command::Serve {
+            watch,
+            rag,
+            federated,
+        } => {
             let rag_override = config::resolve_auto_embed(rag, &cartog_config);
             // Auto-embed only runs via the watcher; warn whenever it was requested
             // (flag, [embedding] auto_embed, or CARTOG_WATCH_RAG) without --watch.
@@ -506,6 +510,7 @@ fn main() -> Result<()> {
                 config_usable: Some(std::sync::Arc::new(|path: &Path| {
                     config::read_config(path).is_some()
                 })),
+                federated: config::resolve_federated(federated, &cartog_config),
             };
             runtime.block_on(mcp::run_server(
                 &db_path,

@@ -10,7 +10,7 @@ Exposes cartog's graph queries, indexing, and semantic search as MCP tools over 
 
 ### MCP tools
 
-16 tools are exposed via rmcp's `#[tool_router]` macro with auto-generated JSON Schema parameters. Each tool also carries `annotations` (a `title` and `readOnlyHint`: `true` for the 13 query tools, `false` for the two index tools and `cartog_update`), and the read tools declare an `outputSchema`:
+16 tools are exposed by default via rmcp's `#[tool_router]` macro with auto-generated JSON Schema parameters (18 with `CartogServer::with_federated(true)`, which adds the two cross-project tools `cartog_list_projects` and `cartog_search_all`; see `ServerOptions::federated`). Each tool also carries `annotations` (a `title` and `readOnlyHint`: `true` for the 13 query tools, `false` for the two index tools and `cartog_update`), and the read tools declare an `outputSchema`:
 
 | Tool | Description |
 |------|-------------|

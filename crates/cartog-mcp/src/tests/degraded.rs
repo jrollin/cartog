@@ -6,7 +6,7 @@
 //! message, and reports the degraded state in `cartog_stats`. Read tools work
 //! against the empty DB and naturally return empty results.
 
-use super::test_provider;
+use super::{test_provider, RegistryEnv};
 use crate::*;
 
 fn degraded_server() -> CartogServer {
@@ -198,37 +198,6 @@ fn production_reranker_wiring_is_lazy_at_construction() {
         "lazy_reranker must not build until first use — this is the wiring the \
          real server uses, unlike the test harness's no_reranker()"
     );
-}
-
-/// RAII override of `CARTOG_REGISTRY`, restoring the previous value on drop.
-///
-/// Mandatory for every test here: the registry is **user-global**, so a test
-/// that sets the var without restoring it — or that runs in parallel with one
-/// that does — reads and writes the developer's own registry. `#[serial]` on
-/// each test closes the parallel half; this guard closes the leak half,
-/// including on panic.
-struct RegistryEnv(Option<std::ffi::OsString>);
-
-impl RegistryEnv {
-    fn set(value: &std::ffi::OsStr) -> Self {
-        let prev = std::env::var_os(cartog_registry::REGISTRY_ENV);
-        std::env::set_var(cartog_registry::REGISTRY_ENV, value);
-        Self(prev)
-    }
-
-    /// Point at a fresh registry inside `dir`.
-    fn isolated(dir: &std::path::Path) -> Self {
-        Self::set(dir.join("projects.sqlite").as_os_str())
-    }
-}
-
-impl Drop for RegistryEnv {
-    fn drop(&mut self) {
-        match self.0.take() {
-            Some(v) => std::env::set_var(cartog_registry::REGISTRY_ENV, v),
-            None => std::env::remove_var(cartog_registry::REGISTRY_ENV),
-        }
-    }
 }
 
 /// `cartog_list_projects` must work on a degraded server. A degraded server has
@@ -446,11 +415,11 @@ fn a_large_project_list_is_trimmed_and_says_so() {
     );
 }
 
-/// The MCP surface is 18 tools. Pinned so a router that silently loses a block
+/// The full router is 18 tools. Pinned so a router that silently loses a block
 /// (a `mod` line dropped, a `+ Self::x_router()` removed) fails here rather
 /// than by a client mysteriously not seeing a tool.
 #[test]
-fn the_tool_router_exposes_eighteen_tools() {
+fn the_full_tool_router_exposes_eighteen_tools() {
     let tools = CartogServer::tool_router().list_all();
     assert_eq!(
         tools.len(),
@@ -459,7 +428,7 @@ fn the_tool_router_exposes_eighteen_tools() {
         tools.len(),
         tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>()
     );
-    for expected in ["cartog_list_projects", "cartog_search_all"] {
+    for expected in FEDERATED_TOOLS {
         assert!(
             tools.iter().any(|t| t.name == expected),
             "{expected} must be routed"

@@ -29,6 +29,16 @@ pub(crate) fn resolve_auto_embed_with(
     cfg.or_else(|| cli_rag.then_some(true))
 }
 
+/// Whether `cartog serve` exposes the cross-project MCP tools.
+///
+/// Either source turns them on: the `--federated` flag or `[mcp] federated =
+/// true`. No env var — this is a per-project privacy decision, not a
+/// per-machine knob.
+#[must_use]
+pub fn resolve_federated(cli_federated: bool, config: &CartogConfig) -> bool {
+    cli_federated || config.mcp.as_ref().is_some_and(McpConfig::federated)
+}
+
 /// Parse a permissive boolean env value; `None` if unrecognized.
 fn parse_bool_flag(s: &str) -> Option<bool> {
     match s.trim().to_ascii_lowercase().as_str() {

@@ -460,3 +460,51 @@ fn project_description_cap_is_280_chars() {
     assert_eq!(PROJECT_DESCRIPTION_MAX_CHARS, 280);
     assert_eq!(PROJECT_NAME_MAX_CHARS, 100);
 }
+
+// ── `[mcp]` ─────────────────────────────────────────────────────────────────
+
+/// Off unless a project says otherwise: the two cross-project tools read other
+/// repositories' paths and README text into the session.
+#[test]
+fn mcp_federated_defaults_false_when_absent() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    fs::write(&cfg_path, "[mcp]\n").unwrap();
+
+    let cfg = read_config(&cfg_path).expect("bare [mcp] must parse");
+
+    assert!(!cfg.mcp.expect("section present").federated());
+}
+
+#[test]
+fn mcp_federated_true_is_read_from_config() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    fs::write(&cfg_path, "[mcp]\nfederated = true\n").unwrap();
+
+    let cfg = read_config(&cfg_path).expect("[mcp] must parse");
+
+    assert!(cfg.mcp.expect("section present").federated());
+}
+
+/// A `federatd` typo is **salvaged**, not fatal: the file still loads and every
+/// other section still applies. The cost is that the tools stay hidden, which
+/// is the safe direction — but it is silent in the load result, so the warning
+/// `read_config` prints is the only signal the user gets.
+///
+/// Asserted through `read_config`, not the raw parser: production catches the
+/// `deny_unknown_fields` error and re-parses, so a parser-level assertion would
+/// pin an error string that never reaches a user.
+#[test]
+fn unknown_key_in_mcp_is_salvaged_and_leaves_the_tools_hidden() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg_path = dir.path().join(".cartog.toml");
+    fs::write(&cfg_path, "[mcp]\nfederatd = true\n").unwrap();
+
+    let cfg = read_config(&cfg_path).expect("a stray [mcp] key must salvage, not reject");
+
+    assert!(
+        !cfg.mcp.unwrap_or_default().federated(),
+        "a typo'd key must not enable the cross-project tools"
+    );
+}

@@ -342,7 +342,7 @@ only data available for a project the current binary cannot open.
 
 ## Step 2 — `cartog_list_projects`
 
-One read-only MCP tool, exposed from the **existing per-project server**. No
+One read-only MCP tool, exposed from the **existing per-project server** — but **opt-in**: hidden unless the project sets `[mcp] federated = true` (or `serve --federated`), because it surfaces other repositories' paths and README text into the session. No
 change to the serve topology — but note this is not free: it requires P1, since
 `cartog-mcp` cannot reach the bin crate's `state` module where the state-dir
 and slot helpers live today.
@@ -1460,7 +1460,7 @@ Mandatory in the same change, per the docs + site-sync rule:
 - `crates/cartog/src/config/load.rs` — `KNOWN_CONFIG_SECTIONS` gains `"project"`
 - `.cartog.toml.example` at the repo root **and** `init.rs` `TOML_TEMPLATE` —
   both, or the template-parity test fails
-- `docs/reference/mcp-tools.md` — `cartog_list_projects` (16 → 18 tools)
+- `docs/reference/mcp-tools.md` — `cartog_list_projects` (the opt-in 17th tool)
 - `docs/explanation/project-registry.md` — this document
 - `docs/explanation/README.md` **and** `docs/README.md` — both indexes list every
   explanation doc; the convention requires keeping them in sync when adding one

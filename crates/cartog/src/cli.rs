@@ -479,6 +479,15 @@ pub enum Command {
         /// otherwise).
         #[arg(long)]
         rag: bool,
+
+        /// Expose the cross-project tools (`cartog_list_projects`, `cartog_search_all`)
+        ///
+        /// Off by default: they surface the paths and README text of this
+        /// machine's other indexed projects into the session. `[mcp] federated
+        /// = true` in `.cartog.toml` enables them for a project; either source
+        /// turns them on.
+        #[arg(long)]
+        federated: bool,
     },
 
     /// Semantic code search (RAG pipeline)

@@ -19,6 +19,14 @@
 # name        = "my-project"        # display name; defaults to the directory name
 # description = "One line describing what this project is for."
 
+# ── MCP server ───────────────────────────────────────────────────────────────
+# `federated` adds the two cross-project tools (cartog_list_projects,
+# cartog_search_all), which show agents the paths and descriptions of this
+# machine's OTHER indexed projects. Off by default; `cartog serve --federated`
+# also turns them on for one launch.
+[mcp]
+# federated = false
+
 [database]
 # Path to the SQLite graph file. `~` is expanded to your home directory.
 # path = "~/.cache/cartog/myproject.db"
