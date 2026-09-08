@@ -487,6 +487,31 @@ mod tests {
             (root, db)
         }
 
+        /// A textually different spelling of `db` that resolves to the same
+        /// file, and the same slot, on every platform.
+        ///
+        /// A `.` component does that portably. The earlier spelling swapped a
+        /// macOS-only `/private/var` prefix, so on Linux the drift tests
+        /// returned before their first assertion and covered nothing.
+        fn drifted_spelling(&self, root: &Path, db: &Path) -> std::path::PathBuf {
+            let drifted = root.join(".").join("db.sqlite");
+            // Compare the strings, not the paths: `PathBuf` equality treats a
+            // `.` component as insignificant, so `assert_ne!` on the values
+            // fails even though the stored bytes differ — and the bytes are
+            // what a drifted registry row actually holds.
+            assert_ne!(
+                drifted.to_string_lossy(),
+                db.to_string_lossy(),
+                "the stored spelling must differ textually"
+            );
+            assert_eq!(
+                slot_for_db("serve", &drifted),
+                slot_for_db("serve", db),
+                "both spellings must resolve to one slot"
+            );
+            drifted
+        }
+
         /// Drive the real fallible core, so the env-dependent wrapper is the
         /// only thing these tests do not exercise.
         fn record(&self, facts: &ProjectFacts) {
@@ -720,17 +745,12 @@ mod tests {
         // `db_path` byte-identical, so it cannot catch this.
         let f = WriteFixture::new();
         let (root, db) = f.project("a");
-        let canonical = db.to_string_lossy().into_owned();
-        let non_canonical = canonical.replace("/private/var/", "/var/");
-        if non_canonical == canonical {
-            // Not macOS, or no such prefix: the case under test cannot arise.
-            return;
-        }
+        let non_canonical = f.drifted_spelling(&root, &db);
         {
             let conn = crate::open::open_read_write(&f.registry).unwrap();
             let stale = ProjectFacts {
                 // Bypass `absolutize` to reproduce what a DB-absent write stored.
-                db_path: std::path::PathBuf::from(&non_canonical),
+                db_path: non_canonical.clone(),
                 ..counted(&db, &root, 8134)
             };
             upsert(&conn, "serve-stale0000000000", &stale, Some("stale-fp")).unwrap();
@@ -786,17 +806,12 @@ mod tests {
     fn a_collision_merges_the_drifted_row_rather_than_dropping_its_counts() {
         let f = WriteFixture::new();
         let (root, db) = f.project("a");
-        let canonical = db.to_string_lossy().into_owned();
-        let non_canonical = canonical.replace("/private/var/", "/var/");
-        if non_canonical == canonical {
-            // Not macOS, or no such prefix: the drift under test cannot arise.
-            return;
-        }
+        let non_canonical = f.drifted_spelling(&root, &db);
         {
             let conn = crate::open::open_read_write(&f.registry).unwrap();
             let stale = ProjectFacts {
                 // Bypass `absolutize` to reproduce a DB-absent write.
-                db_path: std::path::PathBuf::from(&non_canonical),
+                db_path: non_canonical.clone(),
                 ..counted(&db, &root, 8134)
             };
             upsert(&conn, "serve-stale0000000000", &stale, Some("fp-stale")).unwrap();
@@ -826,15 +841,11 @@ mod tests {
     fn a_collision_never_overwrites_the_survivors_own_counts() {
         let f = WriteFixture::new();
         let (root, db) = f.project("a");
-        let canonical = db.to_string_lossy().into_owned();
-        let non_canonical = canonical.replace("/private/var/", "/var/");
-        if non_canonical == canonical {
-            return;
-        }
+        let non_canonical = f.drifted_spelling(&root, &db);
         {
             let conn = crate::open::open_read_write(&f.registry).unwrap();
             let stale = ProjectFacts {
-                db_path: std::path::PathBuf::from(&non_canonical),
+                db_path: non_canonical.clone(),
                 ..counted(&db, &root, 1)
             };
             upsert(&conn, "serve-stale0000000000", &stale, Some("fp-stale")).unwrap();

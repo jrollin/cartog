@@ -216,10 +216,15 @@ fn is_markup_only_html_line(trimmed: &str) -> bool {
 /// Counts opening against closing and self-closing tags rather than pattern
 /// matching a tag list: `<br>`, `<img …/>` and `<p …><img/></p>` all balance,
 /// while `<div>` does not. A void element written without a slash (`<br>`,
-/// `<img …>`, `<hr>`) has no closer, so it is listed — that set is fixed by
-/// the HTML spec and short.
+/// `<img …>`, `<hr>`) has no closer, so all of them are listed — the set is
+/// closed by the HTML spec, and an omission makes the element look unclosed,
+/// which suppresses the paragraph beneath it.
 fn is_balanced_html_line(trimmed: &str) -> bool {
-    const VOID: [&str; 8] = ["br", "img", "hr", "input", "meta", "link", "source", "col"];
+    /// Every HTML void element, per the spec's fixed list.
+    const VOID: [&str; 14] = [
+        "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+        "source", "track", "wbr",
+    ];
     let mut depth = 0i32;
     let mut rest = trimmed;
     while let Some(open) = rest.find('<') {
@@ -1006,6 +1011,26 @@ The real summary.
     /// HTML syntax lost the very thing it was describing — `` `<div>` ``
     /// vanished outright. This text becomes a project description an agent
     /// reads, so silently eating it is worse than leaving markup in.
+    /// Every HTML void element must leave the paragraph beneath it alone.
+    ///
+    /// The list started at 8 of the spec's 14, and each omission made the tag
+    /// look unclosed, so the block ran to the next blank line and ate the
+    /// tagline — the same failure the centered-logo fix addressed, just with a
+    /// rarer tag. Enumerated rather than spot-checked because the set is
+    /// closed: a future edit that drops one fails here.
+    #[test]
+    fn no_void_element_swallows_the_paragraph_beneath_it() {
+        for tag in [
+            "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+            "source", "track", "wbr",
+        ] {
+            let body = format!("<{tag}>\nA fast thing.\n");
+            let d = describe("README.md", &body)
+                .unwrap_or_else(|| panic!("<{tag}> must not suppress the tagline"));
+            assert_eq!(d.text, "A fast thing.", "tag: <{tag}>");
+        }
+    }
+
     /// An indented code block is code, not prose.
     ///
     /// `first_prose_paragraph` trims each line before testing, so a 4-space
