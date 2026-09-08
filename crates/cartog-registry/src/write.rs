@@ -696,6 +696,28 @@ mod tests {
         );
     }
 
+    /// The write path is the only caller that quarantines, so a corrupt
+    /// registry must recover here or it never recovers at all: reads
+    /// deliberately leave the file alone (see `read::list_projects_at`).
+    #[test]
+    #[serial]
+    fn a_corrupt_registry_is_quarantined_and_rebuilt_by_the_next_write() {
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        std::fs::write(&f.registry, b"not a database").unwrap();
+
+        f.record(&ProjectFacts::identity_only(&db, &root));
+
+        assert!(
+            f.row(&db).is_some(),
+            "the write must land in a rebuilt registry"
+        );
+        let quarantined = std::fs::read_dir(f.dir.path())
+            .unwrap()
+            .any(|e| e.unwrap().path().to_string_lossy().contains(".corrupt."));
+        assert!(quarantined, "the corrupt bytes must be preserved aside");
+    }
+
     #[test]
     fn re_keying_a_drifted_row_preserves_the_counts_it_accumulated() {
         // It is the same project, so its history must survive: a path that
