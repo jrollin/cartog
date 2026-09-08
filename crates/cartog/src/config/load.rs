@@ -744,13 +744,24 @@ fn warn_orphan_legacy_once(path: &Path) {
     );
 }
 
-/// Expand a leading `~/` to the user's home directory.
+/// Expand a leading `~` or `~/` to the user's home directory.
+///
+/// A **bare** `~` expands too. Handling only `~/` left `--under '~'` matching
+/// nothing while the MCP fan-out — whose expander this one is paired with —
+/// expanded it and searched all of `$HOME`: the same argument, opposite
+/// behaviour per surface. `~user` is left alone, since resolving another
+/// account's home is not something to guess at.
 pub fn expand_tilde(p: PathBuf) -> PathBuf {
     let s = p.to_string_lossy();
-    if let Some(rest) = s.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-            return PathBuf::from(home).join(rest);
-        }
+    let rest = if s == "~" {
+        ""
+    } else if let Some(r) = s.strip_prefix("~/") {
+        r
+    } else {
+        return p;
+    };
+    match std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+        Ok(home) => PathBuf::from(home).join(rest),
+        Err(_) => p,
     }
-    p
 }

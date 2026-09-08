@@ -112,7 +112,7 @@ different fixes. Two cases are reported as distinct from a genuine
 no-match, because an agent would otherwise take either as "the symbol exists
 nowhere else": when *no* candidate could be read, the text says the search could
 not run; when a filter (or the project cap) selected *no* candidate at all, it
-says nothing was searched and names the reason. `under` accepts `~`.
+says nothing was searched and names the reason. `under` accepts `~` and `~/path` (a bare `~` is your home directory); `~user` is left as written, since another account's home is not guessed at.
 
 Like `cartog_list_projects`, it is gated by **neither** `refuse_if_degraded` nor
 `refuse_if_read_only`: it never touches *this* project's index, and a server with

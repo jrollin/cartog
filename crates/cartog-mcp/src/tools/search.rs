@@ -465,11 +465,16 @@ fn query_project(
 
 /// `canonicalize` when the path exists, else the path as given, so a filter
 /// still behaves sensibly for a project whose database has been removed.
-fn canonical_path(p: &Path) -> std::path::PathBuf {
+// `pub(crate)` for the tilde-parity test: the contract it shares with the CLI's
+// `expand_tilde` is what drifted, so it has to be assertable.
+pub(crate) fn canonical_path(p: &Path) -> std::path::PathBuf {
     // Expand `~` first: an agent may pass `~/work` literally, and
     // `canonicalize` leaves it alone — so the `starts_with` test would match
     // nothing and the fan-out would silently return zero projects. Mirrors
     // `canonical` in the CLI's search_all.rs.
+    // `Path::strip_prefix` compares components, so `~` and `~/x` both expand
+    // while `~user` does not — the contract `config::expand_tilde` now states
+    // explicitly on the CLI side, pinned by `a_bare_tilde_expands_and_a_user_tilde_does_not`.
     let expanded = match p.strip_prefix("~") {
         Ok(rest) => match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
             Some(home) => std::path::PathBuf::from(home).join(rest),
@@ -492,18 +497,16 @@ pub(crate) fn render_search_all(result: &SearchAllResult, query: &str) -> String
         if result.queried == 0 {
             // Nothing was selected, so nothing was searched. Saying "no symbols
             // matching" implies otherwise, and an agent reads that as "the
-            // symbol exists nowhere else" and stops looking. Why nothing was
-            // selected is left to the cap notice appended below, which already
-            // states it whenever the cap is what dropped the candidates.
-            // "none matched the filter" would be wrong when the cap is what
-            // dropped them, and the notice below already explains that case.
-            let why = if result.elided_by_cap > 0 {
-                "see below"
-            } else {
-                "none matched the filter — widen `under`/`lang`, or check \
-                 `cartog projects list`"
-            };
-            format!("No other indexed project was searched for '{query}': {why}.\n")
+            // symbol exists nowhere else" and stops looking.
+            //
+            // Only the filter can produce this: the cap clamps to >= 1 and
+            // truncates after counting, so `elided_by_cap > 0` implies at least
+            // one candidate survived and was queried. See
+            // `the_cap_cannot_elide_every_candidate`.
+            format!(
+                "No other indexed project was searched for '{query}': none matched the \
+                 filter — widen `under`/`lang`, or check `cartog projects list`.\n"
+            )
         } else if searched == 0 {
             format!(
                 "No project could be searched for '{query}' — none of the {} candidate(s) \

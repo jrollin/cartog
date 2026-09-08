@@ -134,14 +134,10 @@ pub fn cmd_search_all(
             elided_by_cap,
             total_matches: 0,
         };
-        return super::shared::output(&empty, json, token_budget, |e| {
-            if e.elided_by_cap > 0 {
-                return format!(
-                    "{} project(s) matched {} but none were queried — raise --max-projects.\n",
-                    e.elided_by_cap,
-                    describe(filter),
-                );
-            }
+        // Only the filter reaches here: the cap clamps to >= 1 and truncates
+        // after counting, so an elision always leaves a candidate queried. See
+        // `the_cap_cannot_elide_every_candidate`.
+        return super::shared::output(&empty, json, token_budget, |_| {
             format!("No other indexed project matches {}.\n", describe(filter))
         });
     }
