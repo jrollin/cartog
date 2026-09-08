@@ -1460,7 +1460,7 @@ Mandatory in the same change, per the docs + site-sync rule:
 - `crates/cartog/src/config/load.rs` — `KNOWN_CONFIG_SECTIONS` gains `"project"`
 - `.cartog.toml.example` at the repo root **and** `init.rs` `TOML_TEMPLATE` —
   both, or the template-parity test fails
-- `docs/reference/mcp-tools.md` — `cartog_list_projects` (the opt-in 17th tool)
+- `docs/reference/mcp-tools.md` — the two opt-in cross-project tools, `cartog_list_projects` and `cartog_search_all` (16 → 18 when federated)
 - `docs/explanation/project-registry.md` — this document
 - `docs/explanation/README.md` **and** `docs/README.md` — both indexes list every
   explanation doc; the convention requires keeping them in sync when adding one
