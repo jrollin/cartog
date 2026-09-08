@@ -190,7 +190,7 @@ bash skills/cartog/scripts/ensure_indexed.sh
 
 ## MCP Server
 
-`cartog serve` runs cartog as an MCP server over stdio, exposing 16 tools for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 13 query tools are read-only (including `cartog_trace` for call paths and `cartog_context` for one-shot task bundles); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones.
+`cartog serve` runs cartog as an MCP server over stdio, exposing 16 tools by default (18 with the opt-in cross-project tools) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 13 query tools are read-only (including `cartog_trace` for call paths and `cartog_context` for one-shot task bundles); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones.
 
 When `cartog serve --watch` is running and a file changes (or RAG embeddings are still catching up — including symbols whose body was just edited and not yet re-embedded), affected read-tool responses are prefixed with a `⚠️` staleness banner so the agent knows the answer may be momentarily behind the working tree. Read-only secondaries and `cartog serve` without `--watch` never show the banner.
 
@@ -337,10 +337,27 @@ Pre-flight analysis before changing a symbol, module, or file. Maps the full bla
 claude --agent refactoring-scout
 ```
 
+## Multiple Projects
+
+cartog indexes one project per database. When a question spans two repositories, you do not
+need a merged index — you need the other project's database path:
+
+```bash
+cartog projects list                 # every indexed project on this machine
+cartog search Foo --db /path/to/other/.cartog/db.sqlite
+```
+
+Every index, `rag index`, `pull`, watcher re-index, and `serve` startup registers its project,
+so there is nothing to enable. Each entry carries a one-line description — from `.cartog.toml`'s
+`[project] description`, or the target repo's `README.md` — so an agent can route by intent, not
+just by name. Agents get the same rows from the `cartog_list_projects` MCP tool once a project opts in with `[mcp] federated = true` (or `cartog serve --federated`); the cross-project tools are hidden by default. Full
+walkthrough: **[how-to/query-another-project.md](how-to/query-another-project.md)**.
+
 ## Commands and Configuration
 
 - All CLI commands and flags: **[reference/cli.md](reference/cli.md)**
 - All `.cartog.toml` keys and env vars: **[reference/config.md](reference/config.md)**
 - MCP tools, progress, cancellation, logging: **[reference/mcp-tools.md](reference/mcp-tools.md)**
 - Self-update exit codes and state file: **[reference/exit-codes.md](reference/exit-codes.md)**
+- Why the registry stores metadata rather than merging graphs: **[explanation/project-registry.md](explanation/project-registry.md)**
 

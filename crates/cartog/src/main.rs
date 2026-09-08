@@ -2,6 +2,7 @@ mod cli;
 mod commands;
 mod config;
 use cartog::auto_check::{self, CommandKind, MaybeSpawnInput};
+use cartog::registry_hook;
 use cartog::state;
 
 use anyhow::Result;
@@ -11,7 +12,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::time::SystemTime;
 
-use cli::{Cli, Command, RagCommand, SelfCommand};
+use cli::{Cli, Command, ProjectsCommand, RagCommand, SelfCommand};
 
 /// Public-default GitHub latest-release endpoint for the daily background
 /// check. Override via `CARTOG_GITHUB_API_URL` (used by integration tests).
@@ -144,9 +145,9 @@ fn main() -> Result<()> {
     if config_rejected && indexes_with_config(&cli.command) {
         if let Some(p) = &config_path {
             eprintln!(
-                "cartog: note: {} was rejected; indexing with defaults \
-                 ([database] path, [index] exclude, [security], and [lsp] \
-                 settings ignored).",
+                "cartog: note: {} was rejected; running with defaults \
+                 ([database] path, [index] exclude, [security], [lsp], and \
+                 [mcp] federated settings ignored).",
                 p.display()
             );
         }
@@ -196,6 +197,15 @@ fn main() -> Result<()> {
                 .display(),
         );
     }
+    // What this run may learn about `[project]`. A rejected config collapsed to
+    // defaults above, so its empty `[project]` is *unknown*, not absent —
+    // sending it as a registry write would erase the stored declared name and
+    // description on a single parse error anywhere in the file.
+    let project_source = if config_rejected {
+        commands::ProjectSource::Rejected
+    } else {
+        commands::ProjectSource::Config(cartog_config.project.as_ref())
+    };
     let provider_config = config::to_provider_config(&cartog_config);
     let redact = config::to_redaction_config(&cartog_config);
     // read_config already validated this, so it only re-builds a known-good
@@ -280,6 +290,7 @@ fn main() -> Result<()> {
                 redact,
                 &lsp_overrides,
                 &filter,
+                project_source,
             )
         }
         Command::Outline { file } => commands::cmd_outline(
@@ -361,6 +372,7 @@ fn main() -> Result<()> {
         } => commands::cmd_pull(
             &db_path,
             &cartog_config,
+            project_source,
             remote.as_deref(),
             force,
             no_sign_request,
@@ -388,17 +400,42 @@ fn main() -> Result<()> {
             kind,
             file,
             limit,
-        } => commands::cmd_search(
-            &db_path,
-            &query,
-            kind,
-            file.as_deref(),
-            limit,
-            cli.json,
-            compact,
-            token_budget,
-            embedding_dim,
-        ),
+            all,
+            under,
+            lang,
+            max_projects,
+        } => {
+            if all {
+                commands::cmd_search_all(
+                    &db_path,
+                    &query,
+                    kind,
+                    limit,
+                    &commands::FanoutFilter {
+                        under: under.map(Into::into),
+                        lang,
+                        max_projects,
+                    },
+                    commands::OutputOpts {
+                        json: cli.json,
+                        compact,
+                        token_budget,
+                    },
+                )
+            } else {
+                commands::cmd_search(
+                    &db_path,
+                    &query,
+                    kind,
+                    file.as_deref(),
+                    limit,
+                    cli.json,
+                    compact,
+                    token_budget,
+                    embedding_dim,
+                )
+            }
+        }
         Command::Map { tokens, mermaid } => {
             commands::cmd_map(&db_path, tokens, cli.json, compact, mermaid, embedding_dim)
         }
@@ -442,7 +479,11 @@ fn main() -> Result<()> {
             dry_run,
             no_watch,
         } => commands::ide::cmd_install(clients, scope, dry_run, no_watch, cli.json),
-        Command::Serve { watch, rag } => {
+        Command::Serve {
+            watch,
+            rag,
+            federated,
+        } => {
             let rag_override = config::resolve_auto_embed(rag, &cartog_config);
             // Auto-embed only runs via the watcher; warn whenever it was requested
             // (flag, [embedding] auto_embed, or CARTOG_WATCH_RAG) without --watch.
@@ -469,6 +510,7 @@ fn main() -> Result<()> {
                 config_usable: Some(std::sync::Arc::new(|path: &Path| {
                     config::read_config(path).is_some()
                 })),
+                federated: config::resolve_federated(federated, &cartog_config),
             };
             runtime.block_on(mcp::run_server(
                 &db_path,
@@ -492,6 +534,7 @@ fn main() -> Result<()> {
                 &provider_config,
                 redact,
                 &walk_filter,
+                project_source,
             ),
             RagCommand::Search { query, kind, limit } => commands::cmd_rag_search(
                 &db_path,
@@ -504,6 +547,22 @@ fn main() -> Result<()> {
                 &provider_config,
                 &search_tuning,
             ),
+        },
+        // `cartog projects` reads the machine-local registry, never a project
+        // index — so it takes no `db_path` and works from any directory,
+        // including one that was never indexed. That is the point of a
+        // machine-global listing, and it is why `Projects` is absent from
+        // `indexes_with_config` (and therefore from the consent gate).
+        Command::Projects(sub) => match sub {
+            ProjectsCommand::List => commands::cmd_projects_list(cli.json, token_budget),
+            ProjectsCommand::Add { path } => commands::cmd_projects_add(&path, cli.json),
+            ProjectsCommand::Scan {
+                dir,
+                depth,
+                dry_run,
+            } => commands::cmd_projects_scan(&dir, depth, dry_run, cli.json),
+            ProjectsCommand::Forget { target } => commands::cmd_projects_forget(&target, cli.json),
+            ProjectsCommand::Prune { dry_run } => commands::cmd_projects_prune(dry_run, cli.json),
         },
         Command::Completions { shell } => {
             use clap::CommandFactory;

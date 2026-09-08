@@ -179,9 +179,7 @@ fn create_bucket(endpoint: &str, bucket: &str) {
             "mb",
             &format!("s3://{bucket}"),
         ])
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -192,6 +190,23 @@ fn create_bucket(endpoint: &str, bucket: &str) {
 /// Build a minimal real cartog DB by running `cartog index` on a small
 /// throwaway repo. We don't fabricate SQLite files from scratch — push/pull
 /// must work against actual cartog-produced DBs.
+/// Environment every spawned `cartog` in this file must carry.
+///
+/// The AWS credentials point at the local floci/minio container. The registry
+/// kill switch is the important one: every fixture here lives in a temp
+/// directory that is gone by the next run, so a `cartog index` or `cartog pull`
+/// without it leaves a dangling row per run in the **developer's own**
+/// user-global registry. Centralised because there are ten `pull` call sites
+/// and patching them one at a time is how one gets missed.
+fn test_env() -> [(&'static str, &'static str); 4] {
+    [
+        ("AWS_ACCESS_KEY_ID", "test"),
+        ("AWS_SECRET_ACCESS_KEY", "test"),
+        ("AWS_DEFAULT_REGION", "us-east-1"),
+        (cartog::registry::REGISTRY_ENV, ""),
+    ]
+}
+
 fn build_minimal_index(repo_dir: &Path, db_path: &Path) {
     std::fs::create_dir_all(repo_dir).unwrap();
     std::fs::write(repo_dir.join("hello.py"), "def greet():\n    return 'hi'\n").unwrap();
@@ -243,6 +258,10 @@ fn build_minimal_index(repo_dir: &Path, db_path: &Path) {
         // This throwaway fixture has no .cartog.toml; AUTO_INIT is the documented
         // opt-in to index a config-less repo (the consent gate refuses otherwise).
         .env("CARTOG_AUTO_INIT", "1")
+        // Kill the project registry: this fixture lives in a temp dir that is
+        // gone by the next run, so registering it would leave a dangling row in
+        // the developer's own user-global registry on every `cargo test`.
+        .env(cartog::registry::REGISTRY_ENV, "")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -278,11 +297,7 @@ fn push_pull_roundtrip_against_floci() {
 
     let src_bytes = std::fs::read(&src_db).unwrap();
 
-    let env = &[
-        ("AWS_ACCESS_KEY_ID", "test"),
-        ("AWS_SECRET_ACCESS_KEY", "test"),
-        ("AWS_DEFAULT_REGION", "us-east-1"),
-    ];
+    let env = &test_env();
 
     // cartog needs `[remote].endpoint` to talk to floci; the CLI has no
     // `--endpoint` flag (and shouldn't — endpoint is per-deployment config,
@@ -398,11 +413,7 @@ fn pull_streamed_hash_matches_file_on_disk_against_floci() {
     let dst_db = work.path().join("dst.sqlite");
     build_minimal_index(&repo, &src_db);
 
-    let env = &[
-        ("AWS_ACCESS_KEY_ID", "test"),
-        ("AWS_SECRET_ACCESS_KEY", "test"),
-        ("AWS_DEFAULT_REGION", "us-east-1"),
-    ];
+    let env = &test_env();
 
     let cfg_dir = work.path().join("cfg");
     std::fs::create_dir_all(&cfg_dir).unwrap();
@@ -516,9 +527,7 @@ path_style = true
             &payload_path.to_string_lossy(),
             "s3://cartog-corrupt/index.sqlite",
         ])
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .status()
         .unwrap();
     assert!(st.success());
@@ -527,9 +536,7 @@ path_style = true
     let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
         .args(["--db", &dst_db.to_string_lossy(), "pull"])
         .current_dir(&cfg_dir)
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .output()
         .unwrap();
     assert!(!out.status.success(), "pull must fail on missing checksum");
@@ -597,6 +604,9 @@ path_style = true
             "--no-sign-request",
         ])
         .current_dir(&cfg_dir)
+        // Registry off for the same reason as every other spawn here; this
+        // path fails before registering, but the guard is structural.
+        .env(cartog::registry::REGISTRY_ENV, "")
         .env_remove("AWS_ACCESS_KEY_ID")
         .env_remove("AWS_SECRET_ACCESS_KEY")
         .output()
@@ -700,9 +710,7 @@ fn pull_refuses_non_cartog_sqlite_with_valid_sha() {
             "--metadata",
             &format!("sha256={sha},schema-version={claimed_v}"),
         ])
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .status()
         .unwrap();
     assert!(st.success(), "aws s3 cp failed");
@@ -730,9 +738,7 @@ path_style = true
     let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
         .args(["--db", &dst_db.to_string_lossy(), "pull"])
         .current_dir(&cfg_dir)
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .output()
         .unwrap();
 
@@ -778,6 +784,7 @@ fn push_refuses_when_config_was_rejected() {
     let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
         .args(["--db", &db_path.to_string_lossy(), "push"])
         .current_dir(&cfg_dir)
+        .env(cartog::registry::REGISTRY_ENV, "")
         .env_remove("CARTOG_DB")
         .output()
         .unwrap();
@@ -842,11 +849,7 @@ endpoint = "{endpoint}"
         .current_dir(&cfg_dir)
         .status();
 
-    let env = [
-        ("AWS_ACCESS_KEY_ID", "test"),
-        ("AWS_SECRET_ACCESS_KEY", "test"),
-        ("AWS_DEFAULT_REGION", "us-east-1"),
-    ];
+    let env = test_env();
 
     let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
         .args(["--db", &src_db.to_string_lossy(), "push"])
@@ -923,9 +926,7 @@ fn upload_with_schema_version(
             "--metadata",
             &format!("sha256={sha},schema-version={header_v},cartog-version=test"),
         ])
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .status()
         .unwrap();
     assert!(st.success(), "aws s3 cp failed");
@@ -987,9 +988,7 @@ fn pull_refuses_future_schema_version() {
     let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
         .args(["--db", &dst_db.to_string_lossy(), "pull"])
         .current_dir(&cfg_dir)
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .output()
         .unwrap();
     assert!(
@@ -1038,9 +1037,7 @@ fn pull_refuses_header_vs_file_mismatch() {
     let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
         .args(["--db", &dst_db.to_string_lossy(), "pull"])
         .current_dir(&cfg_dir)
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .output()
         .unwrap();
     assert!(
@@ -1094,9 +1091,7 @@ fn pull_refuses_git_commit_header_vs_file_mismatch() {
             "--metadata",
             &format!("sha256={sha},schema-version={claimed_v},git-commit=deadbeefdeadbeef"),
         ])
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .status()
         .unwrap();
     assert!(st.success(), "aws s3 cp failed");
@@ -1124,9 +1119,7 @@ path_style = true
     let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
         .args(["--db", &dst_db.to_string_lossy(), "pull"])
         .current_dir(&cfg_dir)
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .output()
         .unwrap();
     assert!(
@@ -1182,9 +1175,7 @@ fn pull_reports_malformed_schema_version_header() {
             "--metadata",
             &format!("sha256={sha},schema-version=notanumber"),
         ])
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .status()
         .unwrap();
     assert!(st.success(), "aws s3 cp failed");
@@ -1212,9 +1203,7 @@ path_style = true
     let out = Command::new(env!("CARGO_BIN_EXE_cartog"))
         .args(["--db", &dst_db.to_string_lossy(), "pull"])
         .current_dir(&cfg_dir)
-        .env("AWS_ACCESS_KEY_ID", "test")
-        .env("AWS_SECRET_ACCESS_KEY", "test")
-        .env("AWS_DEFAULT_REGION", "us-east-1")
+        .envs(test_env())
         .output()
         .unwrap();
     assert!(

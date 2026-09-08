@@ -48,7 +48,10 @@ jobs:
           echo "Deploying site from $target"
 
       - name: Checkout deploy ref
-        run: git checkout "${{ steps.ref.outputs.target }}" -- site
+        # Whole tree, not just `site/`: the machine-readable endpoints read
+        # `README.md` and `docs/` at build time, so a partial checkout would
+        # publish the tag's site around the default branch's docs.
+        run: git checkout --force "${{ steps.ref.outputs.target }}"
 
       - uses: actions/setup-node@v4
         with:

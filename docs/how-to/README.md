@@ -3,6 +3,7 @@
 Task-oriented guides for common operations. Assumes you have already completed the quickstart.
 
 - [configure-lsp-servers.md](configure-lsp-servers.md) — LSP server overrides and concurrency cap
+- [query-another-project.md](query-another-project.md) — find another indexed project on this machine and query it with `--db`
 - [set-up-s3-sync.md](set-up-s3-sync.md) — remote push/pull via S3-compatible storage
 - [switch-embedding-provider.md](switch-embedding-provider.md) — local ONNX, Ollama, OpenAI-compatible
 - [update-cartog.md](update-cartog.md) — upgrade, rollback, deferred in-session updates

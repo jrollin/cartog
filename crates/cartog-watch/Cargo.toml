@@ -17,6 +17,7 @@ cartog-db = { workspace = true }
 cartog-indexer = { workspace = true }
 cartog-rag = { workspace = true }
 cartog-process-lock = { workspace = true }
+cartog-registry = { workspace = true }
 anyhow = { workspace = true }
 ctrlc = { workspace = true }
 notify = { workspace = true }

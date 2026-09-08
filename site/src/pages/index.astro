@@ -6,6 +6,7 @@ import { withBase } from "../lib/url";
 <Base
   title="Cartog — Code Graph Navigator & Semantic Search for AI Coding Agents"
   description="Cartog is a local code graph indexer for LLM coding agents: pre-computed symbols, calls, imports and impact analysis queried in microseconds. Single Rust binary, 100% local, 18 languages plus React/Vue/Svelte/Astro, MCP server built in."
+  markdownUrl="https://www.cartog.dev/index.md"
   ogType="website"
   ogUrl="https://www.cartog.dev/"
   footerVariant="home"
@@ -21,8 +22,10 @@ import { withBase } from "../lib/url";
       </h1>
 
       <p class="subtitle">
-        Semantic search that returns named symbols, not text chunks — ranked, reranked, budget-aware. <br/>
-        Single Rust binary, 18 languages, 100% local. MCP server built in.
+        Cartog parses your repo into a symbol graph your agent queries instead of grepping, then asks
+        your language server to resolve each edge and records which tier resolved it. <br/>
+        Keyword and semantic search over named symbols, not text chunks. Single Rust binary, 18 languages,
+        100% local. MCP server built in.
       </p>
 
       <!-- Stats bar: anchor the value claim before showing the demo -->
@@ -456,6 +459,34 @@ import { withBase } from "../lib/url";
     </div>
   </section>
 
+  <!-- ── Provenance ──────────────────────────────── -->
+  <section id="provenance">
+    <div class="container">
+      <div class="section-label">Provenance</div>
+      <h2 class="section-heading">Every edge says how it was resolved.</h2>
+      <p class="section-subtitle">An agent acting on a call graph should know which edges are facts and which are guesses. Cartog labels each one.</p>
+
+      <div class="features-grid" style="margin-top: 48px;">
+        <div class="feature-card" data-reveal style="--reveal-delay: 0s;">
+          <h3><span class="feature-icon">🛰️</span> Asked, not inferred</h3>
+          <p>Where a language server is on <code>PATH</code>, cartog asks it for the real definition rather than guessing from names. Those edges are tagged <code>lsp</code>, or <code>lsp_external</code> when the definition lives outside the indexed tree (stdlib, dependencies), or <code>lsp_unresolvable</code> when the server definitively says there is none. A tool that only parses the syntax tree cannot make that distinction.</p>
+        </div>
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.08s;">
+          <h3><span class="feature-icon">🪜</span> Six heuristic tiers, named</h3>
+          <p>With no language server, name resolution falls through an ordered ladder and records the rung it landed on: <code>same_file</code>, <code>import_path</code>, <code>same_dir</code>, <code>parent_scope</code>, <code>unique_global</code>, <code>kind_disambig</code>. A <code>same_file</code> hit is near-certain; a <code>unique_global</code> hit is a single-candidate bet. Both are edges, and they are not the same claim.</p>
+        </div>
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.16s;">
+          <h3><span class="feature-icon">🔎</span> Visible in every answer</h3>
+          <p>The tag rides on the edge in the database and surfaces as <code>provenance</code> in <code>--json</code> and in MCP tool output, so an agent weighing a refactor can tell a language-server fact from a name-match guess without re-deriving anything.</p>
+        </div>
+      </div>
+
+      <p style="margin-top: 32px; font-size: 14px; color: var(--text-tertiary);">
+        Resolution rate is measured per language by <code>make bench-resolution</code>, which also snapshots the provenance mix. Install a language server to move edges from the heuristic tiers to <code>lsp</code>.
+      </p>
+    </div>
+  </section>
+
   <!-- ── LLM Agents ──────────────────────────────── -->
   <section id="agents">
     <div class="container">
@@ -532,7 +563,7 @@ import { withBase } from "../lib/url";
         <div class="why-card" data-reveal style="--reveal-delay: 0.08s;">
           <div class="why-number">02</div>
           <h3>16 MCP tools</h3>
-          <p><code>cartog serve</code> exposes <code>cartog_map</code>, <code>cartog_search</code>, <code>cartog_refs</code>, <code>cartog_impact</code>, <code>cartog_rag_search</code>, and 11 more. Each tool description tells the agent when (and when not) to use it.</p>
+          <p><code>cartog serve</code> exposes <code>cartog_map</code>, <code>cartog_search</code>, <code>cartog_refs</code>, <code>cartog_impact</code>, <code>cartog_rag_search</code>, and 11 more — plus 2 opt-in cross-project tools. Each tool description tells the agent when (and when not) to use it.</p>
         </div>
         <div class="why-card" data-reveal style="--reveal-delay: 0.16s;">
           <div class="why-number">03</div>
@@ -622,11 +653,15 @@ import { withBase } from "../lib/url";
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.08s;">
           <h3><span class="feature-icon">🧰</span> 16 tools, typed output</h3>
-          <p>14 read tools (<code>map</code>, <code>search</code>, <code>refs</code>, <code>impact</code>, <code>rag_search</code>, …) ship <code>readOnlyHint</code> and declare an <code>outputSchema</code>, so clients skip approval prompts and get validated <code>structuredContent</code>. 2 write tools build the index.</p>
+          <p>13 read tools (<code>map</code>, <code>search</code>, <code>refs</code>, <code>impact</code>, <code>rag_search</code>, …) ship <code>readOnlyHint</code> and declare an <code>outputSchema</code>, so clients skip approval prompts and get validated <code>structuredContent</code>. 2 write tools build the index, and <code>cartog_update</code> arms a deferred self-update.</p>
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.16s;">
           <h3><span class="feature-icon">📡</span> Live + progress-aware</h3>
           <p><code>--watch</code> re-indexes on file changes and auto-refreshes semantic embeddings when the repo already has them (no <code>--rag</code> needed). <code>cartog_index</code> and <code>cartog_rag_index</code> emit MCP <code>notifications/progress</code> so the client can show a progress bar.</p>
+        </div>
+        <div class="feature-card" data-reveal style="--reveal-delay: 0.24s;">
+          <h3><span class="feature-icon">🗂️</span> Several repos on one machine</h3>
+          <p>Your agent is in the API gateway; the symbol lives in the orders service. <code>cartog search CreateOrder --all</code> finds it across your <em>other</em> indexed projects and returns the <code>--db</code> path to drill in — the CLI opts in per invocation, with that flag. Giving an <em>agent</em> the same reach is separate and off by default: <code>[mcp] federated</code> adds the two cross-project MCP tools, since those surface other repos' paths and descriptions into a session. One repo? Ignore all of it, there is nothing to configure.</p>
         </div>
       </div>
 
@@ -702,7 +737,7 @@ import { withBase } from "../lib/url";
           <span class="article-num">05</span>
           <div class="article-body">
             <h3><a href="https://www.julienrollin.com/en/posts/cartog-mcp-server">Exposing a code graph as an MCP server</a></h3>
-            <p>Wiring cartog's 16 tools into the Model Context Protocol so AI agents query structured graph results instead of flooding context with raw files.</p>
+            <p>Wiring cartog's MCP tools into the Model Context Protocol so AI agents query structured graph results instead of flooding context with raw files.</p>
             <div class="article-links">
               <a href="https://www.julienrollin.com/en/posts/cartog-mcp-server">🇬🇧 Read article</a>
               <a href="https://www.julienrollin.com/posts/cartog-mcp-server">🇫🇷 Lire l'article</a>

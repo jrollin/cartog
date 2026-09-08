@@ -1109,6 +1109,128 @@ fn read_metadata_at_returns_none_when_row_absent() {
     assert_eq!(read_metadata_at(&db_path, "last_commit").unwrap(), None);
 }
 
+/// The three `EMBED_*_KEY` constants are `pub` so out-of-crate readers name
+/// the same rows this crate writes. A typo in one is invisible to every
+/// in-crate caller (they all use the constant), so pin each against the row
+/// the store actually produces — reached the way an out-of-crate reader would,
+/// via `read_metadata_at` on a closed file.
+#[test]
+fn embed_dimension_key_names_the_row_the_store_writes() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    // Database::open writes the dimension via handle_embedding_dimension,
+    // whose SQL inlines the literal rather than using the constant.
+    let _db = Database::open(&db_path, 384).unwrap();
+
+    assert_eq!(
+        read_metadata_at(&db_path, EMBED_DIMENSION_KEY).unwrap(),
+        Some("384".to_string()),
+        "EMBED_DIMENSION_KEY must match the literal handle_embedding_dimension writes"
+    );
+}
+
+#[test]
+fn embed_provider_and_model_keys_name_the_rows_the_store_writes() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    {
+        let db = Database::open(&db_path, 384).unwrap();
+        db.reconcile_embedding_fingerprint(&EmbeddingFingerprint {
+            provider: "local".to_string(),
+            model: "BAAI/bge-small-en-v1.5".to_string(),
+            dimension: 384,
+        })
+        .unwrap();
+    }
+
+    assert_eq!(
+        read_metadata_at(&db_path, EMBED_PROVIDER_KEY).unwrap(),
+        Some("local".to_string())
+    );
+    assert_eq!(
+        read_metadata_at(&db_path, EMBED_MODEL_KEY).unwrap(),
+        Some("BAAI/bge-small-en-v1.5".to_string())
+    );
+}
+
+#[test]
+fn read_database_facts_at_reads_the_whole_fingerprint_in_one_call() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    {
+        let db = Database::open(&db_path, 384).unwrap();
+        db.reconcile_embedding_fingerprint(&EmbeddingFingerprint {
+            provider: "local".to_string(),
+            model: "bge-small".to_string(),
+            dimension: 384,
+        })
+        .unwrap();
+    }
+
+    let facts = read_database_facts_at(&db_path);
+
+    assert_eq!(facts.schema_version, Some(CURRENT_SCHEMA_VERSION));
+    assert_eq!(facts.embed_provider.as_deref(), Some("local"));
+    assert_eq!(facts.embed_model.as_deref(), Some("bge-small"));
+    assert_eq!(facts.embed_dim, Some(384));
+}
+
+#[test]
+fn schema_version_key_names_the_row_the_store_writes() {
+    // `SCHEMA_VERSION_KEY` has no in-crate callers — every writer inlines the
+    // literal in its SQL — so a typo in the constant is invisible except here.
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let _db = Database::open(&db_path, 384).unwrap();
+
+    assert_eq!(
+        read_metadata_at(&db_path, SCHEMA_VERSION_KEY).unwrap(),
+        Some(CURRENT_SCHEMA_VERSION.to_string()),
+        "SCHEMA_VERSION_KEY must match the literal the store writes"
+    );
+}
+
+#[test]
+fn read_database_facts_at_reports_no_schema_version_for_a_foreign_file() {
+    // `read_schema_version_at` returns Ok(0) for a non-cartog file; storing 0
+    // would render as a real version and misleadingly flag `stale-schema`.
+    let dir = tempfile::TempDir::new().unwrap();
+    let foreign = dir.path().join("foreign.db");
+    std::fs::write(&foreign, b"not a database").unwrap();
+
+    let facts = read_database_facts_at(&foreign);
+
+    assert_eq!(
+        facts,
+        DatabaseFacts::default(),
+        "all-None for a foreign file"
+    );
+}
+
+#[test]
+fn read_database_facts_at_reports_no_embeddings_for_a_never_embedded_db() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let _db = Database::open(&db_path, 384).unwrap();
+
+    let facts = read_database_facts_at(&db_path);
+
+    assert_eq!(facts.schema_version, Some(CURRENT_SCHEMA_VERSION));
+    assert_eq!(facts.embed_provider, None);
+    assert_eq!(facts.embed_model, None);
+    // The dimension IS written at open, so it is known even with no vectors.
+    assert_eq!(facts.embed_dim, Some(384));
+}
+
+#[test]
+fn read_database_facts_at_never_fails_on_an_absent_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert_eq!(
+        read_database_facts_at(&dir.path().join("nope.db")),
+        DatabaseFacts::default()
+    );
+}
+
 #[test]
 fn read_metadata_at_returns_none_for_non_cartog_sqlite() {
     let dir = tempfile::TempDir::new().unwrap();

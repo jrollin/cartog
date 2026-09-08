@@ -191,6 +191,9 @@ fn strip_unknown_lsp_scalars(raw: &mut toml::value::Table, path: &Path) -> bool 
     !bad.is_empty()
 }
 
+/// The per-project config file, looked up at a git root or an explicit root.
+pub const CONFIG_FILENAME: &str = ".cartog.toml";
+
 /// Load the local project config from `.cartog.toml`. See [`ConfigLoad`]
 /// for the three possible outcomes; existing commands that don't care
 /// about the rejected-vs-missing distinction can wrap this with
@@ -210,7 +213,7 @@ pub fn load_config() -> ConfigLoad {
 fn local_config_path() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
-        let candidate = dir.join(".cartog.toml");
+        let candidate = dir.join(CONFIG_FILENAME);
         if candidate.exists() {
             return Some(candidate);
         }
@@ -237,6 +240,8 @@ pub(crate) const KNOWN_CONFIG_SECTIONS: &[&str] = &[
     "security",
     "lsp",
     "index",
+    "project",
+    "mcp",
 ];
 
 /// Collect top-level keys that are not a recognized config section.
@@ -381,7 +386,61 @@ pub(crate) fn read_config(path: &Path) -> Option<CartogConfig> {
         return None;
     }
 
+    // Reject an over-long or control-character-bearing `[project]` value before
+    // it reaches the registry and every single-line surface that renders it.
+    if let Err(msg) = validate_project(&parsed) {
+        eprintln!("cartog: error in {}: {msg}", path.display());
+        return None;
+    }
+
     Some(parsed)
+}
+
+/// Reject an unusable `[project]` name/description.
+///
+/// Caps are enforced here rather than at write time so an over-long value the
+/// user *chose* is reported instead of silently truncated (the README fallback
+/// truncates, because there the length was not a choice). Control characters —
+/// newlines and tabs included — are refused because the value flows into
+/// single-line terminal output, JSON, and potentially HTML. An
+/// empty/whitespace-only value is a mistake, not a way to mean "unset": that is
+/// what omitting the key is for.
+pub(crate) fn validate_project(config: &CartogConfig) -> Result<(), String> {
+    let Some(project) = config.project.as_ref() else {
+        return Ok(());
+    };
+    check_project_field("name", project.name.as_deref(), PROJECT_NAME_MAX_CHARS)?;
+    check_project_field(
+        "description",
+        project.description.as_deref(),
+        PROJECT_DESCRIPTION_MAX_CHARS,
+    )
+}
+
+/// Validate one `[project]` field. Char counts, not bytes: the cap is about what
+/// a reader sees, and a byte cap would reject a short accented name.
+fn check_project_field(field: &str, value: Option<&str>, max_chars: usize) -> Result<(), String> {
+    let Some(raw) = value else {
+        return Ok(());
+    };
+    if raw.trim().is_empty() {
+        return Err(format!(
+            "[project] {field} is empty; omit the key instead of setting it to a blank value"
+        ));
+    }
+    if let Some(c) = raw.chars().find(|c| c.is_control()) {
+        return Err(format!(
+            "[project] {field} contains a control character ({}); it must be a single line of plain text",
+            c.escape_debug()
+        ));
+    }
+    let count = raw.trim().chars().count();
+    if count > max_chars {
+        return Err(format!(
+            "[project] {field} exceeds {max_chars} characters (got {count})"
+        ));
+    }
+    Ok(())
 }
 
 /// Reject an invalid `[lsp.<lang>]` block: an empty `command` (no executable to
@@ -557,6 +616,82 @@ pub fn resolve_db_path(explicit: Option<PathBuf>, config: &CartogConfig) -> Path
     // 4. Fallback relative to cwd
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     resolve_root_db_path(&cwd)
+}
+
+/// A project root's database path plus the `[project]` identity its own
+/// `.cartog.toml` declares, resolved without consulting the process cwd.
+#[derive(Debug, Clone)]
+pub struct ProjectAtRoot {
+    pub db_path: PathBuf,
+    /// What the root's config says about its declared identity.
+    pub declared: DeclaredAtRoot,
+}
+
+/// A scanned root's `[project]` identity, keeping "declares nothing" separate
+/// from "could not be read".
+///
+/// The distinction is load-bearing, not pedantry: a config that fails to parse
+/// declares *nothing*, which is not the same as declaring an empty name. A
+/// caller that treats the two alike overwrites a name and description an
+/// earlier, working config stored — so a single typo silently erases them.
+/// `commands::shared::ProjectSource` draws the same line for `cartog index`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclaredAtRoot {
+    /// The config parsed (or is absent): these are its `[project]` values.
+    Known {
+        name: Option<String>,
+        description: Option<String>,
+    },
+    /// A config file exists but could not be read or parsed. Its declared
+    /// identity is unknown, so a writer must keep whatever is stored.
+    Unreadable,
+}
+
+/// Resolve `root`'s database path and declared identity, ignoring the cwd.
+///
+/// [`resolve_db_path`] and [`load_config`] both key off the working directory,
+/// which is right for every command that acts on "the project I am in" and
+/// wrong for `cartog projects scan`, which visits many roots in one process.
+/// This is the root-relative counterpart, applying the same
+/// `.cartog/db.sqlite`-else-legacy convention and honoring a `[database] path`
+/// that root declares for itself.
+///
+/// A root whose config is unreadable still resolves its default database path:
+/// a rejected config is not a reason to claim the project has no index.
+#[must_use]
+pub fn resolve_project_at(root: &Path) -> ProjectAtRoot {
+    let config_path = root.join(CONFIG_FILENAME);
+    let config = read_config(&config_path);
+    // `read_config` returns `None` for both "absent" and "rejected", so the
+    // file's existence is what separates them.
+    let rejected = config.is_none() && config_path.exists();
+    let project = config.as_ref().and_then(|c| c.project.as_ref());
+    let db_path = match config
+        .as_ref()
+        .and_then(|c| c.database.as_ref())
+        .and_then(|d| d.path.as_deref())
+    {
+        // A relative `[database] path` is relative to the root that declared
+        // it, not to the scanning process's cwd.
+        Some(p) => {
+            let expanded = expand_tilde(PathBuf::from(p));
+            if expanded.is_absolute() {
+                expanded
+            } else {
+                root.join(expanded)
+            }
+        }
+        None => resolve_root_db_path(root),
+    };
+    let declared = if rejected {
+        DeclaredAtRoot::Unreadable
+    } else {
+        DeclaredAtRoot::Known {
+            name: project.and_then(|p| p.name()).map(str::to_string),
+            description: project.and_then(|p| p.description()).map(str::to_string),
+        }
+    };
+    ProjectAtRoot { db_path, declared }
 }
 
 /// Prefer `.cartog/db.sqlite`; fall back to legacy `.cartog.db` with a warning.

@@ -1,4 +1,4 @@
-.PHONY: check check-rust check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-csharp check-c check-cpp check-kt check-vue check-svelte check-astro check-react check-install-script tla loom bench bench-memory bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-flaky check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-csharp check-c check-cpp check-kt check-vue check-svelte check-astro check-react check-install-script tla loom bench bench-memory bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
@@ -42,6 +42,31 @@ check-rust: ## cargo fmt + clippy + test
 	cargo fmt --check
 	cargo clippy --all-targets -- -D warnings
 	cargo test
+
+check-flaky: ## Repeat the full suite N times (N=4) to surface cross-test interference
+	@n=$${N:-4}; \
+	echo "Running the full suite $$n times. A test that passes alone but fails here"; \
+	echo "is interfering with a sibling (shared env var, shared temp path, timing)."; \
+	fail=0; \
+	for i in $$(seq 1 $$n); do \
+	  cargo test --workspace > /tmp/cartog-flaky-$$i.log 2>&1; \
+	  code=$$?; \
+	  failures=$$(grep -cE '^test .* FAILED$$' /tmp/cartog-flaky-$$i.log || true); \
+	  errors=$$(grep -cE '^error(\[|:)' /tmp/cartog-flaky-$$i.log || true); \
+	  if [ "$$code" -ne 0 ] && [ "$$failures" -eq 0 ]; then \
+	    echo "run $$i: BUILD ERROR (exit $$code, $$errors error lines) — not a flake:"; \
+	    grep -E '^error(\[|:)' /tmp/cartog-flaky-$$i.log | head -3; \
+	    fail=1; \
+	  elif [ "$$failures" -ne 0 ]; then \
+	    echo "run $$i: $$failures FAILED"; \
+	    grep -E '^test .* FAILED$$' /tmp/cartog-flaky-$$i.log; \
+	    fail=1; \
+	  else \
+	    echo "run $$i: ok (exit $$code)"; \
+	  fi; \
+	done; \
+	[ "$$fail" -eq 0 ] || { echo "FAIL: see /tmp/cartog-flaky-*.log"; exit 1; }
+	@echo "=== no cross-test interference over $${N:-4} full-suite runs ==="
 
 # --- Fixture syntax/build checks ---
 

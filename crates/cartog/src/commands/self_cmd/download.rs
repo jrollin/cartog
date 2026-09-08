@@ -247,7 +247,17 @@ fn http_get_text(url: &str) -> Result<String> {
 /// exit. A corrupt-but-not-crashing binary that hangs on startup would
 /// otherwise hang `cartog self update` indefinitely with the swap
 /// already done; the timeout lets the restore branch fire.
-pub(crate) const SMOKE_TEST_TIMEOUT: Duration = Duration::from_secs(5);
+///
+/// Raised 5s → 30s. The ceiling only has to be *finite* to serve its purpose
+/// (unwedging a hung binary), while being too tight has a much worse failure:
+/// a **healthy** binary gets rejected, the swap is rolled back, and the target
+/// is marked as having failed verification. That happened — a freshly-written
+/// ~88 MB binary, cold in the page cache, first-execution on a machine running
+/// a dozen concurrent processes, exceeded 5s and was thrown away.
+///
+/// A hang costs the user 30s once; a false rejection costs them the upgrade
+/// and tells them their download was corrupt. The asymmetry says be generous.
+pub(crate) const SMOKE_TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Stale staging directory cutoff. A previous upgrade killed by SIGINT
 /// or SIGKILL leaves `.cartog-update-<rand>/` behind; anything older
@@ -287,7 +297,26 @@ pub(crate) fn sweep_stale_staging_dirs(install_dir: &Path) {
     }
 }
 
+/// Verify a freshly-swapped binary answers `--version` within
+/// [`SMOKE_TEST_TIMEOUT`].
+///
+/// # Errors
+///
+/// Errors if the binary cannot be spawned, exits non-zero, or does not exit
+/// before the ceiling (in which case the child is killed).
 pub(crate) fn smoke_test(bin: &Path) -> Result<()> {
+    smoke_test_within(bin, SMOKE_TEST_TIMEOUT)
+}
+
+/// [`smoke_test`] with an explicit ceiling.
+///
+/// Takes the timeout as a parameter rather than reading a global so tests can
+/// exercise the deadline branch cheaply. An env-var seam was tried first and
+/// rejected: a process-global override makes every *sibling* test's
+/// correctness depend on scheduling — a 300 ms ceiling leaking out of the
+/// hung-binary test made a healthy-binary test time out. A parameter cannot
+/// leak.
+pub(crate) fn smoke_test_within(bin: &Path, timeout: Duration) -> Result<()> {
     let mut child = std::process::Command::new(bin)
         .arg("--version")
         .stdin(std::process::Stdio::null())
@@ -295,7 +324,7 @@ pub(crate) fn smoke_test(bin: &Path) -> Result<()> {
         .stderr(std::process::Stdio::null())
         .spawn()?;
 
-    let deadline = std::time::Instant::now() + SMOKE_TEST_TIMEOUT;
+    let deadline = std::time::Instant::now() + timeout;
     loop {
         match child.try_wait()? {
             Some(status) => {
@@ -308,7 +337,7 @@ pub(crate) fn smoke_test(bin: &Path) -> Result<()> {
                 if std::time::Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    anyhow::bail!("{bin:?} --version did not exit within {SMOKE_TEST_TIMEOUT:?}");
+                    anyhow::bail!("{bin:?} --version did not exit within {timeout:?}");
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }

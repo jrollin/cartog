@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "astro build && node scripts/verify-machine-pages.mjs",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check",
+    "verify:machine": "node scripts/verify-machine-pages.mjs"
   },
   "dependencies": {
     "@pagefind/default-ui": "^1.5.2",

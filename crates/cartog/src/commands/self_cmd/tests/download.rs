@@ -145,30 +145,43 @@ fn smoke_test_fails_on_non_zero_exit() {
 #[cfg(unix)]
 #[test]
 fn smoke_test_kills_a_hung_binary_after_timeout() {
-    // Override the timeout via the SMOKE_TEST_TIMEOUT constant is not
-    // possible without exposing a seam; instead, the deadline branch
-    // is reachable as long as the script sleeps longer than the
-    // 5-second ceiling. To keep this fast, we use a script that
-    // sleeps for 30s — the watchdog kills it within the 5s budget.
-    // A regression that drops the timeout would hang this test for
-    // 30 seconds; the test runner's per-test budget is the safety
-    // net. Marked #[ignore] would mask the bug; better to fail loud.
+    // Passes the ceiling as an argument rather than out-sleeping the production
+    // constant.
+    //
+    // The old version slept 30s to out-wait a 5s ceiling and asserted the
+    // watchdog fired within 15s — its runtime AND its assertion were pinned to
+    // a production value it did not control. Raising SMOKE_TEST_TIMEOUT to 30s
+    // (a healthy but slow binary was being rejected) made the sleep and the
+    // ceiling equal, turning this into a coin flip.
+    //
+    // An env-var override was the next attempt and was worse: process-global,
+    // so a 300ms ceiling leaked into `smoke_test_passes_on_zero_exit` and made
+    // *that* healthy binary time out. A parameter cannot leak, and needs no
+    // `#[serial]`.
+    let timeout = Duration::from_millis(300);
+
     let dir = tempfile::TempDir::new().unwrap();
+    // Sleeps far longer than the 300ms ceiling, so the deadline branch is the
+    // only way this can return.
     let bin = write_exec_script(dir.path(), "hang", "#!/bin/sh\nsleep 30\n");
     wait_for_exec_ready(&bin);
+
     let start = std::time::Instant::now();
-    let err = smoke_test(&bin).expect_err("hanging binary must time out");
+    let err = smoke_test_within(&bin, timeout).expect_err("hanging binary must time out");
     let elapsed = start.elapsed();
+
     let msg = format!("{err:#}");
     assert!(
         msg.contains("did not exit"),
         "expected timeout message, got: {msg}"
     );
-    // Deadline is 5s; allow generous slack for slow CI but verify we
-    // didn't actually wait the full 30s.
+    // Generous multiple of the 300ms ceiling — enough that machine load cannot
+    // flip it, while still far below the child's 30s sleep, which is what
+    // proves the watchdog killed the child rather than the child exiting.
     assert!(
-        elapsed < Duration::from_secs(15),
-        "smoke_test should have killed the child within ~5s, took {elapsed:?}"
+        elapsed < Duration::from_secs(10),
+        "smoke_test should have killed the child shortly after its {timeout:?} \
+         ceiling, took {elapsed:?}"
     );
 }
 

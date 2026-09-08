@@ -308,12 +308,38 @@ pub enum Command {
         kind: Option<SymbolKindFilter>,
 
         /// Filter to a specific file path
-        #[arg(long)]
+        ///
+        /// Scoped to this project, so it cannot combine with `--all` (a path in
+        /// one project means nothing in another).
+        #[arg(long, conflicts_with = "all")]
         file: Option<String>,
 
         /// Maximum results to return (capped at 100)
+        ///
+        /// With `--all` this applies **per project**, so the output holds at
+        /// most `limit x max-projects` symbols.
         #[arg(long, default_value = "30")]
         limit: u32,
+
+        /// Search this machine's OTHER indexed projects instead of this one
+        ///
+        /// Results stay grouped per project and ranked within it — cross-project
+        /// relevance is not comparable, so no merged ranking is attempted. Each
+        /// project's database is opened read-only; nothing is ever written.
+        #[arg(long)]
+        all: bool,
+
+        /// With --all: only projects whose root is inside this directory
+        #[arg(long, requires = "all")]
+        under: Option<String>,
+
+        /// With --all: only projects that indexed this language (e.g. typescript)
+        #[arg(long, requires = "all")]
+        lang: Option<String>,
+
+        /// With --all: how many projects to query (default 10)
+        #[arg(long, requires = "all")]
+        max_projects: Option<usize>,
     },
 
     /// Token-budget-aware codebase summary (file tree + top symbols by centrality)
@@ -453,11 +479,24 @@ pub enum Command {
         /// otherwise).
         #[arg(long)]
         rag: bool,
+
+        /// Expose the cross-project tools (`cartog_list_projects`, `cartog_search_all`)
+        ///
+        /// Off by default: they surface the paths and README text of this
+        /// machine's other indexed projects into the session. `[mcp] federated
+        /// = true` in `.cartog.toml` enables them for a project; either source
+        /// turns them on.
+        #[arg(long)]
+        federated: bool,
     },
 
     /// Semantic code search (RAG pipeline)
     #[command(subcommand)]
     Rag(RagCommand),
+
+    /// Inspect the machine-local registry of indexed cartog projects
+    #[command(subcommand)]
+    Projects(ProjectsCommand),
 
     /// Manage the cartog installation: upgrade, inspect, roll back
     #[command(name = "self", subcommand)]
@@ -475,6 +514,53 @@ pub enum Command {
     ///
     /// Example: `cartog manpage > cartog.1 && man ./cartog.1`
     Manpage,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProjectsCommand {
+    /// List every indexed project on this machine, with staleness markers
+    List,
+
+    /// Register an already-indexed project without re-indexing it.
+    ///
+    /// Use this to make a project cartog indexed a while ago show up in
+    /// `projects list` again. It refuses when there is no index at the path —
+    /// it registers an existing one, it never creates one.
+    Add {
+        /// Project root to register (defaults to the current directory)
+        #[arg(default_value = ".")]
+        path: String,
+    },
+
+    /// Register every already-indexed project under a directory
+    ///
+    /// Walks only the directory you name — never `$HOME` by default.
+    Scan {
+        /// Directory to search for indexed projects
+        dir: String,
+
+        /// How many levels below `dir` to search
+        #[arg(long, default_value = "2")]
+        depth: u32,
+
+        /// Report what would be registered without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Drop one project's registry row. Never touches its index.
+    Forget {
+        /// Project id, root path, database path, or name — either the declared
+        /// `[project] name` or the directory basename (from `projects list`)
+        target: String,
+    },
+
+    /// Drop registry rows whose database file no longer exists
+    Prune {
+        /// Report what would be dropped without changing the registry
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

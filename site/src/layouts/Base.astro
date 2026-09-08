@@ -10,6 +10,8 @@ interface Props {
   ogType?: string;
   ogUrl: string;
   footerVariant?: "home" | "docs";
+  /** Path to this page's plain-Markdown twin, advertised to agents via `rel="alternate"`. */
+  markdownUrl?: string;
 }
 
 const {
@@ -17,6 +19,7 @@ const {
   description,
   ogType = "website",
   ogUrl,
+  markdownUrl,
   footerVariant = "home",
 } = Astro.props;
 
@@ -33,6 +36,12 @@ const favicon =
     <title>{title}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={ogUrl} />
+    {/* Machine-readable twins: an agent that lands on the HTML can find the
+        Markdown and the full index without already knowing the URLs. */}
+    {markdownUrl && (
+      <link rel="alternate" type="text/markdown" href={markdownUrl} title="Markdown version" />
+    )}
+    <link rel="alternate" type="text/plain" href="https://www.cartog.dev/llms-full.txt" title="Full index for LLMs" />
     <link rel="icon" href={favicon} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />

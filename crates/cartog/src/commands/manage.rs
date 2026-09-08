@@ -34,12 +34,21 @@ pub fn cmd_push(
 pub fn cmd_pull(
     db_path: &Path,
     config: &CartogConfig,
+    project: super::shared::ProjectSource<'_>,
     cli_remote: Option<&str>,
     force: bool,
     no_sign_request: bool,
     json: bool,
 ) -> Result<()> {
-    remote::pull_index(db_path, config, cli_remote, force, no_sign_request, json)
+    remote::pull_index(
+        db_path,
+        config,
+        project,
+        cli_remote,
+        force,
+        no_sign_request,
+        json,
+    )
 }
 
 /// Index statistics summary.
