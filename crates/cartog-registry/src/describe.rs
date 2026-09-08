@@ -277,11 +277,11 @@ fn map_outside_code_spans(text: &str, f: impl Fn(&str) -> String) -> String {
     let mut i = 0;
     while i < chars.len() {
         if chars[i] == '`' {
-            if let Some(end) = closing_backtick(&chars, i) {
+            if let Some(end) = span_end(&chars, i) {
                 out.push_str(&f(&plain));
                 plain.clear();
-                out.extend(&chars[i..=end]);
-                i = end + 1;
+                out.extend(&chars[i..end]);
+                i = end;
                 continue;
             }
         }
@@ -292,12 +292,28 @@ fn map_outside_code_spans(text: &str, f: impl Fn(&str) -> String) -> String {
     out
 }
 
-/// Index of the backtick closing the span opened at `start`, if it is closed.
-fn closing_backtick(chars: &[char], start: usize) -> Option<usize> {
-    chars[start + 1..]
-        .iter()
-        .position(|&c| c == '`')
-        .map(|offset| start + 1 + offset)
+/// Index just past the code span opening at `start`, if it is closed.
+///
+/// A closer must be a backtick run of the *same* length as the opener, which is
+/// how [`copy_code_span`] and `remove_emphasis` already delimit spans. Matching
+/// the first single backtick instead closed a `` `` ``-fenced span early, so the
+/// passes below stripped the markup it was supposed to keep literal.
+fn span_end(chars: &[char], start: usize) -> Option<usize> {
+    let open_end = run_end(chars, start);
+    let fence_len = open_end - start;
+    let mut i = open_end;
+    while i < chars.len() {
+        if chars[i] == '`' {
+            let close_end = run_end(chars, i);
+            if close_end - i == fence_len {
+                return Some(close_end);
+            }
+            i = close_end;
+            continue;
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Drop `![alt](url)` and `![alt][ref]` entirely — an image carries no prose.
@@ -892,6 +908,15 @@ The real summary.
             (
                 "Write `![alt](img.png)` inline.",
                 "Write ![alt](img.png) inline.",
+            ),
+            // A double-backtick fence is the idiom for a span containing a
+            // backtick, and is what this repo's own doc comments use. Closing
+            // at the first single tick ended the span early and stripped the
+            // content the fix exists to keep.
+            ("Set ``<div>`` explicitly.", "Set <div> explicitly."),
+            (
+                "Use ``[foo](bar)`` in configs.",
+                "Use [foo](bar) in configs.",
             ),
         ] {
             let d = describe("README.md", body).unwrap();

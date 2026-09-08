@@ -228,6 +228,49 @@ fn a_search_where_every_candidate_was_unreadable_does_not_claim_no_match() {
     );
 }
 
+/// The structured half must fit the cap, not just the bare array.
+///
+/// `success_result` never re-clamps `structuredContent`, so the element trim is
+/// its only bound — and this payload nests one level deeper than the other list
+/// tools (`projects[]` each holding `symbols[]`) plus four wrapper fields, so a
+/// bare-array budget overshot the cap by ~4 KB. Mirrors the same assertion on
+/// `cartog_list_projects`.
+#[test]
+fn a_maximal_fan_out_fits_both_halves_of_the_envelope() {
+    let long = "q".repeat(120);
+    let projects: Vec<ProjectMatches> = (0..400)
+        .map(|i| ProjectMatches {
+            name: format!("project-{i}-{long}"),
+            root: format!("/home/u/work/project-{i}/{long}"),
+            db_path: format!("/home/u/work/project-{i}/.cartog/db.sqlite"),
+            description: Some(long.clone()),
+            symbols: Vec::new(),
+        })
+        .collect();
+    let total = projects.len();
+
+    // 50 root causes is the documented worst case, and they share the envelope.
+    let unreadable = (0..50)
+        .map(|i| format!("project-{i}: {long}"))
+        .collect::<Vec<_>>();
+
+    let envelope_budget = crate::mcp_list_budget().saturating_sub(crate::mcp_list_budget() / 8);
+    let (kept, omitted) = crate::fit_to_budget(projects, envelope_budget);
+    assert!(
+        omitted > 0,
+        "precondition: this fan-out must exceed the budget"
+    );
+    assert_eq!(kept.len() + omitted, total, "nothing may be lost silently");
+
+    let trimmed = result(kept, unreadable, total, 0);
+    let structured = serde_json::to_string_pretty(&trimmed).unwrap();
+    assert!(
+        structured.len() <= crate::mcp_max_bytes(),
+        "structuredContent must stay under the response cap, got {} bytes",
+        structured.len()
+    );
+}
+
 /// Selecting no candidate is not the same as searching some and finding
 /// nothing. "No symbols matching X" implies a search happened; when a filter
 /// excluded every project, an agent reads that as "the symbol exists nowhere

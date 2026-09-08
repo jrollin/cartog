@@ -354,9 +354,18 @@ impl CartogServer {
 
             // Trim whole projects at the element level so the text block and
             // `structuredContent` are bounded together — an outputSchema tool
-            // must always return structuredContent, so capping only the text
-            // would leave the structured half unbounded (cf. PR #151).
-            let (projects, omitted) = fit_to_budget(projects, mcp_list_budget());
+            // must always return structuredContent, and `success_result` never
+            // re-clamps the structured half, so this trim is its only bound
+            // (cf. PR #151).
+            //
+            // Budgeted against the *envelope*, not the bare array, exactly as
+            // `projects::trim_to_budget` does: the wrapper fields plus this
+            // payload's extra nesting level (`projects[]` each holding
+            // `symbols[]`) pushed a bare-array fit of 63,272 bytes to 67,701
+            // serialized — over the cap. `unreadable` shares the same envelope,
+            // so its up-to-50 root-cause strings are covered by the haircut.
+            let envelope_budget = mcp_list_budget().saturating_sub(mcp_list_budget() / 8);
+            let (projects, omitted) = fit_to_budget(projects, envelope_budget);
 
             let result = SearchAllResult {
                 registry_available: true,
