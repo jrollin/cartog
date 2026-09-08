@@ -107,6 +107,30 @@ fn expand_tilde_expands_a_bare_tilde() {
     );
 }
 
+/// The tilde is a path component, so the platform's own separator works.
+///
+/// A `~/`-only string test expanded on unix and silently failed on Windows,
+/// where the separator is `\` — and Windows is a shipped release target.
+///
+/// On unix this is tautological (`MAIN_SEPARATOR` is `/`, so both forms pass);
+/// it earns its place on the Windows CI target, where the old form fails. A
+/// hardcoded `~\work` would instead be wrong on unix, where `\` is a legal
+/// filename character rather than a separator.
+#[test]
+fn expand_tilde_uses_the_platform_separator() {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| "/tmp".into());
+    let sep = std::path::MAIN_SEPARATOR;
+
+    let expanded = expand_tilde(PathBuf::from(format!("~{sep}work")));
+    assert_eq!(
+        expanded,
+        PathBuf::from(&home).join("work"),
+        "`~{sep}work` must expand on this platform"
+    );
+}
+
 #[test]
 fn test_expand_tilde_no_tilde() {
     let p = PathBuf::from("/absolute/path");

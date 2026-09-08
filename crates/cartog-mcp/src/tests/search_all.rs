@@ -289,6 +289,13 @@ fn a_fan_out_that_selected_no_candidate_does_not_claim_no_match() {
         out.contains("no other indexed project") || out.contains("No other indexed project"),
         "must say the selection was empty, got: {out}"
     );
+    // Must not blame the filter: self-exclusion and a `missing` marker drop
+    // rows before `under`/`lang` are consulted, so a reader with no filter set
+    // was previously told to widen one.
+    assert!(
+        !out.contains("none matched the filter"),
+        "the filter is only one of several reasons, got: {out}"
+    );
 }
 
 /// The `~` contract must match the CLI's `config::expand_tilde`.

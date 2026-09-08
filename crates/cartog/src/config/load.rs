@@ -751,13 +751,15 @@ fn warn_orphan_legacy_once(path: &Path) {
 /// expanded it and searched all of `$HOME`: the same argument, opposite
 /// behaviour per surface. `~user` is left alone, since resolving another
 /// account's home is not something to guess at.
+///
+/// Platform separators are honoured, so `~\work` expands on Windows.
 pub fn expand_tilde(p: PathBuf) -> PathBuf {
-    let s = p.to_string_lossy();
-    let rest = if s == "~" {
-        ""
-    } else if let Some(r) = s.strip_prefix("~/") {
-        r
-    } else {
+    // Matched as a path *component*, not a string prefix: on Windows the
+    // separator is `\`, so a `~/`-only string test left `~\work` unexpanded
+    // there while working on unix. `Path::strip_prefix` uses the platform's
+    // separators and matches `~` exactly, so `~` and `~<sep>x` both expand and
+    // `~user` does not — identical to the MCP side's `canonical_path`.
+    let Ok(rest) = p.strip_prefix("~") else {
         return p;
     };
     match std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {

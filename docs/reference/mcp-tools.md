@@ -111,8 +111,11 @@ silently dropped — a schema drift, a corrupt file and a permission error need
 different fixes. Two cases are reported as distinct from a genuine
 no-match, because an agent would otherwise take either as "the symbol exists
 nowhere else": when *no* candidate could be read, the text says the search could
-not run; when a filter (or the project cap) selected *no* candidate at all, it
-says nothing was searched and names the reason. `under` accepts `~` and `~/path` (a bare `~` is your home directory); `~user` is left as written, since another account's home is not guessed at.
+not run; when *no* candidate was eligible at all — no other project indexed,
+every one excluded as this project or `missing`, or none inside the given
+`under`/`lang` — it says nothing was searched rather than naming one cause. (The
+project cap cannot produce this: it always leaves at least one candidate
+queried.) `under` accepts `~` and `~/path` (a bare `~` is your home directory); `~user` is left as written, since another account's home is not guessed at.
 
 Like `cartog_list_projects`, it is gated by **neither** `refuse_if_degraded` nor
 `refuse_if_read_only`: it never touches *this* project's index, and a server with

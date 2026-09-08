@@ -134,9 +134,12 @@ pub fn cmd_search_all(
             elided_by_cap,
             total_matches: 0,
         };
-        // Only the filter reaches here: the cap clamps to >= 1 and truncates
-        // after counting, so an elision always leaves a candidate queried. See
-        // `the_cap_cannot_elide_every_candidate`.
+        // The cap cannot reach here: it clamps to >= 1 and truncates after
+        // counting, so an elision always leaves a candidate queried — the clamp
+        // is pinned by `the_project_cap_is_clamped_to_the_same_range_as_the_mcp_tool`
+        // below, and the same invariant by `the_cap_cannot_elide_every_candidate`
+        // in cartog-mcp. `describe` names whichever filter was actually applied,
+        // or the registry itself when none was.
         return super::shared::output(&empty, json, token_budget, |_| {
             format!("No other indexed project matches {}.\n", describe(filter))
         });
