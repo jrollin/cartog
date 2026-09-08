@@ -228,6 +228,45 @@ fn a_search_where_every_candidate_was_unreadable_does_not_claim_no_match() {
     );
 }
 
+/// Selecting no candidate is not the same as searching some and finding
+/// nothing. "No symbols matching X" implies a search happened; when a filter
+/// excluded every project, an agent reads that as "the symbol exists nowhere
+/// else" and stops looking. The CLI already distinguishes the two.
+#[test]
+fn a_fan_out_that_selected_no_candidate_does_not_claim_no_match() {
+    let r = result(Vec::new(), Vec::new(), 0, 0);
+
+    let out = render_search_all(&r, "CreateOrder");
+
+    assert!(
+        !out.contains("No symbols matching"),
+        "must not imply the other projects were searched, got: {out}"
+    );
+    assert!(
+        out.contains("no other indexed project") || out.contains("No other indexed project"),
+        "must say the selection was empty, got: {out}"
+    );
+}
+
+/// Nothing searched *because of the cap* must still name the cap, so the reader
+/// raises `max_projects` rather than widening a filter that was never the
+/// problem. The header says nothing was searched; the notice says why.
+#[test]
+fn no_candidate_queried_because_of_the_cap_points_at_the_cap() {
+    let r = result(Vec::new(), Vec::new(), 0, 7);
+
+    let out = render_search_all(&r, "Widget");
+
+    assert!(
+        !out.contains("No symbols matching"),
+        "nothing was searched, so this is not a no-match, got: {out}"
+    );
+    assert!(
+        out.contains('7') && out.contains("max_projects"),
+        "must point at the cap, got: {out}"
+    );
+}
+
 #[test]
 fn an_empty_result_still_reports_projects_elided_by_the_cap() {
     let r = result(Vec::new(), Vec::new(), 2, 7);

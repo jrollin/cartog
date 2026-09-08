@@ -480,7 +480,22 @@ pub(crate) fn render_search_all(result: &SearchAllResult, query: &str) -> String
     // a false negative that reads as "the symbol is not there".
     let mut out = if result.projects.is_empty() {
         let searched = result.queried.saturating_sub(result.unreadable.len());
-        if searched == 0 && result.queried > 0 {
+        if result.queried == 0 {
+            // Nothing was selected, so nothing was searched. Saying "no symbols
+            // matching" implies otherwise, and an agent reads that as "the
+            // symbol exists nowhere else" and stops looking. Why nothing was
+            // selected is left to the cap notice appended below, which already
+            // states it whenever the cap is what dropped the candidates.
+            // "none matched the filter" would be wrong when the cap is what
+            // dropped them, and the notice below already explains that case.
+            let why = if result.elided_by_cap > 0 {
+                "see below"
+            } else {
+                "none matched the filter — widen `under`/`lang`, or check \
+                 `cartog projects list`"
+            };
+            format!("No other indexed project was searched for '{query}': {why}.\n")
+        } else if searched == 0 {
             format!(
                 "No project could be searched for '{query}' — none of the {} candidate(s) \
                  could be read.\n",
