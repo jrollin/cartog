@@ -120,6 +120,13 @@ fn first_prose_paragraph(text: &str) -> Option<String> {
             }
         }
 
+        // A 4-space indent starts a code block, but only where a paragraph
+        // could start: inside one, an indented line is a wrapped continuation
+        // (or a list's), and treating it as code would truncate the sentence.
+        // Tested before the trim-based checks below, which cannot see indent.
+        if paragraph.is_empty() && is_indented_code(line) {
+            continue;
+        }
         if trimmed.is_empty() || is_structural(trimmed) {
             if !paragraph.is_empty() {
                 break;
@@ -151,16 +158,22 @@ enum HtmlBlock {
 }
 
 impl HtmlBlock {
-    /// The block a `<`-leading line opens.
+    /// The block a `<`-leading line opens, or `None` when the line is already
+    /// complete on its own.
     ///
     /// An `Element` block runs to the next blank line, which is CommonMark's
-    /// rule and also why a self-contained `<p>text</p>` needs no special case:
-    /// the line after it is blank, so the block ends there either way.
+    /// rule for a multi-line block. A line that closes everything it opened is
+    /// *not* such a block: the centered-logo README puts a complete `<img>` or
+    /// `<p>…</p>` on its own line with the tagline directly beneath and no
+    /// blank between, and treating that as an open block ate the tagline.
     fn opened_by(trimmed: &str) -> Option<Self> {
         if let Some(rest) = trimmed.strip_prefix("<!--") {
             return (!rest.contains("-->")).then_some(Self::Comment);
         }
-        trimmed.starts_with('<').then_some(Self::Element)
+        if !trimmed.starts_with('<') {
+            return None;
+        }
+        (!is_markup_only_html_line(trimmed)).then_some(Self::Element)
     }
 
     /// True when `trimmed` is the block's last line.
@@ -170,6 +183,81 @@ impl HtmlBlock {
             Self::Element => trimmed.is_empty(),
         }
     }
+}
+
+/// Whether a `<`-leading line is complete *and* carries no prose of its own.
+///
+/// Both halves matter. Complete, so `<div>` still opens a block that runs to
+/// the blank line. Prose-free, so `<p>ignored</p>` stays a block whose text is
+/// markup rather than a description — only the decorative shapes (`<br>`,
+/// `<img>`, `<p align="center"><img/></p>`) end on their own line, which is
+/// what stops them swallowing the tagline beneath.
+fn is_markup_only_html_line(trimmed: &str) -> bool {
+    if !is_balanced_html_line(trimmed) {
+        return false;
+    }
+    // Text outside the tags is prose the block rule should still consume.
+    let mut rest = trimmed;
+    while let Some(open) = rest.find('<') {
+        if !rest[..open].trim().is_empty() {
+            return false;
+        }
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('>') else {
+            return false;
+        };
+        rest = &after[close + 1..];
+    }
+    rest.trim().is_empty()
+}
+
+/// Whether a `<`-leading line leaves no element open.
+///
+/// Counts opening against closing and self-closing tags rather than pattern
+/// matching a tag list: `<br>`, `<img …/>` and `<p …><img/></p>` all balance,
+/// while `<div>` does not. A void element written without a slash (`<br>`,
+/// `<img …>`, `<hr>`) has no closer, so it is listed — that set is fixed by
+/// the HTML spec and short.
+fn is_balanced_html_line(trimmed: &str) -> bool {
+    const VOID: [&str; 8] = ["br", "img", "hr", "input", "meta", "link", "source", "col"];
+    let mut depth = 0i32;
+    let mut rest = trimmed;
+    while let Some(open) = rest.find('<') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('>') else {
+            // An unterminated tag spills onto the next line: a real block.
+            return false;
+        };
+        let inner = &after[..close];
+        rest = &after[close + 1..];
+
+        if inner.starts_with('/') {
+            depth -= 1;
+        } else if inner.ends_with('/') {
+            // Self-closing, contributes nothing.
+        } else {
+            let name = inner
+                .split([' ', '\t', '\n'])
+                .next()
+                .unwrap_or("")
+                .trim_end_matches('/')
+                .to_ascii_lowercase();
+            if !VOID.contains(&name.as_str()) {
+                depth += 1;
+            }
+        }
+    }
+    depth <= 0
+}
+
+/// A line indented enough to be a code block (4 spaces, or a tab).
+///
+/// Only meaningful where a paragraph could begin — see the call site.
+fn is_indented_code(line: &str) -> bool {
+    if line.trim().is_empty() {
+        return false;
+    }
+    line.starts_with("    ") || line.starts_with('\t')
 }
 
 /// The fence character of a code-fence line (``` or ~~~), if any.
@@ -323,7 +411,7 @@ fn remove_images(text: &str) -> String {
     while let Some(start) = rest.find("![") {
         out.push_str(&rest[..start]);
         let after = &rest[start + 2..];
-        let Some(close) = after.find(']') else {
+        let Some(close) = matching_bracket(after) else {
             // Unterminated: keep the literal so nothing is silently eaten.
             out.push_str(&rest[start..]);
             return out;
@@ -336,6 +424,24 @@ fn remove_images(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Offset of the `]` closing a bracket span, honouring nesting.
+///
+/// The first `]` is the wrong one when the label itself holds a link, as in
+/// `![img in [link](u)](v)`: taking it consumed `(u)` as the image target and
+/// left `](v)` in the description.
+fn matching_bracket(after_open: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, c) in after_open.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' if depth == 0 => return Some(i),
+            ']' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Rewrite `[text](url)` / `[text][ref]` / `[text]` to `text`.
@@ -900,6 +1006,68 @@ The real summary.
     /// HTML syntax lost the very thing it was describing — `` `<div>` ``
     /// vanished outright. This text becomes a project description an agent
     /// reads, so silently eating it is worse than leaving markup in.
+    /// An indented code block is code, not prose.
+    ///
+    /// `first_prose_paragraph` trims each line before testing, so a 4-space
+    /// block looked like ordinary text; a README opening with an install
+    /// snippet stored the snippet as its description. Fenced blocks were
+    /// already handled — this was the one code-block form that leaked.
+    #[test]
+    fn an_indented_code_block_is_not_prose() {
+        let body = "# T\n\n    cargo install thing\n\nThe real summary.\n";
+        let d = describe("README.md", body).expect("must find prose");
+        assert_eq!(d.text, "The real summary.");
+    }
+
+    /// A list's continuation lines are indented too, so indentation alone must
+    /// not be read as code once a paragraph is under way.
+    #[test]
+    fn an_indented_continuation_line_stays_part_of_its_paragraph() {
+        let body = "# T\n\nA summary that wraps\n    onto an indented line.\n";
+        let d = describe("README.md", body).expect("must find prose");
+        assert_eq!(d.text, "A summary that wraps onto an indented line.");
+    }
+
+    /// A link nested in image alt text must not leak markup.
+    ///
+    /// `remove_images` found the first `]` — the inner link's — and consumed
+    /// the wrong `(…)` as the image target, leaving the remainder behind.
+    #[test]
+    fn a_link_nested_in_image_alt_text_is_removed_whole() {
+        let body = "Nested ![img in [link](u)](v) prose.\n";
+        let d = describe("README.md", body).expect("must find prose");
+        assert_eq!(d.text, "Nested prose.");
+    }
+
+    /// A self-contained HTML line must not swallow the paragraph under it.
+    ///
+    /// CommonMark runs an HTML *block* to the next blank line, which is right
+    /// for a multi-line block. But the centered-logo README shape puts a
+    /// complete `<img>` or `<br>` on its own line with the tagline directly
+    /// beneath and no blank between — so the block rule ate exactly the prose
+    /// the description exists to surface.
+    #[test]
+    fn a_self_contained_html_line_does_not_swallow_the_next_paragraph() {
+        for body in [
+            "# proj\n\n<br>\nA fast thing.\n",
+            "<img src=\"logo.png\">\nA fast thing.\n",
+            "<p align=\"center\"><img src=\"logo.png\" /></p>\nA fast thing.\n",
+        ] {
+            let d = describe("README.md", body)
+                .unwrap_or_else(|| panic!("must find prose, body: {body:?}"));
+            assert_eq!(d.text, "A fast thing.", "body: {body:?}");
+        }
+    }
+
+    /// A genuinely multi-line HTML block still runs to the blank line, or the
+    /// fix above would leak raw markup into the description.
+    #[test]
+    fn a_multi_line_html_block_still_runs_to_the_blank_line() {
+        let body = "<div>\n  <img src=\"logo.png\">\n</div>\n\nA fast thing.\n";
+        let d = describe("README.md", body).expect("must find prose");
+        assert_eq!(d.text, "A fast thing.");
+    }
+
     #[test]
     fn markup_inside_a_code_span_is_literal() {
         for (body, want) in [
