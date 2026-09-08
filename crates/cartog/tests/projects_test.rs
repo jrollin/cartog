@@ -436,7 +436,7 @@ fn projects_list_works_from_a_directory_with_no_git_and_no_config() {
 // ── corruption ──
 
 #[test]
-fn a_corrupt_registry_is_renamed_aside_rather_than_truncated() {
+fn a_corrupt_registry_survives_a_read_and_is_quarantined_by_the_next_write() {
     let sb = Sandbox::new();
     assert!(sb.index().status.success());
 
@@ -448,8 +448,24 @@ fn a_corrupt_registry_is_renamed_aside_rather_than_truncated() {
     let dir = registry.parent().unwrap().to_path_buf();
     fs::write(&registry, b"this is not a database").unwrap();
 
+    // A read must not rename the user's file, so it reports no projects and
+    // leaves the corruption in place for the write path to handle.
     let out = sb.cmd(&["projects", "list"]);
     assert!(out.status.success(), "a corrupt registry is not fatal");
+    assert!(
+        registry.exists(),
+        "a listing must not rename the registry out from under the user"
+    );
+
+    // The write path is the quarantiner: indexing recovers and preserves the
+    // corrupt bytes aside.
+    // `--force`: a second no-op pass changes nothing, and the registry hook
+    // deliberately skips a write that has nothing new to record.
+    let reindex = sb.cmd_env(
+        &["index", "--no-lsp", "--force", "."],
+        &[("CARTOG_AUTO_INIT", "1")],
+    );
+    assert!(reindex.status.success(), "the index must recover");
 
     let quarantined: Vec<_> = fs::read_dir(&dir)
         .unwrap()
