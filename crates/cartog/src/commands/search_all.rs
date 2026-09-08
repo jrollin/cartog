@@ -712,6 +712,44 @@ mod tests {
         assert!(text.contains("ruby"), "got {text}");
     }
 
+    /// The zero-candidate line names the filter that was applied, or the
+    /// registry when none was — never a filter the user did not set.
+    ///
+    /// The MCP surface got this wrong in the other direction (it hardcoded
+    /// "none matched the filter"), so the CLI's behaviour is pinned here rather
+    /// than left to `describe`'s unit test alone.
+    #[test]
+    fn the_zero_candidate_line_names_only_what_was_applied() {
+        let no_filter = FanoutFilter {
+            under: None,
+            lang: None,
+            max_projects: None,
+        };
+        let line = format!(
+            "No other indexed project matches {}.\n",
+            describe(&no_filter)
+        );
+        assert!(
+            line.contains("this machine's registry"),
+            "with no filter set, blame the registry, not a filter: {line}"
+        );
+        assert!(
+            !line.contains("under") && !line.contains("language"),
+            "must not name a filter the caller never set: {line}"
+        );
+
+        let filtered = FanoutFilter {
+            under: Some(PathBuf::from("/w/team")),
+            lang: None,
+            max_projects: None,
+        };
+        let line = format!(
+            "No other indexed project matches {}.\n",
+            describe(&filtered)
+        );
+        assert!(line.contains("/w/team"), "name the applied filter: {line}");
+    }
+
     #[test]
     fn a_description_is_carried_through_for_routing() {
         // The description is why an agent can pick the right project, so it
