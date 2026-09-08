@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+
+# Machine-readable copies of this site, for coding agents and LLM crawlers.
+# cartog's users are agents, so the docs are served as plain text too.
+# /llms.txt      — short index (start here)
+# /llms-full.txt — full index: every page and every canonical doc
+# /index.md      — landing page as Markdown
+# /usage.md      — usage guide as Markdown
