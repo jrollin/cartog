@@ -252,11 +252,52 @@ fn is_badge_only(trimmed: &str) -> bool {
 /// markers. See [`remove_emphasis`]. `<...>` is only markup when it opens like
 /// a real tag, so `< 1 MB` survives; see [`remove_html_tags`].
 fn strip_inline_markup(text: &str) -> String {
-    let s = remove_images(text);
-    let s = unwrap_links(&s);
-    let s = remove_html_tags(&s);
-    let s = remove_emphasis(&s);
-    collapse_whitespace(&s)
+    // Applied per non-code segment, not to the whole string: a code span is
+    // literal for every pass, so a README documenting `[a](b)` or `<div>` keeps
+    // it. `remove_emphasis` walks spans itself (it must keep `*args` intact),
+    // so it still runs over the joined result.
+    let stripped = map_outside_code_spans(text, |segment| {
+        let s = remove_images(segment);
+        let s = unwrap_links(&s);
+        remove_html_tags(&s)
+    });
+    collapse_whitespace(&remove_emphasis(&stripped))
+}
+
+/// Apply `f` to every stretch of `text` that sits outside a backtick code span,
+/// passing spans through with their delimiters intact.
+///
+/// The delimiters survive here because `remove_emphasis` strips them in the
+/// final pass; dropping them now would let the span's contents be re-parsed as
+/// markup by a later caller.
+fn map_outside_code_spans(text: &str, f: impl Fn(&str) -> String) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut plain = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '`' {
+            if let Some(end) = closing_backtick(&chars, i) {
+                out.push_str(&f(&plain));
+                plain.clear();
+                out.extend(&chars[i..=end]);
+                i = end + 1;
+                continue;
+            }
+        }
+        plain.push(chars[i]);
+        i += 1;
+    }
+    out.push_str(&f(&plain));
+    out
+}
+
+/// Index of the backtick closing the span opened at `start`, if it is closed.
+fn closing_backtick(chars: &[char], start: usize) -> Option<usize> {
+    chars[start + 1..]
+        .iter()
+        .position(|&c| c == '`')
+        .map(|offset| start + 1 + offset)
 }
 
 /// Drop `![alt](url)` and `![alt][ref]` entirely — an image carries no prose.
@@ -834,6 +875,37 @@ The real summary.
         let body = "Call `__init__` and `*args` and `**kwargs`.";
         let d = describe("README.md", body).unwrap();
         assert_eq!(d.text, "Call __init__ and *args and **kwargs.");
+    }
+
+    /// A code span is literal for **every** pass, not just emphasis.
+    ///
+    /// `remove_emphasis` already respected spans, but images, links and HTML
+    /// tags were stripped before it ran, so a README documenting markdown or
+    /// HTML syntax lost the very thing it was describing — `` `<div>` ``
+    /// vanished outright. This text becomes a project description an agent
+    /// reads, so silently eating it is worse than leaving markup in.
+    #[test]
+    fn markup_inside_a_code_span_is_literal() {
+        for (body, want) in [
+            ("Set `<div>` explicitly.", "Set <div> explicitly."),
+            ("Use `[foo](bar)` in configs.", "Use [foo](bar) in configs."),
+            (
+                "Write `![alt](img.png)` inline.",
+                "Write ![alt](img.png) inline.",
+            ),
+        ] {
+            let d = describe("README.md", body).unwrap();
+            assert_eq!(d.text, want, "body: {body}");
+        }
+    }
+
+    /// The passes must still strip markup *outside* a span, or the fix above
+    /// would trade one silent failure for another.
+    #[test]
+    fn markup_outside_a_code_span_is_still_stripped() {
+        let body = "A [link](url) and <b>tag</b> and ![img](i.png) summary.";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "A link and tag and summary.");
     }
 
     #[test]

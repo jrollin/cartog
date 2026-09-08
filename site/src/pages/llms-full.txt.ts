@@ -46,7 +46,7 @@ editors. Reference: ${SITE}/usage.html#mcp-server
 
 ## Markdown for agents
 
-Append \`.md\` to any page URL for a plain-Markdown version of that page:
+Two pages are served as plain Markdown:
 ${SITE}/index.md (the project README) and ${SITE}/usage.md (the usage guide).
 
 Those two are prose overviews. The exhaustive references — every CLI command,

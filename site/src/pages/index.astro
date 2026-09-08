@@ -653,7 +653,7 @@ import { withBase } from "../lib/url";
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.08s;">
           <h3><span class="feature-icon">🧰</span> 16 tools, typed output</h3>
-          <p>13 read tools (<code>map</code>, <code>search</code>, <code>refs</code>, <code>impact</code>, <code>rag_search</code>, …) ship <code>readOnlyHint</code> and declare an <code>outputSchema</code>, so clients skip approval prompts and get validated <code>structuredContent</code>. 2 write tools build the index.</p>
+          <p>13 read tools (<code>map</code>, <code>search</code>, <code>refs</code>, <code>impact</code>, <code>rag_search</code>, …) ship <code>readOnlyHint</code> and declare an <code>outputSchema</code>, so clients skip approval prompts and get validated <code>structuredContent</code>. 2 write tools build the index, and <code>cartog_update</code> arms a deferred self-update.</p>
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.16s;">
           <h3><span class="feature-icon">📡</span> Live + progress-aware</h3>
@@ -661,7 +661,7 @@ import { withBase } from "../lib/url";
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.24s;">
           <h3><span class="feature-icon">🗂️</span> Several repos on one machine</h3>
-          <p>Your agent is in the API gateway; the symbol lives in the orders service. <code>cartog search CreateOrder --all</code> finds it across your <em>other</em> indexed projects and returns the <code>--db</code> path to drill in. <strong>Opt-in per project</strong> (<code>[mcp] federated</code>) — it shows other repos' paths and descriptions, so nothing crosses a boundary you didn't open. One repo? Ignore it, there is nothing to configure.</p>
+          <p>Your agent is in the API gateway; the symbol lives in the orders service. <code>cartog search CreateOrder --all</code> finds it across your <em>other</em> indexed projects and returns the <code>--db</code> path to drill in — the CLI opts in per invocation, with that flag. Giving an <em>agent</em> the same reach is separate and off by default: <code>[mcp] federated</code> adds the two cross-project MCP tools, since those surface other repos' paths and descriptions into a session. One repo? Ignore all of it, there is nothing to configure.</p>
         </div>
       </div>
 
