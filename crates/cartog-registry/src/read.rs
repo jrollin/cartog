@@ -9,7 +9,6 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::corrupt::quarantine_if_corrupt;
 use crate::model::{Description, DescriptionSource, Listing, Markers, ProjectRow};
 use crate::open::open_read_only;
 use crate::slot::slot_for_db;
@@ -43,8 +42,12 @@ pub fn list_projects_at(
     if !registry.exists() {
         return Listing::unavailable();
     }
-    quarantine_if_corrupt(registry);
-
+    // Deliberately does NOT quarantine. A listing is a read: renaming the
+    // user's registry as a side effect of `cartog projects list` is not
+    // predictable from the command, and the reader gains nothing from it —
+    // the failed open below already degrades to "no projects". Quarantine
+    // stays on the write path, which is the caller that needs the path
+    // cleared before it can make progress.
     let conn = match open_read_only(registry) {
         Ok(c) => c,
         Err(e) => {
@@ -733,8 +736,14 @@ mod tests {
         assert_eq!(row.file_count, Some(412), "the sane columns survive");
     }
 
+    /// A corrupt registry degrades the listing and leaves the file alone.
+    ///
+    /// The reader needs the first half only. Renaming the user's registry is
+    /// not a predictable side effect of `cartog projects list`, so quarantine
+    /// belongs to the write path — which is also the only caller that cannot
+    /// make progress until the path is cleared.
     #[test]
-    fn a_corrupt_registry_lists_as_unavailable_and_is_quarantined() {
+    fn a_corrupt_registry_lists_as_unavailable_without_renaming_it() {
         let f = Fixture::new();
         std::fs::write(&f.registry, b"not a database").unwrap();
 
@@ -742,10 +751,14 @@ mod tests {
 
         assert!(!listing.available);
         assert!(listing.projects.is_empty());
+        assert!(
+            f.registry.exists(),
+            "a read must not rename the user's registry"
+        );
         let quarantined = std::fs::read_dir(f._dir.path())
             .unwrap()
             .any(|e| e.unwrap().path().to_string_lossy().contains(".corrupt."));
-        assert!(quarantined, "the corrupt file must be preserved aside");
+        assert!(!quarantined, "quarantine is the write path's job");
     }
 
     #[test]

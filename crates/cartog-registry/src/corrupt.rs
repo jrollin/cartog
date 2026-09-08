@@ -16,10 +16,18 @@ use crate::open::open_read_only;
 /// particular this does nothing for an absent file, an unreadable-by-permission
 /// file, or a busy one — none of those is corruption.
 ///
-/// The corrupt file is preserved, never truncated: it still holds every row
-/// the user accumulated, and its bytes are the only evidence of what went
-/// wrong. The unix-timestamp suffix means a second corruption cannot clobber
-/// the first quarantine.
+/// The corrupt main file is preserved, never truncated: its bytes are the
+/// evidence of what went wrong. The unix-timestamp suffix means a second
+/// corruption cannot clobber the first quarantine.
+///
+/// Its `-wal`/`-shm` sidecars are **discarded**, not moved aside, so rows that
+/// were committed but not yet checkpointed are lost — the quarantined file is
+/// evidence, not a complete backup. That is the deliberate cost of the ordering
+/// documented on `rename_aside`: a stale WAL left next to a freed path would be
+/// recovered against whatever new registry appears there.
+///
+/// Called from the write path only. A read degrades to "no projects" instead,
+/// since renaming a user's file is not a predictable side effect of a listing.
 pub(crate) fn quarantine_if_corrupt(path: &Path) {
     if !path.exists() {
         return;

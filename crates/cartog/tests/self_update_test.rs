@@ -1321,15 +1321,18 @@ fn apply_pending_does_not_wait_on_a_foreign_peer_without_the_test_seam() {
     // can be named from an integration test.
     //
     // Measured on a warm spawn, 4+ runs each:
-    //   correct   (0 s budget) -> 260-272 ms
+    //   correct   (0 s budget) -> 260-272 ms isolated, up to ~1.07 s under a
+    //                             full-workspace run (process spawn contends)
     //   regressed (2 s tier)   -> ~2075 ms
-    // 1 s is half the 2 s tier: ~3.7x above the correct cluster and ~2x below
-    // the regressed one, so neither load jitter nor the regression sits near
-    // the line.
-    let bound = std::time::Duration::from_secs(1);
+    // 1.5 s sits above the loaded correct cluster and still ~1.4x below the
+    // regressed one. An earlier 1 s bound was derived from the isolated
+    // numbers only and flaked at 1.07 s in `cargo test --workspace`; measuring
+    // a wall-clock bound outside the load it will run under is the mistake
+    // that produced it.
+    let bound = std::time::Duration::from_millis(1500);
     assert!(
         elapsed < bound,
-        "took {elapsed:?} (bound {bound:?}, half the 2 s own-peer grace); an unclearable \
+        "took {elapsed:?} (bound {bound:?}, below the 2 s own-peer grace); an unclearable \
          foreign lock must wait out no peer budget at all"
     );
     let text = std::fs::read_to_string(&state_path).unwrap();

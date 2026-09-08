@@ -125,7 +125,12 @@ fn retire_drifted_rows(conn: &Connection, keep_id: &str, db_path: &Path) {
             continue;
         }
         // Still on the old id? It lost the UPDATE to an existing `keep_id` row,
-        // which is authoritative — so this one is a true duplicate.
+        // which is authoritative — so this one is a true duplicate. Merge what
+        // it knows and the winner does not before dropping it: both rows
+        // describe the same physical project, and the upsert's `COALESCE` can
+        // only preserve values the *winner* already holds, so a bare canonical
+        // row would otherwise lose the drifted row's counts outright.
+        merge_into_survivor(conn, keep_id, &id, db_path);
         if let Err(e) = conn.execute(
             "DELETE FROM projects WHERE id = ?1 AND ?1 != ?2",
             rusqlite::params![id, keep_id],
@@ -136,6 +141,58 @@ fn retire_drifted_rows(conn: &Connection, keep_id: &str, db_path: &Path) {
                 "could not drop a duplicate registry row; the project may list twice"
             );
         }
+    }
+}
+
+/// Columns a losing duplicate can contribute to the row that outranks it.
+///
+/// Measurements and embedding state only. `db_path`/`root`/`name` belong to the
+/// canonical row by definition, `last_seen` is about to be refreshed, and the
+/// three declared columns are the config's to set — a stale row must not
+/// resurrect a name or description a later config cleared.
+const MERGEABLE_COLUMNS: [&str; 12] = [
+    "languages",
+    "schema_version",
+    "file_count",
+    "symbol_count",
+    "edge_count",
+    "resolved_count",
+    "embedding_count",
+    "embed_provider",
+    "embed_model",
+    "embed_dim",
+    "source_fingerprint",
+    "last_indexed",
+];
+
+/// Fill any [`MERGEABLE_COLUMNS`] the survivor left NULL from the loser.
+///
+/// `COALESCE(survivor, loser)` per column, so a value the survivor already
+/// holds always wins: this recovers lost history without ever overwriting the
+/// canonical row's own measurements. Failure is logged and ignored, like every
+/// other step here — a row missing its counts is untidy, not incorrect, and
+/// must never fail the caller's index.
+fn merge_into_survivor(conn: &Connection, keep_id: &str, loser_id: &str, db_path: &Path) {
+    let assignments = MERGEABLE_COLUMNS
+        .iter()
+        .map(|c| format!("{c} = COALESCE(survivor.{c}, loser.{c})"))
+        .collect::<Vec<_>>()
+        .join(",\n             ");
+    // Only the column *names* are interpolated, and they are compile-time
+    // literals; both ids are bound.
+    let sql = format!(
+        "UPDATE projects AS survivor SET
+             {assignments}
+         FROM (SELECT * FROM projects WHERE id = ?2) AS loser
+         WHERE survivor.id = ?1"
+    );
+    if let Err(e) = conn.execute(&sql, rusqlite::params![keep_id, loser_id]) {
+        tracing::warn!(
+            project = %db_path.display(),
+            error = %e,
+            "could not merge a duplicate registry row's counts; the project may \
+             list with unknown counts until its next index"
+        );
     }
 }
 
@@ -430,6 +487,31 @@ mod tests {
             (root, db)
         }
 
+        /// A textually different spelling of `db` that resolves to the same
+        /// file, and the same slot, on every platform.
+        ///
+        /// A `.` component does that portably. The earlier spelling swapped a
+        /// macOS-only `/private/var` prefix, so on Linux the drift tests
+        /// returned before their first assertion and covered nothing.
+        fn drifted_spelling(&self, root: &Path, db: &Path) -> std::path::PathBuf {
+            let drifted = root.join(".").join("db.sqlite");
+            // Compare the strings, not the paths: `PathBuf` equality treats a
+            // `.` component as insignificant, so `assert_ne!` on the values
+            // fails even though the stored bytes differ — and the bytes are
+            // what a drifted registry row actually holds.
+            assert_ne!(
+                drifted.to_string_lossy(),
+                db.to_string_lossy(),
+                "the stored spelling must differ textually"
+            );
+            assert_eq!(
+                slot_for_db("serve", &drifted),
+                slot_for_db("serve", db),
+                "both spellings must resolve to one slot"
+            );
+            drifted
+        }
+
         /// Drive the real fallible core, so the env-dependent wrapper is the
         /// only thing these tests do not exercise.
         fn record(&self, facts: &ProjectFacts) {
@@ -663,17 +745,12 @@ mod tests {
         // `db_path` byte-identical, so it cannot catch this.
         let f = WriteFixture::new();
         let (root, db) = f.project("a");
-        let canonical = db.to_string_lossy().into_owned();
-        let non_canonical = canonical.replace("/private/var/", "/var/");
-        if non_canonical == canonical {
-            // Not macOS, or no such prefix: the case under test cannot arise.
-            return;
-        }
+        let non_canonical = f.drifted_spelling(&root, &db);
         {
             let conn = crate::open::open_read_write(&f.registry).unwrap();
             let stale = ProjectFacts {
                 // Bypass `absolutize` to reproduce what a DB-absent write stored.
-                db_path: std::path::PathBuf::from(&non_canonical),
+                db_path: non_canonical.clone(),
                 ..counted(&db, &root, 8134)
             };
             upsert(&conn, "serve-stale0000000000", &stale, Some("stale-fp")).unwrap();
@@ -693,6 +770,103 @@ mod tests {
             listing.projects[0].symbol_count,
             Some(8134),
             "the re-keyed row must keep the counts it accumulated"
+        );
+    }
+
+    /// The write path is the only caller that quarantines, so a corrupt
+    /// registry must recover here or it never recovers at all: reads
+    /// deliberately leave the file alone (see `read::list_projects_at`).
+    #[test]
+    #[serial]
+    fn a_corrupt_registry_is_quarantined_and_rebuilt_by_the_next_write() {
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        std::fs::write(&f.registry, b"not a database").unwrap();
+
+        f.record(&ProjectFacts::identity_only(&db, &root));
+
+        assert!(
+            f.row(&db).is_some(),
+            "the write must land in a rebuilt registry"
+        );
+        let quarantined = std::fs::read_dir(f.dir.path())
+            .unwrap()
+            .any(|e| e.unwrap().path().to_string_lossy().contains(".corrupt."));
+        assert!(quarantined, "the corrupt bytes must be preserved aside");
+    }
+
+    /// A collision must merge the drifted row's counts, not drop them.
+    ///
+    /// `UPDATE OR IGNORE` cannot re-key onto an occupied id, so the drifted row
+    /// was deleted outright. When the canonical row holds no counts and the
+    /// drifted one does, the upsert's `COALESCE` has nothing to preserve and
+    /// the project reads `? symbols` until something re-indexes it.
+    #[test]
+    #[serial]
+    fn a_collision_merges_the_drifted_row_rather_than_dropping_its_counts() {
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        let non_canonical = f.drifted_spelling(&root, &db);
+        {
+            let conn = crate::open::open_read_write(&f.registry).unwrap();
+            let stale = ProjectFacts {
+                // Bypass `absolutize` to reproduce a DB-absent write.
+                db_path: non_canonical.clone(),
+                ..counted(&db, &root, 8134)
+            };
+            upsert(&conn, "serve-stale0000000000", &stale, Some("fp-stale")).unwrap();
+            // The canonical row exists already, and knows no counts.
+            let bare = ProjectFacts::identity_only(&db, &root);
+            upsert(&conn, &slot_for_db("serve", &db), &bare, Some("fp-bare")).unwrap();
+        }
+
+        f.record(&ProjectFacts::identity_only(&db, &root));
+
+        let rows = crate::read::list_projects_at(&f.registry, None, 8).projects;
+        assert_eq!(rows.len(), 1, "one database, one row");
+        assert_eq!(
+            rows[0].symbol_count,
+            Some(8134),
+            "the surviving row must inherit the counts the drifted row held"
+        );
+    }
+
+    /// The merge fills gaps; it never overwrites the canonical row.
+    ///
+    /// Without this the recovery above could regress into "last writer wins",
+    /// letting a stale duplicate replace the measurements the canonical row
+    /// obtained from a real index.
+    #[test]
+    #[serial]
+    fn a_collision_never_overwrites_the_survivors_own_counts() {
+        let f = WriteFixture::new();
+        let (root, db) = f.project("a");
+        let non_canonical = f.drifted_spelling(&root, &db);
+        {
+            let conn = crate::open::open_read_write(&f.registry).unwrap();
+            let stale = ProjectFacts {
+                db_path: non_canonical.clone(),
+                ..counted(&db, &root, 1)
+            };
+            upsert(&conn, "serve-stale0000000000", &stale, Some("fp-stale")).unwrap();
+            // The canonical row already knows a real, larger count.
+            upsert(
+                &conn,
+                &slot_for_db("serve", &db),
+                &counted(&db, &root, 9999),
+                Some("fp-real"),
+            )
+            .unwrap();
+        }
+
+        f.record(&ProjectFacts::identity_only(&db, &root));
+
+        let rows = crate::read::list_projects_at(&f.registry, None, 8).projects;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].symbol_count,
+            Some(9999),
+            "the survivor's own count must win over the duplicate's"
         );
     }
 
