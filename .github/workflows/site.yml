@@ -1,0 +1,49 @@
+name: Site
+
+# The site build is not covered by `ci.yml`, which path-ignores `site/**`.
+# Without this workflow the machine-readable endpoints are only ever built at
+# release time, so a `docs/` edit that breaks them stays green on the PR and
+# fails the next `v*` tag push at the deploy step (#183).
+#
+# Triggered on `docs/**` as well as `site/**`: `site/src/lib/docs.ts` reads
+# `README.md` and `docs/` at build time, so a docs-only change can break the
+# build without touching a single file under `site/`.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/**"
+      - "README.md"
+      - ".github/workflows/site.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/**"
+      - "README.md"
+      - ".github/workflows/site.yml"
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      # Full tree, not a sparse checkout: the build reads `README.md` and
+      # `docs/` from the repo root, same as the deploy job.
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      # `npm run build` runs `verify-machine-pages.mjs`, which asserts every
+      # endpoint is emitted, plausibly sized, free of unrewritten relative
+      # links, and advertising only pages and anchors that exist.
+      - name: Build site and verify machine-readable pages
+        working-directory: site
+        run: |
+          npm ci
+          npm run build

@@ -21,14 +21,16 @@ function read(name) {
 
 // 1. Every endpoint emitted, and non-trivial. A helper that throws mid-render
 //    can still leave a short file behind.
-// Floors set just under the current sizes (llms-full ~5.9k, llms ~1.1k,
-// index.md ~32k, usage.md ~23k). A generous floor cannot detect the failure
-// this check exists for: a helper that throws mid-render leaves a short file.
+// Floors set at roughly half the current sizes (llms.txt ~1.0k, llms-full ~5.8k,
+// index.md ~32k, usage.md ~23k). The failure this guards is a helper throwing
+// mid-render and leaving a stub, which loses most of the file — so half is
+// ample. Tighter floors trip on ordinary prose edits instead, which trains
+// people to raise the number rather than read the error.
 const MIN_BYTES = {
-  "llms.txt": 900,
-  "llms-full.txt": 5000,
-  "index.md": 28000,
-  "usage.md": 20000,
+  "llms.txt": 500,
+  "llms-full.txt": 3000,
+  "index.md": 16000,
+  "usage.md": 12000,
 };
 const bodies = {};
 for (const [name, min] of Object.entries(MIN_BYTES)) {
