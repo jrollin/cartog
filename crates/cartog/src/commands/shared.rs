@@ -219,11 +219,11 @@ mod tests {
         // The bridge is the only place `[project] name` crosses into the
         // registry types, so a dropped field here is invisible everywhere else.
         let dir = tempfile::TempDir::new().unwrap();
-        let cfg = project(Some("svc-billing"), None);
+        let cfg = project(Some("billing-service"), None);
 
         let declared = declared_for(Some(&cfg), dir.path());
 
-        assert_eq!(declared.name.as_deref(), Some("svc-billing"));
+        assert_eq!(declared.name.as_deref(), Some("billing-service"));
     }
 
     #[test]
@@ -243,11 +243,11 @@ mod tests {
         // The accessors trim; the bridge must use them rather than the raw
         // fields, or a padded TOML value renders with its padding.
         let dir = tempfile::TempDir::new().unwrap();
-        let cfg = project(Some("  svc-billing  "), Some("  Invoices.  "));
+        let cfg = project(Some("  billing-service  "), Some("  Invoices.  "));
 
         let declared = declared_for(Some(&cfg), dir.path());
 
-        assert_eq!(declared.name.as_deref(), Some("svc-billing"));
+        assert_eq!(declared.name.as_deref(), Some("billing-service"));
         assert_eq!(
             declared.description.map(|d| d.text).as_deref(),
             Some("Invoices.")
@@ -282,14 +282,14 @@ mod tests {
     #[test]
     fn a_loaded_config_resolves_a_set_update() {
         let dir = tempfile::TempDir::new().unwrap();
-        let cfg = project(Some("svc-billing"), Some("Invoices."));
+        let cfg = project(Some("billing-service"), Some("Invoices."));
 
         let update = declared_update_for(ProjectSource::Config(Some(&cfg)), dir.path());
 
         let cartog_registry::DeclaredUpdate::Set(declared) = update else {
             panic!("a loaded config must resolve a Set update");
         };
-        assert_eq!(declared.name.as_deref(), Some("svc-billing"));
+        assert_eq!(declared.name.as_deref(), Some("billing-service"));
     }
 
     #[test]

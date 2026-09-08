@@ -56,7 +56,7 @@ the repo is indexed, walked, embedded, or queried.
 
 ```toml
 [project]
-name        = "svc-billing"                                    # optional, <= 100 chars, defaults to the root dir name
+name        = "billing-service"                                 # optional, <= 100 chars, defaults to the root dir name
 description = "Invoice generation and payment reconciliation."  # optional, <= 280 chars, one line
 ```
 

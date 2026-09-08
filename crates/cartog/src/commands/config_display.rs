@@ -568,26 +568,26 @@ mod tests {
     #[test]
     fn project_section_labels_each_value_with_its_source() {
         let mut d = default_config_display();
-        d.project.name = "svc-billing".into();
+        d.project.name = "billing-service".into();
         d.project.name_source = "config";
         d.project.description = Some("Invoice generation.".into());
         d.project.description_source = Some("readme");
 
         let out = format_config_human(&d);
 
-        assert!(out.contains("name:              svc-billing (config)"));
+        assert!(out.contains("name:              billing-service (config)"));
         assert!(out.contains("description:       Invoice generation. (readme)"));
     }
 
     #[test]
     fn project_section_serializes_to_json() {
         let mut d = default_config_display();
-        d.project.name = "svc-billing".into();
+        d.project.name = "billing-service".into();
         d.project.name_source = "config";
 
         let json = serde_json::to_value(&d).unwrap();
 
-        assert_eq!(json["project"]["name"], "svc-billing");
+        assert_eq!(json["project"]["name"], "billing-service");
         assert_eq!(json["project"]["name_source"], "config");
         assert!(json["project"]["description"].is_null());
         assert!(json["project"].get("description_source").is_none());
@@ -611,13 +611,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("README.md"), "# T\n\nFrom readme.\n").unwrap();
         let project = crate::config::ProjectConfig {
-            name: Some("svc-billing".into()),
+            name: Some("billing-service".into()),
             description: Some("From config.".into()),
         };
 
         let d = resolve_project_display(Some(&project), Some(&dir.path().join(".cartog.toml")));
 
-        assert_eq!(d.name, "svc-billing");
+        assert_eq!(d.name, "billing-service");
         assert_eq!(d.name_source, "config");
         assert_eq!(d.description.as_deref(), Some("From config."));
         assert_eq!(d.description_source, Some("config"));

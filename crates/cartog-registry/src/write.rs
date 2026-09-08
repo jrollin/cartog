@@ -846,12 +846,12 @@ mod tests {
         let (root, db) = f.project("a");
 
         f.record(&ProjectFacts {
-            declared: declared(Some("svc-billing"), Some("Invoices.")),
+            declared: declared(Some("billing-service"), Some("Invoices.")),
             ..counted(&db, &root, 100)
         });
 
         let row = f.row(&db).unwrap();
-        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
+        assert_eq!(row.declared_name.as_deref(), Some("billing-service"));
         let d = row.description.expect("a description");
         assert_eq!(d.text, "Invoices.");
         assert_eq!(d.source, crate::model::DescriptionSource::Config);
@@ -864,7 +864,7 @@ mod tests {
         let f = WriteFixture::new();
         let (root, db) = f.project("a");
         f.record(&ProjectFacts {
-            declared: declared(Some("svc-billing"), Some("Invoices.")),
+            declared: declared(Some("billing-service"), Some("Invoices.")),
             ..counted(&db, &root, 100)
         });
 
@@ -885,7 +885,7 @@ mod tests {
         let f = WriteFixture::new();
         let (root, db) = f.project("a");
         f.record(&ProjectFacts {
-            declared: declared(Some("svc-billing"), Some("Invoices.")),
+            declared: declared(Some("billing-service"), Some("Invoices.")),
             ..counted(&db, &root, 100)
         });
         // Change the DB so the fingerprint skip does not hide the merge.
@@ -894,7 +894,7 @@ mod tests {
         f.record(&ProjectFacts::identity_only(&db, &root));
 
         let row = f.row(&db).unwrap();
-        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
+        assert_eq!(row.declared_name.as_deref(), Some("billing-service"));
         assert_eq!(
             row.description.map(|d| d.text).as_deref(),
             Some("Invoices.")

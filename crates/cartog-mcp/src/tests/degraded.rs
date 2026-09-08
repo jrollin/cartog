@@ -350,7 +350,7 @@ fn fake_row(name: &str, db_path: &str) -> cartog_registry::ProjectRow {
 #[test]
 fn a_declared_name_and_description_reach_the_tool_entry() {
     let mut r = fake_row("api", "/w/api/.cartog/db.sqlite");
-    r.declared_name = Some("svc-billing".to_string());
+    r.declared_name = Some("billing-service".to_string());
     r.description = Some(cartog_registry::Description {
         text: "Invoice generation.".to_string(),
         source: cartog_registry::DescriptionSource::Readme,
@@ -364,7 +364,7 @@ fn a_declared_name_and_description_reach_the_tool_entry() {
 
     let e = &result.projects[0];
     assert_eq!(
-        e.name, "svc-billing",
+        e.name, "billing-service",
         "the declared name is the display name"
     );
     assert_eq!(e.description.as_deref(), Some("Invoice generation."));

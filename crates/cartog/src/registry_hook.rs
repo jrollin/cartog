@@ -353,10 +353,13 @@ mod tests {
     fn the_config_description_wins_over_the_readme() {
         let dir = tempfile::TempDir::new().unwrap();
         std::fs::write(dir.path().join("README.md"), "Inferred from the readme.\n").unwrap();
-        let declared =
-            resolve_declared(Some("svc-billing"), Some("Declared in config."), dir.path());
+        let declared = resolve_declared(
+            Some("billing-service"),
+            Some("Declared in config."),
+            dir.path(),
+        );
 
-        assert_eq!(declared.name.as_deref(), Some("svc-billing"));
+        assert_eq!(declared.name.as_deref(), Some("billing-service"));
         let d = declared.description.unwrap();
         assert_eq!(d.text, "Declared in config.");
         assert_eq!(d.source, DescriptionSource::Config);
@@ -370,9 +373,9 @@ mod tests {
             "# Title\n\nInferred from the readme.\n",
         )
         .unwrap();
-        let declared = resolve_declared(Some("svc-billing"), None, dir.path());
+        let declared = resolve_declared(Some("billing-service"), None, dir.path());
 
-        assert_eq!(declared.name.as_deref(), Some("svc-billing"));
+        assert_eq!(declared.name.as_deref(), Some("billing-service"));
         let d = declared.description.unwrap();
         assert_eq!(d.text, "Inferred from the readme.");
         assert_eq!(d.source, DescriptionSource::Readme);
@@ -412,7 +415,7 @@ mod tests {
         let _env = RegistryEnvGuard::set(registry.as_os_str());
         let (db, db_path) = seeded_db(dir.path());
         let declared = resolve_declared(
-            Some("svc-billing"),
+            Some("billing-service"),
             Some("Invoices and payments."),
             dir.path(),
         );
@@ -422,8 +425,8 @@ mod tests {
         let listing =
             cartog_registry::list_projects_at(&registry, None, cartog_db::CURRENT_SCHEMA_VERSION);
         let row = listing.projects.first().expect("the project was recorded");
-        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
-        assert_eq!(row.display_name(), "svc-billing");
+        assert_eq!(row.declared_name.as_deref(), Some("billing-service"));
+        assert_eq!(row.display_name(), "billing-service");
         let d = row.description.as_ref().expect("a stored description");
         assert_eq!(d.text, "Invoices and payments.");
         assert_eq!(d.source, DescriptionSource::Config);
@@ -462,7 +465,7 @@ mod tests {
         let _env = RegistryEnvGuard::set(registry.as_os_str());
         let (db, db_path) = seeded_db(dir.path());
         let declared = resolve_declared(
-            Some("svc-billing"),
+            Some("billing-service"),
             Some("Invoices and payments."),
             dir.path(),
         );
@@ -473,7 +476,7 @@ mod tests {
         let listing =
             cartog_registry::list_projects_at(&registry, None, cartog_db::CURRENT_SCHEMA_VERSION);
         let row = listing.projects.first().expect("the project was recorded");
-        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
+        assert_eq!(row.declared_name.as_deref(), Some("billing-service"));
         assert_eq!(
             row.description.as_ref().map(|d| d.text.as_str()),
             Some("Invoices and payments.")
@@ -490,7 +493,7 @@ mod tests {
         let _env = RegistryEnvGuard::set(registry.as_os_str());
         let (db, db_path) = seeded_db(dir.path());
         let declared = resolve_declared(
-            Some("svc-billing"),
+            Some("billing-service"),
             Some("Invoices and payments."),
             dir.path(),
         );
@@ -535,7 +538,7 @@ mod tests {
             &db_path,
             dir.path(),
             DeclaredUpdate::Set(resolve_declared(
-                Some("svc-widgets"),
+                Some("widget-service"),
                 Some("From the config."),
                 dir.path(),
             )),
@@ -544,7 +547,7 @@ mod tests {
         let listing =
             cartog_registry::list_projects_at(&registry, None, cartog_db::CURRENT_SCHEMA_VERSION);
         let row = listing.projects.first().expect("the project was recorded");
-        assert_eq!(row.declared_name.as_deref(), Some("svc-widgets"));
+        assert_eq!(row.declared_name.as_deref(), Some("widget-service"));
         let d = row.description.as_ref().expect("a stored description");
         assert_eq!(d.text, "From the config.");
         assert_eq!(d.source, DescriptionSource::Config);
@@ -596,7 +599,7 @@ mod tests {
             &db_path,
             dir.path(),
             DeclaredUpdate::Set(resolve_declared(
-                Some("svc-billing"),
+                Some("billing-service"),
                 Some("Invoices and payments."),
                 dir.path(),
             )),
@@ -607,7 +610,7 @@ mod tests {
         let listing =
             cartog_registry::list_projects_at(&registry, None, cartog_db::CURRENT_SCHEMA_VERSION);
         let row = listing.projects.first().expect("the project was recorded");
-        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
+        assert_eq!(row.declared_name.as_deref(), Some("billing-service"));
         let d = row.description.as_ref().expect("the stored description");
         assert_eq!(d.text, "Invoices and payments.");
         assert_eq!(d.source, DescriptionSource::Config);

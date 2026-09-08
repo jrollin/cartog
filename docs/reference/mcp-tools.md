@@ -84,7 +84,7 @@ project is not known up front. `cartog_list_projects` tells an agent *where*
 projects are; this searches them.
 
 ```
-cartog_search_all { "query": "CreateShipment" }
+cartog_search_all { "query": "CreateOrder" }
 cartog_search_all { "query": "Shift", "under": "/home/u/work", "lang": "ruby" }
 ```
 

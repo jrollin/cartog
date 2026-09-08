@@ -512,7 +512,7 @@ mod tests {
     #[test]
     fn the_first_prose_paragraph_wins_over_headings_and_badges() {
         let body = "\
-# svc-billing
+# billing-service
 
 [![build](https://img.shields.io/badge/build-passing-green)](https://ci.example)
 [![crates.io](https://img.shields.io/crates/v/x.svg)](https://crates.io/crates/x)
@@ -529,7 +529,7 @@ More detail nobody asked for.
     #[test]
     fn a_readme_of_only_badges_and_headings_has_no_description() {
         let body = "\
-# svc-billing
+# billing-service
 
 ![badge](https://img.shields.io/x.svg)
 
@@ -655,7 +655,7 @@ More detail nobody asked for.
 
     #[test]
     fn a_setext_heading_is_not_mistaken_for_prose() {
-        let body = "svc-billing\n===========\n\nInvoice generation.\n";
+        let body = "billing-service\n===========\n\nInvoice generation.\n";
         let d = describe("README.md", body).unwrap();
         assert_eq!(d.text, "Invoice generation.");
     }

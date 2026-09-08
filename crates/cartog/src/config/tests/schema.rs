@@ -406,14 +406,14 @@ fn project_name_and_description_round_trip() {
     let cfg_path = dir.path().join(".cartog.toml");
     fs::write(
         &cfg_path,
-        "[project]\nname = \"svc-billing\"\ndescription = \"Invoice generation.\"\n",
+        "[project]\nname = \"billing-service\"\ndescription = \"Invoice generation.\"\n",
     )
     .unwrap();
 
     let cfg = read_config(&cfg_path).expect("should parse");
 
     let project = cfg.project.unwrap();
-    assert_eq!(project.name(), Some("svc-billing"));
+    assert_eq!(project.name(), Some("billing-service"));
     assert_eq!(project.description(), Some("Invoice generation."));
 }
 
@@ -424,14 +424,14 @@ fn project_accessors_trim_surrounding_whitespace() {
     let cfg_path = dir.path().join(".cartog.toml");
     fs::write(
         &cfg_path,
-        "[project]\nname = \"  svc-billing \"\ndescription = \"  Invoices.  \"\n",
+        "[project]\nname = \"  billing-service \"\ndescription = \"  Invoices.  \"\n",
     )
     .unwrap();
 
     let cfg = read_config(&cfg_path).expect("should parse");
 
     let project = cfg.project.unwrap();
-    assert_eq!(project.name(), Some("svc-billing"));
+    assert_eq!(project.name(), Some("billing-service"));
     assert_eq!(project.description(), Some("Invoices."));
 }
 

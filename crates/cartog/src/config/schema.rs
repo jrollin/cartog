@@ -60,7 +60,7 @@ impl McpConfig {
 ///
 /// ```toml
 /// [project]
-/// name        = "svc-billing"
+/// name        = "billing-service"
 /// description = "Invoice generation and payment reconciliation."
 /// ```
 ///

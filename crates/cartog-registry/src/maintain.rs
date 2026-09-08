@@ -216,9 +216,9 @@ mod tests {
     #[test]
     fn forget_by_name_drops_the_row() {
         let f = Fixture::new();
-        f.add("svc-billing");
+        f.add("billing-service");
 
-        let out = forget_project_at(&f.registry, "svc-billing");
+        let out = forget_project_at(&f.registry, "billing-service");
 
         assert_eq!(out.dropped.len(), 1);
     }
@@ -232,13 +232,13 @@ mod tests {
         {
             let conn = open_read_write(&f.registry).unwrap();
             conn.execute(
-                "UPDATE projects SET declared_name = 'svc-billing' WHERE id = ?1",
+                "UPDATE projects SET declared_name = 'billing-service' WHERE id = ?1",
                 rusqlite::params![slot_for_db("serve", &db)],
             )
             .unwrap();
         }
 
-        let out = forget_project_at(&f.registry, "svc-billing");
+        let out = forget_project_at(&f.registry, "billing-service");
 
         assert_eq!(out.dropped, vec![slot_for_db("serve", &db)]);
         assert!(f.ids().is_empty());

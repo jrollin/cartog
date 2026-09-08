@@ -59,23 +59,23 @@ repository to look in. It searches this machine's **other** indexed projects
 (the current one is covered by a plain `cartog search`):
 
 ```bash
-cartog search CreateShipment --all                          # every eligible project
+cartog search CreateOrder --all                          # every eligible project
 cartog search Shift --all --under ~/work                    # only that subtree
 cartog search Shift --all --under ~/work --lang ruby        # and only Ruby projects
 cartog search Widget --all --max-projects 25                # raise the project cap
 ```
 
 ```text
-3 matches for 'CreateShipment' across 2 of 7 projects:
+3 matches for 'CreateOrder' across 2 of 7 projects:
 
-svc-shipping (/home/u/work/svc-shipping)
-  Shipment creation, tracking, and carrier integration.
-  CreateShipment              internal/ship/ship.go:41
-  --db /home/u/work/svc-shipping/.cartog/db.sqlite
+order-service (/home/u/work/order-service)
+  Order creation, tracking, and fulfilment.
+  CreateOrder              internal/order/order.go:41
+  --db /home/u/work/order-service/.cartog/db.sqlite
 
-svc-bff (/home/u/work/svc-bff)
-  CreateShipmentInput         src/graphql/shipment.ts:18
-  --db /home/u/work/svc-bff/.cartog/db.sqlite
+api-gateway (/home/u/work/api-gateway)
+  CreateOrderInput         src/graphql/order.ts:18
+  --db /home/u/work/api-gateway/.cartog/db.sqlite
 ```
 
 **Fan-out, not consolidation.** The [registry](#cartog-projects-listaddscanforgetprune)
@@ -735,8 +735,8 @@ know, and "not known" is a different fact from "empty".
 **Cross-project queries.** `db_path` is the actionable field — pass it to any cartog command:
 
 ```bash
-DB=$(cartog projects list --json | jq -r '.projects[] | select(.name=="svc-shipping").db_path')
-cartog search CreateShipment --db "$DB"
+DB=$(cartog projects list --json | jq -r '.projects[] | select(.name=="order-service").db_path')
+cartog search CreateOrder --db "$DB"
 cartog outline ship.go --db "$DB"
 ```
 

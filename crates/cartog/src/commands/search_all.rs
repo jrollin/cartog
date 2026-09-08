@@ -650,14 +650,14 @@ mod tests {
         let r = results(
             Vec::new(),
             vec![unreadable(
-                "svc-old",
+                "legacy-service",
                 "schema_version mismatch: expects 8, DB has 3",
             )],
             1,
             0,
         );
 
-        let out = render(&r, "CreateShipment");
+        let out = render(&r, "CreateOrder");
 
         assert!(
             out.contains("could not be searched") || out.contains("could not be read"),
@@ -668,7 +668,7 @@ mod tests {
             "must not claim a genuine no-match, got: {out}"
         );
         assert!(
-            out.contains("svc-old") && out.contains("schema_version"),
+            out.contains("legacy-service") && out.contains("schema_version"),
             "the reason must survive an empty match list, got: {out}"
         );
     }

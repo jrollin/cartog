@@ -211,19 +211,19 @@ fn a_search_where_every_candidate_was_unreadable_does_not_claim_no_match() {
     // symbol does not exist in any other project.
     let r = result(
         Vec::new(),
-        vec!["svc-old: schema_version mismatch: expects 8, DB has 3".to_string()],
+        vec!["legacy-service: schema_version mismatch: expects 8, DB has 3".to_string()],
         1,
         0,
     );
 
-    let out = render_search_all(&r, "CreateShipment");
+    let out = render_search_all(&r, "CreateOrder");
 
     assert!(
         !out.contains("No symbols matching"),
         "must not claim a genuine no-match, got: {out}"
     );
     assert!(
-        out.contains("svc-old") && out.contains("schema_version"),
+        out.contains("legacy-service") && out.contains("schema_version"),
         "the reason must survive an empty match list, got: {out}"
     );
 }

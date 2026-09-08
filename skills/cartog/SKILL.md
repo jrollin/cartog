@@ -367,7 +367,7 @@ Use when the question is about a **different repository** than the current one â
 service, a shared library. Take that project's `db_path` and pass it to any cartog command:
 
 ```bash
-cartog search CreateShipment --db /path/to/other/.cartog/db.sqlite
+cartog search CreateOrder --db /path/to/other/.cartog/db.sqlite
 ```
 
 If a project you know is indexed does not appear, registration simply has not run for it yet
@@ -379,7 +379,7 @@ When you know the **symbol** but not which repository defines it, search them al
 instead of listing then guessing:
 
 ```bash
-cartog search CreateShipment --all                     # every eligible project
+cartog search CreateOrder --all                     # every eligible project
 cartog search Shift --all --under ~/work --lang ruby   # narrow the fan-out
 ```
 

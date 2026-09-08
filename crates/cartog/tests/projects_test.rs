@@ -212,12 +212,12 @@ fn the_registered_counts_agree_with_cartog_stats() {
 #[test]
 fn the_registered_row_names_the_project_after_its_directory() {
     let sb = Sandbox::new();
-    let dir = sb.sibling("svc-billing");
+    let dir = sb.sibling("billing-service");
     assert!(sb.index_dir(&dir).status.success());
 
     let rows = sb.rows();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["name"], "svc-billing");
+    assert_eq!(rows[0]["name"], "billing-service");
 }
 
 #[test]
@@ -225,13 +225,13 @@ fn two_separately_indexed_projects_both_register() {
     // The motivating case: a session in one repo must be able to see the other.
     let sb = Sandbox::new();
     assert!(sb.index().status.success());
-    let other = sb.sibling("svc-shipping");
+    let other = sb.sibling("order-service");
     assert!(sb.index_dir(&other).status.success());
 
     let rows = sb.rows();
     assert_eq!(rows.len(), 2, "both projects must be discoverable");
     let names: Vec<&str> = rows.iter().map(|r| r["name"].as_str().unwrap()).collect();
-    assert!(names.contains(&"svc-shipping"));
+    assert!(names.contains(&"order-service"));
 }
 
 #[test]
@@ -581,8 +581,8 @@ fn a_backfilled_row_reports_last_indexed_as_never() {
 #[test]
 fn scan_registers_every_indexed_project_under_the_named_directory() {
     let sb = Sandbox::new();
-    let one = sb.sibling("svc-one");
-    let two = sb.sibling("svc-two");
+    let one = sb.sibling("first-service");
+    let two = sb.sibling("second-service");
     for dir in [&one, &two] {
         let out = sb.cmd_in(
             dir,
@@ -603,7 +603,8 @@ fn scan_registers_every_indexed_project_under_the_named_directory() {
         .map(|r| r["name"].as_str().unwrap_or_default().to_string())
         .collect();
     assert!(
-        names.contains(&"svc-one".to_string()) && names.contains(&"svc-two".to_string()),
+        names.contains(&"first-service".to_string())
+            && names.contains(&"second-service".to_string()),
         "scan must register both projects, got {names:?}"
     );
 }
@@ -611,7 +612,7 @@ fn scan_registers_every_indexed_project_under_the_named_directory() {
 #[test]
 fn scan_dry_run_reports_what_it_would_add_and_writes_nothing() {
     let sb = Sandbox::new();
-    let one = sb.sibling("svc-dry");
+    let one = sb.sibling("dry-run-service");
     assert!(sb
         .cmd_in(
             &one,
@@ -626,7 +627,7 @@ fn scan_dry_run_reports_what_it_would_add_and_writes_nothing() {
     assert!(out.status.success(), "{}", stderr(&out));
 
     assert!(
-        stdout(&out).contains("svc-dry"),
+        stdout(&out).contains("dry-run-service"),
         "a dry run must name what it would register: {}",
         stdout(&out)
     );

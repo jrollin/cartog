@@ -5,6 +5,7 @@ import Base from "../layouts/Base.astro";
 <Base
   title="Cartog Docs — CLI Reference, MCP Server & Semantic Search Setup"
   description="Cartog documentation: install, the cartog CLI (search, refs, impact, map), MCP server wiring for Claude Code, Cursor & VS Code, embedding providers, and hybrid semantic search."
+  markdownUrl="https://www.cartog.dev/usage.md"
   ogType="article"
   ogUrl="https://www.cartog.dev/usage.html"
   footerVariant="docs"
@@ -279,7 +280,7 @@ url        = "s3://my-team-bucket/cartog/main"
 <span class="comment"># Credentials are NEVER read from this file — see "Remote Storage (S3)".</span>
 
 [project]                        <span class="comment"># UNSET by default — name falls back to the root dir name, no description</span>
-# name        = "svc-billing"
+# name        = "billing-service"
 # description = "Invoice generation and payment reconciliation."
 
 [mcp]
@@ -542,7 +543,7 @@ jobs = 4</pre>
         <h2 id="config-project">Project Identity</h2>
         <p>Purely descriptive: nothing in <code>[project]</code> changes how the repo is indexed, walked, embedded, or queried. It feeds the <a href="#cmd-projects">project registry</a> — the name and description shown in <code>cartog projects list</code> and returned by <code>cartog_list_projects</code>, so a session in a different repository can route to this one by what it is for.</p>
         <pre>[project]
-name        = "svc-billing"                                    <span class="comment"># optional, &lt;= 100 chars, defaults to the root dir name</span>
+name        = "billing-service"                                 <span class="comment"># optional, &lt;= 100 chars, defaults to the root dir name</span>
 description = "Invoice generation and payment reconciliation."  <span class="comment"># optional, &lt;= 280 chars, one line</span></pre>
         <p>Both fields are optional and resolve independently, highest wins: <strong>name</strong> — <code>[project] name</code> → the project root's directory basename. <strong>Description</strong> — <code>[project] description</code> → the first prose paragraph of <code>README.md</code>, truncated to 280 characters at a word boundary → none. No environment-variable override for either — a project's identity isn't the kind of per-machine knob the other sections' env vars exist for.</p>
         <p>Validated at config load: a <code>name</code> over 100 characters or a <code>description</code> over 280 rejects the whole config, naming the field and the limit; so does either field being empty, whitespace-only, or containing a control character or newline. An unknown key inside <code>[project]</code> is salvaged like any other section — the config still loads and indexing still proceeds, only the lost key's value is gone.</p>
@@ -915,22 +916,23 @@ method    _validate_payment  services/payment/processor.py:122
 document  Validate           README.md:8</pre>
         <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>enum-member</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>, <code>macro</code>, <code>component</code>.</p>
         <h3><code>--all</code>: search this machine's other projects</h3>
-        <p><code>--all</code> answers "which project defines this?" when you do not know which repository to look in. It searches the <em>other</em> indexed projects (a plain <code>cartog search</code> covers the current one), taking candidates from the <a href="#cmd-projects">project registry</a>.</p>
-        <pre>cartog search CreateShipment --all                     <span class="comment"># every eligible project</span>
-cartog search Shift --all --under ~/work               <span class="comment"># only that subtree</span>
-cartog search Shift --all --under ~/work --lang ruby   <span class="comment"># and only Ruby projects</span>
+        <p><strong>The situation:</strong> you know the symbol, not the repository. Your agent is working in the API gateway, the function it needs lives in the orders service, and neither you nor the agent remembers which of your dozen checkouts that is. Grep cannot cross a repository boundary, and opening each one to look is the tax this removes.</p>
+        <p><code>--all</code> answers "which project defines this?" — it searches the <em>other</em> indexed projects (a plain <code>cartog search</code> covers the current one), taking candidates from the <a href="#cmd-projects">project registry</a>, and hands back each match with the <code>--db</code> path to drill into it. Skip this whole section if you work in one repository: nothing here needs configuring.</p>
+        <pre>cartog search CreateOrder --all                        <span class="comment"># every eligible project</span>
+cartog search Invoice --all --under ~/work             <span class="comment"># only that subtree</span>
+cartog search Invoice --all --under ~/work --lang ruby <span class="comment"># and only Ruby projects</span>
 cartog search Widget --all --max-projects 25           <span class="comment"># raise the project cap</span></pre>
         <p class="example-label">Example output</p>
-        <pre class="example-output">3 matches for 'CreateShipment' across 2 of 7 projects:
+        <pre class="example-output">3 matches for 'CreateOrder' across 2 of 7 projects:
 
-svc-shipping (/home/u/work/svc-shipping)
-  Shipment creation, tracking, and carrier integration.
-  CreateShipment              internal/ship/ship.go:41
-  --db /home/u/work/svc-shipping/.cartog/db.sqlite
+order-service (/home/u/work/order-service)
+  Order creation, tracking, and fulfilment.
+  CreateOrder                 internal/order/order.go:41
+  --db /home/u/work/order-service/.cartog/db.sqlite
 
-svc-bff (/home/u/work/svc-bff)
-  CreateShipmentInput         src/graphql/shipment.ts:18
-  --db /home/u/work/svc-bff/.cartog/db.sqlite</pre>
+api-gateway (/home/u/work/api-gateway)
+  CreateOrderInput            src/graphql/order.ts:18
+  --db /home/u/work/api-gateway/.cartog/db.sqlite</pre>
         <p><strong>Fan-out, not consolidation.</strong> Each candidate database is opened <strong>read-only</strong> and queried on its own, and results stay grouped under the project they came from. Consequently: <strong>ranking is within a project only</strong> (<code>in_degree</code> centrality is per-graph, so a flat cross-project ordering cannot be justified without a ranking benchmark that does not exist), <strong>nothing is merged</strong> (a combined database is a deliberate non-goal, so every hit is read live from the project that owns it), and <strong>nothing is written</strong> (a registry row grants discovery, not write access).</p>
         <p><code>--limit</code> applies <strong>per project</strong>, so output is bounded by <code>limit x max-projects</code>. <code>--max-projects</code> (default 10, clamped to 1..=50) caps how many databases are opened, most-symbols-first; when the cap elides candidates the output says so. A project that cannot be read is listed with the <strong>reason</strong> (a schema drift, a corrupt file and a permission error need different fixes) rather than silently skipped — including when <em>nothing</em> could be read, in which case the output says the search could not run rather than reporting a no-match that would read as "the symbol is not there". <code>--under</code> accepts <code>~</code>, and composes with <code>--lang</code> as an AND. <code>--file</code> is <strong>not</strong> combinable with <code>--all</code>: a path in one project means nothing in another, so cartog rejects the pair rather than silently ignoring the filter.</p>
         <p>There is no <code>--all</code> for semantic search: vectors from projects embedded with different providers, models, or dimensions live in different spaces, so merging their scores would be meaningless.</p>
@@ -1280,12 +1282,12 @@ cartog projects forget &lt;target&gt;  <span class="comment"># drop one row; the
 cartog projects prune            <span class="comment"># drop rows whose database file is gone</span>
 cartog projects prune --dry-run  <span class="comment"># report only, change nothing</span></pre>
         <p class="example-label">Example output</p>
-        <pre class="example-output">svc-billing        8134 symbols   412 files  rust, markdown        2h ago  [live]
+        <pre class="example-output">billing-service    8134 symbols   412 files  rust, markdown    2h ago  [live]
   Invoice generation and payment reconciliation.
-  /home/u/work/svc-billing/.cartog/db.sqlite
-svc-shipping       2201 symbols    98 files  go                    3d ago
-  Shipment creation, tracking, and carrier integration. (readme)
-  /home/u/work/svc-shipping/.cartog/db.sqlite
+  /home/u/work/billing-service/.cartog/db.sqlite
+order-service      2201 symbols    98 files  go                3d ago
+  Order creation, tracking, and fulfilment. (readme)
+  /home/u/work/order-service/.cartog/db.sqlite
 
 2 projects registered. Query another with `cartog &lt;command&gt; --db &lt;db_path&gt;`.</pre>
         <p>Every <code>cartog index</code>, <code>rag index</code>, <code>pull</code>, <code>watch</code> re-index, and <code>serve</code> startup records its project. Nothing is recorded for a project cartog was not allowed to index, or for a <code>serve</code> running degraded — registration can never precede the consent gate. A registry write never fails the command it rides on.</p>
@@ -1294,8 +1296,8 @@ svc-shipping       2201 symbols    98 files  go                    3d ago
         <p><strong>Description.</strong> Each project's listing shows a one-line description — from that project's <code>[project] description</code> in <code>.cartog.toml</code>, or, when unset, the first prose paragraph of its <code>README.md</code> (suffixed <code>(readme)</code> above to mark it as inferred). <code>--json</code> adds <code>"description"</code> and <code>"description_source"</code> (<code>"config"</code> or <code>"readme"</code>), both omitted when the project has no description. A project with neither source shows nothing — <code>cartog doctor</code> flags that as advisory. See <a href="#config-project">Project Identity</a>.</p>
         <p><strong>Markers:</strong> <code>live</code> (a <code>serve</code>/<code>watch</code> peer holds the lock), <code>stale-schema vN</code> (written at an older schema — it still lists, its cached counts are the last thing known true), <code>missing</code> (database gone, a <code>prune</code> candidate), <code>embed-mismatch</code> (its embedding provider/model/dimension differs from most of your other projects, so the vectors are not comparable). An unknown count renders as <code>?</code>, never <code>0</code> — "not known" is a different fact from "empty".</p>
         <p><strong>Cross-project queries.</strong> <code>db_path</code> is the actionable field; pass it to any cartog command:</p>
-        <pre>DB=$(cartog projects list --json | jq -r '.projects[] | select(.name=="svc-shipping").db_path')
-cartog search CreateShipment --db "$DB"</pre>
+        <pre>DB=$(cartog projects list --json | jq -r '.projects[] | select(.name=="order-service").db_path')
+cartog search CreateOrder --db "$DB"</pre>
         <p>Set <code>CARTOG_REGISTRY</code> to relocate the registry (absolute paths only), or to an empty value to disable it entirely.</p>
 
         <h2 id="cmd-self"><code>cartog self &lt;update|version|rollback|migrate-db&gt;</code></h2>

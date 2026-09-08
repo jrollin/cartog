@@ -300,9 +300,9 @@ mod tests {
         // The whole point of the tool: the agent must see how to query it.
         let text = render_projects(&ListProjectsResult {
             registry_available: true,
-            projects: vec![entry("svc-shipping", false)],
+            projects: vec![entry("order-service", false)],
         });
-        assert!(text.contains("--db /w/svc-shipping/.cartog/db.sqlite"));
+        assert!(text.contains("--db /w/order-service/.cartog/db.sqlite"));
     }
 
     #[test]
@@ -342,7 +342,7 @@ mod tests {
         let text = render_projects(&ListProjectsResult {
             registry_available: true,
             projects: vec![described(
-                entry("svc-billing", false),
+                entry("billing-service", false),
                 "Invoice generation and payment reconciliation.",
                 "config",
             )],
@@ -358,7 +358,7 @@ mod tests {
         let text = render_projects(&ListProjectsResult {
             registry_available: true,
             projects: vec![described(
-                entry("svc-billing", false),
+                entry("billing-service", false),
                 "Guessed from the readme.",
                 "readme",
             )],
@@ -370,7 +370,7 @@ mod tests {
     fn a_project_without_a_description_renders_no_description_line() {
         let text = render_projects(&ListProjectsResult {
             registry_available: true,
-            projects: vec![entry("svc-billing", false)],
+            projects: vec![entry("billing-service", false)],
         });
         assert!(!text.contains("repo says"), "{text}");
     }
@@ -388,7 +388,7 @@ mod tests {
         let mut result = ListProjectsResult {
             registry_available: true,
             projects: (0..20)
-                .map(|i| described(entry(&format!("svc-{i}"), false), &long, "readme"))
+                .map(|i| described(entry(&format!("service-{i}"), false), &long, "readme"))
                 .collect(),
         };
 
@@ -417,7 +417,7 @@ mod tests {
         let mut result = ListProjectsResult {
             registry_available: true,
             projects: (0..2000)
-                .map(|i| described(entry(&format!("svc-{i}"), false), &long, "readme"))
+                .map(|i| described(entry(&format!("service-{i}"), false), &long, "readme"))
                 .collect(),
         };
 

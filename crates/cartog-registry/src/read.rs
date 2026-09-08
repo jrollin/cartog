@@ -368,14 +368,14 @@ mod tests {
     fn a_seeded_row_round_trips_every_field() {
         let f = Fixture::new();
         let dir = f._dir.path().to_path_buf();
-        let db = touch_db(&dir, "svc-billing");
-        let root = dir.join("svc-billing");
+        let db = touch_db(&dir, "billing-service");
+        let root = dir.join("billing-service");
         f.seed(&facts(&db, &root));
 
         let listing = f.list();
         assert_eq!(listing.projects.len(), 1);
         let row = &listing.projects[0];
-        assert_eq!(row.name, "svc-billing");
+        assert_eq!(row.name, "billing-service");
         // Compare canonicalized: the writer absolutizes, and on macOS
         // /var canonicalizes to /private/var. That normalization is the point —
         // it is what stops one project occupying two rows.
@@ -394,7 +394,7 @@ mod tests {
         let db = touch_db(&dir, "api");
         f.seed(&ProjectFacts {
             declared: crate::model::DeclaredUpdate::Set(crate::model::Declared {
-                name: Some("svc-billing".to_string()),
+                name: Some("billing-service".to_string()),
                 description: Some(Description {
                     text: "Invoice generation.".to_string(),
                     source: DescriptionSource::Readme,
@@ -405,7 +405,7 @@ mod tests {
 
         let row = &f.list().projects[0];
         assert_eq!(row.name, "api", "name stays the root basename");
-        assert_eq!(row.declared_name.as_deref(), Some("svc-billing"));
+        assert_eq!(row.declared_name.as_deref(), Some("billing-service"));
         let d = row.description.as_ref().expect("a description");
         assert_eq!(d.text, "Invoice generation.");
         assert_eq!(d.source, DescriptionSource::Readme);
@@ -418,13 +418,13 @@ mod tests {
         let db = touch_db(&dir, "api");
         f.seed(&ProjectFacts {
             declared: crate::model::DeclaredUpdate::Set(crate::model::Declared {
-                name: Some("svc-billing".to_string()),
+                name: Some("billing-service".to_string()),
                 description: None,
             }),
             ..facts(&db, &dir.join("api"))
         });
 
-        assert_eq!(f.list().projects[0].display_name(), "svc-billing");
+        assert_eq!(f.list().projects[0].display_name(), "billing-service");
     }
 
     #[test]

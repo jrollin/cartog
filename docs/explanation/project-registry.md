@@ -67,7 +67,7 @@ what languages they hold, and what each project is for — without merging their
 code graphs.
 
 Motivating case: a microservice fleet, one repo (and one index) per service. An
-agent working in `svc-billing` needs to answer "which service owns invoicing?"
+agent working in `billing-service` needs to answer "which service owns invoicing?"
 before it can ask a question about that service's code.
 
 ## Scope
@@ -354,9 +354,9 @@ and slot helpers live today.
   "projects": [
     {
       "id": "serve-1a2b3c4d5e6f7a8b",
-      "name": "svc-billing",
-      "root": "/home/u/work/svc-billing",
-      "db_path": "/home/u/work/svc-billing/.cartog/db.sqlite",
+      "name": "billing-service",
+      "root": "/home/u/work/billing-service",
+      "db_path": "/home/u/work/billing-service/.cartog/db.sqlite",
       "description": "Invoice generation and payment reconciliation.",
       "languages": [["rust", 412], ["markdown", 30]],
       "symbol_count": 8134,
@@ -393,7 +393,7 @@ This raises the MCP tool count 16 → 17 and the CLI command count 27 → 28
 ### The intended two-step
 
 ```
-cartog_list_projects            → route by description to svc-billing
+cartog_list_projects            → route by description to billing-service
 cartog_search --db <that path>  → drill into that one graph
 ```
 
@@ -413,7 +413,7 @@ Two sources, in priority order:
 
    ```toml
    [project]
-   name = "svc-billing"
+   name = "billing-service"
    description = "Invoice generation and payment reconciliation."
    ```
 
@@ -527,7 +527,7 @@ machinery rather than as one struct field.
 
 ```toml
 [project]
-name        = "svc-billing"
+name        = "billing-service"
 description = "Invoice generation and payment reconciliation."
 ```
 

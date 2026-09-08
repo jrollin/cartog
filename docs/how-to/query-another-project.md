@@ -13,7 +13,7 @@ database path, then any ordinary cartog command with `--db`.
 
 ```bash
 cartog projects list                 # 1. find the other project
-cartog search CreateShipment --db /path/to/other/.cartog/db.sqlite   # 2. query it
+cartog search CreateOrder --db /path/to/other/.cartog/db.sqlite   # 2. query it
 ```
 
 Every `cartog index`, `cartog rag index`, `cartog pull`, watcher re-index, and `cartog serve`
@@ -27,7 +27,7 @@ may not appear yet. Opening it again is enough — the plugin launches `cartog s
 a `serve` startup records the project. To make one (or a whole fleet) visible without waiting:
 
 ```bash
-cartog projects add ~/work/svc-shipping    # register one existing index
+cartog projects add ~/work/order-service    # register one existing index
 cartog projects scan ~/work                # register every indexed project under ~/work
 cartog projects scan ~/work --dry-run      # see what that would register first
 ```
@@ -43,7 +43,7 @@ with its real counts and description but shows `never` for last-indexed until it
 Searching every indexed project at once is one command, and avoids listing then guessing:
 
 ```bash
-cartog search CreateShipment --all                     # every eligible project
+cartog search CreateOrder --all                     # every eligible project
 cartog search Shift --all --under ~/work               # only that subtree
 cartog search Shift --all --under ~/work --lang ruby   # and only Ruby projects
 ```
@@ -59,10 +59,10 @@ because vectors from differently-embedded projects are not comparable. See
 `--json` gives a stable shape for scripts and agents:
 
 ```bash
-DB=$(cartog projects list --json | jq -r '.projects[] | select(.name=="svc-shipping").db_path')
-cartog search CreateShipment --db "$DB"
-cartog outline internal/ship/ship.go --db "$DB"
-cartog impact CreateShipment --db "$DB"
+DB=$(cartog projects list --json | jq -r '.projects[] | select(.name=="order-service").db_path')
+cartog search CreateOrder --db "$DB"
+cartog outline internal/order/order.go --db "$DB"
+cartog impact CreateOrder --db "$DB"
 ```
 
 Any command that accepts `--db` works this way — `search`, `outline`, `refs`, `callees`,
@@ -81,11 +81,11 @@ the normal tools for that one.
 ## Reading the markers
 
 ```
-svc-billing        8134 symbols   412 files  rust, markdown    2h ago  [live]
-  /home/u/work/svc-billing/.cartog/db.sqlite
-svc-shipping       2201 symbols    98 files  go                3d ago  [stale-schema v6]
-  /home/u/work/svc-shipping/.cartog/db.sqlite
-old-thing             ? symbols        ?     —                 never   [missing]
+billing-service    8134 symbols   412 files  rust, markdown    2h ago  [live]
+  /home/u/work/billing-service/.cartog/db.sqlite
+order-service      2201 symbols    98 files  go                3d ago  [stale-schema v6]
+  /home/u/work/order-service/.cartog/db.sqlite
+old-thing             ? symbols      ? files  —                 never   [missing]
   /home/u/work/old-thing/.cartog/db.sqlite
 ```
 
@@ -106,8 +106,8 @@ Routing works better when there is something to route on. Add a one-line descrip
 
 ```toml
 [project]
-name        = "svc-shipping"
-description = "Shipment creation, tracking, and carrier integration."
+name        = "order-service"
+description = "Order creation, tracking, and fulfilment."
 ```
 
 No config? cartog falls back to the first prose paragraph of `README.md`, truncated to 280

@@ -53,14 +53,14 @@ fn an_available_but_empty_registry_says_how_to_add_a_project() {
 #[test]
 fn a_project_row_renders_its_name_counts_languages_and_db_path() {
     let out = render(&Listing {
-        projects: vec![row("svc-billing")],
+        projects: vec![row("billing-service")],
         available: true,
     });
-    assert!(out.contains("svc-billing"));
+    assert!(out.contains("billing-service"));
     assert!(out.contains("8134"));
     assert!(out.contains("rust"));
     assert!(
-        out.contains("/w/svc-billing/.cartog/db.sqlite"),
+        out.contains("/w/billing-service/.cartog/db.sqlite"),
         "the db_path is the actionable payload and must always be shown"
     );
 }
@@ -224,12 +224,12 @@ fn described(text: &str, source: DescriptionSource) -> Description {
 fn a_declared_name_is_shown_instead_of_the_root_basename() {
     // The user named the project; showing the directory name would ignore that.
     let mut r = row("api");
-    r.declared_name = Some("svc-billing".to_string());
+    r.declared_name = Some("billing-service".to_string());
     let out = render(&Listing {
         projects: vec![r],
         available: true,
     });
-    assert!(out.contains("svc-billing"), "{out}");
+    assert!(out.contains("billing-service"), "{out}");
     assert!(
         !out.lines().next().unwrap().contains("api"),
         "the basename must not shadow the declared name: {out}"
@@ -305,14 +305,14 @@ fn a_long_description_is_truncated_so_the_row_stays_single_line() {
 #[test]
 fn the_json_name_is_the_display_name_and_carries_the_description_and_its_source() {
     let mut r = row("api");
-    r.declared_name = Some("svc-billing".to_string());
+    r.declared_name = Some("billing-service".to_string());
     r.description = Some(described("Invoices.", DescriptionSource::Readme));
     let payload = to_json(&Listing {
         projects: vec![r],
         available: true,
     });
     let p = &payload.projects[0];
-    assert_eq!(p.name, "svc-billing");
+    assert_eq!(p.name, "billing-service");
     assert_eq!(p.description.as_deref(), Some("Invoices."));
     assert_eq!(p.description_source, Some("readme"));
 }

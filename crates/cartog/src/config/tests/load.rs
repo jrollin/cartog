@@ -848,7 +848,8 @@ fn existing_db_lifts_the_unknown_db_path_refusal() {
 /// section parsed fine — a silent-nag bug.
 #[test]
 fn project_is_a_known_config_section() {
-    let raw: toml::value::Table = toml::from_str("[project]\nname = \"svc-billing\"\n").unwrap();
+    let raw: toml::value::Table =
+        toml::from_str("[project]\nname = \"billing-service\"\n").unwrap();
     assert!(unknown_sections(&raw).is_empty());
 }
 
@@ -974,14 +975,14 @@ fn unknown_project_key_is_salvaged_without_costing_the_index() {
     let cfg_path = dir.path().join(".cartog.toml");
     fs::write(
         &cfg_path,
-        "[project]\nname = \"svc-billing\"\ndescriptoin = \"typo\"\n[security]\nredact_secrets = false\n",
+        "[project]\nname = \"billing-service\"\ndescriptoin = \"typo\"\n[security]\nredact_secrets = false\n",
     )
     .unwrap();
 
     let cfg = read_config(&cfg_path).expect("a typo must not reject the whole file");
 
     let project = cfg.project.as_ref().expect("section survives the salvage");
-    assert_eq!(project.name(), Some("svc-billing"));
+    assert_eq!(project.name(), Some("billing-service"));
     assert_eq!(project.description(), None);
     assert!(
         !cfg.security.as_ref().unwrap().redact_secrets(),

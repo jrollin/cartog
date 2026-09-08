@@ -367,8 +367,8 @@ mod tests {
 
     #[test]
     fn the_name_is_the_root_basename() {
-        let f = ProjectFacts::identity_only("/w/svc/.cartog/db.sqlite", "/w/svc-billing");
-        assert_eq!(f.name(), "svc-billing");
+        let f = ProjectFacts::identity_only("/w/svc/.cartog/db.sqlite", "/w/billing-service");
+        assert_eq!(f.name(), "billing-service");
     }
 
     #[test]
@@ -390,9 +390,9 @@ mod tests {
         let f = ProjectFacts {
             // Bypass identity_only's absolutize so the rootless case is exact.
             root: PathBuf::from("/"),
-            ..ProjectFacts::identity_only("/w/svc-billing/.cartog/db.sqlite", "/")
+            ..ProjectFacts::identity_only("/w/billing-service/.cartog/db.sqlite", "/")
         };
-        assert_eq!(f.name(), "svc-billing");
+        assert_eq!(f.name(), "billing-service");
     }
 
     #[test]
@@ -544,8 +544,8 @@ mod tests {
     #[test]
     fn the_display_name_prefers_the_declared_name() {
         assert_eq!(
-            row("api", Some("svc-billing")).display_name(),
-            "svc-billing"
+            row("api", Some("billing-service")).display_name(),
+            "billing-service"
         );
     }
 

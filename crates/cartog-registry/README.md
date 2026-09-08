@@ -66,7 +66,7 @@ use cartog_registry::{Declared, DeclaredUpdate, Description, DescriptionSource};
 // from the repo clears the row.
 let facts = ProjectFacts {
     declared: DeclaredUpdate::Set(Declared {
-        name: Some("svc-billing".to_string()),
+        name: Some("billing-service".to_string()),
         description: Some(Description {
             text: "Invoice generation and payment reconciliation.".to_string(),
             source: DescriptionSource::Config,
