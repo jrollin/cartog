@@ -465,11 +465,18 @@ fn query_project(
 
 /// `canonicalize` when the path exists, else the path as given, so a filter
 /// still behaves sensibly for a project whose database has been removed.
-fn canonical_path(p: &Path) -> std::path::PathBuf {
-    // Expand `~` first: an agent may pass `~/work` literally, and
-    // `canonicalize` leaves it alone — so the `starts_with` test would match
-    // nothing and the fan-out would silently return zero projects. Mirrors
-    // `canonical` in the CLI's search_all.rs.
+///
+/// A bare `~` and `~<sep>path` both expand to the current user's home
+/// directory; `~user` is preserved as written, since another account's home is
+/// not something to guess at. `config::expand_tilde` on the CLI side states the
+/// same contract, and `a_bare_tilde_expands_and_a_user_tilde_does_not` pins the
+/// pair — they drifted once already, when only one of them expanded a bare `~`.
+///
+/// `pub(crate)` so that test can assert the contract directly.
+pub(crate) fn canonical_path(p: &Path) -> std::path::PathBuf {
+    // Expand before canonicalizing: an agent may pass `~/work` literally, and
+    // `canonicalize` leaves a tilde alone — so `starts_with` would match
+    // nothing and the fan-out would silently return zero projects.
     let expanded = match p.strip_prefix("~") {
         Ok(rest) => match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
             Some(home) => std::path::PathBuf::from(home).join(rest),
@@ -492,18 +499,20 @@ pub(crate) fn render_search_all(result: &SearchAllResult, query: &str) -> String
         if result.queried == 0 {
             // Nothing was selected, so nothing was searched. Saying "no symbols
             // matching" implies otherwise, and an agent reads that as "the
-            // symbol exists nowhere else" and stops looking. Why nothing was
-            // selected is left to the cap notice appended below, which already
-            // states it whenever the cap is what dropped the candidates.
-            // "none matched the filter" would be wrong when the cap is what
-            // dropped them, and the notice below already explains that case.
-            let why = if result.elided_by_cap > 0 {
-                "see below"
-            } else {
-                "none matched the filter — widen `under`/`lang`, or check \
-                 `cartog projects list`"
-            };
-            format!("No other indexed project was searched for '{query}': {why}.\n")
+            // symbol exists nowhere else" and stops looking.
+            //
+            // Deliberately does not blame the filter: `under`/`lang` are only
+            // two of the reasons a row is dropped. Self-exclusion (this is the
+            // only registered project) and a `missing` marker both run first,
+            // and the earlier wording sent a reader to widen a filter they had
+            // never set. The cap cannot land here at all — it clamps to >= 1 and
+            // truncates after counting, so an elision always leaves a candidate
+            // queried (`the_cap_cannot_elide_every_candidate` in the MCP tests).
+            format!(
+                "No other indexed project was eligible to search for '{query}'. Check \
+                 `cartog_list_projects`: another project must be indexed, not this one, \
+                 not missing, and within any `under`/`lang` given.\n"
+            )
         } else if searched == 0 {
             format!(
                 "No project could be searched for '{query}' — none of the {} candidate(s) \

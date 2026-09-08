@@ -73,6 +73,64 @@ fn read_config_rejects_unknown_provider() {
     assert!(read_config(&cfg_path).is_none());
 }
 
+/// A bare `~` must expand, like `~/x` does.
+///
+/// `--under '~'` (quoted, or from a script where the shell does not expand it)
+/// silently matched nothing, while the MCP expander — which the comments claim
+/// this one mirrors — expanded it to `$HOME` and searched everything. Same
+/// argument, opposite behaviour across two surfaces.
+#[test]
+fn expand_tilde_expands_a_bare_tilde() {
+    // Reads the real HOME rather than setting it: this crate's tests must not
+    // mutate process-global env (see the test-isolation rules), and the
+    // sibling `test_expand_tilde_with_home` uses the same approach.
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| "/tmp".into());
+
+    assert_eq!(
+        expand_tilde(PathBuf::from("~")),
+        PathBuf::from(&home),
+        "a bare `~` is the home directory"
+    );
+    assert_eq!(
+        expand_tilde(PathBuf::from("~/work")),
+        PathBuf::from(&home).join("work"),
+        "`~/x` keeps working"
+    );
+    // `~user` is another user's home, which this does not resolve — leaving it
+    // alone is better than silently pointing at the wrong person's directory.
+    assert_eq!(
+        expand_tilde(PathBuf::from("~other/work")),
+        PathBuf::from("~other/work"),
+        "`~user` is not ours to expand"
+    );
+}
+
+/// The tilde is a path component, so the platform's own separator works.
+///
+/// A `~/`-only string test expanded on unix and silently failed on Windows,
+/// where the separator is `\` — and Windows is a shipped release target.
+///
+/// On unix this is tautological (`MAIN_SEPARATOR` is `/`, so both forms pass);
+/// it earns its place on the Windows CI target, where the old form fails. A
+/// hardcoded `~\work` would instead be wrong on unix, where `\` is a legal
+/// filename character rather than a separator.
+#[test]
+fn expand_tilde_uses_the_platform_separator() {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| "/tmp".into());
+    let sep = std::path::MAIN_SEPARATOR;
+
+    let expanded = expand_tilde(PathBuf::from(format!("~{sep}work")));
+    assert_eq!(
+        expanded,
+        PathBuf::from(&home).join("work"),
+        "`~{sep}work` must expand on this platform"
+    );
+}
+
 #[test]
 fn test_expand_tilde_no_tilde() {
     let p = PathBuf::from("/absolute/path");

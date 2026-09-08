@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use cartog_registry::{Markers, ProjectRow};
 
-use crate::tools::search::select_fanout_candidates;
+use crate::tools::search::{canonical_path, select_fanout_candidates};
 
 fn row(name: &str, root: &str, symbols: Option<u32>, langs: &[&str]) -> ProjectRow {
     ProjectRow {
@@ -289,25 +289,81 @@ fn a_fan_out_that_selected_no_candidate_does_not_claim_no_match() {
         out.contains("no other indexed project") || out.contains("No other indexed project"),
         "must say the selection was empty, got: {out}"
     );
+    // Must not blame the filter: self-exclusion and a `missing` marker drop
+    // rows before `under`/`lang` are consulted, so a reader with no filter set
+    // was previously told to widen one.
+    assert!(
+        !out.contains("none matched the filter"),
+        "the filter is only one of several reasons, got: {out}"
+    );
 }
 
-/// Nothing searched *because of the cap* must still name the cap, so the reader
-/// raises `max_projects` rather than widening a filter that was never the
-/// problem. The header says nothing was searched; the notice says why.
+/// The `~` contract must match the CLI's `config::expand_tilde`.
+///
+/// The two expanders are deliberately duplicated (no crate can host the shared
+/// logic), and they drifted: this side expanded a bare `~`, the CLI did not, so
+/// `--under '~'` searched everything here and nothing there. A comment claiming
+/// they "mirror" each other did not stop it, so the contract is asserted.
 #[test]
-fn no_candidate_queried_because_of_the_cap_points_at_the_cap() {
-    let r = result(Vec::new(), Vec::new(), 0, 7);
+fn a_bare_tilde_expands_and_a_user_tilde_does_not() {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .expect("HOME must be set");
 
-    let out = render_search_all(&r, "Widget");
+    // A bare `~` and `~/x` both resolve under $HOME.
+    for (input, suffix) in [("~", ""), ("~/work", "work")] {
+        let got = canonical_path(std::path::Path::new(input));
+        let want = std::path::PathBuf::from(&home).join(suffix);
+        // `canonical_path` canonicalizes, so compare against the same treatment.
+        let want = want.canonicalize().unwrap_or(want);
+        assert_eq!(got, want, "input: {input}");
+    }
 
-    assert!(
-        !out.contains("No symbols matching"),
-        "nothing was searched, so this is not a no-match, got: {out}"
+    // `~user` is another account's home: neither surface guesses at it.
+    let got = canonical_path(std::path::Path::new("~other/work"));
+    assert_eq!(
+        got,
+        std::path::PathBuf::from("~other/work"),
+        "`~user` must be left alone"
     );
-    assert!(
-        out.contains('7') && out.contains("max_projects"),
-        "must point at the cap, got: {out}"
-    );
+}
+
+/// The cap can never elide *every* candidate, which is why the zero-candidate
+/// message names only the filter.
+///
+/// `cap = max_projects.clamp(1, 50)` then `kept.truncate(cap)`, so an elision
+/// means `kept.len() > cap >= 1` and at least one project was queried. A
+/// previous version of this file asserted the opposite state — zero queried
+/// with a non-zero elision — which `select_fanout_candidates` cannot emit; the
+/// assertion passed only because an unrelated trailing notice satisfied it.
+#[test]
+fn the_cap_cannot_elide_every_candidate() {
+    let rows: Vec<ProjectRow> = (0..7)
+        .map(|i| row(&format!("p{i}"), &format!("/w/p{i}"), Some(100), &["rust"]))
+        .collect();
+    let total = rows.len();
+
+    // Across every cap the clamp can yield, including 0 and an over-max value.
+    for requested in [0usize, 1, 3, 7, 50, 999] {
+        let (kept, elided) = select_fanout_candidates(
+            rows.clone(),
+            std::path::Path::new("/nonexistent/current/db.sqlite"),
+            None,
+            None,
+            requested,
+        );
+        assert_eq!(
+            kept.len() + elided,
+            total,
+            "requested {requested}: nothing lost"
+        );
+        if elided > 0 {
+            assert!(
+                !kept.is_empty(),
+                "requested {requested}: an elision must leave a candidate queried"
+            );
+        }
+    }
 }
 
 #[test]

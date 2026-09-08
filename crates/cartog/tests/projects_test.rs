@@ -755,6 +755,31 @@ fn backfill_keeps_a_declared_identity_when_the_config_is_unreadable() {
     );
 }
 
+/// A fan-out with nothing eligible says so, and blames only what applied.
+///
+/// The sandbox registry holds one project — this one — so self-exclusion empties
+/// the candidate set before any filter is consulted. Exercises the real
+/// zero-candidate path end to end, which a unit test on `describe` cannot: that
+/// block prints through `shared::output`.
+#[test]
+fn search_all_with_no_eligible_project_does_not_blame_a_filter() {
+    let sb = Sandbox::new();
+    assert!(sb.index().status.success());
+
+    let out = sb.cmd(&["search", "main", "--all"]);
+
+    assert!(out.status.success(), "an empty fan-out is not an error");
+    let text = stdout(&out);
+    assert!(
+        text.contains("this machine's registry"),
+        "with no filter set it must blame the registry: {text}"
+    );
+    assert!(
+        !text.contains("No symbols matching"),
+        "nothing was searched, so this is not a genuine no-match: {text}"
+    );
+}
+
 #[test]
 fn search_all_refuses_to_combine_with_the_project_scoped_file_filter() {
     // A path in one project means nothing in another, so `--file` cannot scope

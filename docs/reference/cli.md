@@ -97,7 +97,7 @@ candidates the output says so. A project that cannot be read is listed with the
 **reason** (a schema drift, a corrupt file and a permission error need different
 fixes) rather than silently skipped — including when *nothing* could be read, in
 which case the output says the search could not run rather than reporting a
-no-match that would read as "the symbol is not there". `--under` accepts `~`, and composes with
+no-match that would read as "the symbol is not there". `--under` accepts `~` and `~/path` — a bare `~` is your home directory, while `~user` is left as written rather than guessing another account's home — and composes with
 `--lang` as an AND.
 
 `--file` is **not** combinable with `--all`: a path in one project means nothing

@@ -134,14 +134,13 @@ pub fn cmd_search_all(
             elided_by_cap,
             total_matches: 0,
         };
-        return super::shared::output(&empty, json, token_budget, |e| {
-            if e.elided_by_cap > 0 {
-                return format!(
-                    "{} project(s) matched {} but none were queried — raise --max-projects.\n",
-                    e.elided_by_cap,
-                    describe(filter),
-                );
-            }
+        // The cap cannot reach here: it clamps to >= 1 and truncates after
+        // counting, so an elision always leaves a candidate queried — the clamp
+        // is pinned by `the_project_cap_is_clamped_to_the_same_range_as_the_mcp_tool`
+        // below, and the same invariant by `the_cap_cannot_elide_every_candidate`
+        // in cartog-mcp. `describe` names whichever filter was actually applied,
+        // or the registry itself when none was.
+        return super::shared::output(&empty, json, token_budget, |_| {
             format!("No other indexed project matches {}.\n", describe(filter))
         });
     }
@@ -711,6 +710,44 @@ mod tests {
 
         assert!(text.contains("/w/team"), "got {text}");
         assert!(text.contains("ruby"), "got {text}");
+    }
+
+    /// The zero-candidate line names the filter that was applied, or the
+    /// registry when none was — never a filter the user did not set.
+    ///
+    /// The MCP surface got this wrong in the other direction (it hardcoded
+    /// "none matched the filter"), so the CLI's behaviour is pinned here rather
+    /// than left to `describe`'s unit test alone.
+    #[test]
+    fn the_zero_candidate_line_names_only_what_was_applied() {
+        let no_filter = FanoutFilter {
+            under: None,
+            lang: None,
+            max_projects: None,
+        };
+        let line = format!(
+            "No other indexed project matches {}.\n",
+            describe(&no_filter)
+        );
+        assert!(
+            line.contains("this machine's registry"),
+            "with no filter set, blame the registry, not a filter: {line}"
+        );
+        assert!(
+            !line.contains("under") && !line.contains("language"),
+            "must not name a filter the caller never set: {line}"
+        );
+
+        let filtered = FanoutFilter {
+            under: Some(PathBuf::from("/w/team")),
+            lang: None,
+            max_projects: None,
+        };
+        let line = format!(
+            "No other indexed project matches {}.\n",
+            describe(&filtered)
+        );
+        assert!(line.contains("/w/team"), "name the applied filter: {line}");
     }
 
     #[test]
