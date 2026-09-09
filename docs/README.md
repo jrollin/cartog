@@ -17,6 +17,7 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 - [how-to/set-up-s3-sync.md](how-to/set-up-s3-sync.md) — remote push/pull via S3-compatible storage
 - [how-to/update-cartog.md](how-to/update-cartog.md) — upgrade, rollback, deferred updates
 - [how-to/wire-editors.md](how-to/wire-editors.md) — `cartog ide` and manual MCP config
+- [how-to/publish-vscode-extension.md](how-to/publish-vscode-extension.md) — maintainer runbook: publish the VS Code extension to the Marketplace + Open VSX
 
 ## Reference
 
@@ -37,6 +38,7 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 
 ## Background docs
 
+- [usage.md](usage.md) — hub: search commands, plugin, agent skill, MCP server, agents
 - [product.md](product.md) — vision, target users, positioning
 - [tech.md](tech.md) — technology stack, dependencies, benchmarks
 - [structure.md](structure.md) — workspace layout and per-crate links
