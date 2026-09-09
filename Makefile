@@ -215,9 +215,10 @@ check-react: ## Type-check React fixtures (tsc via npx, falls back to Docker)
 
 # --- Skill tests ---
 
-check-skill: ## Run skill tests (ensure_indexed.sh + update_on_exit.sh + install.sh unit tests)
+check-skill: ## Run skill tests (ensure_indexed.sh + drift_notice.sh + update_on_exit.sh + install.sh unit tests)
 	@echo "==> Checking skill tests..."
 	@bash skills/cartog/tests/test_ensure_indexed.sh
+	@bash skills/cartog/tests/test_drift_notice.sh
 	@bash skills/cartog/tests/test_update_on_exit.sh
 	@bash skills/cartog/tests/test_install.sh
 

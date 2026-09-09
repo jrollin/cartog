@@ -9,12 +9,14 @@ set -euo pipefail
 #       background subshell and exit 0 fast. MCP won't have cartog this
 #       session — it will pick up next session. /cartog-install repairs
 #       on demand.
-#   F3. Drift warning if the installed binary doesn't match plugin.json.
-#       The actual update is the user's call via /cartog-install (or, for
-#       binaries <0.14.0, the transitional SessionEnd hook).
+#   F3. Drift warning if the installed binary doesn't match plugin.json
+#       (model-facing; the user-visible notice is drift_notice.sh, a sibling
+#       SessionStart command).
 #   F4. `cartog index .` (incremental, typically <1s for unchanged trees).
 #
 # Background (forked into one subshell, logged to ~/.cache/cartog/session.log):
+#   B0. Deferred update: arm the plugin pin when drifted and not yet armed
+#       (converges even if SessionEnd never runs), else apply an armed intent.
 #   B1. cartog rag setup — download cross-encoder reranker (~150MB, first time).
 #   B2. cartog rag index . — embed symbols for vector search.
 #
@@ -139,6 +141,20 @@ apply_pending_update_bg() {
     command -v cartog >/dev/null 2>&1 || return 0
     supports_deferred_update || return 0
     local rc=0
+    # Arm the pin on drift here too (idempotent `--defer --to`). Arming used to
+    # live only in the SessionEnd hook, so a user whose sessions never end
+    # cleanly (killed terminal, sleep, hook timeout) never converged. A run that
+    # arms does NOT also apply: the swap would put this session on a new CLI
+    # while the old MCP server is still live, so it waits for the next boundary.
+    # A cargo binary is never armed (`--defer` refuses it, exit 3); the drift
+    # notice tells that cohort to run `cargo install cartog --force` instead. The
+    # apply below still runs for them and still refuses with exit 3, which the
+    # `3)` arm turns into an actionable last-error rather than a silent failure.
+    if [ -n "$INSTALLED" ] && [ "$SOURCE" != "cargo" ] \
+       && version_lt "$INSTALLED" "$PLUGIN_VERSION" && [ "$PENDING" != "$PLUGIN_VERSION" ]; then
+        cartog self update --defer --to "$PLUGIN_VERSION" --quiet || true
+        return 0
+    fi
     # Bracket the apply with the bare marker (same one the SessionEnd hook uses
     # and F1c surfaces): written before the swap, removed after. A kill in
     # between leaves it for next SessionStart's F1c to surface.
@@ -160,6 +176,30 @@ apply_pending_update_bg() {
     return 0
 }
 
+# Installed version, armed target and install source, read once from the binary
+# (`self version --json`, falling back to `--version` on older binaries). Shared
+# by the F3 drift line and B0's startup arm, which must agree on "drifted".
+INSTALLED=""
+PENDING=""
+SOURCE=""
+read_version_info() {
+    local info
+    info="$(cartog self version --json 2>/dev/null)" || info=""
+    if [ -n "$info" ]; then
+        INSTALLED="$(printf '%s' "$info" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+        PENDING="$(printf '%s' "$info" | sed -n 's/.*"target_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+        SOURCE="$(printf '%s' "$info" | sed -n 's/.*"install_source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    else
+        # `|| INSTALLED=""`: under `pipefail` a broken binary's status propagates
+        # out of the assignment and `set -e` aborts the hook before it can fork
+        # the background pipeline (no index, no RAG, no session log).
+        INSTALLED="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')" \
+            || INSTALLED=""
+        PENDING=""
+        SOURCE=""
+    fi
+}
+
 # F3: passive drift warning. Warns only when the installed binary is OLDER than
 # the plugin's pinned version — an equal or newer binary (e.g. a deliberate
 # manual install ahead of the pin) is left alone. Pending-aware: if a deferred
@@ -167,46 +207,38 @@ apply_pending_update_bg() {
 # The actual swap happens at SessionEnd (>=0.14) or via /cartog-install.
 #
 # Notices go to STDOUT, not stderr: Claude Code injects a SessionStart hook's
-# stdout into the model's context (so it surfaces to the user), but discards
-# stderr when the hook exits 0. A drift notice on stderr would be invisible.
+# stdout into the model's context, but discards stderr when the hook exits 0.
+# This line reaches the MODEL only; the user-visible counterpart is
+# drift_notice.sh (a sibling SessionStart command emitting `systemMessage`).
 warn_if_drifted() {
     [ -n "$PLUGIN_VERSION" ] || return 0
-    local info installed pending source
-    info="$(cartog self version --json 2>/dev/null)" || info=""
-    if [ -n "$info" ]; then
-        installed="$(printf '%s' "$info" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-        pending="$(printf '%s' "$info" | sed -n 's/.*"target_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-        source="$(printf '%s' "$info" | sed -n 's/.*"install_source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-    else
-        installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')"
-        pending=""
-        source=""
-    fi
-    [ -n "$installed" ] || return 0
+    [ -n "$INSTALLED" ] || return 0
     # Only an OLDER binary is "drifted". Equal or ahead → nothing to do.
-    version_lt "$installed" "$PLUGIN_VERSION" || return 0
-    if [ -n "$pending" ]; then
-        if [ "$pending" = "$PLUGIN_VERSION" ]; then
+    version_lt "$INSTALLED" "$PLUGIN_VERSION" || return 0
+    if [ -n "$PENDING" ]; then
+        if [ "$PENDING" = "$PLUGIN_VERSION" ]; then
             # Armed for the current pin. The apply runs at SessionEnd, but only
             # once no other cartog session/watch holds the lock — say so, so a
             # user with a second window open isn't left wondering why nothing
             # changed.
-            echo "cartog $pending will be applied when this session ends (once any other cartog sessions close)."
+            echo "cartog $PENDING will be applied when this session ends (once any other cartog sessions close)."
         else
             # A deferred update is armed, but the plugin pin has since moved.
-            # Tell the user the armed target is stale and how to re-arm.
-            echo "cartog has a deferred update to $pending armed, but the plugin now wants $PLUGIN_VERSION — run /cartog-install to re-arm."
+            # B0 re-arms to the new pin in the background this session.
+            echo "cartog has a deferred update to $PENDING armed, but the plugin now wants $PLUGIN_VERSION — re-arming to $PLUGIN_VERSION; it applies when this session ends."
         fi
         return 0
     fi
     # A cargo-installed binary cannot be swapped by /cartog-install (self update
     # refuses with exit 3); give that cohort the command that actually works
     # rather than a dead-end nudge.
-    if [ "$source" = "cargo" ]; then
-        echo "cartog binary $installed is out of sync with plugin $PLUGIN_VERSION; it was installed via cargo — run \`cargo install cartog --force\` to upgrade."
+    if [ "$SOURCE" = "cargo" ]; then
+        echo "cartog binary $INSTALLED is out of sync with plugin $PLUGIN_VERSION; it was installed via cargo — run \`cargo install cartog --force\` to upgrade."
         return 0
     fi
-    echo "cartog binary $installed is out of sync with plugin $PLUGIN_VERSION (run /cartog-install to update)."
+    # B0 arms the pin in the background this session; the apply follows at the
+    # next boundary, so a passive user converges without /cartog-install.
+    echo "cartog binary $INSTALLED is out of sync with plugin $PLUGIN_VERSION (arming the update now; it applies when this session ends — run /cartog-install to update sooner)."
 }
 
 # Background pipeline (steady-state): RAG setup → RAG index.
@@ -436,7 +468,9 @@ if [ "$index_rc" -ne 0 ]; then
     printf 'cartog index . failed (exit %d). See terminal output above.\n' "$index_rc" > "$LAST_ERROR_FILE"
 fi
 
-# F3: drift warning (apply runs in the background pipeline below + at SessionEnd).
+# F3: drift warning (arm/apply run in the background pipeline below + at SessionEnd).
+# Read once here; the forked pipeline inherits INSTALLED/PENDING/SOURCE.
+read_version_info
 warn_if_drifted
 
 # Background pipeline.
