@@ -72,7 +72,9 @@ Both fields are optional, so a bare `[project]` header is valid and inert.
 - **Name:** `[project] name` → project root's directory basename.
 - **Description:** `[project] description` → first prose paragraph of
   `README.md` (also `README.markdown`, `README`), plain text, truncated to
-  280 characters at a word boundary → none.
+  280 characters at a word boundary → none. A tagline in a blockquote counts as
+  that paragraph; a blockquote that *leads with* a link or image, or that opens
+  a `Note:`/`Warning:`/`Tip:`/`Important:`/`Caution:` callout, is skipped.
 
 No env-var override for either field — a project's identity is not the kind
 of per-machine knob the other sections' env vars exist for.

@@ -423,7 +423,25 @@ Two sources, in priority order:
 
 2. **`README.md` read from disk** — fallback when no config description exists.
    The first non-empty prose paragraph under the top-level heading, truncated to
-   280 characters at a word boundary.
+   280 characters at a word boundary. Headings, badge rows, tables, lists,
+   horizontal rules, code blocks and HTML blocks are skipped as structure.
+
+   A **blockquote is judged, not skipped wholesale** (issue #186). Many READMEs
+   put the tagline in one (`> Daily connection service for French seniors`), and
+   skipping it dropped the description to a later, worse line; but plenty of
+   others open with `> **[Documentation site](…)**`, which is navigation, or a
+   `> [!WARNING]` alert, which describes one caveat. So a blockquote is taken as
+   prose unless it leads with a link or image construct (tested after emphasis
+   stripping, since the real-world case wraps the link in `**`), opens a
+   `Note:`/`Warning:`/`Tip:`/`Important:`/`Caution:` callout, nests another
+   quote, or carries no words at all. A rejected quote is skipped as a whole
+   block, so an alert's body on the following line does not become the
+   description; that block ends at a blank line or at the next line markdown
+   treats as a new block (a heading, a list), since only plain prose can be a
+   quote's lazy continuation — ending it on a blank line alone swallowed the
+   rest of the file when a heading followed the alert directly. A blockquote
+   after prose has already started still ends the paragraph — it is a new block
+   either way.
 
    **Read the file directly; do not query the graph for this.** Markdown *is* an
    indexed language, but the markdown extractor stores no retrievable prose in
@@ -614,7 +632,7 @@ Name and description resolve independently, each highest-wins:
 **Name:** `[project] name` → project root basename.
 
 **Description:** `[project] description` → first prose paragraph of `README.md`
-→ none. The registry records which source won in `description_src`
+(a blockquote tagline included — see the resolution rules above) → none. The registry records which source won in `description_src`
 (`config` | `readme`), so `cartog projects list` can show that a description
 was inferred rather than declared.
 

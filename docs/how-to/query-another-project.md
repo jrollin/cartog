@@ -111,9 +111,11 @@ description = "Order creation, tracking, and fulfilment."
 ```
 
 No config? cartog falls back to the first prose paragraph of `README.md`, truncated to 280
-characters. Either way, the description shows up the next time you `cartog index` — even a
-no-op incremental pass refreshes it, since the registry compares config and README content
-independently of whether any code changed.
+characters. A tagline in a blockquote counts as that paragraph; a blockquote that leads with
+a link or image, or that opens a `Note:`/`Warning:` callout, is skipped. Either way, the description
+shows up the next time you `cartog index` — even a no-op incremental pass refreshes it,
+since the registry compares config and README content independently of whether any code
+changed.
 
 `cartog doctor` flags a project with no description from either source (advisory, not an
 error) — see [config.md § Project identity](../reference/config.md#project-identity-project).

@@ -85,6 +85,12 @@ fn first_prose_paragraph(text: &str) -> Option<String> {
     // not close it.
     let mut fence: Option<char> = None;
     let mut html: Option<HtmlBlock> = None;
+    // Whether the open paragraph was started by a blockquote, so its later
+    // `>` lines continue it instead of reading as a fresh block.
+    let mut in_blockquote = false;
+    // Whether a rejected blockquote block is still being skipped, so its
+    // continuation lines are not judged on their own.
+    let mut skipping_quote = false;
 
     while let Some(line) = lines.next() {
         let trimmed = line.trim();
@@ -126,6 +132,42 @@ fn first_prose_paragraph(text: &str) -> Option<String> {
         // Tested before the trim-based checks below, which cannot see indent.
         if paragraph.is_empty() && is_indented_code(line) {
             continue;
+        }
+        // A rejected quote taints its whole block, not just the line that was
+        // rejected: `> [!WARNING]` puts the caveat on the *next* `>` line, and
+        // judging that line on its own made the alert body the description.
+        //
+        // The block ends at a blank line or at anything markdown treats as a
+        // new block — only a plain-prose line can be its lazy continuation.
+        // Ending it on the blank line alone swallowed the rest of the file when
+        // a heading followed the alert directly, yielding no description at all
+        // (PR #191 review).
+        // A `>` line is the quote's own continuation, so it is skipped even
+        // though `is_structural` also calls it structure.
+        if skipping_quote {
+            if trimmed.starts_with('>') || (!trimmed.is_empty() && !is_structural(trimmed)) {
+                continue;
+            }
+            skipping_quote = false;
+        }
+        // A blockquote holding a plain tagline is the paragraph a reader wants
+        // (cf. #186: skipping it dropped the description to a later
+        // `**Status:**` line). Accepted only to open a paragraph or to continue
+        // one it opened itself — a `>` after plain prose is a new block, and
+        // `is_structural` below still ends the run there.
+        if paragraph.is_empty() || in_blockquote {
+            match blockquote_prose(trimmed) {
+                Some(prose) => {
+                    in_blockquote = true;
+                    paragraph.push(prose);
+                    continue;
+                }
+                None if trimmed.starts_with('>') => {
+                    skipping_quote = true;
+                    continue;
+                }
+                None => {}
+            }
         }
         if trimmed.is_empty() || is_structural(trimmed) {
             if !paragraph.is_empty() {
@@ -272,11 +314,77 @@ fn fence_marker(trimmed: &str) -> Option<char> {
         .find(|marker| trimmed.starts_with(&marker.to_string().repeat(3)))
 }
 
+/// The inner text of a blockquote line carrying prose, or `None`.
+///
+/// A `>` line is the tagline in some READMEs and decoration in others, so it
+/// is neither taken nor skipped unconditionally (cf. #186 — skipping it dropped
+/// the description to a later, worse line). Two shapes are rejected:
+///
+/// - a quote *leading* with a link or image (`> **[Documentation site](…)**`),
+///   which is navigation, not a summary — whatever follows it. Tested after
+///   emphasis stripping, since the real-world case wraps the link in `**` and a
+///   raw `starts_with('[')` misses it;
+/// - a `Note:`/`Warning:`/… callout, whose text describes one caveat rather
+///   than the project.
+///
+/// A nested quote (`>>`) is rejected as quoted matter rather than this
+/// project's own words, and a quote reduced to nothing but markup is rejected
+/// too, so an accepted line always carries words.
+fn blockquote_prose(trimmed: &str) -> Option<&str> {
+    let inner = trimmed.strip_prefix('>')?.trim_start();
+    // A nested quote (`>>`) is quoted matter, not this project's summary.
+    if inner.is_empty() || inner.starts_with('>') {
+        return None;
+    }
+    let bare = remove_emphasis(inner);
+    let bare = bare.trim_start();
+    if is_callout_label(bare) || starts_with_link_construct(bare) {
+        return None;
+    }
+    // `is_badge_only` covers a bare `![badge]` row; this catches a quote whose
+    // whole content is markup by any other route.
+    if !strip_inline_markup(inner)
+        .chars()
+        .any(char::is_alphanumeric)
+    {
+        return None;
+    }
+    Some(inner)
+}
+
+/// Whether emphasis-stripped `bare` opens with a link or image construct.
+///
+/// Prose that merely *contains* a link (`> Project used in [my article](…)`)
+/// still counts — only a quote that leads with the construct is navigation.
+fn starts_with_link_construct(bare: &str) -> bool {
+    bare.starts_with('[') || bare.starts_with("![")
+}
+
+/// Whether emphasis-stripped `bare` opens with a `Note:`-style callout label.
+///
+/// A caveat is not what the description exists to convey. Only the prose form
+/// is matched: GitHub's `[!NOTE]` alert form already leads with `[`, so
+/// [`starts_with_link_construct`] rejects it, and duplicating it here would be
+/// a branch no test can reach.
+fn is_callout_label(bare: &str) -> bool {
+    const LABELS: [&str; 5] = ["note", "warning", "tip", "important", "caution"];
+    let lower = bare.to_ascii_lowercase();
+    LABELS.iter().any(|label| {
+        lower
+            .strip_prefix(label)
+            .is_some_and(|rest| rest.trim_start().starts_with(':'))
+    })
+}
+
 /// Lines that are markdown *structure*, not prose.
 ///
 /// Rejecting a badge-only line is what makes the common README shape work: the
 /// build/coverage/crates.io row sits above the paragraph a reader actually
 /// wants, and an unfiltered "first non-blank line" returns the badges.
+///
+/// A `>` line stays structural here even though [`blockquote_prose`] may accept
+/// it: this predicate also *terminates* an open paragraph, and a quote after
+/// plain prose is a new block either way.
 fn is_structural(trimmed: &str) -> bool {
     is_heading(trimmed)
         || is_setext_underline(trimmed)
@@ -829,7 +937,7 @@ More detail nobody asked for.
     }
 
     #[test]
-    fn a_list_a_table_and_a_blockquote_are_all_skipped() {
+    fn a_list_and_a_table_are_both_skipped() {
         let body = "\
 - a bullet
 * another
@@ -838,10 +946,190 @@ More detail nobody asked for.
 | col | col |
 |-----|-----|
 
-> quoted
-
 The real summary.
 ";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "The real summary.");
+    }
+
+    // Blockquote handling, one test per README shape sampled on #186. A `>`
+    // line is the tagline in some projects and decoration in others, so both
+    // directions are pinned.
+
+    #[test]
+    fn a_prose_blockquote_tagline_is_the_description() {
+        // family-check's README: the real tagline sits in a blockquote, and
+        // skipping it dropped the description to the `**Status:**` line below.
+        let body = "\
+# Garder le Lien
+
+> Daily connection service for French seniors
+
+**Status:** Implementation in progress
+";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "Daily connection service for French seniors");
+    }
+
+    #[test]
+    fn a_prose_blockquote_holding_a_link_mid_sentence_is_still_prose() {
+        // ts-zod's README: it leads with words, so the link is incidental.
+        let body = "> Project used in [my article about TS + Zod](https://example.com)\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "Project used in my article about TS + Zod");
+    }
+
+    #[test]
+    fn a_bold_wrapped_link_blockquote_is_skipped() {
+        // cartog's own README: navigation, not a summary. The `**` must not
+        // hide the leading link from the check.
+        let body = "\
+# Cartog
+
+> **[Documentation site](https://www.cartog.dev/)**
+
+Map your codebase.
+";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "Map your codebase.");
+    }
+
+    #[test]
+    fn a_blockquote_leading_with_a_link_is_skipped_even_with_trailing_prose() {
+        // Deliberately stricter than "link-only": a quote that opens with a
+        // link reads as navigation whatever follows it, and the sentence is
+        // rarely a summary of the project.
+        let body = "> [Link](https://e.co) is a great tool for X\n\nThe real summary.\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "The real summary.");
+    }
+
+    #[test]
+    fn a_bold_only_blockquote_is_prose() {
+        let body = "> **Recursive Language Models**\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "Recursive Language Models");
+    }
+
+    #[test]
+    fn a_callout_blockquote_is_skipped() {
+        let body = "> Note: requires a nightly toolchain.\n\nThe real summary.\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "The real summary.");
+    }
+
+    #[test]
+    fn every_callout_label_is_skipped_whatever_its_case() {
+        // One case per label, so a typo in the table or a broken case-fold
+        // fails here rather than by a caveat becoming a project description.
+        for label in [
+            "Note",
+            "Warning",
+            "Tip",
+            "Important",
+            "Caution",
+            "WARNING",
+            "tip",
+        ] {
+            let body = format!("> {label}: a caveat, not a summary.\n\nThe real summary.\n");
+            let d = describe("README.md", &body).unwrap();
+            assert_eq!(d.text, "The real summary.", "label {label} was not skipped");
+        }
+    }
+
+    #[test]
+    fn a_blockquote_led_by_a_bare_image_is_skipped() {
+        // The `![` arm of the leading-construct check, distinct from a badge
+        // row: an image opener is decoration even with prose after it.
+        let body = "> ![icon](i.png) Some words here\n\nThe real summary.\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "The real summary.");
+    }
+
+    #[test]
+    fn a_one_word_blockquote_is_prose() {
+        // The shape the pre-#186 combined test used to assert was skipped. It
+        // now wins, deliberately: one word is a thin description, but a length
+        // floor would reject real short taglines, and `**Status:**`-style
+        // fallthrough is what the issue was about.
+        let body = "> quoted\n\nThe real summary.\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "quoted");
+    }
+
+    #[test]
+    fn a_github_alert_blockquote_is_skipped_body_and_all() {
+        // The `[!WARNING]` line is rejected as a leading link construct; the
+        // caveat on the line *below* it must go with it.
+        let body = "> [!WARNING]\n> This eats your data.\n\nThe real summary.\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "The real summary.");
+    }
+
+    #[test]
+    fn a_heading_directly_under_a_rejected_quote_ends_the_skip() {
+        // A rejected quote must not swallow the rest of the file: with no blank
+        // line after the alert, ending the skip only on a blank one returned no
+        // description at all (PR #191 review).
+        let body = "> [!WARNING]\n# Project\nActual tagline\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "Actual tagline");
+    }
+
+    #[test]
+    fn a_list_directly_under_a_rejected_quote_ends_the_skip() {
+        let body = "> Note: careful\n- item\nActual tagline\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "Actual tagline");
+    }
+
+    #[test]
+    fn a_quoted_alert_body_is_still_skipped_when_a_heading_follows_it() {
+        // The complement of the two above: a `>` line is the quote's own
+        // continuation, so it goes with the alert even though `is_structural`
+        // also calls a `>` line structure. Getting this wrong made the caveat
+        // the description.
+        let body = "> [!WARNING]\n> eats data\n# Project\nActual tagline\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "Actual tagline");
+    }
+
+    #[test]
+    fn a_blockquote_spanning_two_lines_is_joined_with_one_space() {
+        let body = "> Daily connection service\n> for French seniors\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "Daily connection service for French seniors");
+    }
+
+    #[test]
+    fn a_badge_only_blockquote_is_skipped() {
+        let body = "> [![build](https://img.shields.io/badge/b-p-green)](https://ci.example)\n\nThe real summary.\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "The real summary.");
+    }
+
+    #[test]
+    fn a_punctuation_only_blockquote_is_skipped() {
+        // Not caught by the link or callout rules: a quote whose content
+        // survives markup stripping but carries no words at all. Without the
+        // check it became the description verbatim.
+        let body = "> ---\n\nThe real summary.\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "The real summary.");
+    }
+
+    #[test]
+    fn a_nested_blockquote_is_skipped() {
+        let body = "> > quoted matter\n\nThe real summary.\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "The real summary.");
+    }
+
+    #[test]
+    fn a_blockquote_after_prose_does_not_extend_the_paragraph() {
+        // The quote is a new block: `is_structural` still ends the run, so an
+        // unrelated aside never lands in the middle of the description.
+        let body = "The real summary.\n> an aside\n";
         let d = describe("README.md", body).unwrap();
         assert_eq!(d.text, "The real summary.");
     }
