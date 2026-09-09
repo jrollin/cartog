@@ -321,6 +321,29 @@ in the file falls back to defaults for every section. Under an MCP client both
 warnings go to the server's stderr log, not the chat, so `cartog config` in a
 terminal is the reliable check.
 
+### Claude Code says the cartog binary is older than the plugin
+
+This is the plugin's SessionStart `drift_notice.sh` hook: it compares the installed
+`cartog` binary to the plugin's pinned version and, on drift, prints a
+user-visible notice in the terminal. It appears at most once per day for a
+given (installed version, plugin pin) pair, and only in a cartog-configured
+project (a `.cartog.toml`, an existing index, or `CARTOG_AUTO_INIT` set);
+unconfigured projects get no cartog output at all.
+
+For most users no action is needed: the SessionStart hook automatically arms
+the pinned update, and it applies at the next safe boundary (this session's
+end, or, if that is cancelled by teardown, the next SessionStart's catch-up).
+Run `/cartog-install` to apply it sooner instead of waiting.
+
+A `cargo install cartog` binary cannot auto-update (`cartog self update`
+refuses it); the notice names the exact replacement command,
+`cargo install cartog --force`.
+
+Set `CARTOG_NO_UPDATE_CHECK=1` to silence it entirely: the notice, the
+background update check, `doctor`'s version row, and the MCP server's drift
+sentence and `cartog_stats` pin fields. Asking for an update explicitly still
+works.
+
 ### MCP stderr is full of `[ERROR]` lines that look like info-level messages
 
 Fixed in v0.17. When `cartog serve` runs as an MCP child (stderr not a

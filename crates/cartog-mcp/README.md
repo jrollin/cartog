@@ -58,9 +58,11 @@ Read tools return both a text block (the original JSON shape, including bare arr
 
 | Export | Description |
 |--------|-------------|
-| `run_server(db_path, watch, rag, rag_config, opts)` | Start the MCP server over stdio (async). `rag_config: EmbeddingProviderConfig` threads through to all RAG operations; `opts: ServerOptions` configures PID-lock tracking. |
-| `ServerOptions` | `pid_lock_dir` + `pid_lock_slot` for single-writer election (both set together, or neither for untracked mode). |
+| `run_server(db_path, watch, rag, rag_config, opts)` | Start the MCP server over stdio (async). `rag_config: EmbeddingProviderConfig` threads through to all RAG operations; `opts: ServerOptions` configures PID-lock tracking, federation, and the plugin pin. |
+| `ServerOptions` | `pid_lock_dir` + `pid_lock_slot` for single-writer election (both set together, or neither for untracked mode); `federated` to expose the two cross-project tools; `plugin_pin: Option<PluginPin>` to surface a drift sentence when the binary is behind the plugin's pinned version. |
 | `SINGLE_WRITER_ENV` | Name of the env var (`CARTOG_SINGLE_WRITER`) that disables single-writer election when set to `0`. |
+| `PluginPin` | `{ version, behind, update_command }` describing the Claude Code plugin's pinned version, whether the running binary is behind it, and the command to bring it in line (`/cartog-install` or `cargo install cartog --force`). |
+| `parse_plugin_pin(manifest: &str) -> Option<String>` | Extracts a bare `MAJOR.MINOR.PATCH` version from a plugin manifest's `"version"` field, in `plugin_pin.rs`. |
 
 ## Crate dependencies
 
