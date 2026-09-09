@@ -436,8 +436,12 @@ Two sources, in priority order:
    `Note:`/`Warning:`/`Tip:`/`Important:`/`Caution:` callout, nests another
    quote, or carries no words at all. A rejected quote is skipped as a whole
    block, so an alert's body on the following line does not become the
-   description. A blockquote after prose has already started still ends the
-   paragraph — it is a new block either way.
+   description; that block ends at a blank line or at the next line markdown
+   treats as a new block (a heading, a list), since only plain prose can be a
+   quote's lazy continuation — ending it on a blank line alone swallowed the
+   rest of the file when a heading followed the alert directly. A blockquote
+   after prose has already started still ends the paragraph — it is a new block
+   either way.
 
    **Read the file directly; do not query the graph for this.** Markdown *is* an
    indexed language, but the markdown extractor stores no retrievable prose in

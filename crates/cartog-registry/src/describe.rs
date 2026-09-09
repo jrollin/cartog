@@ -135,13 +135,20 @@ fn first_prose_paragraph(text: &str) -> Option<String> {
         }
         // A rejected quote taints its whole block, not just the line that was
         // rejected: `> [!WARNING]` puts the caveat on the *next* `>` line, and
-        // judging that line on its own made the alert body the description. The
-        // block runs to the blank line, so a lazy continuation goes too.
+        // judging that line on its own made the alert body the description.
+        //
+        // The block ends at a blank line or at anything markdown treats as a
+        // new block — only a plain-prose line can be its lazy continuation.
+        // Ending it on the blank line alone swallowed the rest of the file when
+        // a heading followed the alert directly, yielding no description at all
+        // (PR #191 review).
+        // A `>` line is the quote's own continuation, so it is skipped even
+        // though `is_structural` also calls it structure.
         if skipping_quote {
-            if trimmed.is_empty() {
-                skipping_quote = false;
+            if trimmed.starts_with('>') || (!trimmed.is_empty() && !is_structural(trimmed)) {
+                continue;
             }
-            continue;
+            skipping_quote = false;
         }
         // A blockquote holding a plain tagline is the paragraph a reader wants
         // (cf. #186: skipping it dropped the description to a later
@@ -1057,6 +1064,34 @@ Map your codebase.
         let body = "> [!WARNING]\n> This eats your data.\n\nThe real summary.\n";
         let d = describe("README.md", body).unwrap();
         assert_eq!(d.text, "The real summary.");
+    }
+
+    #[test]
+    fn a_heading_directly_under_a_rejected_quote_ends_the_skip() {
+        // A rejected quote must not swallow the rest of the file: with no blank
+        // line after the alert, ending the skip only on a blank one returned no
+        // description at all (PR #191 review).
+        let body = "> [!WARNING]\n# Project\nActual tagline\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "Actual tagline");
+    }
+
+    #[test]
+    fn a_list_directly_under_a_rejected_quote_ends_the_skip() {
+        let body = "> Note: careful\n- item\nActual tagline\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "Actual tagline");
+    }
+
+    #[test]
+    fn a_quoted_alert_body_is_still_skipped_when_a_heading_follows_it() {
+        // The complement of the two above: a `>` line is the quote's own
+        // continuation, so it goes with the alert even though `is_structural`
+        // also calls a `>` line structure. Getting this wrong made the caveat
+        // the description.
+        let body = "> [!WARNING]\n> eats data\n# Project\nActual tagline\n";
+        let d = describe("README.md", body).unwrap();
+        assert_eq!(d.text, "Actual tagline");
     }
 
     #[test]
