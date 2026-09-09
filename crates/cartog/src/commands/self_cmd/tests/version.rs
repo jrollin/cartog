@@ -1,6 +1,7 @@
 //! Tests for version reporting and update-availability checks.
 
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use crate::commands::self_cmd::*;
 
@@ -272,4 +273,69 @@ fn cargo_install_not_detected_for_unrelated_paths() {
         Path::new("/home/u/.cargo-tools/bin/cartog"),
         None,
     ));
+}
+
+// ── plugin pin resolution for `cartog serve` ──
+
+#[test]
+fn plugin_manifest_path_prefers_explicit_over_root() {
+    let explicit = OsStr::new("/tmp/explicit.json");
+    let root = OsStr::new("/plugins/cartog");
+    assert_eq!(
+        plugin_manifest_path(Some(explicit), Some(root)),
+        Some(PathBuf::from("/tmp/explicit.json"))
+    );
+    assert_eq!(
+        plugin_manifest_path(None, Some(root)),
+        Some(PathBuf::from("/plugins/cartog/.claude-plugin/plugin.json"))
+    );
+}
+
+#[test]
+fn plugin_manifest_path_treats_empty_as_unset() {
+    let empty = OsStr::new("");
+    assert_eq!(plugin_manifest_path(Some(empty), Some(empty)), None);
+    assert_eq!(plugin_manifest_path(None, None), None);
+    assert_eq!(
+        plugin_manifest_path(Some(empty), Some(OsStr::new("/r"))),
+        Some(PathBuf::from("/r/.claude-plugin/plugin.json"))
+    );
+}
+
+#[test]
+fn describe_plugin_pin_flags_only_an_older_binary() {
+    assert!(describe_plugin_pin("0.34.0", "0.33.0", "release-tarball", false).behind);
+    assert!(!describe_plugin_pin("0.33.0", "0.33.0", "release-tarball", false).behind);
+    // Ahead of the pin (deliberate manual install) is not drift.
+    assert!(!describe_plugin_pin("0.33.0", "0.34.0", "release-tarball", false).behind);
+}
+
+#[test]
+fn describe_plugin_pin_gives_cargo_users_the_cargo_command() {
+    assert_eq!(
+        describe_plugin_pin("0.34.0", "0.33.0", "cargo", false).update_command,
+        "cargo install cartog --force"
+    );
+    for source in ["release-tarball", "dev"] {
+        assert_eq!(
+            describe_plugin_pin("0.34.0", "0.33.0", source, false).update_command,
+            "/cartog-install",
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn describe_plugin_pin_suppresses_the_notice_when_update_checks_are_disabled() {
+    // CARTOG_NO_UPDATE_CHECK silences the two MCP notice surfaces, exactly as it
+    // silences `doctor`'s version row and the SessionStart notice.
+    let quiet = describe_plugin_pin("0.34.0", "0.33.0", "release-tarball", true);
+    assert!(
+        !quiet.behind,
+        "a disabled update check must not report drift"
+    );
+    // The pin itself survives: `cartog_update` still arms `--to` the pin when the
+    // user explicitly asks for an update.
+    assert_eq!(quiet.version, "0.34.0");
+    assert_eq!(quiet.update_command, "/cartog-install");
 }

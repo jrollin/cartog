@@ -20,7 +20,7 @@ impl CartogServer {
     /// `self update --defer`, which records the target and exits without
     /// touching the binary; the boundary swap happens at SessionEnd.
     #[tool(
-        description = "Arm a deferred cartog self-update. Does NOT upgrade in this session — the running server keeps its current binary; the new version becomes active after this session ends (or the next restart). Use when the user confirms they want to update cartog. When cartog is installed as a Claude Code plugin, this arms the plugin's PINNED version (discovered from the plugin manifest); otherwise it arms the latest stable release. Not for: indexing or search. Returns: {current, target, status, apply, message}.",
+        description = "Arm a deferred cartog self-update. Does NOT upgrade in this session — the running server keeps its current binary; the new version becomes active after this session ends (or the next restart). Use when the user confirms they want to update cartog. When cartog is installed as a Claude Code plugin, this arms the plugin's PINNED version (read from the plugin manifest at server start); otherwise it arms the latest stable release. Not for: indexing or search. Returns: {current, target, status, apply, message}.",
         annotations(
             title = "Update cartog",
             read_only_hint = false,
@@ -34,14 +34,14 @@ impl CartogServer {
         output_schema = output_schema_for::<UpdateResult>()
     )]
     pub(crate) async fn cartog_update(&self) -> Result<CallToolResult, McpError> {
+        let pin = self.plugin_pin.as_ref().map(|p| p.version.clone());
         tokio::task::spawn_blocking(move || {
             debug!("update (arm deferred)");
             let exe = std::env::current_exe()
                 .map_err(|e| mcp_err(format!("cannot resolve cartog binary: {e}")))?;
-            // Arm the plugin's pinned version when discoverable so we can't
-            // overshoot the pin; fall back to latest stable otherwise.
+            // Arm the plugin's pinned version when the binary resolved one so we
+            // can't overshoot the pin; fall back to latest stable otherwise.
             let mut args = vec!["self", "update", "--defer", "--json"];
-            let pin = discover_plugin_pin();
             if let Some(ref v) = pin {
                 args.push("--to");
                 args.push(v);

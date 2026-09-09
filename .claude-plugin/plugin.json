@@ -25,7 +25,10 @@
   "mcpServers": {
     "cartog": {
       "command": "cartog",
-      "args": ["serve", "--watch"]
+      "args": ["serve", "--watch"],
+      "env": {
+        "CLAUDE_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}"
+      }
     }
   },
   "hooks": {

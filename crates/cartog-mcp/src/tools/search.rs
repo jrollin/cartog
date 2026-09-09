@@ -80,7 +80,7 @@ impl CartogServer {
 
     /// Index statistics summary.
     #[tool(
-        description = "Show index health: file count, symbol count, edge count, and edge resolution buckets. Use to verify the index is built and check coverage. Not for: finding code (use cartog_search or cartog_rag_search). Returns: {num_files, num_symbols, num_edges, num_resolved, num_unresolvable, num_external, languages, symbol_kinds, role, watcher_active}. num_external counts edges whose LSP-resolved target lives outside the indexed root (stdlib, deps, node_modules).",
+        description = "Show index health: file count, symbol count, edge count, and edge resolution buckets. Use to verify the index is built and check coverage. Not for: finding code (use cartog_search or cartog_rag_search). Returns: {num_files, num_symbols, num_edges, num_resolved, num_unresolvable, num_external, languages, symbol_kinds, role, watcher_active, plugin_pin?, update_command?}. plugin_pin/update_command appear only when this binary is older than the installed Claude Code plugin's pin. num_external counts edges whose LSP-resolved target lives outside the indexed root (stdlib, deps, node_modules).",
         annotations(title = "Index stats", read_only_hint = true, open_world_hint = false),
         output_schema = output_schema_for::<StatsResult>()
     )]
@@ -91,6 +91,8 @@ impl CartogServer {
             .watcher_active
             .load(std::sync::atomic::Ordering::Relaxed);
         let degraded = self.is_degraded();
+        // Already `None` when degraded: an unconfigured project gets no drift output.
+        let behind = self.behind_plugin_pin().cloned();
 
         tokio::task::spawn_blocking(move || {
             debug!("stats");
@@ -111,6 +113,8 @@ impl CartogServer {
                 role,
                 watcher_active,
                 degraded,
+                plugin_pin: behind.as_ref().map(|p| p.version.clone()),
+                update_command: behind.map(|p| p.update_command),
             };
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;

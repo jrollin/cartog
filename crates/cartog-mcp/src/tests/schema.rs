@@ -282,6 +282,8 @@ fn stats_result_flattens_index_stats() {
         role: Role::ReadOnly,
         watcher_active: false,
         degraded: false,
+        plugin_pin: None,
+        update_command: None,
     };
     let value = serde_json::to_value(&result).expect("serialize");
     let obj = value.as_object().expect("object");
