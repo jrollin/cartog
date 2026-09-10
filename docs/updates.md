@@ -185,7 +185,7 @@ The check is suppressed when:
 | Variable | Effect |
 |----------|--------|
 | `CARTOG_NO_UPDATE_CHECK=1` | Disable all auto-check, and silence every drift notice: the plugin's SessionStart notice, `doctor`'s version row, and the MCP server's drift sentence and `cartog_stats` pin fields. An explicit `cartog_update` still arms the pin |
-| `CARTOG_UPDATE_CHECK=never` | Same as above (alternative name) |
+| `CARTOG_UPDATE_CHECK=never` | Disable the background check only. It does **not** silence the drift notices or `doctor`'s version row; use `CARTOG_NO_UPDATE_CHECK` for those |
 | `CARTOG_UPDATE_CHECK=daily` | Default — check at most once per 24h |
 | `CARTOG_UPDATE_CHECK=always` | Check on every invocation (debugging) |
 | `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` | Honored by all network calls |

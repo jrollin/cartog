@@ -20,12 +20,18 @@ set -euo pipefail
 #      an existing DB file) plus an explicit CARTOG_DB. An unconfigured repo
 #      gets no cartog output of any kind.
 #   4. installed < pin. Equal or ahead (a deliberate manual install) is left alone.
-#   5. No update to exactly the pin is already armed — that case converges on
-#      its own at the next session boundary, so there is nothing to ask of the
-#      user (ensure_indexed.sh's model-facing line still says so).
-#   6. This (installed, pin) pair has not been announced in the last 24 hours,
+#   5. This (installed, pin) pair has not been announced in the last 24 hours,
 #      across all windows and projects (marker file in the cartog cache dir).
 #      A new plugin pin or a changed binary re-notifies.
+#
+# Deliberately NOT a condition: whether an update is already armed for the pin.
+# `ensure_indexed.sh` arms during this same startup and sibling hooks are
+# unordered, so suppressing on the live pending value drops the notice whenever
+# that arm wins the race (2 of 5 concurrent startups). Gating it on the marker
+# instead is order-independent but then mutes an update that has been armed and
+# stuck for over a day, which is exactly when the user needs telling again. The
+# 24h marker alone is the honest rule: an armed update that applies cleanly
+# changes the installed version, and the pair stops matching.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SCRIPT_DIR="."
 
@@ -37,10 +43,35 @@ PLUGIN_VERSION="$( { sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*
 
 command -v cartog >/dev/null 2>&1 || exit 0
 
-SESSION_LOG_DIR="${CARTOG_LOG_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cartog}"
-if ! mkdir -p "$SESSION_LOG_DIR" 2>/dev/null; then
-    SESSION_LOG_DIR="/tmp"
+# Snapshot the binary's version state NOW, before anything else this script does.
+# `ensure_indexed.sh` runs as a sibling SessionStart command and arms the pin
+# during this same startup; Claude Code does not order hooks, so a later read
+# could see that fresh arm and suppress a notice the user has never been shown.
+# Reading first bounds the race to a couple of lines instead of the whole
+# consent + marker path. An arm landing after this point is the one WE announce,
+# and the 24h marker keeps the next startup quiet.
+info="$(cartog self version --json 2>/dev/null)" || info=""
+if [ -n "$info" ]; then
+    installed="$(printf '%s' "$info" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+    source="$(printf '%s' "$info" | sed -n 's/.*"install_source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+else
+    # `|| installed=""`: under `pipefail` a broken binary's non-zero status would
+    # propagate out of the assignment and `set -e` would kill the hook BEFORE the
+    # emptiness guard below. An empty exit-2 hook reads to Claude Code as a
+    # blocking error, so a half-swapped binary must degrade to silence instead.
+    installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')" \
+        || installed=""
+    source=""
 fi
+
+# The only state this script keeps is the 24h marker, and its name is fully
+# predictable from two version numbers. Deliberately NO /tmp fallback (the
+# sibling hook has one for its log): a world-writable directory lets another
+# local user pre-create the path as a symlink, and `: > "$marker"` would then
+# truncate whatever it points at. With no private cache dir there is nowhere
+# safe to dedupe, so exit rather than notify unthrottled.
+SESSION_LOG_DIR="${CARTOG_LOG_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cartog}"
+mkdir -p "$SESSION_LOG_DIR" 2>/dev/null || exit 0
 
 # Semver compare: returns 0 iff $1 < $2 component-wise (pre-release suffix
 # stripped). Mirrors version_lt in ensure_indexed.sh.
@@ -89,24 +120,8 @@ project_is_configured() {
 }
 project_is_configured || exit 0
 
-info="$(cartog self version --json 2>/dev/null)" || info=""
-if [ -n "$info" ]; then
-    installed="$(printf '%s' "$info" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-    pending="$(printf '%s' "$info" | sed -n 's/.*"target_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-    source="$(printf '%s' "$info" | sed -n 's/.*"install_source"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-else
-    # `|| installed=""`: under `pipefail` a broken binary's non-zero status would
-    # propagate out of the assignment and `set -e` would kill the hook BEFORE the
-    # emptiness guard below. An empty exit-2 hook reads to Claude Code as a
-    # blocking error, so a half-swapped binary must degrade to silence instead.
-    installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')" \
-        || installed=""
-    pending=""
-    source=""
-fi
 [ -n "$installed" ] || exit 0
 version_lt "$installed" "$PLUGIN_VERSION" || exit 0
-[ "$pending" != "$PLUGIN_VERSION" ] || exit 0
 
 # Versions are interpolated into JSON and a filename: keep only semver chars.
 safe_installed="$(printf '%s' "$installed" | tr -cd '0-9A-Za-z.+-')"

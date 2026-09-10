@@ -232,11 +232,31 @@ test_silent_when_ahead_of_pin() {
     teardown
 }
 
-test_silent_when_armed_for_pin() {
-    echo "TEST: update already armed for the pin → silent (converges on its own)"
+test_an_armed_pin_does_not_by_itself_suppress_the_notice() {
+    echo "TEST: an armed pin never suppresses on its own; only the 24h marker does"
     setup
     create_mock_cartog "0.29.0" "release-tarball" "0.30.0"
-    assert_silent "no output when armed for pin" "$(run_notice)"
+    # `ensure_indexed.sh` arms during this same startup and sibling hooks are
+    # unordered, so an arm present at read time may be one the user has never
+    # been told about. Suppressing on it dropped the notice in 2 of 5 races.
+    assert_contains "notifies even though an update is armed for the pin" \
+        "is older than the cartog plugin" "$(run_notice)"
+    # The marker, not the arm, is what keeps the next startup quiet.
+    assert_silent "the marker suppresses the repeat" "$(run_notice)"
+    teardown
+}
+
+test_an_update_armed_but_stuck_over_a_day_is_re_announced() {
+    echo "TEST: an armed update that has not applied in 24h gets re-announced"
+    setup
+    create_mock_cartog "0.29.0" "release-tarball" "0.30.0"
+    run_notice >/dev/null
+    # Still armed, still not applied, a day later: a wedged apply or a peer that
+    # never closes. Gating suppression on the arm would mute this forever, which
+    # is precisely when the user needs telling again.
+    touch -t 202001010000 "$CARTOG_LOG_DIR/drift-notified-0.29.0-0.30.0"
+    assert_contains "re-announces a stuck armed update" \
+        "is older than the cartog plugin" "$(run_notice)"
     teardown
 }
 
@@ -310,6 +330,27 @@ test_cartog_db_pointing_at_a_real_file_is_consent() {
     export CARTOG_DB="$TEST_DIR/real.sqlite"
     create_mock_cartog "0.29.0"
     assert_contains "an existing CARTOG_DB grants consent" "is older than the cartog plugin" "$(run_notice)"
+    teardown
+}
+
+test_unwritable_cache_dir_is_silent_and_never_writes_tmp() {
+    echo "TEST: no private cache dir -> silent, and NOTHING written to shared /tmp"
+    setup
+    create_mock_cartog "0.29.0"
+    # A regular file where the cache dir should be: `mkdir -p` fails.
+    local blocked="$TEST_DIR/not-a-dir"
+    : > "$blocked"
+    local before after out
+    before=$(find /tmp -maxdepth 1 -name 'drift-notified-*' 2>/dev/null | wc -l | tr -d ' ')
+    out=$( cd "$TEST_DIR/workdir" \
+        && PATH="$TEST_DIR/bin:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$TEST_DIR/home" \
+           CARTOG_LOG_DIR="$blocked" bash "$NOTICE_SCRIPT" 2>&1 </dev/null )
+    after=$(find /tmp -maxdepth 1 -name 'drift-notified-*' 2>/dev/null | wc -l | tr -d ' ')
+    # Falling back to /tmp would put a predictable, world-writable path in play:
+    # another local user can pre-create it as a symlink and have `: > "$marker"`
+    # truncate the target. With nowhere private to dedupe, stay silent instead.
+    assert_silent "no notice without a private cache dir" "$out"
+    assert_eq "nothing written to shared /tmp" "$before" "$after"
     teardown
 }
 
@@ -409,7 +450,9 @@ test_silent_when_in_sync
 echo ""
 test_silent_when_ahead_of_pin
 echo ""
-test_silent_when_armed_for_pin
+test_an_armed_pin_does_not_by_itself_suppress_the_notice
+echo ""
+test_an_update_armed_but_stuck_over_a_day_is_re_announced
 echo ""
 test_silent_when_project_not_configured
 echo ""
@@ -424,6 +467,8 @@ echo ""
 test_cartog_db_pointing_at_a_missing_file_is_not_consent
 echo ""
 test_cartog_db_pointing_at_a_real_file_is_consent
+echo ""
+test_unwritable_cache_dir_is_silent_and_never_writes_tmp
 echo ""
 test_second_run_within_24h_is_silent
 echo ""

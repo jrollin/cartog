@@ -152,7 +152,16 @@ apply_pending_update_bg() {
     # `3)` arm turns into an actionable last-error rather than a silent failure.
     if [ -n "$INSTALLED" ] && [ "$SOURCE" != "cargo" ] \
        && version_lt "$INSTALLED" "$PLUGIN_VERSION" && [ "$PENDING" != "$PLUGIN_VERSION" ]; then
-        cartog self update --defer --to "$PLUGIN_VERSION" --quiet || true
+        local arm_rc=0
+        cartog self update --defer --to "$PLUGIN_VERSION" --quiet || arm_rc=$?
+        if [ "$arm_rc" -ne 0 ]; then
+            # The foreground line and drift_notice.sh both promised the update
+            # would apply at the next boundary. If arming failed there is no
+            # intent to apply, so say so rather than let the user wait forever.
+            printf 'cartog could not arm the update to %s (exit %d); it will NOT apply on its own. Run /cartog-install, or `cartog self update --defer --to %s` in a terminal. See %s.\n' \
+                "$PLUGIN_VERSION" "$arm_rc" "$PLUGIN_VERSION" "$SESSION_LOG" \
+                > "$LAST_ERROR_FILE" 2>/dev/null && APPLY_ERROR_WRITTEN=1
+        fi
         return 0
     fi
     # Bracket the apply with the bare marker (same one the SessionEnd hook uses

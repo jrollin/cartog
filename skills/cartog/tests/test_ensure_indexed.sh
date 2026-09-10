@@ -1180,6 +1180,42 @@ test_startup_does_not_arm_cargo_binary() {
     teardown
 }
 
+test_startup_cargo_apply_refusal_surfaces_the_cargo_command() {
+    echo "TEST: cargo binary is not armed, but its apply-pending exit 3 still writes the cargo command"
+    setup
+    write_plugin_json "0.29.3"
+    # install_source=cargo, and `self update` refuses with exit 3 like the real binary.
+    create_mock_cartog "0.29.0" 0 "" 3 "" "cargo"
+
+    run_ensure_indexed >/dev/null 2>&1
+    wait_for_rag_index
+
+    assert_not_contains "no arm for cargo" "self update --defer" "$(cat "$CARTOG_TEST_LOG")"
+    local err
+    err=$(cat "$CARTOG_LOG_DIR/last-error" 2>/dev/null || echo "")
+    assert_contains "exit 3 names the cargo command" "cargo install cartog --force" "$err"
+    teardown
+}
+
+# F5 regression: a failed --defer must not be reported as convergence.
+test_startup_failed_arm_is_surfaced_not_silent() {
+    echo "TEST: a --defer that fails writes an actionable last-error instead of promising convergence"
+    setup
+    write_plugin_json "0.29.3"
+    # self_update_exit=2 makes both `--defer` and `--apply-pending` fail; the arm
+    # branch returns before the apply, so the message must be the arm's.
+    create_mock_cartog "0.29.0" 0 "" 2
+
+    run_ensure_indexed >/dev/null 2>&1
+    wait_for_rag_index
+
+    local err
+    err=$(cat "$CARTOG_LOG_DIR/last-error" 2>/dev/null || echo "")
+    assert_contains "says arming failed" "could not arm the update to 0.29.3" "$err"
+    assert_contains "says it will not self-apply" "will NOT apply on its own" "$err"
+    teardown
+}
+
 test_startup_does_not_arm_when_binary_lacks_deferred_flags() {
     echo "TEST: drifted pre-0.20 binary → B0 neither arms nor applies (SessionEnd install.sh owns it)"
     setup
@@ -2111,6 +2147,10 @@ echo ""
 test_startup_does_not_arm_cargo_binary
 echo ""
 test_startup_does_not_arm_when_binary_lacks_deferred_flags
+echo ""
+test_startup_cargo_apply_refusal_surfaces_the_cargo_command
+echo ""
+test_startup_failed_arm_is_surfaced_not_silent
 echo ""
 test_last_update_surfaced_and_cleared
 echo ""

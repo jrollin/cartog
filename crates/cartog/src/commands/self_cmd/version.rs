@@ -139,6 +139,15 @@ pub(crate) fn describe_plugin_pin(
     }
 }
 
+/// `CARTOG_NO_UPDATE_CHECK` (any non-empty value) silences the drift notices.
+///
+/// Uses `var_os`, not `var`, so a non-UTF-8 value still counts as set: this must
+/// agree byte for byte with `doctor`'s `update_check_disabled`, or the same
+/// environment would silence one surface and not the other.
+fn update_notices_disabled() -> bool {
+    std::env::var_os("CARTOG_NO_UPDATE_CHECK").is_some_and(|v| !v.is_empty())
+}
+
 /// The plugin pin for a `cartog serve` launched by the Claude Code plugin, or
 /// `None` when no manifest is reachable or its version is not bare semver.
 pub(crate) fn plugin_pin_for_serve() -> Option<cartog_mcp::PluginPin> {
@@ -152,9 +161,7 @@ pub(crate) fn plugin_pin_for_serve() -> Option<cartog_mcp::PluginPin> {
         &pin,
         env!("CARGO_PKG_VERSION"),
         effective_install_source(),
-        crate::auto_check::parse_disabled_env(
-            std::env::var("CARTOG_NO_UPDATE_CHECK").ok().as_deref(),
-        ),
+        update_notices_disabled(),
     ))
 }
 

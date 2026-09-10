@@ -58,7 +58,9 @@ fn serve_instructions(project: &Path, envs: &[(&str, &str)], home: &Path) -> Str
         .env_remove("CARTOG_NO_UPDATE_CHECK")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        // Captured, not discarded: when the handshake yields nothing the server's
+        // own startup error is the only thing that explains why.
+        .stderr(Stdio::piped());
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -74,11 +76,17 @@ fn serve_instructions(project: &Path, envs: &[(&str, &str)], home: &Path) -> Str
     BufReader::new(child.stdout.take().expect("stdout"))
         .read_line(&mut line)
         .expect("read initialize response");
+    let mut stderr = String::new();
     let _ = child.kill();
+    if let Some(mut e) = child.stderr.take() {
+        use std::io::Read;
+        let _ = e.read_to_string(&mut stderr);
+    }
     let _ = child.wait();
 
-    let parsed: serde_json::Value = serde_json::from_str(&line)
-        .unwrap_or_else(|e| panic!("initialize response was not JSON ({e}): {line}"));
+    let parsed: serde_json::Value = serde_json::from_str(&line).unwrap_or_else(|e| {
+        panic!("initialize response was not JSON ({e}): {line:?}\nserver stderr: {stderr}")
+    });
     parsed["result"]["instructions"]
         .as_str()
         .unwrap_or_else(|| panic!("no instructions in response: {line}"))
