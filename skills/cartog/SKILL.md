@@ -140,7 +140,7 @@ The plugin's SessionStart hook handles install + indexing automatically:
 
 If `cartog --version` fails (binary missing, broken install, wrong architecture), tell the user to run `/cartog-install` and explain it installs the cartog binary that matches the plugin version.
 
-If `cartog --version` shows the installed binary is **older** than the plugin's pinned version, suggest `/cartog-install` to upgrade (or `cartog self update` for users on 0.14.0+). Ask before running either — the user may have pinned an older version deliberately.
+If `cartog --version` shows the installed binary is **older** than the plugin's pinned version: the SessionStart `drift_notice.sh` hook already shows the user a once-a-day notice for this, and the SessionStart pipeline already arms the pinned update automatically for non-cargo installs (it applies at the next session boundary; a `cargo install` binary is never armed and needs `cargo install cartog --force`). Don't repeat the notice unless a tool call actually fails because of the drift, or the user asks. When you do need to say something, use the update command from the server's `get_info` instructions or `cartog_stats`'s `update_command` field if present (cargo-installed binaries: `cargo install cartog --force`; everyone else: `/cartog-install`). Ask before running either — the user may have pinned an older version deliberately.
 
 ### Search quality tiers
 
@@ -459,7 +459,7 @@ cartog self migrate-db          # move legacy .cartog.db (+ -wal/-shm/.bak) into
 cartog self migrate-db --dry-run  # preview the planned moves
 ```
 
-User-facing maintenance commands. If the agent observes a "new cartog version available" hint or a stale binary, it can suggest the user run `cartog self update`. `cargo install cartog` users get an exit-3 refusal pointing at `cargo install cartog --force` instead. If the agent sees a one-shot deprecation warning about a legacy `.cartog.db`, suggest `cartog self migrate-db`.
+User-facing maintenance commands. Inside a plugin session the SessionStart hooks already notify the user (once a day) and auto-arm a drifted binary's update (cargo installs excepted: they cannot self-update), so the agent should not repeat that notice on its own — only mention it if a tool call fails because of the drift, or the user asks, using the update command from `get_info`'s instructions or `cartog_stats.update_command` when present. Outside a plugin session, if the agent observes a "new cartog version available" hint or a stale binary, it can suggest the user run `cartog self update`. `cargo install cartog` users get an exit-3 refusal pointing at `cargo install cartog --force` instead. If the agent sees a one-shot deprecation warning about a legacy `.cartog.db`, suggest `cartog self migrate-db`.
 
 ### Init (scaffold project config — user-facing)
 ```bash

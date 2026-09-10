@@ -516,6 +516,7 @@ fn fetch_latest_version_quick(url: &str) -> Result<String> {
 fn check_version(
     current: &str,
     disabled: bool,
+    install_source: &str,
     fetch: impl FnOnce() -> Result<String>,
 ) -> CheckResult {
     if disabled {
@@ -529,12 +530,17 @@ fn check_version(
     match fetch() {
         Ok(latest) => {
             if compare_stable_versions(current, &latest) == std::cmp::Ordering::Less {
+                // `self update` refuses a cargo-managed binary (exit 3); name the
+                // command that actually works for this install source.
+                let command = if install_source == "cargo" {
+                    "cargo install cartog --force"
+                } else {
+                    "cartog self update"
+                };
                 CheckResult {
                     name: "version".into(),
                     status: CheckStatus::Warn,
-                    message: format!(
-                        "update available: {current} -> {latest}, run 'cartog self update'"
-                    ),
+                    message: format!("update available: {current} -> {latest}, run '{command}'"),
                     ..Default::default()
                 }
             } else {
@@ -967,6 +973,7 @@ pub fn cmd_doctor(
     checks.push(check_version(
         env!("CARGO_PKG_VERSION"),
         update_check_disabled(),
+        super::self_cmd::effective_install_source(),
         || fetch_latest_version_quick(&github_latest_url()),
     ));
 
@@ -1588,7 +1595,9 @@ mod tests {
 
     #[test]
     fn version_older_than_latest_warns_with_upgrade_hint() {
-        let result = check_version("0.32.0", false, || Ok("0.33.0".to_string()));
+        let result = check_version("0.32.0", false, "release-tarball", || {
+            Ok("0.33.0".to_string())
+        });
         assert_eq!(result.status, CheckStatus::Warn);
         assert!(
             result.message.contains("0.32.0 -> 0.33.0"),
@@ -1599,8 +1608,23 @@ mod tests {
     }
 
     #[test]
+    fn version_older_on_cargo_install_names_the_cargo_command() {
+        // `cartog self update` exits 3 for this cohort; the hint must not send them there.
+        let result = check_version("0.32.0", false, "cargo", || Ok("0.33.0".to_string()));
+        assert_eq!(result.status, CheckStatus::Warn);
+        assert!(
+            result.message.contains("cargo install cartog --force"),
+            "{}",
+            result.message
+        );
+        assert!(!result.message.contains("cartog self update"));
+    }
+
+    #[test]
     fn version_equal_to_latest_is_ok() {
-        let result = check_version("0.33.0", false, || Ok("0.33.0".to_string()));
+        let result = check_version("0.33.0", false, "release-tarball", || {
+            Ok("0.33.0".to_string())
+        });
         assert_eq!(result.status, CheckStatus::Ok);
         assert!(result.message.contains("up to date"));
     }
@@ -1608,13 +1632,15 @@ mod tests {
     #[test]
     fn version_ahead_of_latest_is_ok() {
         // A dev build past the last release must not be reported as outdated.
-        let result = check_version("0.34.0", false, || Ok("0.33.0".to_string()));
+        let result = check_version("0.34.0", false, "release-tarball", || {
+            Ok("0.33.0".to_string())
+        });
         assert_eq!(result.status, CheckStatus::Ok);
     }
 
     #[test]
     fn version_check_disabled_reports_current_without_probing() {
-        let result = check_version("0.33.0", true, || {
+        let result = check_version("0.33.0", true, "release-tarball", || {
             panic!("must not probe when the check is disabled")
         });
         assert_eq!(result.status, CheckStatus::Ok);
@@ -1628,7 +1654,9 @@ mod tests {
     #[test]
     fn version_probe_failure_is_ok_not_error() {
         // Offline is not a broken environment, and doctor exits 1 on any error.
-        let result = check_version("0.33.0", false, || anyhow::bail!("connection refused"));
+        let result = check_version("0.33.0", false, "release-tarball", || {
+            anyhow::bail!("connection refused")
+        });
         assert_eq!(result.status, CheckStatus::Ok);
         assert!(
             result.message.contains("latest unknown"),

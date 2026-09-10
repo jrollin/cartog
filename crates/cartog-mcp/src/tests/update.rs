@@ -1,4 +1,4 @@
-//! Tests for cartog_update: arm-output reshaping and plugin-pin discovery.
+//! Tests for cartog_update: arm-output reshaping and plugin-pin parsing.
 
 use crate::*;
 
@@ -52,67 +52,32 @@ fn rag_snippet_bounds_body_length() {
     assert!(s.len() <= rag::search::SNIPPET_MAX_BYTES);
 }
 
-// ── discover_plugin_pin tests (cartog_update arms the pin) ──
-// Serialized via SERIAL because they mutate process-global env vars.
+// ── parse_plugin_pin tests (cartog_update arms the pin the binary resolved) ──
 
 #[test]
-fn discover_plugin_pin_reads_explicit_manifest() {
-    let _g = test_validate_call_counter::SERIAL.blocking_lock();
-    let prev_json = std::env::var_os("CARTOG_PLUGIN_JSON");
-    let prev_root = std::env::var_os("CLAUDE_PLUGIN_ROOT");
-    std::env::remove_var("CLAUDE_PLUGIN_ROOT");
-
-    let dir = tempfile::TempDir::new().unwrap();
-    let manifest = dir.path().join("plugin.json");
-    std::fs::write(&manifest, r#"{"name":"cartog","version":"0.20.0"}"#).unwrap();
-    std::env::set_var("CARTOG_PLUGIN_JSON", &manifest);
-    assert_eq!(discover_plugin_pin().as_deref(), Some("0.20.0"));
-
-    // Malformed (non-bare) version → None (fall back to latest).
-    std::fs::write(&manifest, r#"{"version":"v0.20.0"}"#).unwrap();
+fn parse_plugin_pin_accepts_bare_semver() {
     assert_eq!(
-        discover_plugin_pin(),
-        None,
-        "non-bare-semver pin must be rejected"
+        parse_plugin_pin(r#"{"name":"cartog","version":"0.20.0"}"#).as_deref(),
+        Some("0.20.0")
     );
-
-    // No manifest discoverable → None.
-    std::env::remove_var("CARTOG_PLUGIN_JSON");
-    assert_eq!(discover_plugin_pin(), None);
-
-    match prev_json {
-        Some(v) => std::env::set_var("CARTOG_PLUGIN_JSON", v),
-        None => std::env::remove_var("CARTOG_PLUGIN_JSON"),
-    }
-    if let Some(v) = prev_root {
-        std::env::set_var("CLAUDE_PLUGIN_ROOT", v);
-    }
 }
 
 #[test]
-fn discover_plugin_pin_reads_claude_plugin_root() {
-    let _g = test_validate_call_counter::SERIAL.blocking_lock();
-    let prev_json = std::env::var_os("CARTOG_PLUGIN_JSON");
-    let prev_root = std::env::var_os("CLAUDE_PLUGIN_ROOT");
-    std::env::remove_var("CARTOG_PLUGIN_JSON");
-
-    let dir = tempfile::TempDir::new().unwrap();
-    std::fs::create_dir_all(dir.path().join(".claude-plugin")).unwrap();
-    std::fs::write(
-        dir.path().join(".claude-plugin").join("plugin.json"),
-        r#"{"version":"0.21.0"}"#,
-    )
-    .unwrap();
-    std::env::set_var("CLAUDE_PLUGIN_ROOT", dir.path());
-    assert_eq!(discover_plugin_pin().as_deref(), Some("0.21.0"));
-
-    match prev_json {
-        Some(v) => std::env::set_var("CARTOG_PLUGIN_JSON", v),
-        None => std::env::remove_var("CARTOG_PLUGIN_JSON"),
-    }
-    match prev_root {
-        Some(v) => std::env::set_var("CLAUDE_PLUGIN_ROOT", v),
-        None => std::env::remove_var("CLAUDE_PLUGIN_ROOT"),
+fn parse_plugin_pin_rejects_non_bare_versions() {
+    // A malformed pin must fall back to latest, not arm garbage.
+    for manifest in [
+        r#"{"version":"v0.20.0"}"#,
+        r#"{"version":"0.20.0-rc.1"}"#,
+        r#"{"version":"0.20"}"#,
+        r#"{"version":""}"#,
+        r#"{"name":"cartog"}"#,
+        r#"not json"#,
+    ] {
+        assert_eq!(
+            parse_plugin_pin(manifest),
+            None,
+            "{manifest} must be rejected"
+        );
     }
 }
 

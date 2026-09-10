@@ -6,6 +6,7 @@ mod degraded;
 mod federated;
 mod handlers;
 mod lsp_gate;
+mod plugin_pin;
 mod read_tools;
 mod schema;
 mod search_all;

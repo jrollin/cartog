@@ -30,6 +30,8 @@ use cartog_watch as watch;
 use cartog_watch::{StaleSnapshot, WatchConfig, WatchHandle};
 
 mod lazy_provider;
+mod plugin_pin;
+pub use plugin_pin::{parse_plugin_pin, PluginPin};
 mod progress;
 mod tools;
 mod types;
@@ -536,37 +538,6 @@ fn fit_to_budget<T: Serialize>(items: Vec<T>, budget: usize) -> (Vec<T>, usize) 
     (kept, omitted)
 }
 
-/// Discover the plugin's pinned version so `cartog_update` can arm the PIN
-/// rather than the latest stable release (which could overshoot the pin).
-///
-/// Reads the `"version"` field of the plugin manifest, located via
-/// `CARTOG_PLUGIN_JSON` (explicit override) or `CLAUDE_PLUGIN_ROOT`
-/// (`<root>/.claude-plugin/plugin.json`, set by Claude Code for plugin hooks).
-/// Returns `None` when no manifest is discoverable (e.g. a non-plugin install),
-/// in which case the caller falls back to arming the latest stable release.
-fn discover_plugin_pin() -> Option<String> {
-    let manifest = match std::env::var_os("CARTOG_PLUGIN_JSON") {
-        Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => {
-            let root = std::env::var_os("CLAUDE_PLUGIN_ROOT").filter(|v| !v.is_empty())?;
-            PathBuf::from(root)
-                .join(".claude-plugin")
-                .join("plugin.json")
-        }
-    };
-    let text = std::fs::read_to_string(&manifest).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let version = parsed.get("version")?.as_str()?;
-    // Only accept a bare MAJOR.MINOR.PATCH — a malformed pin must fall back to
-    // latest, not arm garbage.
-    let parts: Vec<&str> = version.split('.').collect();
-    let bare = parts.len() == 3
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
-    bare.then(|| version.to_string())
-}
-
 /// Map the JSON envelope from `cartog self update --defer --json` to an
 /// [`UpdateResult`]. The CLI is the single source of truth for arming
 /// behavior and exit semantics; this only reshapes its output for MCP.
@@ -862,6 +833,10 @@ pub struct CartogServer {
     /// Whether the two cross-project tools are exposed. Drives the entry-point
     /// list in `get_info`, which must never name a tool this instance hides.
     federated: bool,
+    /// The Claude Code plugin's pinned version, when this server was launched
+    /// by the plugin. Drives `cartog_update`'s `--to` and the drift sentence in
+    /// `get_info` / `cartog_stats`. `None` for manual MCP wiring.
+    plugin_pin: Option<PluginPin>,
     /// Shared database connection, opened once at server start.
     db: Arc<Mutex<Database>>,
     /// Canonicalized CWD captured at server start to avoid repeated syscalls.
@@ -1166,6 +1141,7 @@ impl CartogServer {
         Ok(Self {
             tool_router: Self::tool_router_for(false),
             federated: false,
+            plugin_pin: None,
             db: Arc::new(Mutex::new(db)),
             embedding_provider: Arc::new(Mutex::new(provider)),
             reranker_provider: Arc::new(reranker),
@@ -1374,6 +1350,42 @@ impl CartogServer {
     pub fn is_federated(&self) -> bool {
         self.federated
     }
+
+    /// Record the plugin pin the binary resolved (see [`PluginPin`]).
+    #[must_use]
+    pub fn with_plugin_pin(mut self, pin: Option<PluginPin>) -> Self {
+        self.plugin_pin = pin;
+        self
+    }
+
+    /// The plugin pin this server is running behind, if any.
+    ///
+    /// `None` when there is no pin, when the binary is at or ahead of it, or
+    /// when the server is degraded: an unconfigured project gets no cartog
+    /// output of any kind, drift included.
+    fn behind_plugin_pin(&self) -> Option<&PluginPin> {
+        self.plugin_pin
+            .as_ref()
+            .filter(|pin| pin.behind && !self.is_degraded())
+    }
+
+    /// One model-facing sentence for `get_info` when running behind the pin.
+    /// Read once per session by the client, so it costs nothing per call and
+    /// never repeats; the user-facing counterpart is the SessionStart hook.
+    fn drift_instruction(&self) -> String {
+        match self.behind_plugin_pin() {
+            Some(pin) => format!(
+                " NOTE: this cartog binary ({current}) is older than the installed cartog plugin \
+                 ({pin}); tools or parameters the plugin's skill describes may be missing here. \
+                 If a cartog call fails unexpectedly, or the user asks, tell them once and suggest: \
+                 {cmd}. Do not run it for them.",
+                current = env!("CARGO_PKG_VERSION"),
+                pin = pin.version,
+                cmd = pin.update_command,
+            ),
+            None => String::new(),
+        }
+    }
 }
 
 /// The tools hidden unless [`CartogServer::with_federated`] enables them.
@@ -1406,7 +1418,9 @@ impl CartogServer {
              cartog_rag_search (find code by concept), cartog_search (look up an exact symbol name)\
              {federated_entry}. \
              Languages: Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, PHP, Dart, Swift, Kotlin, C, C++, C#, Vue, Svelte, Astro, Markdown. \
-             Frameworks: React, Vue, Svelte, Astro — JSX/SFC component-usage edges."
+             Frameworks: React, Vue, Svelte, Astro — JSX/SFC component-usage edges.\
+             {drift}",
+            drift = self.drift_instruction(),
         )
     }
 }

@@ -14,19 +14,38 @@ on:
       - ".claude-plugin/**"
       - ".github/workflows/skill-tests.yml"
 
+# These jobs run on `pull_request` and execute shell scripts from the branch
+# under test, so the token they carry should be able to do nothing but read.
+# Applied at workflow level: every job here is a test runner with the same needs.
+permissions:
+  contents: read
+
 jobs:
   ensure-indexed:
     name: ensure_indexed.sh unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - run: bash skills/cartog/tests/test_ensure_indexed.sh
+
+  drift-notice:
+    name: drift_notice.sh unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: bash skills/cartog/tests/test_drift_notice.sh
 
   update-on-exit:
     name: update_on_exit.sh unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - run: bash skills/cartog/tests/test_update_on_exit.sh
 
   install-script:
@@ -34,4 +53,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - run: bash skills/cartog/tests/test_install.sh

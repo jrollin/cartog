@@ -39,14 +39,14 @@ with three controls, highest precedence first: `CARTOG_WATCH_RAG` (env) override
 | `cartog_context` | `task`, `tokens?` | One-shot task bundle: relevant symbols + bodies |
 | `cartog_hierarchy` | `name` | Inheritance tree |
 | `cartog_deps` | `file` | File-level imports |
-| `cartog_stats` | — | Index summary |
+| `cartog_stats` | — | Index summary (adds `plugin_pin`/`update_command` when the binary is behind the plugin's pinned version) |
 | `cartog_map` | `tokens?` | Token-budget-aware codebase summary (file tree + top symbols by centrality) |
 | `cartog_changes` | `commits?`, `kind?` | Symbols affected by recent git changes |
 | `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search (write) |
 | `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
 | `cartog_list_projects` | — | The other cartog-indexed projects on this machine, with each one's `db_path` |
 | `cartog_search_all` | `query`, `kind?`, `limit?`, `under?`, `lang?`, `max_projects?` | Find a symbol by name across the *other* indexed projects, grouped per project |
-| `cartog_update` | `version?` | Arm a deferred self-update (write; touches the state file, not the index) |
+| `cartog_update` | `version?` | Arm a deferred self-update (write; touches the state file, not the index). When launched by the plugin, it arms the plugin's pinned version by default (the pin is resolved from `plugin.json` via `CLAUDE_PLUGIN_ROOT`, forwarded by the plugin's MCP server config); otherwise it falls back to the latest release. |
 
 Read tools (everything except `cartog_index`, `cartog_rag_index`, and `cartog_update`)
 carry an `outputSchema` and return `structuredContent`. All tool responses also include a JSON text block.
@@ -186,7 +186,7 @@ In a client that does not render progress (Claude Code, Claude Desktop today), t
 
 ## Built-in Workflow Guidance
 
-The MCP server sends workflow instructions to the client at initialization, covering tool chaining order (index → search → refs/callees/impact → re-index) and when to use semantic search. Clients that support the MCP `instructions` field will surface these automatically.
+The MCP server sends workflow instructions to the client at initialization, covering tool chaining order (index → search → refs/callees/impact → re-index) and when to use semantic search. Clients that support the MCP `instructions` field will surface these automatically. When the binary is behind the plugin's pinned version, the server is not degraded, and `CARTOG_NO_UPDATE_CHECK` is unset, the instructions gain one extra sentence: the binary is older than the plugin pin, tools or parameters described by the plugin skill may be missing, and the agent should tell the user once and suggest the update command without running it.
 
 ## Logging
 

@@ -159,7 +159,12 @@ upgrade_via_installer() {
 }
 
 run_update() {
-    installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')"
+    # `|| installed=""`: under `pipefail` a broken binary's status propagates out
+    # of the assignment. `set -e` is suspended here (the caller invokes this in an
+    # `if !` condition), so today it only skips the guard below rather than
+    # aborting — but the guard is the thing that must decide, not the pipeline.
+    installed="$(cartog --version 2>/dev/null | head -n 1 | sed -E 's/^cartog ([^ ]+).*/\1/')" \
+        || installed=""
     [ -n "$installed" ] || return 0
 
     # Capability is the only gate: a binary with no `self update` also lacks

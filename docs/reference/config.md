@@ -523,10 +523,10 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 | `CARTOG_REGISTRY` | `<state_dir>/projects.sqlite` | Path to the machine-local project registry read by `cartog projects`. Must be **absolute** — a relative value is refused (it would give each directory its own registry). Set to an **empty** value to disable the registry entirely: both reads and writes become no-ops. `cartog doctor` prints the resolved path, or names which of the three causes disabled it. |
 | `CARTOG_MCP_MAX_BYTES` | `65536` | Max bytes per MCP tool response before truncation. |
 | `CARTOG_MCP_COMPACT` | `1` (on) | MCP tools strip heavy fields by default (symbol cache hashes + docstrings; `cartog_rag_search`/`cartog_trace` bodies bounded to a ~500-byte snippet; `cartog_context` keeps budgeted bodies). Set `0`/`false`/`no`/`off` to return full bodies. |
-| `CARTOG_NO_UPDATE_CHECK` | unset | Set to skip the background self-update check. |
+| `CARTOG_NO_UPDATE_CHECK` | unset | Set to skip the background self-update check, and to silence every drift notice: the plugin's SessionStart notice, `doctor`'s version row, and the MCP server's drift sentence and `cartog_stats` pin fields. An explicit `cartog_update` still arms the plugin's pinned version. |
 | `CARTOG_UPDATE_CHECK` | unset | Force an update check regardless of cadence. |
 | `CARTOG_GITHUB_API_URL` | GitHub releases API | Override the GitHub API endpoint used for update checks. Useful in air-gapped environments or integration tests. |
-| `CARTOG_PLUGIN_JSON` | unset | Explicit path to the plugin manifest file, used by the MCP server to discover a deferred-update pin. |
+| `CARTOG_PLUGIN_JSON` | unset | Explicit path to the plugin manifest file, used by the MCP server to discover a deferred-update pin. Falls back to `<CLAUDE_PLUGIN_ROOT>/.claude-plugin/plugin.json`, where `CLAUDE_PLUGIN_ROOT` is forwarded to the server process via `plugin.json`'s `mcpServers.cartog.env`. |
 | `CARTOG_PROGRESS` | unset | Set to any value to force the progress spinner on non-TTY output (e.g. CI). Normally auto-gates to TTY only. |
 | `CARTOG_LOG_DIR` | `~/.cache/cartog` | Directory for the `last-update` breadcrumb written after a self-update. Respects `$XDG_CACHE_HOME` when set. |
 | `CARTOG_LSP_READY_TIMEOUT_SECS` | `20` | Seconds to wait for an LSP server to finish loading its project model before the first definition request. |

@@ -511,6 +511,7 @@ fn main() -> Result<()> {
                     config::read_config(path).is_some()
                 })),
                 federated: config::resolve_federated(federated, &cartog_config),
+                plugin_pin: commands::plugin_pin_for_serve(),
             };
             runtime.block_on(mcp::run_server(
                 &db_path,

@@ -54,6 +54,7 @@ mod self_cmd;
 pub use projects::{
     cmd_projects_add, cmd_projects_forget, cmd_projects_list, cmd_projects_prune, cmd_projects_scan,
 };
+pub(crate) use self_cmd::plugin_pin_for_serve;
 pub use self_cmd::{
     cmd_self_migrate_db, cmd_self_rollback, cmd_self_update, cmd_self_version, UpdateMode,
 };

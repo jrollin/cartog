@@ -212,7 +212,7 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
             <tr><td><code>CARTOG_REGISTRY</code></td><td><code>&lt;state_dir&gt;/projects.sqlite</code></td><td>Machine-local project registry read by <code>cartog projects</code>. Absolute paths only. Empty value disables reads <strong>and</strong> writes; <code>cartog doctor</code> names which cause disabled it.</td></tr>
             <tr><td><code>CARTOG_MCP_MAX_BYTES</code></td><td><code>65536</code></td><td>Max bytes per MCP tool response before truncation.</td></tr>
             <tr><td><code>CARTOG_MCP_COMPACT</code></td><td><code>1</code> (on)</td><td>MCP tools strip heavy fields by default (cache hashes + docstrings; <code>cartog_rag_search</code>/<code>cartog_trace</code> bodies bounded to a ~500-byte snippet; <code>cartog_context</code> keeps budgeted bodies). Set <code>0</code> to return full bodies.</td></tr>
-            <tr><td><code>CARTOG_NO_UPDATE_CHECK</code></td><td>unset</td><td>Set to skip the background self-update check.</td></tr>
+            <tr><td><code>CARTOG_NO_UPDATE_CHECK</code></td><td>unset</td><td>Set to skip the background self-update check, and to silence every drift notice: the plugin's SessionStart notice, <code>doctor</code>'s version row, and the MCP server's drift sentence and <code>cartog_stats</code> pin fields.</td></tr>
             <tr><td><code>CARTOG_UPDATE_CHECK</code></td><td>unset</td><td>Force an update check regardless of cadence.</td></tr>
             <tr><td><code>CARTOG_INSTALL_DIR</code></td><td><code>~/.local/bin</code></td><td>Install location used by <code>install.sh</code>.</td></tr>
             <tr><td><code>CARTOG_VERSION</code></td><td>latest</td><td>Pin the version <code>install.sh</code> fetches.</td></tr>
@@ -631,13 +631,13 @@ cartog serve --federated      <span class="comment"># also expose the 2 cross-pr
             <tr><td><code>cartog_trace</code></td><td>read</td><td>Shortest call path between two symbols, bodies inline</td></tr>
             <tr><td><code>cartog_hierarchy</code></td><td>read</td><td>Inheritance tree</td></tr>
             <tr><td><code>cartog_deps</code></td><td>read</td><td>File-level imports</td></tr>
-            <tr><td><code>cartog_stats</code></td><td>read</td><td>Index summary</td></tr>
+            <tr><td><code>cartog_stats</code></td><td>read</td><td>Index summary (adds <code>plugin_pin</code>/<code>update_command</code> when the binary trails the plugin's pinned version)</td></tr>
             <tr><td><code>cartog_changes</code></td><td>read</td><td>Symbols affected by recent git changes</td></tr>
             <tr><td><code>cartog_rag_index</code></td><td>write</td><td>Build embedding index</td></tr>
             <tr><td><code>cartog_rag_search</code></td><td>read</td><td>Semantic search</td></tr>
             <tr><td><code>cartog_list_projects</code></td><td>read · opt-in</td><td>The other cartog-indexed projects on this machine, each with its <code>db_path</code> and description</td></tr>
             <tr><td><code>cartog_search_all</code></td><td>read · opt-in</td><td>Find a symbol by name across the <em>other</em> indexed projects, grouped per project (filters: <code>under</code>, <code>lang</code>, <code>max_projects</code>)</td></tr>
-            <tr><td><code>cartog_update</code></td><td>write</td><td>Arm a deferred self-update</td></tr>
+            <tr><td><code>cartog_update</code></td><td>write</td><td>Arm a deferred self-update (defaults to the plugin's pinned version when launched by the plugin)</td></tr>
           </tbody>
         </table>
 

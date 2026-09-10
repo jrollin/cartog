@@ -232,6 +232,16 @@ pub(crate) struct StatsResult {
     /// serialized when true, so non-degraded `--json` output is unchanged.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) degraded: bool,
+    /// The Claude Code plugin's pinned cartog version, when this server was
+    /// launched by the plugin and is running BEHIND that pin. Absent when there
+    /// is no pin, the binary is current, or the server is degraded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) plugin_pin: Option<String>,
+    /// The command that brings the binary to `plugin_pin` (`/cartog-install`,
+    /// or `cargo install cartog --force` for a cargo-managed binary). Present
+    /// exactly when `plugin_pin` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) update_command: Option<String>,
 }
 
 /// Result of `cartog_update` (arm a deferred self-update).

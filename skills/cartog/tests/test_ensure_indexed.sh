@@ -1107,7 +1107,126 @@ test_drift_warning_acknowledges_stale_armed_after_repin() {
 
     assert_contains "names the stale armed target" "deferred update to 0.20.0 armed" "$output"
     assert_contains "names the new pin" "plugin now wants 0.21.0" "$output"
-    assert_contains "points at re-arm" "/cartog-install to re-arm" "$output"
+    assert_contains "says it re-arms itself" "re-arming to 0.21.0" "$output"
+    # B0 re-arms to the moved pin and defers the apply to the next boundary.
+    if grep -q 'self update --defer --to 0.21.0' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: re-armed to the new pin"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: did not re-arm to the new pin"; FAIL=$((FAIL + 1))
+    fi
+    assert_not_contains "no same-run apply after re-arm" "self update --apply-pending" "$(cat "$CARTOG_TEST_LOG")"
+    teardown
+}
+
+# --- B0 startup arm: converge without depending on SessionEnd ---
+
+test_startup_arms_pin_when_drifted_and_not_armed() {
+    echo "TEST: drifted + nothing armed → B0 arms the pin at startup and does NOT apply in the same run"
+    setup
+    write_plugin_json "0.29.3"
+    create_mock_cartog "0.29.0"   # installed < pin, no pending
+
+    run_ensure_indexed >/dev/null 2>&1
+    wait_for_rag_index
+
+    if grep -q 'self update --defer --to 0.29.3 --quiet' "$CARTOG_TEST_LOG"; then
+        echo "  PASS: armed the pin"; PASS=$((PASS + 1))
+    else
+        echo "  FAIL: did not arm the pin"; FAIL=$((FAIL + 1))
+    fi
+    assert_not_contains "apply deferred to the next boundary" "self update --apply-pending" "$(cat "$CARTOG_TEST_LOG")"
+    # RAG steps still run after the arm.
+    assert_contains "pipeline continues past B0" "rag index ." "$(cat "$CARTOG_TEST_LOG")"
+    teardown
+}
+
+test_startup_does_not_arm_when_already_armed_for_pin() {
+    echo "TEST: drifted + already armed for the pin → B0 applies, no redundant --defer"
+    setup
+    write_plugin_json "0.29.3"
+    create_mock_cartog "0.29.0" 0 "" 0 "0.29.3"
+
+    run_ensure_indexed >/dev/null 2>&1
+    wait_for_rag_index
+
+    assert_not_contains "no redundant arm" "self update --defer" "$(cat "$CARTOG_TEST_LOG")"
+    assert_contains "apply runs" "self update --apply-pending --quiet --at-startup" "$(cat "$CARTOG_TEST_LOG")"
+    teardown
+}
+
+test_startup_does_not_arm_when_in_sync() {
+    echo "TEST: binary == pin → B0 never arms (apply-pending no-op only)"
+    setup
+    write_plugin_json "0.29.3"
+    create_mock_cartog "0.29.3"
+
+    run_ensure_indexed >/dev/null 2>&1
+    wait_for_rag_index
+
+    assert_not_contains "no arm when in sync" "self update --defer" "$(cat "$CARTOG_TEST_LOG")"
+    teardown
+}
+
+test_startup_does_not_arm_cargo_binary() {
+    echo "TEST: drifted cargo binary → B0 does not arm (self update would refuse with exit 3)"
+    setup
+    write_plugin_json "0.29.3"
+    create_mock_cartog "0.29.0" 0 "" 0 "" "cargo"
+
+    run_ensure_indexed >/dev/null 2>&1
+    wait_for_rag_index
+
+    assert_not_contains "no arm for cargo" "self update --defer" "$(cat "$CARTOG_TEST_LOG")"
+    teardown
+}
+
+test_startup_cargo_apply_refusal_surfaces_the_cargo_command() {
+    echo "TEST: cargo binary is not armed, but its apply-pending exit 3 still writes the cargo command"
+    setup
+    write_plugin_json "0.29.3"
+    # install_source=cargo, and `self update` refuses with exit 3 like the real binary.
+    create_mock_cartog "0.29.0" 0 "" 3 "" "cargo"
+
+    run_ensure_indexed >/dev/null 2>&1
+    wait_for_rag_index
+
+    assert_not_contains "no arm for cargo" "self update --defer" "$(cat "$CARTOG_TEST_LOG")"
+    local err
+    err=$(cat "$CARTOG_LOG_DIR/last-error" 2>/dev/null || echo "")
+    assert_contains "exit 3 names the cargo command" "cargo install cartog --force" "$err"
+    teardown
+}
+
+# F5 regression: a failed --defer must not be reported as convergence.
+test_startup_failed_arm_is_surfaced_not_silent() {
+    echo "TEST: a --defer that fails writes an actionable last-error instead of promising convergence"
+    setup
+    write_plugin_json "0.29.3"
+    # self_update_exit=2 makes both `--defer` and `--apply-pending` fail; the arm
+    # branch returns before the apply, so the message must be the arm's.
+    create_mock_cartog "0.29.0" 0 "" 2
+
+    run_ensure_indexed >/dev/null 2>&1
+    wait_for_rag_index
+
+    local err
+    err=$(cat "$CARTOG_LOG_DIR/last-error" 2>/dev/null || echo "")
+    assert_contains "says arming failed" "could not arm the update to 0.29.3" "$err"
+    assert_contains "says it will not self-apply" "will NOT apply on its own" "$err"
+    teardown
+}
+
+test_startup_does_not_arm_when_binary_lacks_deferred_flags() {
+    echo "TEST: drifted pre-0.20 binary → B0 neither arms nor applies (SessionEnd install.sh owns it)"
+    setup
+    write_plugin_json "0.29.3"
+    create_mock_cartog "0.19.0" 0 "" 0 "" "release-tarball" 1
+
+    run_ensure_indexed >/dev/null 2>&1
+    wait_for_rag_index
+
+    assert_not_contains "no arm without --defer support" "self update --defer" "$(cat "$CARTOG_TEST_LOG")"
+    assert_not_contains "no apply without --apply-pending support" "self update --apply-pending" "$(cat "$CARTOG_TEST_LOG")"
     teardown
 }
 
@@ -2018,6 +2137,20 @@ echo ""
 test_drift_warning_pending_aware_when_armed
 echo ""
 test_drift_warning_acknowledges_stale_armed_after_repin
+echo ""
+test_startup_arms_pin_when_drifted_and_not_armed
+echo ""
+test_startup_does_not_arm_when_already_armed_for_pin
+echo ""
+test_startup_does_not_arm_when_in_sync
+echo ""
+test_startup_does_not_arm_cargo_binary
+echo ""
+test_startup_does_not_arm_when_binary_lacks_deferred_flags
+echo ""
+test_startup_cargo_apply_refusal_surfaces_the_cargo_command
+echo ""
+test_startup_failed_arm_is_surfaced_not_silent
 echo ""
 test_last_update_surfaced_and_cleared
 echo ""

@@ -82,6 +82,11 @@ pub struct ServerOptions {
     /// paths and README text into this session. Set from `--federated` or
     /// `[mcp] federated = true`.
     pub federated: bool,
+    /// The Claude Code plugin's pinned version, resolved by the binary from the
+    /// manifest the plugin's `mcpServers.env` points at. `None` outside the
+    /// plugin. Read by `cartog_update` (arms `--to` the pin) and surfaced as a
+    /// drift sentence in `get_info` / `cartog_stats` when the binary is behind.
+    pub plugin_pin: Option<crate::PluginPin>,
 }
 
 /// Outcome of trying to claim the `serve` lock at MCP startup.
@@ -270,6 +275,7 @@ pub async fn run_server(
         let rag_config = rag_config.clone();
         let filter = filter.clone();
         let federated = opts.federated;
+        let plugin_pin = opts.plugin_pin.clone();
         tokio::task::spawn_blocking(move || {
             let server = match role {
                 Role::Primary => CartogServer::new(
@@ -284,7 +290,7 @@ pub async fn run_server(
                     CartogServer::new_read_only(&db_path, rag_config, redact, lsp_overrides, filter)
                 }
             };
-            server.map(|s| s.with_federated(federated))
+            server.map(|s| s.with_federated(federated).with_plugin_pin(plugin_pin))
         })
         .await
         .map_err(|e| anyhow::anyhow!("server construction task panicked: {e}"))??

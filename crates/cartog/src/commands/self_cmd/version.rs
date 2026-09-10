@@ -1,5 +1,6 @@
 //! `cartog self version` and update-availability checks.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -84,6 +85,84 @@ pub(crate) fn looks_like_cargo_install(binary_path: &Path, cargo_home: Option<&P
         prev = Some(cur);
     }
     false
+}
+
+/// Locate the Claude Code plugin manifest from what the plugin's `mcpServers`
+/// entry forwards to `cartog serve`: `CARTOG_PLUGIN_JSON` (explicit path,
+/// tests and overrides) or `CLAUDE_PLUGIN_ROOT` (`<root>/.claude-plugin/plugin.json`).
+/// Claude Code expands `${CLAUDE_PLUGIN_ROOT}` inside `plugin.json` but does not
+/// export it, so the manifest wires it through `env` explicitly. `None` outside
+/// the plugin. Pure so every branch is testable without touching the environment.
+pub(crate) fn plugin_manifest_path(
+    explicit: Option<&OsStr>,
+    plugin_root: Option<&OsStr>,
+) -> Option<PathBuf> {
+    match explicit {
+        Some(p) if !p.is_empty() => Some(PathBuf::from(p)),
+        _ => {
+            let root = plugin_root.filter(|r| !r.is_empty())?;
+            Some(
+                PathBuf::from(root)
+                    .join(".claude-plugin")
+                    .join("plugin.json"),
+            )
+        }
+    }
+}
+
+/// Describe a plugin pin to the MCP server: is this binary behind it, and what
+/// brings it in line for this install source. `cartog self update` refuses a
+/// cargo-managed binary (exit 3), so that cohort gets the cargo command rather
+/// than a dead-end `/cartog-install`.
+pub(crate) fn describe_plugin_pin(
+    pin: &str,
+    current: &str,
+    install_source: &str,
+    notices_disabled: bool,
+) -> cartog_mcp::PluginPin {
+    // `behind` drives the two *notice* surfaces (the `get_info` sentence and the
+    // `cartog_stats` fields) only. `CARTOG_NO_UPDATE_CHECK` silences those, as it
+    // does `doctor`'s version row and the SessionStart notice. The pin itself
+    // stays set: `cartog_update` arms `--to` it, and an explicit update request
+    // is not a notice.
+    let behind =
+        !notices_disabled && compare_stable_versions(current, pin) == std::cmp::Ordering::Less;
+    let update_command = if install_source == "cargo" {
+        "cargo install cartog --force"
+    } else {
+        "/cartog-install"
+    };
+    cartog_mcp::PluginPin {
+        version: pin.to_string(),
+        behind,
+        update_command: update_command.to_string(),
+    }
+}
+
+/// `CARTOG_NO_UPDATE_CHECK` (any non-empty value) silences the drift notices.
+///
+/// Uses `var_os`, not `var`, so a non-UTF-8 value still counts as set: this must
+/// agree byte for byte with `doctor`'s `update_check_disabled`, or the same
+/// environment would silence one surface and not the other.
+fn update_notices_disabled() -> bool {
+    std::env::var_os("CARTOG_NO_UPDATE_CHECK").is_some_and(|v| !v.is_empty())
+}
+
+/// The plugin pin for a `cartog serve` launched by the Claude Code plugin, or
+/// `None` when no manifest is reachable or its version is not bare semver.
+pub(crate) fn plugin_pin_for_serve() -> Option<cartog_mcp::PluginPin> {
+    let manifest = plugin_manifest_path(
+        std::env::var_os("CARTOG_PLUGIN_JSON").as_deref(),
+        std::env::var_os("CLAUDE_PLUGIN_ROOT").as_deref(),
+    )?;
+    let text = std::fs::read_to_string(&manifest).ok()?;
+    let pin = cartog_mcp::parse_plugin_pin(&text)?;
+    Some(describe_plugin_pin(
+        &pin,
+        env!("CARGO_PKG_VERSION"),
+        effective_install_source(),
+        update_notices_disabled(),
+    ))
 }
 
 /// Snapshot of "what version of cartog am I, and how did I get here?".
