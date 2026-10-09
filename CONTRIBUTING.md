@@ -7,7 +7,7 @@
 
 ## Setup
 
-Requires Rust MSRV 1.80.
+Requires Rust MSRV 1.90.
 
 ```bash
 cargo build                         # default build (includes LSP)

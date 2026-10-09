@@ -69,7 +69,7 @@ pub fn cmd_config(
                 value: embed.map_or(DEFAULT_EMBEDDING_PROVIDER.into(), |e| {
                     e.provider().to_string()
                 }),
-                is_default: embed.map_or(true, |e| e.provider.is_none()),
+                is_default: embed.is_none_or(|e| e.provider.is_none()),
                 default: DEFAULT_EMBEDDING_PROVIDER.into(),
             },
             model: embed.and_then(|e| e.model.clone()),
@@ -82,12 +82,12 @@ pub fn cmd_config(
                 base_url: ValueDisplay {
                     value: ollama
                         .map_or(DEFAULT_OLLAMA_BASE_URL.into(), |o| o.base_url().to_string()),
-                    is_default: ollama.map_or(true, |o| o.base_url.is_none()),
+                    is_default: ollama.is_none_or(|o| o.base_url.is_none()),
                     default: DEFAULT_OLLAMA_BASE_URL.into(),
                 },
                 model: ValueDisplay {
                     value: ollama.map_or(DEFAULT_OLLAMA_MODEL.into(), |o| o.model().to_string()),
-                    is_default: ollama.map_or(true, |o| o.model.is_none()),
+                    is_default: ollama.is_none_or(|o| o.model.is_none()),
                     default: DEFAULT_OLLAMA_MODEL.into(),
                 },
             },
@@ -99,7 +99,7 @@ pub fn cmd_config(
                 }),
                 // `enabled = false` resolves the provider to "none"; without it
                 // in the check, an explicit opt-out reads back as "(default)".
-                is_default: reranker.map_or(true, |r| r.provider.is_none() && r.enabled.is_none()),
+                is_default: reranker.is_none_or(|r| r.provider.is_none() && r.enabled.is_none()),
                 default: DEFAULT_RERANKER_PROVIDER.into(),
             },
         },
@@ -127,8 +127,8 @@ pub fn cmd_config(
         },
         security: SecurityDisplay {
             redact_secrets: ValueDisplay {
-                value: security.map_or(true, |s| s.redact_secrets()).to_string(),
-                is_default: security.map_or(true, |s| s.redact_secrets.is_none()),
+                value: security.is_none_or(|s| s.redact_secrets()).to_string(),
+                is_default: security.is_none_or(|s| s.redact_secrets.is_none()),
                 default: "true".into(),
             },
         },

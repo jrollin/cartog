@@ -990,9 +990,7 @@ const REGISTRY_WRITE_DEBOUNCE: Duration = Duration::from_secs(60);
 /// `None` (no write yet this session) always passes: the first pass after a
 /// watcher starts is exactly when the registry is most likely to be stale.
 fn registry_debounce_elapsed(last: Option<Instant>) -> bool {
-    // `map_or`, not `is_none_or`: the latter is stable only from Rust 1.82 and
-    // this workspace's MSRV is 1.80.
-    last.map_or(true, |t| t.elapsed() >= REGISTRY_WRITE_DEBOUNCE)
+    last.is_none_or(|t| t.elapsed() >= REGISTRY_WRITE_DEBOUNCE)
 }
 
 /// Record the watched project in the machine-local registry.

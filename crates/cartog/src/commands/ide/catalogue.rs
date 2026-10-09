@@ -157,7 +157,7 @@ pub fn build_specs(
             IdeScope::User => e.scope == Scope::User,
             IdeScope::All => true,
         })
-        .filter(|e| client.map_or(true, |c| c == e.kind))
+        .filter(|e| client.is_none_or(|c| c == e.kind))
         .filter_map(|e| {
             let path = match e.scope {
                 Scope::Project => project_path(e.kind, cwd)?,

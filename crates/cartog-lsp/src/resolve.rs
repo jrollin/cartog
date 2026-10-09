@@ -365,7 +365,7 @@ pub(crate) fn drain_language(
 
             for ((edge, _pos), outcome) in batch_slice.iter().zip(window) {
                 let done = sink.tick();
-                if done % PROGRESS_STRIDE == 0 {
+                if done.is_multiple_of(PROGRESS_STRIDE) {
                     sink.emit(done);
                 }
                 match outcome {
