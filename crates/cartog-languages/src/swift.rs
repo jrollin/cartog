@@ -645,7 +645,10 @@ fn walk_nested_decls(
 /// Callee name of a `call_expression`: leading identifier for `f()`, trailing
 /// navigation segment for `a.b.f()`.
 fn callee_name(call: Node, source: &str) -> Option<String> {
-    let head = call.named_child(0)?;
+    callee_from_head(call.named_child(0)?, source)
+}
+
+fn callee_from_head(head: Node, source: &str) -> Option<String> {
     match head.kind() {
         "simple_identifier" => Some(node_text(head, source).to_string()),
         "navigation_expression" => {
@@ -662,6 +665,8 @@ fn callee_name(call: Node, source: &str) -> Option<String> {
                 .map(|c| node_text(c, source).to_string());
             found
         }
+        // `!f()`, `.f()` and (since tree-sitter-swift 0.7.4) `!a.f()` wrap the callee in the operator.
+        "prefix_expression" => callee_from_head(head.child_by_field_name("target")?, source),
         _ => None,
     }
 }
@@ -1145,6 +1150,24 @@ mod tests {
     fn method_call_target_is_trailing_segment() {
         let r = extract("func p() { obj.doThing() }");
         assert!(has_edge(&r, EdgeKind::Calls, "doThing"));
+    }
+
+    #[test]
+    fn negated_method_call_keeps_call_edge() {
+        let r = extract("func p() { if !user.checkPassword(pw) { return } }");
+        assert!(has_edge(&r, EdgeKind::Calls, "checkPassword"));
+    }
+
+    #[test]
+    fn negated_function_call_keeps_call_edge() {
+        let r = extract("func p() { if !isValid() { return } }");
+        assert!(has_edge(&r, EdgeKind::Calls, "isValid"));
+    }
+
+    #[test]
+    fn implicit_member_call_emits_call_edge() {
+        let r = extract("func p() { run(.executableTarget(name: \"x\")) }");
+        assert!(has_edge(&r, EdgeKind::Calls, "executableTarget"));
     }
 
     #[test]
