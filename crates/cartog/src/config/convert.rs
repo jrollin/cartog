@@ -53,7 +53,7 @@ pub fn to_redaction_config(config: &CartogConfig) -> cartog_indexer::RedactionCo
     let enabled = config
         .security
         .as_ref()
-        .map_or(true, SecurityConfig::redact_secrets);
+        .is_none_or(SecurityConfig::redact_secrets);
     cartog_indexer::RedactionConfig { enabled }
 }
 

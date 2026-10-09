@@ -166,9 +166,22 @@ results by roughly half without changing symbol-search behaviour.
 
 ## Minimum Supported Rust Version
 
-1.80+ (edition 2021). Declared in `Cargo.toml` as `rust-version = "1.80"`. (1.80
-is required for the `[lints] check-cfg` manifest key used to declare the
-`cfg(loom)` cfg for the `cartog-loom-models` model-checking crate.)
+1.90+ (edition 2021). Declared in `Cargo.toml` as `rust-version = "1.90"`.
+
+Dependencies set the floor, not cartog's own code:
+
+| Dependency | Requires |
+|---|---|
+| `tree-sitter-language` (every grammar) | 1.90 |
+| `ignore`, `ort`, `time`, `darling`, `sysinfo` | 1.88 |
+| `rmcp` (edition 2024) | 1.85 |
+
+To recheck after a dependency bump, find the highest `rust_version` among
+non-workspace packages in `cargo metadata --format-version 1` output.
+
+Clippy reads `rust-version` as its MSRV. Raising it enables lints that suggest
+newer std APIs (`is_none_or`, `is_multiple_of`, `as_chunks`), so a bump comes
+with those fixes.
 
 ## Further Reading
 

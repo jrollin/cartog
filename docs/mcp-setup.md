@@ -10,7 +10,7 @@ All clients need `cartog` on your `PATH` first:
 # Recommended — no Rust required
 curl -fsSL https://www.cartog.dev/install.sh | sh
 
-# Cargo (Rust 1.80+ required)
+# Cargo (Rust 1.90+ required)
 cargo install cartog             # latest version
 cargo install cartog@<version>   # specific version (see Releases)
 ```

@@ -12,7 +12,7 @@ Three install paths, pick whichever matches your environment:
 #    /usr/local/bin or ~/.local/bin.
 curl -fsSL https://www.cartog.dev/install.sh | sh
 
-# 2. Cargo (Rust 1.80+; lets advanced users strip features, e.g. --no-default-features).
+# 2. Cargo (Rust 1.90+; lets advanced users strip features, e.g. --no-default-features).
 cargo install cartog
 
 # 3. Build from source.

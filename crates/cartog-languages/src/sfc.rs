@@ -68,10 +68,7 @@ fn lang_attr_value(start_tag_text: &str) -> Option<String> {
         let at = rest.find("lang")?;
         // `lang` must be a standalone attribute name: preceded by whitespace or
         // `<`/tag boundary, not the tail of `data-lang`/`xml:lang`.
-        let preceded_ok = rest[..at]
-            .chars()
-            .last()
-            .map_or(true, |c| c.is_whitespace());
+        let preceded_ok = rest[..at].chars().last().is_none_or(|c| c.is_whitespace());
         let after = &rest[at + 4..];
         let after_trimmed = after.trim_start();
         if preceded_ok {

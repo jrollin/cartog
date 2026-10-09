@@ -56,7 +56,7 @@ pub(crate) fn parse_candidates(
                     redact,
                 );
                 let n = parsed_count.fetch_add(1, Ordering::Relaxed) + 1;
-                if n % PROGRESS_STRIDE == 0 || n == parse_total {
+                if n.is_multiple_of(PROGRESS_STRIDE) || n == parse_total {
                     // fetch_max returns the prior high; only emit if we raised it,
                     // so emitted `done` is non-decreasing despite out-of-order calls.
                     if reported_high.fetch_max(n, Ordering::Relaxed) < n {

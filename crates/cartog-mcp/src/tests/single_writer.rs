@@ -178,7 +178,7 @@ proptest::proptest! {
             Err(_) => {
                 proptest::prop_assert_ne!(&s, "serve");
                 proptest::prop_assert!(
-                    s.strip_prefix("serve-").map_or(true, str::is_empty),
+                    s.strip_prefix("serve-").is_none_or(str::is_empty),
                     "rejected a valid serve-<nonempty> slot: {s:?}"
                 );
             }

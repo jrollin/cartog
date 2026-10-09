@@ -23,7 +23,7 @@ fn is_heading(line: &str) -> bool {
             && trimmed
                 .as_bytes()
                 .get(hashes)
-                .map_or(true, |&b| b == b' ' || b == b'\t')
+                .is_none_or(|&b| b == b' ' || b == b'\t')
     }
 }
 

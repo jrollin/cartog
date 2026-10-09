@@ -9,7 +9,7 @@
 # matching release binary, installs to /usr/local/bin or ~/.local/bin.
 curl -fsSL https://www.cartog.dev/install.sh | sh
 
-# Cargo (Rust 1.80+ required; lets advanced users strip features).
+# Cargo (Rust 1.90+ required; lets advanced users strip features).
 cargo install cartog
 
 # Build from source.
