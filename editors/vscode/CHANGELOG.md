@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.34.1] - 2026-10-09
+
+### Bug Fixes
+
+- **deps**: Bump rustls to 0.23.45 (RUSTSEC-2026-0285) ([`6fda751`](https://github.com/jrollin/cartog/commit/6fda751f42c7f0118af85a4a0755f5c3cd4b80f7))
+- **deps**: Bump rmcp to 2.2 for GHSA-33f5-2c5q-wgwj, GHSA-9pj6-vhgr-3mwh, GHSA-9g45-5xwm-f3wc ([`ea43fe3`](https://github.com/jrollin/cartog/commit/ea43fe36ba8d596ac0cfa171f07438c146c4320f))
+- **deps**: Npm audit fix in site ([`37a4697`](https://github.com/jrollin/cartog/commit/37a4697d6ccf187849e39f8f3579d426a999b550))
+- **deps**: Npm audit fix in editors/vscode ([`486d847`](https://github.com/jrollin/cartog/commit/486d8476b86a4b415d923f3534e2687fe4ad6bd0))
+- **swift**: Resolve calls under a prefix operator ([`9a8aff9`](https://github.com/jrollin/cartog/commit/9a8aff9aedd95828090fb32722db33e3cf4db1d2))
+
+### Build
+
+- Raise MSRV to 1.90 ([`a7174e5`](https://github.com/jrollin/cartog/commit/a7174e551a05a64d6b87a1d00a46407f441d8be0))
+
+### Documentation
+
+- **mcp**: Qualify the cancelled-request no-response wording ([`341a26c`](https://github.com/jrollin/cartog/commit/341a26c8e4d80c0352f5263ad9bc019f335c682b))
+
+### Miscellaneous
+
+- **deps**: Update dependencies within semver ranges ([`57f6659`](https://github.com/jrollin/cartog/commit/57f66592e7a135c495f03067f0a097ca49874992))
+
 ## [0.34.0] - 2026-09-10
 
 ### Bug Fixes
