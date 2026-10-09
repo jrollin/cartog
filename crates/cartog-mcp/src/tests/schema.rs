@@ -209,10 +209,12 @@ fn oversized_result_bounds_text_and_structured_together() {
         structured_bytes <= cap,
         "structured mirror is bounded, not shipped in full: {structured_bytes} > {cap}"
     );
-    let text = match &result.content.first().expect("content").raw {
-        RawContent::Text(t) => &t.text,
-        _ => panic!("expected text content"),
-    };
+    let text = &result
+        .content
+        .first()
+        .and_then(ContentBlock::as_text)
+        .expect("text content")
+        .text;
     assert!(
         text.len() <= cap,
         "text block bounded: {} > {cap}",
@@ -234,10 +236,12 @@ fn tool_response_with_banner_stays_under_cap() {
     // rag_pending on a rag tool fires the longest banner.
     let stale = Some(snap(9, 0, 0));
     let result = tool_response(&db, json, None, "cartog_rag_search", 0, stale).expect("response");
-    let text = match &result.content.first().expect("content").raw {
-        RawContent::Text(t) => &t.text,
-        _ => panic!("expected text content"),
-    };
+    let text = &result
+        .content
+        .first()
+        .and_then(ContentBlock::as_text)
+        .expect("text content")
+        .text;
     assert!(text.starts_with("⚠️"), "banner present: {}", &text[..40]);
     assert!(
         text.len() <= mcp_max_bytes(),
@@ -260,10 +264,12 @@ fn tool_response_banner_plus_suffix_stays_under_cap() {
     let json = format!("[\"{payload}\"]");
     let stale = Some(snap(3, 0, 0));
     let result = tool_response(&db, json, None, "cartog_rag_search", 0, stale).expect("response");
-    let text = match &result.content.first().expect("content").raw {
-        RawContent::Text(t) => &t.text,
-        _ => panic!("expected text content"),
-    };
+    let text = &result
+        .content
+        .first()
+        .and_then(ContentBlock::as_text)
+        .expect("text content")
+        .text;
     assert!(
         text.len() <= cap,
         "banner + body + suffix must stay under {cap}, got {}",

@@ -491,7 +491,7 @@ fn strip_int_formats(value: &mut serde_json::Value) {
 /// `structuredContent` is attached only when present (callers that return no
 /// structured data pass `None`).
 fn success_result(text: String, structured: Option<serde_json::Value>) -> CallToolResult {
-    let mut result = CallToolResult::success(vec![Content::text(text)]);
+    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
     result.structured_content = structured;
     result
 }
