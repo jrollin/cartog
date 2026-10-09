@@ -193,13 +193,10 @@ pub fn spawn_forwarder(token: ProgressToken, notifier: Notifier) -> Forwarder {
                 continue;
             }
             last_emitted = Some(last_progress);
-            (notifier)(ProgressNotificationParam {
-                progress_token: token.clone(),
-                progress: last_progress,
-                total,
-                message: Some(message),
-            })
-            .await;
+            let mut param =
+                ProgressNotificationParam::new(token.clone(), last_progress).with_message(message);
+            param.total = total;
+            (notifier)(param).await;
         }
     });
     Forwarder { tx, join }

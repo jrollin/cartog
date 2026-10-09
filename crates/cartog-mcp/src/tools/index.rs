@@ -96,7 +96,7 @@ impl CartogServer {
                 text.push_str("\n\n");
                 text.push_str(hint);
             }
-            Ok(CallToolResult::success(vec![Content::text(text)]))
+            Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
         })
         .await;
 
@@ -198,7 +198,7 @@ impl CartogServer {
 
             let json = serde_json::to_string_pretty(&result)
                 .map_err(|e| mcp_err(format!("serialization failed: {e}")))?;
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
         })
         .await;
 
