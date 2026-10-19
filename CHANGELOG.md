@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.34.2] - 2026-10-19
+
+### Bug Fixes
+
+- **site**: Bump mermaid to 12 for katex GHSA-238p-pmpm-9mq7 ([`32f370e`](https://github.com/jrollin/cartog/commit/32f370e5c6d4b12897d83a4db4dfe4e5e2953f12))
+- **deps**: Patch rustls and zip advisories, drop quick-xml ignores ([`560ecc8`](https://github.com/jrollin/cartog/commit/560ecc8ebefdc4c674d8a7bbc40eebf902e61382))
+- **ruby**: Patch tree-sitter-ruby to the unreleased heredoc scanner fix ([`0a13446`](https://github.com/jrollin/cartog/commit/0a13446f3d941be8423efab25bff2f09d58d64da))
+
 ## [0.34.1] - 2026-10-09
 
 ### Bug Fixes
