@@ -109,3 +109,8 @@ opt-level = 1
 [profile.bench]
 inherits = "release"
 debug = true
+
+# The heredoc scanner fix (tree-sitter/tree-sitter-ruby#269) is unreleased; 0.23.1 aborts the
+# process on long heredoc identifiers. Drop once a release > 0.23.1 ships (tree-sitter-ruby#300).
+[patch.crates-io]
+tree-sitter-ruby = { git = "https://github.com/tree-sitter/tree-sitter-ruby", rev = "ad907a69da0c8a4f7a943a7fe012712208da6dee" }
