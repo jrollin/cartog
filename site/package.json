@@ -14,6 +14,6 @@
     "@pagefind/default-ui": "^1.5.2",
     "astro": "^7.2.8",
     "astro-pagefind": "^2.0.1",
-    "mermaid": "^11.15.0"
+    "mermaid": "^12.2.0"
   }
 }
