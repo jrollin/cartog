@@ -826,6 +826,26 @@ mod tests {
     }
 
     #[test]
+    fn heredoc_identifier_over_255_bytes_does_not_abort() {
+        // tree-sitter-ruby 0.23.1 stores the identifier length in one byte, and its
+        // C `assert` then aborts the process (tree-sitter/tree-sitter-ruby#269).
+        let source = r#"<<~"BASH
+  if the string inside is too short it doesn't crash
+  but I haven't found exactly how many chars is the problem
+
+  if the string inside is too short it doesn't crash
+  but I haven't found exactly how many chars is the problem
+
+  it needs this line
+BASH
+"#;
+
+        let result = RubyExtractor::new().extract(source, "test.rb");
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn test_simple_function() {
         let result = extract(
             r#"
