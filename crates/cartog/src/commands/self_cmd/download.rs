@@ -65,10 +65,8 @@ pub(crate) fn perform_upgrade(
     let archive_path = staging.path().join(&archive_name);
     std::fs::write(&archive_path, &archive_bytes)
         .map_err(|e| UpgradeError::Filesystem(format!("failed to stage archive: {e}")))?;
-    self_update::Extract::from_source(&archive_path)
-        .extract_file(staging.path(), bin_name_in_archive())
+    let new_bin = extract_binary(&archive_path, staging.path())
         .map_err(|e| UpgradeError::Filesystem(format!("failed to extract binary: {e}")))?;
-    let new_bin = staging.path().join(bin_name_in_archive());
 
     let backup_path = backup_path_for(&current_bin);
 
@@ -175,6 +173,12 @@ pub(crate) fn bin_name_in_archive() -> &'static str {
     } else {
         "cartog"
     }
+}
+
+/// Extract the cartog binary from a release archive into `into`, returning its path.
+pub(crate) fn extract_binary(archive: &Path, into: &Path) -> Result<PathBuf> {
+    self_update::Extract::from_source(archive).extract_file(into, bin_name_in_archive())?;
+    Ok(into.join(bin_name_in_archive()))
 }
 
 pub(crate) fn backup_path_for(current: &Path) -> PathBuf {

@@ -18,6 +18,19 @@ fn archive_name_drops_version_to_match_release_workflow() {
 }
 
 #[test]
+fn extract_binary_reads_a_deflated_zip() {
+    // release.yml packs the Windows binary with `7z a`, which deflates entries.
+    let dir = tempfile::TempDir::new().unwrap();
+    let archive = dir.path().join("cartog-x86_64-pc-windows-msvc.zip");
+    std::fs::write(&archive, include_bytes!("fixtures/release-deflate.zip")).unwrap();
+
+    let bin = extract_binary(&archive, dir.path()).unwrap();
+
+    let content = std::fs::read_to_string(&bin).unwrap();
+    assert_eq!(content, "cartog release binary stand-in\n".repeat(64));
+}
+
+#[test]
 fn parse_sha256sums_finds_named_entry() {
     let text = "\
 abcd1234  cartog-aarch64-apple-darwin.tar.gz

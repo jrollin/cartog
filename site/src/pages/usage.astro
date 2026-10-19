@@ -1460,6 +1460,9 @@ cartog --tokens 200 outline src/db.rs</pre>
     mermaid.initialize({
       startOnLoad: false,
       theme: "dark",
+      // mermaid 12 defaults to a different layout and look
+      look: "classic",
+      layout: "dagre",
       securityLevel: "strict",
       themeVariables: {
         background: "#0a1620",

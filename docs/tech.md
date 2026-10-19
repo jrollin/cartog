@@ -25,7 +25,7 @@
 | `reqwest` | HTTP client for self-update + remote embedding providers (Ollama, OpenAI) | Non-optional in the `cartog` binary (self-update). The Ollama (`provider-ollama`) and OpenAI-compatible (`provider-openai`) providers in `cartog-rag` are both enabled by default (`ollama-embedding` / `openai-embedding`). The OpenAI provider reads its API key from an env var (`api_key_env`, default `OPENAI_API_KEY`), never from `.cartog.toml`; an unset key sends no auth header (keyless local `/v1` endpoints). Uses `blocking` + `rustls-tls` |
 | `sqlite-vec` | Vector similarity search (KNN) in SQLite | `vec0` virtual table, requires integer rowids (bridged via `symbol_embedding_map`) |
 | `criterion` (dev) | Micro-benchmarks | Four `[[bench]]` targets — see [Benchmarks](#benchmarks). Inputs/results are `black_box`-wrapped so µs-scale benches measure real work |
-| `rust-s3` 0.37 (`tokio-rustls-tls`) | S3-compatible client for `cartog push` / `cartog pull` | Optional via `remote-s3` feature (default on). Chosen over `aws-sdk-s3` for size (~5 MB vs ~18 MB); supports AWS S3, MinIO, R2, floci |
+| `rust-s3` 0.38 (`tokio-rustls-tls`) | S3-compatible client for `cartog push` / `cartog pull` | Optional via `remote-s3` feature (default on). Chosen over `aws-sdk-s3` for size (~5 MB vs ~18 MB); supports AWS S3, MinIO, R2, floci |
 
 ## Build Profiles
 
