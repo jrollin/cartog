@@ -211,7 +211,7 @@ RUST_LOG=warn  cartog watch   # quieten down a foreground watcher
 | | Claude Plugin | MCP Server | Agent Skill |
 |-|--------------|-----------|-------------|
 | Install | `/plugin marketplace add jrollin/cartog` then `/plugin install cartog@cartog-plugins` | `claude mcp add cartog -- cartog serve` | `npx skills add jrollin/cartog` |
-| Context cost | ~150 lines of prompt | Zero (tools are protocol-level) | ~150 lines of prompt |
+| Context cost | ~600-line skill, loaded when it triggers | Zero (tools are protocol-level) | ~600-line skill, loaded when it triggers |
 | Workflow guidance | Full heuristics | Basic (via `instructions` field) | Full heuristics |
 | Compatibility | Claude Code only | MCP clients only | Any LLM with bash |
 | Latency | Fork+exec per command | Persistent process | Fork+exec per command |

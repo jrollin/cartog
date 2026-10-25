@@ -14,7 +14,7 @@ cartog ide --dry-run          # preview without writing
 
 ## Manual config recipes (per editor)
 
-For the config-file snippets for every supported MCP client (Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode, Zed, Codex CLI, Gemini CLI, VS Code/Copilot, and the generic stdio pattern):
+For the config-file snippets for every supported MCP client (Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode, Zed, Codex CLI, Gemini CLI, VS Code/Copilot, Antigravity, Kiro, Hermes Agent, and the generic stdio pattern):
 
 **[../mcp-setup.md](../mcp-setup.md)**
 

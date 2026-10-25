@@ -7,9 +7,17 @@ Drop it into one of:
 
 - `AGENTS.md` (OpenCode, Codex, Aider, any agent that reads it)
 - `CLAUDE.md` (Claude Code)
-- `.cursor/rules/cartog.md` (Cursor)
+- `.cursor/rules/cartog.mdc` (Cursor, with frontmatter `alwaysApply: true`)
+- `.windsurf/rules/cartog.md` (Windsurf, with frontmatter `trigger: always_on`)
+- `.kiro/steering/cartog.md` (Kiro)
+- `.clinerules/cartog.md` (Cline)
+- `.roo/rules/cartog.md` (Roo Code)
 - `.github/copilot-instructions.md` (Copilot)
-- `.windsurfrules` (Windsurf)
+
+Tool names below are bare. Each client adds its own prefix. In Claude Code:
+
+- `mcp__cartog__cartog_search` after `claude mcp add`
+- `mcp__plugin_cartog_cartog__cartog_search` with the plugin
 
 Prerequisite: cartog MCP is wired and the index is built (`cartog ide` + `cartog index .`).
 
@@ -25,17 +33,19 @@ cartog MCP tools are pre-computed and return structured, ranked results in
 microseconds — far cheaper than grep + read.
 
 **Use cartog when the question is:**
-- "where is X defined?" → `mcp__cartog__cartog_search`
-- "who calls / imports / inherits X?" → `mcp__cartog__cartog_refs`
-- "what does X call?" → `mcp__cartog__cartog_callees`
-- "what breaks if I change X?" → `mcp__cartog__cartog_impact`
-- "show the inheritance tree of X" → `mcp__cartog__cartog_hierarchy`
-- "what does this file import?" → `mcp__cartog__cartog_deps`
-- "show the structure of file F" → `mcp__cartog__cartog_outline`
-- "find code about <concept>" (natural language) → `mcp__cartog__cartog_rag_search`
-- "orient me in this repo" → `mcp__cartog__cartog_map`
-- "what changed recently?" → `mcp__cartog__cartog_changes`
-- "is the index healthy?" → `mcp__cartog__cartog_stats`
+- "where is X defined?" → `cartog_search`
+- "who calls / imports / inherits X?" → `cartog_refs`
+- "what does X call?" → `cartog_callees`
+- "how does X reach Y?" (call path) → `cartog_trace`
+- "what breaks if I change X?" → `cartog_impact`
+- "show the inheritance tree of X" → `cartog_hierarchy`
+- "what does this file import?" → `cartog_deps`
+- "show the structure of file F" → `cartog_outline`
+- "find code about <concept>" (natural language) → `cartog_rag_search`
+- "gather the code for a task" → `cartog_context`
+- "orient me in this repo" → `cartog_map`
+- "what changed recently?" → `cartog_changes`
+- "is the index healthy?" → `cartog_stats`
 
 **Fall back to grep / Read only when:**
 - searching for a string literal, comment, config value, or non-code text
@@ -43,8 +53,8 @@ microseconds — far cheaper than grep + read.
 - cartog returned zero results and you need a broader text scan
 
 **Index hygiene:**
-- If a tool reports stale data, call `mcp__cartog__cartog_index` once
-- If `cartog_rag_search` results feel out of date after new files were added, call `mcp__cartog__cartog_rag_index` once
+- If a tool reports stale data, call `cartog_index` once
+- If `cartog_rag_search` results feel out of date after new files were added, call `cartog_rag_index` once
 - For semantic search to work, the user must have run `cartog rag setup` and `cartog rag index .`
 ```
 

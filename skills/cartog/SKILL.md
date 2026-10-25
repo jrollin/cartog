@@ -87,13 +87,13 @@ cartog has two modes — **CLI** (via Bash) and **MCP server**. **Prefer CLI by 
 |---|---|---|
 | Single command or simple query | **CLI** | No server overhead, direct output |
 | Multi-step workflow (e.g. search → refs → impact) | **MCP** | Warm DB connection, parallel tool calls |
-| Subagent | **CLI** | MCP tools are only available to the main agent |
+| Subagent whose `tools:` list has no `mcp__` entry | **CLI** | That allowlist drops MCP tools (a subagent with no `tools:` list inherits them) |
 
 **Do not** fall back to grep/glob if MCP tools are missing — use the Bash tool instead.
 
 **Rules for both modes:**
 - Run independent `cartog` commands as **parallel tool calls** — whether MCP or Bash
-- **Subagents**: always use CLI mode via Bash. Skip setup — assume the parent has already indexed
+- **Subagents**: use MCP tools when present, else CLI via Bash. Skip setup: assume the parent has already indexed
 
 **CLI mode:** every `cartog` command in the examples below must be run via a **Bash tool call**. Do not chain with `&&` or `|` — use separate Bash calls.
 
