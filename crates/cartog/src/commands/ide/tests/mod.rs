@@ -12,5 +12,6 @@ mod catalogue;
 mod merge;
 mod picker;
 mod remove;
+mod rules;
 mod run;
 mod unmerge;

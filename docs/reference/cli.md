@@ -567,7 +567,7 @@ cartog init --dry-run        # preview without writing
 
 `cartog init` never overwrites an existing `.cartog.toml`. Re-running is a no-op (still prints the next-steps hint, useful when you've forgotten the next verb).
 
-### `cartog ide [--client <name>] [--scope project|user|all] [-y] [--dry-run] [--no-watch] [--remove]`
+### `cartog ide [--client <name>] [--scope project|user|all] [-y] [--dry-run] [--no-watch] [--remove] [--rules]`
 
 Wire `cartog serve` into one or all MCP-compatible editors. `cartog ide`, `cartog install` and `cartog uninstall` are the only verbs that touch editor configs.
 
@@ -576,6 +576,7 @@ cartog ide                          # all installed clients, all scopes (interac
 cartog ide --client cursor          # one client
 cartog ide --scope project          # only project-scoped (.mcp.json, .cursor/, .vscode/, .kiro/, ...)
 cartog ide --remove                 # pick configs to take cartog out of (see `cartog uninstall`)
+cartog ide --rules                  # also write agent rule files (see "Agent rule files" below)
 cartog ide --scope user             # only user-scope clients
 cartog ide --dry-run                # preview with before/after diff
 ```
@@ -598,7 +599,7 @@ Example output (`cartog ide --client cursor --dry-run`):
       }
     }
 
-2 clients: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+2 files: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
 Dry run only. Re-run without --dry-run to apply.
 ```
 
@@ -606,7 +607,44 @@ For `cartog ide --client claude-code --dry-run`, both project (`.mcp.json`) and 
 
 Supported clients: `claude-code` (project + user), `claude-desktop`, `cline`, `cline-cli`, `codex`, `copilot-cli`, `cursor` (project + user), `gemini`, `kilo` (project + user), `opencode`, `qwen` (project + user), `roo` (project + user), `vscode` (project + user), `windsurf`, `zed`, `antigravity`, `kiro` (project + user), `hermes`. User-scope clients whose config dir is missing are skipped. With no client named, the `kilo`, `qwen` and `roo` project files are written only when their folder (`.kilo/`, `.qwen/`, `.roo/`) exists in the repo or the client is detected for the user; for `cursor`, `qwen`, `kilo` and `copilot-cli`, a home folder holding only `skills/` does not count as an install. The `cline` and `roo` VS Code extension rows are skipped when VS Code's user dir is missing, even when named. On an existing entry, cartog rewrites only the fields it owns (`command`, `args`, `type`), so enable toggles, tool approvals, `env` and `timeout` set in the client survive.
 
-### `cartog install [client ...] [--scope ...] [--dry-run] [--no-watch]`
+#### Agent rule files: `--rules`
+
+`--rules` also writes one rule file per agent that reads a rules directory, so the agent
+prefers cartog's tools over grep + read. The text is the snippet in
+[agent-snippet.md](../agent-snippet.md), with the header each agent needs to load it on
+every session:
+
+| Client | Rule file | Header |
+|---|---|---|
+| `cursor` | `.cursor/rules/cartog.mdc` | `alwaysApply: true` |
+| `windsurf` | `.windsurf/rules/cartog.md` | `trigger: always_on` |
+| `kiro` | `.kiro/steering/cartog.md` | `inclusion: always` |
+| `cline` | `.clinerules/cartog.md` | none |
+| `roo` | `.roo/rules/cartog.md` | none |
+| `antigravity` | `.agents/rules/cartog.md` | `trigger: always_on` |
+| `claude-code` | `.claude/rules/cartog.md` | none |
+| `vscode` | `.github/instructions/cartog.instructions.md` | `applyTo: '**'` |
+
+- **Project files only:** rule files go in the repo, never in your home.
+  - `--rules` with `--scope user` is an error.
+  - So is `--rules` run from your home directory, where `~/.claude/rules/` and `~/.kiro/steering/` would apply to every project.
+  - Both exit 1 before writing anything.
+- **Which agents:** a named or picked client always gets its file.
+  - With no client named, only agents in use get one: CLI on `PATH`, user config or app folder present, or the rules directory already in the repo.
+  - Folders cartog creates for MCP (`.cursor/`, `.kiro/`, `.roo/`) do not count.
+  - A named client with no rules directory (e.g. `zed`) gets a skipped step pointing at the snippet.
+- **Ownership:** cartog writes a marker line (`<!-- Managed by cartog: ... -->`) into each file.
+  - It rewrites or deletes only files holding that line.
+  - A file at the same path without it (for example one you copied from the snippet) is left as is and reported skipped.
+  - Delete the marker line to keep your own edits.
+- **Re-runs:** an identical file is not rewritten; a cartog file with older or edited text is overwritten. A run without `--rules` never touches rule files.
+- **Skipped to protect your rules:**
+  - `roo`: a `.roorules` or `.clinerules` file with nothing in `.roo/rules/`, since Roo Code stops reading that file once `.roo/rules/` has one. Copy its content into a file under `.roo/rules/` (copy, not move: Cline also reads `.clinerules`).
+  - `cline`: `.clinerules` is a file, not a directory.
+- **JSON:** each step carries `file_kind`, `mcp_config` or `rule`.
+- **Removal:** `cartog uninstall` deletes them (see below).
+
+### `cartog install [client ...] [--scope ...] [--dry-run] [--no-watch] [--rules]`
 
 Friendlier shape of `cartog ide` — takes editors as positional args
 (brew/npm/pip/cargo convention) and is always non-interactive. Safe to call
@@ -618,6 +656,7 @@ cartog install cursor vscode codex    # several editors at once
 cartog install                        # all detected editors
 cartog install cursor --dry-run       # preview without writing
 cartog install claude-code --no-watch # wire Claude Code without --watch
+cartog install cursor --rules         # also write .cursor/rules/cartog.mdc
 ```
 
 Same supported-client list as `cartog ide`. For the interactive multi-select
@@ -625,9 +664,10 @@ picker (useful at a fresh-machine setup), use `cartog ide` directly.
 
 ### `cartog uninstall [client ...] [--scope ...] [--dry-run]`
 
-Take the `cartog` MCP entry out of editor configs: the mirror of `cartog install`,
-positional and non-interactive. `cartog ide --remove` does the same with a picker
-that lists only the configs holding cartog.
+Take the `cartog` MCP entry out of editor configs, and delete the rule files
+`--rules` wrote: the mirror of `cartog install`, positional and non-interactive.
+`cartog ide --remove` does the same with a picker that lists only the files
+holding cartog.
 
 ```bash
 cartog uninstall                      # every config in scope that holds cartog
@@ -647,11 +687,12 @@ Example output (`cartog uninstall`):
 - claude-code (project, /your/repo/.mcp.json): removed
 - cursor (project, /your/repo/.cursor/mcp.json): removed
 
-25 configs: 2 removed, 23 not wired, 0 skipped, 0 errors
+33 files: 2 removed, 31 not wired, 0 skipped, 0 errors
 ```
 
 - **Scope of the edit:** only the `cartog` entry is removed, whatever it holds (custom args, env, approvals). Other servers and keys keep their values. An emptied server map stays as `{}`.
-- **No files created or deleted:** a missing config is reported "not wired", and folders `cartog install` created (`.cursor/`, `.qwen/`, ...) stay.
+- **No configs created or deleted:** a missing config is reported "not wired", and folders `cartog install` created (`.cursor/`, `.qwen/`, ...) stay.
+- **Rule files:** a rule file holding cartog's marker line is deleted, and its directory stays. One without the marker is left in place and reported skipped. `--scope user` leaves rule files alone.
 - **No client named:** every config in scope that holds cartog is cleaned, whether or not its editor is detected as installed.
 - **Codex:** only this project's `[mcp_servers.cartog-<slug>-<hash8>]` section is removed; other projects keep theirs, and a comment written above the removed section moves to the next one.
 - **Kilo:** every `kilo.jsonc` / `kilo.json` present (and the user-level `config.json`) is checked, since install wrote to whichever existed at the time.

@@ -1,10 +1,11 @@
 use crate::cli::{ClientKind, IdeScope};
 use crate::commands::ide::catalogue::HomeDirs;
 use crate::commands::ide::merge::codex_section_name;
+use crate::commands::ide::picker::RemovalItem;
 use crate::commands::ide::remove::*;
 use crate::commands::ide::{
-    ClientSpec, Detection, IdeReport, IdeStatus, IdeStep, IdeSummary, MergeStrategy, Operation,
-    Scope,
+    ClientSpec, Detection, FileKind, IdeReport, IdeStatus, IdeStep, IdeSummary, MergeStrategy,
+    Operation, Scope,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,7 @@ fn step(client: &str, status: IdeStatus, message: &str) -> IdeStep {
         client: client.into(),
         scope: "user".into(),
         path: format!("/home/u/{client}.json"),
+        file_kind: FileKind::McpConfig,
         status,
         message: message.into(),
         diff: None,
@@ -75,7 +77,7 @@ fn remove_report_lists_only_changed_steps_and_a_removal_summary() {
         r.render_human(),
         "- cursor (user, /home/u/cursor.json): removed\n\
          ! kilo (user, /home/u/kilo.json): not modified (bad)\n\
-         \n3 configs: 1 removed, 1 not wired, 1 skipped, 0 errors\n"
+         \n3 files: 1 removed, 1 not wired, 1 skipped, 0 errors\n"
     );
 }
 
@@ -104,7 +106,7 @@ fn install_report_renders_every_step_as_before() {
         r.render_human(),
         "+ cursor (user, /home/u/cursor.json): created\n\
          + zed (user, /home/u/zed.json): already up to date\n\
-         \n2 clients: 1 created, 0 updated, 1 unchanged, 0 skipped, 0 errors\n"
+         \n2 files: 1 created, 0 updated, 1 unchanged, 0 skipped, 0 errors\n"
     );
 }
 
@@ -118,6 +120,42 @@ fn json_report_carries_the_operation_and_removed_count() {
     assert_eq!(v["operation"], "remove");
     assert_eq!(v["summary"]["removed"], 1);
     assert_eq!(v["steps"][0]["status"], "removed");
+}
+
+#[test]
+fn json_steps_say_an_mcp_config_is_one() {
+    let r = report(
+        Operation::Install,
+        vec![step("cursor", IdeStatus::Created, "created")],
+    );
+    let v = serde_json::to_value(&r).unwrap();
+    assert_eq!(v["steps"][0]["file_kind"], "mcp_config");
+}
+
+#[test]
+fn json_steps_say_a_rule_file_is_one() {
+    let mut rule = step("cursor", IdeStatus::Created, "created");
+    rule.file_kind = FileKind::Rule;
+    let v = serde_json::to_value(report(Operation::Install, vec![rule])).unwrap();
+    assert_eq!(v["steps"][0]["file_kind"], "rule");
+}
+
+#[test]
+fn a_step_without_a_path_renders_without_one() {
+    let mut no_path = step("zed", IdeStatus::Skipped, "no rules directory");
+    no_path.scope = "project".into();
+    no_path.path = String::new();
+    assert!(report(Operation::Install, vec![no_path])
+        .render_human()
+        .starts_with("! zed (project): no rules directory\n"));
+}
+
+#[test]
+fn removal_steps_are_tagged_as_mcp_configs() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let spec = spec_at(dir.path().join("absent.json"), MergeStrategy::McpServers);
+    let step = process_removal(&spec, dir.path(), false);
+    assert_eq!(step.file_kind, FileKind::McpConfig);
 }
 
 fn spec_at(path: PathBuf, strategy: MergeStrategy) -> ClientSpec {
@@ -480,7 +518,7 @@ fn a_dry_run_removal_summary_says_would_be_removed() {
     r.dry_run = true;
     assert!(
         r.render_human()
-            .ends_with("\n1 configs: 1 would be removed, 0 not wired, 0 skipped, 0 errors\n"),
+            .ends_with("\n1 files: 1 would be removed, 0 not wired, 0 skipped, 0 errors\n"),
         "{}",
         r.render_human()
     );
@@ -539,4 +577,143 @@ fn picker_report_with_only_preflight_failures_is_not_called_not_wired() {
         run_remove(&[], tmp.path(), false),
     );
     assert!(!report.render_human().contains("not wired in any config"));
+}
+
+const MARKED: &str = "<!-- Managed by cartog: `cartog ide --rules` updates this file and `cartog uninstall` deletes it. Delete this line to keep your own edits. -->\n\nrule\n";
+
+fn rule_repo() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cwd = tmp.path().join("repo");
+    fs::create_dir_all(&cwd).unwrap();
+    (tmp, cwd)
+}
+
+fn put(path: &Path, content: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, content).unwrap();
+}
+
+fn uninstall(clients: &[ClientKind], scope: IdeScope, cwd: &Path) -> IdeReport {
+    let targets = uninstall_targets(clients, scope, cwd, &HomeDirs::default()).unwrap();
+    let mut report = run_remove(&targets.configs, cwd, false);
+    append_rule_removals(&mut report, &targets.rules, false);
+    report
+}
+
+#[test]
+fn uninstall_targets_every_rule_file_when_no_client_is_named() {
+    let (_tmp, cwd) = rule_repo();
+    let targets = uninstall_targets(&[], IdeScope::All, &cwd, &HomeDirs::default()).unwrap();
+    assert_eq!(targets.rules.len(), 8);
+}
+
+#[test]
+fn uninstall_accepts_a_client_whose_only_project_file_is_its_rule() {
+    let (_tmp, cwd) = rule_repo();
+    put(&cwd.join(".windsurf/rules/cartog.md"), MARKED);
+    let targets = uninstall_targets(
+        &[ClientKind::Windsurf],
+        IdeScope::Project,
+        &cwd,
+        &HomeDirs::default(),
+    )
+    .unwrap();
+    assert_eq!((targets.configs.len(), targets.rules.len()), (0, 1));
+}
+
+#[test]
+fn uninstall_deletes_every_cartog_rule_file() {
+    let (_tmp, cwd) = rule_repo();
+    let cursor = cwd.join(".cursor/rules/cartog.mdc");
+    let claude = cwd.join(".claude/rules/cartog.md");
+    put(&cursor, MARKED);
+    put(&claude, MARKED);
+    let report = uninstall(&[], IdeScope::All, &cwd);
+    assert_eq!(
+        (cursor.exists(), claude.exists(), report.summary.removed),
+        (false, false, 2)
+    );
+}
+
+#[test]
+fn uninstall_of_one_client_deletes_only_its_rule_file() {
+    let (_tmp, cwd) = rule_repo();
+    let cursor = cwd.join(".cursor/rules/cartog.mdc");
+    let claude = cwd.join(".claude/rules/cartog.md");
+    put(&cursor, MARKED);
+    put(&claude, MARKED);
+    uninstall(&[ClientKind::Cursor], IdeScope::All, &cwd);
+    assert_eq!((cursor.exists(), claude.exists()), (false, true));
+}
+
+#[test]
+fn uninstall_at_user_scope_keeps_rule_files() {
+    let (_tmp, cwd) = rule_repo();
+    let cursor = cwd.join(".cursor/rules/cartog.mdc");
+    put(&cursor, MARKED);
+    uninstall(&[], IdeScope::User, &cwd);
+    assert!(cursor.exists());
+}
+
+#[test]
+fn uninstall_keeps_a_rule_file_cartog_did_not_write() {
+    let (_tmp, cwd) = rule_repo();
+    let cursor = cwd.join(".cursor/rules/cartog.mdc");
+    put(&cursor, "my rules\n");
+    let report = uninstall(&[ClientKind::Cursor], IdeScope::Project, &cwd);
+    assert_eq!((cursor.exists(), report.summary.skipped), (true, 1));
+}
+
+#[test]
+fn removal_render_hides_absent_rule_files_and_counts_them_not_wired() {
+    let (_tmp, cwd) = rule_repo();
+    let cursor = cwd.join(".cursor/rules/cartog.mdc");
+    put(&cursor, MARKED);
+    let mut report = run_remove(&[], &cwd, false);
+    let targets = uninstall_targets(
+        &[ClientKind::Cursor, ClientKind::ClaudeCode],
+        IdeScope::Project,
+        &cwd,
+        &HomeDirs::default(),
+    )
+    .unwrap();
+    append_rule_removals(&mut report, &targets.rules, false);
+    assert_eq!(
+        report.render_human(),
+        format!(
+            "- cursor (project, {}): removed\n\n2 files: 1 removed, 1 not wired, 0 skipped, 0 errors\n",
+            cursor.display()
+        )
+    );
+}
+
+#[test]
+fn a_picked_rule_row_keeps_only_that_rule_target() {
+    let (_tmp, cwd) = rule_repo();
+    let targets = uninstall_targets(&[], IdeScope::Project, &cwd, &HomeDirs::default()).unwrap();
+    let picked = RemovalItem {
+        kind: ClientKind::Cursor,
+        scope: Scope::Project,
+        path: cwd.join(".cursor/rules/cartog.mdc"),
+    };
+    let chosen = chosen_targets(targets, &[picked]);
+    let rules: Vec<ClientKind> = chosen.rules.iter().map(|t| t.kind).collect();
+    assert_eq!((chosen.configs.len(), rules), (0, vec![ClientKind::Cursor]));
+}
+
+#[test]
+fn uninstall_of_a_client_with_no_file_in_scope_still_names_the_scope() {
+    let (_tmp, cwd) = rule_repo();
+    let err = uninstall_targets(
+        &[ClientKind::Windsurf],
+        IdeScope::Project,
+        &cwd,
+        &HomeDirs::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("windsurf") && err.contains("project"),
+        "got: {err}"
+    );
 }

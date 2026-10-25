@@ -11,9 +11,9 @@ Binary crate and library facade. Provides the `cartog` CLI with 29 top-level com
 | Command | Description |
 |---------|-------------|
 | `init` | Scaffold a `.cartog.toml` config |
-| `ide` | Wire `cartog serve` into MCP-compatible editors |
-| `install [EDITORS...]` | Friendlier `ide`: install MCP config into named editors (or all detected) |
-| `uninstall [EDITORS...]` | Remove the cartog MCP entry from named editors (or every config that holds it) |
+| `ide` | Wire `cartog serve` into MCP-compatible editors (`--rules` also writes agent rule files) |
+| `install [EDITORS...]` | Friendlier `ide`: install MCP config into named editors (or all detected), plus agent rule files with `--rules` |
+| `uninstall [EDITORS...]` | Remove the cartog MCP entry from named editors (or every config that holds it) and delete cartog's rule files |
 | `index [PATH]` | Build or rebuild the code graph (`--force`, `--no-lsp`) |
 | `outline FILE` | Show symbols and structure of a file |
 | `callees NAME` | Find what a symbol calls |

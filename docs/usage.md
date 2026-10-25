@@ -226,6 +226,7 @@ cartog ide --scope user             # only user-scope clients
 cartog ide --client cursor          # one client
 cartog ide --dry-run                # preview without writing
 cartog ide --remove                 # pick configs to take cartog out of
+cartog ide --rules                  # also write agent rule files (below)
 ```
 
 Supported clients (matches the per-client list below): `claude-code` (project
@@ -257,6 +258,37 @@ is your project directory name, hash8 is the first 4 bytes of SHA-256 of the
 absolute path) to keep multiple projects coexisting. The TOML editor preserves
 comments and ordering in the rest of the file.
 
+#### Agent rule files: `--rules`
+
+Wiring MCP makes the tools available; a rule file tells the agent to use them.
+`--rules` writes one cartog-owned rule file per agent that reads a rules
+directory, with the snippet from [agent-snippet.md](agent-snippet.md) and the
+header that loads it on every session:
+
+```bash
+cartog install --rules              # agents in use in this repo
+cartog install cursor kiro --rules  # named agents, in use or not
+```
+
+| Client | Rule file |
+|---|---|
+| `cursor` | `.cursor/rules/cartog.mdc` |
+| `windsurf` | `.windsurf/rules/cartog.md` |
+| `kiro` | `.kiro/steering/cartog.md` |
+| `cline` | `.clinerules/cartog.md` |
+| `roo` | `.roo/rules/cartog.md` |
+| `antigravity` | `.agents/rules/cartog.md` |
+| `claude-code` | `.claude/rules/cartog.md` |
+| `vscode` | `.github/instructions/cartog.instructions.md` |
+
+- Rule files are project files: commit them so teammates' agents load them. `--rules` with `--scope user`, or run from your home directory, is an error.
+- With no client named, an agent gets a file only when it is in use: its CLI on `PATH`, its user config or app folder, or its rules directory already in the repo.
+- Each file carries a marker line. cartog rewrites or deletes only files holding it, so delete the line to keep your own edits.
+- A file at the same path without the marker (a hand copy of the snippet) is left alone and reported skipped.
+
+See [reference/cli.md](reference/cli.md#agent-rule-files---rules) for the
+headers and the cases cartog skips to protect existing rules.
+
 #### Flag reference
 
 | Flag | Effect |
@@ -266,7 +298,8 @@ comments and ordering in the rest of the file.
 | `-y`, `--yes` | Skip interactive prompts. Also implied by `--dry-run`, `--client`, `--json`, or a non-TTY stdin. |
 | `--dry-run` | Print the planned changes (before/after diff per file) without writing. Implies non-interactive. |
 | `--no-watch` | Drop `--watch` from every client's serve args (default wires `serve --watch` for all). |
-| `--remove` | Take the cartog entry out instead of adding it. On a TTY, lists only the configs that hold cartog, pre-checked. Without a terminal (or with `--json`) it refuses unless `--yes`, `--client` or `--dry-run` is given. Conflicts with `--no-watch`. |
+| `--rules` | Also write a cartog rule file for each agent that reads a rules directory (project files only). Conflicts with `--remove` and `--scope user`. |
+| `--remove` | Take the cartog entry out instead of adding it. On a TTY, lists only the configs and rule files that hold cartog, pre-checked. Without a terminal (or with `--json`) it refuses unless `--yes`, `--client` or `--dry-run` is given. Conflicts with `--no-watch`. |
 | `--json` (global) | Emit a structured `IdeReport` on stdout instead of human text (`"operation": "install"` or `"remove"`). |
 
 #### Removing cartog: `cartog uninstall`
@@ -278,8 +311,10 @@ cartog uninstall --dry-run          # preview the removal
 ```
 
 Only the `cartog` entry is removed (Codex: this project's section). Other
-servers stay, no file or folder is created or deleted, and a config cartog
+servers stay, no config or folder is created or deleted, and a config cartog
 cannot parse (for example JSONC with comments) is left untouched and reported.
+Rule files written by `--rules` are deleted when they still hold cartog's
+marker line; their folders stay.
 With no client named it cleans every config in scope that holds cartog, even
 for an editor that is no longer installed. See
 [reference/cli.md](reference/cli.md#cartog-uninstall-client----scope----dry-run).

@@ -608,3 +608,194 @@ fn ide_remove_off_a_terminal_without_yes_refuses_and_changes_nothing() {
     assert!(stderr(&out).contains("--yes"), "{}", stderr(&out));
     assert_eq!(sb.read(".mcp.json").unwrap(), before);
 }
+
+fn rule_steps(out: &std::process::Output) -> Vec<serde_json::Value> {
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    report["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["file_kind"] == "rule")
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn install_rules_writes_a_rule_only_for_agents_in_use() {
+    let sb = Sandbox::new();
+    fs::create_dir_all(sb.home.path().join(".claude")).unwrap();
+    assert_success(&sb.cmd(&["install", "--rules"]));
+    assert_eq!(
+        (
+            sb.read(".claude/rules/cartog.md").is_some(),
+            sb.read(".cursor/mcp.json").is_some(),
+            sb.repo().join(".cursor/rules").exists()
+        ),
+        (true, true, false)
+    );
+}
+
+#[test]
+fn install_without_rules_writes_no_rule_file() {
+    let sb = Sandbox::new();
+    fs::create_dir_all(sb.home.path().join(".claude")).unwrap();
+    assert_success(&sb.cmd(&["install"]));
+    assert!(!sb.repo().join(".claude/rules").exists());
+}
+
+#[test]
+fn a_second_install_leaves_the_rule_file_unchanged() {
+    let sb = Sandbox::new();
+    assert_success(&sb.cmd(&["install", "cursor", "--rules"]));
+    let out = sb.cmd(&["install", "cursor", "--rules", "--json"]);
+    assert_success(&out);
+    let statuses: Vec<String> = rule_steps(&out)
+        .iter()
+        .map(|s| s["status"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(statuses, vec!["unchanged"]);
+}
+
+#[test]
+fn install_json_tags_mcp_and_rule_steps() {
+    let sb = Sandbox::new();
+    let out = sb.cmd(&[
+        "install", "cursor", "--scope", "project", "--rules", "--json",
+    ]);
+    assert_success(&out);
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let kinds: Vec<&str> = report["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["file_kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, vec!["mcp_config", "rule"]);
+}
+
+#[test]
+fn install_windsurf_rules_at_project_scope_writes_only_the_rule() {
+    let sb = Sandbox::new();
+    let out = sb.cmd(&["install", "windsurf", "--scope", "project", "--rules"]);
+    assert_success(&out);
+    assert_eq!(
+        (
+            sb.read(".windsurf/rules/cartog.md").is_some(),
+            sb.home.path().join(".codeium").exists()
+        ),
+        (true, false)
+    );
+}
+
+#[test]
+fn install_rules_at_user_scope_fails_and_changes_nothing() {
+    let sb = Sandbox::new();
+    fs::create_dir_all(sb.home.path().join("fake-bin")).unwrap();
+    let before = (tree(sb.repo()), tree(sb.home.path()));
+    let out = sb.cmd(&["install", "cursor", "--rules", "--scope", "user"]);
+    assert!(!out.status.success(), "expected a usage error");
+    assert_eq!((tree(sb.repo()), tree(sb.home.path())), before);
+}
+
+#[test]
+fn ide_remove_with_rules_is_a_usage_error() {
+    let sb = Sandbox::new();
+    assert_eq!(
+        sb.cmd(&["ide", "--remove", "--rules"]).status.code(),
+        Some(2)
+    );
+}
+
+#[test]
+fn a_hand_made_rule_file_survives_install_and_uninstall() {
+    let sb = Sandbox::new();
+    let rule = sb.repo().join(".cursor/rules/cartog.mdc");
+    fs::create_dir_all(rule.parent().unwrap()).unwrap();
+    fs::write(&rule, "my own rules\n").unwrap();
+    assert_success(&sb.cmd(&["install", "cursor", "--rules"]));
+    assert_success(&sb.cmd(&["uninstall"]));
+    assert_eq!(fs::read_to_string(&rule).unwrap(), "my own rules\n");
+}
+
+#[test]
+fn uninstall_deletes_rule_files_and_keeps_their_directories() {
+    let sb = Sandbox::new();
+    assert_success(&sb.cmd(&["install", "cursor", "claude-code", "--rules"]));
+    assert_success(&sb.cmd(&["uninstall"]));
+    assert_eq!(
+        (
+            sb.read(".cursor/rules/cartog.mdc").is_some(),
+            sb.read(".claude/rules/cartog.md").is_some(),
+            sb.repo().join(".cursor/rules").is_dir(),
+            sb.repo().join(".claude/rules").is_dir()
+        ),
+        (false, false, true, true)
+    );
+}
+
+#[test]
+fn uninstall_dry_run_keeps_rule_files() {
+    let sb = Sandbox::new();
+    assert_success(&sb.cmd(&["install", "cursor", "--rules"]));
+    let out = sb.cmd(&["uninstall", "--dry-run"]);
+    assert_success(&out);
+    assert!(sb.read(".cursor/rules/cartog.mdc").is_some());
+}
+
+#[test]
+fn ide_client_rules_at_project_scope_writes_the_rule() {
+    let sb = Sandbox::new();
+    let out = sb.cmd(&[
+        "ide", "--client", "windsurf", "--scope", "project", "--rules",
+    ]);
+    assert_success(&out);
+    assert!(sb.read(".windsurf/rules/cartog.md").is_some());
+}
+
+#[test]
+fn ide_yes_rules_writes_a_rule_for_agents_in_use() {
+    let sb = Sandbox::new();
+    fs::create_dir_all(sb.home.path().join(".claude")).unwrap();
+    assert_success(&sb.cmd(&["ide", "--yes", "--rules"]));
+    assert!(sb.read(".claude/rules/cartog.md").is_some());
+}
+
+#[test]
+fn install_codex_rules_at_project_scope_fails() {
+    let sb = Sandbox::new();
+    let out = sb.cmd(&["install", "codex", "--scope", "project", "--rules"]);
+    assert!(!out.status.success(), "expected an error");
+    assert!(
+        stderr(&out).contains("no catalogue entries match"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn uninstall_with_a_legacy_clinerules_file_succeeds() {
+    let sb = Sandbox::new();
+    fs::write(sb.repo().join(".clinerules"), "legacy rules\n").unwrap();
+    assert_success(&sb.cmd(&["uninstall"]));
+}
+
+#[test]
+fn install_rules_from_the_home_directory_is_refused() {
+    let sb = Sandbox::new();
+    fs::create_dir_all(sb.home.path().join(".claude")).unwrap();
+    fs::create_dir_all(sb.home.path().join("fake-bin")).unwrap();
+    let before = tree(sb.home.path());
+    let out = Command::new(cartog_bin())
+        .args(["install", "claude-code", "--rules"])
+        .current_dir(sb.home.path())
+        .env("PATH", sb.home.path().join("fake-bin"))
+        .env("HOME", sb.home.path())
+        .env("XDG_CONFIG_HOME", sb.home.path().join(".config"))
+        .env("XDG_DATA_HOME", sb.home.path().join(".local/share"))
+        .env("XDG_STATE_HOME", sb.home.path().join(".local/state"))
+        .env_remove("CARGO_HOME")
+        .output()
+        .expect("failed to spawn cartog");
+    assert!(!out.status.success(), "expected a refusal");
+    assert_eq!(tree(sb.home.path()), before);
+}

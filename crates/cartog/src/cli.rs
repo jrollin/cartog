@@ -442,9 +442,19 @@ pub enum Command {
 
         /// Remove the cartog entry instead of adding it
         ///
-        /// On a TTY, lists the configs that hold cartog so you pick what to remove.
+        /// On a TTY, lists the configs and rule files that hold cartog so you pick what
+        /// to remove.
         #[arg(long, conflicts_with = "no_watch")]
         remove: bool,
+
+        /// Also write a cartog rule file that teaches the agent to prefer cartog's tools
+        ///
+        /// Project files, for agents that read a rules directory: Cursor, Windsurf,
+        /// Kiro, Cline, Roo Code, Antigravity, Claude Code, VS Code. Without `--client`,
+        /// only agents in use get one. Refused at user scope and in the home directory.
+        /// `cartog uninstall` deletes them.
+        #[arg(long, conflicts_with = "remove")]
+        rules: bool,
     },
 
     /// Install cartog MCP config into one or more editors.
@@ -477,17 +487,27 @@ pub enum Command {
         /// Omit `--watch` from every client's serve args (default wires `--watch` for all).
         #[arg(long)]
         no_watch: bool,
+
+        /// Also write a cartog rule file that teaches the agent to prefer cartog's tools
+        ///
+        /// Project files, for agents that read a rules directory: Cursor, Windsurf,
+        /// Kiro, Cline, Roo Code, Antigravity, Claude Code, VS Code. Without clients,
+        /// only agents in use get one. Refused at user scope and in the home directory.
+        /// `cartog uninstall` deletes them.
+        #[arg(long)]
+        rules: bool,
     },
 
     /// Remove the cartog MCP entry from one or more editors' configs.
     ///
     /// Mirror of `cartog install`: editors as positional arguments, always
-    /// non-interactive. Only the `cartog` entry is removed; no file or directory
+    /// non-interactive. Only the `cartog` entry is removed, plus the rule files
+    /// `--rules` wrote (those holding cartog's marker line). No config or directory
     /// is created or deleted. For the interactive picker, use `cartog ide --remove`.
     Uninstall {
         /// One or more editors to unwire
         ///
-        /// Omit to remove cartog from every config in scope that holds it.
+        /// Omit to remove cartog from every config and rule file in scope that holds it.
         clients: Vec<ClientKind>,
 
         /// Filter by scope
@@ -759,6 +779,30 @@ mod tests {
     #[test]
     fn ide_remove_rejects_no_watch() {
         assert!(Cli::try_parse_from(["cartog", "ide", "--remove", "--no-watch"]).is_err());
+    }
+
+    #[test]
+    fn ide_rules_parses() {
+        let cli = Cli::try_parse_from(["cartog", "ide", "--rules", "--yes"]).unwrap();
+        let Command::Ide { rules, .. } = cli.command else {
+            panic!("expected Command::Ide");
+        };
+        assert!(rules);
+    }
+
+    #[test]
+    fn install_rules_parses() {
+        let cli = Cli::try_parse_from(["cartog", "install", "cursor", "--rules"]).unwrap();
+        let Command::Install { rules, .. } = cli.command else {
+            panic!("expected Command::Install");
+        };
+        assert!(rules);
+    }
+
+    #[test]
+    fn ide_remove_rejects_rules() {
+        let err = Cli::try_parse_from(["cartog", "ide", "--remove", "--rules"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     /// `SymbolKindFilter` mirrors `SymbolKind` by hand, so a variant added to core

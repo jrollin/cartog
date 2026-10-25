@@ -3,8 +3,9 @@
 //!
 //! Shared spec types live here; behavior is split across `catalogue` (client
 //! specs + path resolution), `merge` / `unmerge` (adding / removing the entry
-//! per config format), `picker` (interactive TUI), `run` (install entry points
-//! + write), `remove` (uninstall entry points) and `report` (step report + rendering).
+//! per config format), `picker` (interactive TUI), `run` (install entry
+//! points + write), `remove` (uninstall entry points), `report` (step report +
+//! rendering) and `rules` (agent rule files written by `--rules`).
 
 use std::path::PathBuf;
 
@@ -114,11 +115,12 @@ mod merge;
 mod picker;
 mod remove;
 mod report;
+mod rules;
 mod run;
 mod unmerge;
 
 pub use remove::cmd_uninstall;
-pub use report::{DiffPair, IdeReport, IdeStatus, IdeStep, IdeSummary, Operation};
+pub use report::{DiffPair, FileKind, IdeReport, IdeStatus, IdeStep, IdeSummary, Operation};
 pub use run::{cmd_ide, cmd_install};
 
 #[cfg(test)]
