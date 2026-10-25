@@ -60,25 +60,24 @@ pub(super) fn cmd_ide_remove(
     let homes = HomeDirs::detect();
     let targets = removal_targets(&[], scope, &cwd, &homes);
     let plan = removal_plan(&targets, &cwd);
-    let mut skipped = String::new();
-    for step in &plan.skipped {
-        push_step(&mut skipped, step);
-    }
-    print!("{skipped}");
-    if plan.items.is_empty() {
-        if plan.skipped.is_empty() {
-            println!("cartog is not wired in any config in scope.");
+    let report = if plan.items.is_empty() {
+        picker_report(plan.skipped, run_remove(&[], &cwd, false))
+    } else {
+        // Shown before the picker so the choice is made knowing what cannot be cleaned.
+        let mut skipped = String::new();
+        for step in &plan.skipped {
+            push_step(&mut skipped, step);
         }
-        return Ok(());
-    }
-    let RemovalChoice::Selected(chosen) = removal_picker(&plan.items)? else {
-        return Ok(());
+        print!("{skipped}");
+        let RemovalChoice::Selected(chosen) = removal_picker(&plan.items)? else {
+            return Ok(());
+        };
+        let specs: Vec<ClientSpec> = targets
+            .into_iter()
+            .filter(|t| chosen.iter().any(|c| c.path == t.path))
+            .collect();
+        picker_report(plan.skipped, run_remove(&specs, &cwd, false))
     };
-    let specs: Vec<ClientSpec> = targets
-        .into_iter()
-        .filter(|t| chosen.iter().any(|c| c.path == t.path))
-        .collect();
-    let report = run_remove(&specs, &cwd, false);
     print_removal(&report, false, false)?;
     if report.has_errors() {
         std::process::exit(1);
@@ -93,6 +92,16 @@ fn entry_section(spec: &ClientSpec, cwd: &Path) -> String {
     } else {
         "cartog".to_string()
     }
+}
+
+/// The picker's final report: files that failed the preflight (unreadable or
+/// unparseable) count in the summary and exit status, as they do for `uninstall`.
+pub(super) fn picker_report(preflight: Vec<IdeStep>, mut removal: IdeReport) -> IdeReport {
+    for step in &preflight {
+        removal.summary.record(step.status);
+    }
+    removal.steps.splice(0..0, preflight);
+    removal
 }
 
 /// How `cartog ide --remove` proceeds.

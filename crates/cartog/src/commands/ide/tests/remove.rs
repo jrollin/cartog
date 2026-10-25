@@ -501,3 +501,42 @@ fn run_remove_marks_a_dry_run_report() {
     let report = run_remove(&[spec_at(cfg, MergeStrategy::McpServers)], tmp.path(), true);
     assert!(report.dry_run);
 }
+
+#[test]
+fn picker_report_counts_preflight_failures_in_summary_and_exit_status() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg = tmp.path().join("settings.json");
+    fs::write(&cfg, WIRED).unwrap();
+    let removal = run_remove(
+        &[spec_at(cfg, MergeStrategy::McpServers)],
+        tmp.path(),
+        false,
+    );
+    let preflight = vec![
+        step("kilo", IdeStatus::Skipped, "not modified (bad)"),
+        step("codex", IdeStatus::Error, "could not read existing config"),
+    ];
+
+    let report = picker_report(preflight, removal);
+
+    assert_eq!(
+        (
+            report.summary.total,
+            report.summary.removed,
+            report.summary.skipped,
+            report.summary.error
+        ),
+        (3, 1, 1, 1)
+    );
+    assert!(report.has_errors());
+}
+
+#[test]
+fn picker_report_with_only_preflight_failures_is_not_called_not_wired() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let report = picker_report(
+        vec![step("kilo", IdeStatus::Skipped, "not modified (bad)")],
+        run_remove(&[], tmp.path(), false),
+    );
+    assert!(!report.render_human().contains("not wired in any config"));
+}
