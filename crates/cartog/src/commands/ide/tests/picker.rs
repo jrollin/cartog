@@ -389,7 +389,7 @@ fn removal_plan_offers_only_files_that_hold_cartog() {
         removal_spec(ClientKind::Qwen, unwired),
         removal_spec(ClientKind::Kiro, tmp.path().join("absent.json")),
     ];
-    let plan = removal_plan(&specs, tmp.path());
+    let plan = removal_plan(&specs, &[], tmp.path());
     let listed: Vec<_> = plan
         .items
         .iter()
@@ -404,7 +404,7 @@ fn removal_plan_reports_unparseable_files_as_skipped() {
     let tmp = tempfile::tempdir().unwrap();
     let bad = tmp.path().join("kilo.jsonc");
     std::fs::write(&bad, "// c\n{\"mcpServers\": {\"cartog\": {}}}").unwrap();
-    let plan = removal_plan(&[removal_spec(ClientKind::Kilo, bad)], tmp.path());
+    let plan = removal_plan(&[removal_spec(ClientKind::Kilo, bad)], &[], tmp.path());
     assert!(plan.items.is_empty());
     let statuses: Vec<_> = plan.skipped.iter().map(|s| s.status).collect();
     assert_eq!(statuses, vec![crate::commands::ide::IdeStatus::Skipped]);
@@ -418,7 +418,56 @@ fn removal_plan_is_empty_when_nothing_is_wired() {
             ClientKind::Cursor,
             tmp.path().join("absent.json"),
         )],
+        &[],
         tmp.path(),
     );
     assert!(plan.items.is_empty() && plan.skipped.is_empty());
+}
+
+fn marked_rule(cwd: &Path, kind: ClientKind, content: &str) -> PathBuf {
+    let targets = crate::commands::ide::rules::removal_rule_targets(
+        &[kind],
+        crate::cli::IdeScope::Project,
+        cwd,
+    );
+    let path = targets[0].path.clone();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, content).unwrap();
+    path
+}
+
+#[test]
+fn removal_plan_offers_cartog_rule_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = marked_rule(
+        tmp.path(),
+        ClientKind::Cursor,
+        "<!-- Managed by cartog: x -->\nrule\n",
+    );
+    let rules = crate::commands::ide::rules::removal_rule_targets(
+        &[],
+        crate::cli::IdeScope::Project,
+        tmp.path(),
+    );
+    let plan = removal_plan(&[], &rules, tmp.path());
+    let listed: Vec<_> = plan
+        .items
+        .iter()
+        .map(|i| (i.kind, i.scope, i.path.clone()))
+        .collect();
+    assert_eq!(listed, vec![(ClientKind::Cursor, Scope::Project, path)]);
+}
+
+#[test]
+fn removal_plan_reports_foreign_rule_files_as_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    marked_rule(tmp.path(), ClientKind::Cursor, "my own rules\n");
+    let rules = crate::commands::ide::rules::removal_rule_targets(
+        &[],
+        crate::cli::IdeScope::Project,
+        tmp.path(),
+    );
+    let plan = removal_plan(&[], &rules, tmp.path());
+    let skipped: Vec<_> = plan.skipped.iter().map(|s| s.client.as_str()).collect();
+    assert_eq!((plan.items.len(), skipped), (0, vec!["cursor"]));
 }

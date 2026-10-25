@@ -921,7 +921,23 @@ cartog ide --client cline-cli   # ~/.cline/data/settings/cline_mcp_settings.json
         </details>
 
         <h2 id="teach-agent">Teach your agent to use cartog</h2>
-        <p>Wiring MCP is half the job. The other half is telling the LLM <strong>when</strong> to prefer cartog over grep + read. Drop the snippet from <a href="https://github.com/jrollin/cartog/blob/main/docs/agent-snippet.md">docs/agent-snippet.md</a> into your project's <code>AGENTS.md</code>, <code>CLAUDE.md</code>, <code>.cursor/rules/</code>, or equivalent, and the agent will route navigation questions through cartog's MCP tools instead of flooding context with raw text.</p>
+        <p>Wiring MCP is half the job. The other half is telling the LLM <strong>when</strong> to prefer cartog over grep + read. <code>cartog install --rules</code> writes a rule file for each agent in use, with the header that loads it on every session:</p>
+        <pre>cartog install --rules               <span class="comment"># every agent in use in this repo</span>
+cartog install cursor kiro --rules   <span class="comment"># named agents</span></pre>
+        <table>
+          <thead><tr><th>Agent</th><th>Rule file</th></tr></thead>
+          <tbody>
+            <tr><td>Cursor</td><td><code>.cursor/rules/cartog.mdc</code></td></tr>
+            <tr><td>Windsurf</td><td><code>.windsurf/rules/cartog.md</code></td></tr>
+            <tr><td>Kiro</td><td><code>.kiro/steering/cartog.md</code></td></tr>
+            <tr><td>Cline</td><td><code>.clinerules/cartog.md</code></td></tr>
+            <tr><td>Roo Code</td><td><code>.roo/rules/cartog.md</code></td></tr>
+            <tr><td>Antigravity</td><td><code>.agents/rules/cartog.md</code></td></tr>
+            <tr><td>Claude Code</td><td><code>.claude/rules/cartog.md</code></td></tr>
+            <tr><td>VS Code Copilot</td><td><code>.github/instructions/cartog.instructions.md</code></td></tr>
+          </tbody>
+        </table>
+        <p>The files live in the repo: commit them. Each holds a marker line; cartog rewrites or deletes only files that carry it, so delete the line to keep your own edits, and a file you wrote yourself is never touched. <code>cartog uninstall</code> deletes them. For <code>AGENTS.md</code>, <code>CLAUDE.md</code> or any other file, paste the snippet from <a href="https://github.com/jrollin/cartog/blob/main/docs/agent-snippet.md">docs/agent-snippet.md</a>. Either way the agent routes navigation questions through cartog's MCP tools instead of flooding context with raw text.</p>
         <p>Maps the natural-language question to the right tool:</p>
         <ul>
           <li>"where is X defined?" → <code>cartog_search</code></li>
@@ -1274,13 +1290,15 @@ Dry run only. Re-run without --dry-run to apply.</pre>
         <p>Wire <code>cartog serve</code> into one or all MCP-compatible editors, or take it out again. Three shapes:</p>
         <ul>
           <li><strong><code>cartog install &lt;client&gt;...</code></strong> — positional, brew/npm/pip convention, always non-interactive. Safe for scripts and agents.</li>
-          <li><strong><code>cartog ide</code></strong> — original, supports an interactive multi-select picker (bare) and the long-form flags below. <code>--remove</code> lists only the configs that hold cartog so you pick what to take out; without a terminal it needs <code>--yes</code>.</li>
-          <li><strong><code>cartog uninstall [client]...</code></strong> — the mirror of <code>install</code>: removes the <code>cartog</code> entry, non-interactive.</li>
+          <li><strong><code>cartog ide</code></strong> — original, supports an interactive multi-select picker (bare) and the long-form flags below. <code>--remove</code> lists only the configs and rule files that hold cartog so you pick what to take out; without a terminal it needs <code>--yes</code>.</li>
+          <li><strong><code>cartog uninstall [client]...</code></strong> — the mirror of <code>install</code>: removes the <code>cartog</code> entry and the rule files <code>--rules</code> wrote, non-interactive.</li>
         </ul>
+        <p><code>--rules</code> (on <code>ide</code> and <code>install</code>) also writes a cartog rule file for each agent that reads a rules directory, so it prefers cartog over grep: see <a href="#teach-agent">Teach your agent</a>. Rule files are project files: <code>--rules</code> with <code>--scope user</code>, or run from your home directory, is an error, and with no client named only agents in use get one. Each <code>--json</code> step carries <code>file_kind</code> (<code>mcp_config</code> or <code>rule</code>).</p>
         <pre>cartog install cursor                 <span class="comment"># one editor</span>
 cartog install cursor vscode codex    <span class="comment"># several at once</span>
 cartog install                        <span class="comment"># all detected editors</span>
 cartog install cursor --dry-run       <span class="comment"># preview</span>
+cartog install cursor --rules         <span class="comment"># also write .cursor/rules/cartog.mdc</span>
 
 cartog ide                            <span class="comment"># interactive picker (TTY only)</span>
 cartog ide --client cursor            <span class="comment"># single client via flag</span>
@@ -1292,12 +1310,12 @@ cartog ide --remove                   <span class="comment"># interactive: pick 
 cartog uninstall                      <span class="comment"># every config in scope that holds cartog</span>
 cartog uninstall cursor qwen          <span class="comment"># named editors only</span>
 cartog uninstall --dry-run            <span class="comment"># preview the removal</span></pre>
-        <p><code>cartog uninstall</code> removes only the <code>cartog</code> entry (Codex: this project's section) and keeps every other server. It never creates or deletes a file or folder, and a config it cannot parse (for example JSONC with comments) is left untouched and reported. With no client named it cleans every config in scope that holds cartog, even for an editor that is no longer installed.</p>
+        <p><code>cartog uninstall</code> removes only the <code>cartog</code> entry (Codex: this project's section) and keeps every other server. It never creates a file or deletes a folder, deletes no file but the rule files holding cartog's marker line, and a config it cannot parse (for example JSONC with comments) is left untouched and reported. With no client named it cleans every config in scope that holds cartog, even for an editor that is no longer installed.</p>
         <p class="example-label">Example output (<code>cartog uninstall</code>)</p>
         <pre class="example-output">- claude-code (project, /your/repo/.mcp.json): removed
 - cursor (project, /your/repo/.cursor/mcp.json): removed
 
-25 configs: 2 removed, 23 not wired, 0 skipped, 0 errors</pre>
+33 files: 2 removed, 31 not wired, 0 skipped, 0 errors</pre>
         <p class="example-label">Example output (<code>cartog ide --client cursor --dry-run</code>)</p>
         <pre class="example-output">+ cursor (project, /your/repo/.cursor/mcp.json): would create
   --- after ---
@@ -1314,7 +1332,7 @@ cartog uninstall --dry-run            <span class="comment"># preview the remova
       &#125;
     &#125;
 
-2 clients: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+2 files: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
 Dry run only. Re-run without --dry-run to apply.</pre>
         <p class="example-label">Example output (<code>cartog install cursor vscode --dry-run</code>)</p>
         <pre class="example-output">+ cursor (project, /your/repo/.cursor/mcp.json): would create
@@ -1346,7 +1364,7 @@ Dry run only. Re-run without --dry-run to apply.</pre>
       &#125;
     &#125;
 
-4 clients: 4 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+4 files: 4 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
 Dry run only. Re-run without --dry-run to apply.</pre>
         <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>cline</code>, <code>cline-cli</code>, <code>codex</code>, <code>copilot-cli</code>, <code>cursor</code> (project + user), <code>gemini</code>, <code>kilo</code> (project + user), <code>opencode</code>, <code>qwen</code> (project + user), <code>roo</code> (project + user), <code>vscode</code> (project + user), <code>windsurf</code>, <code>zed</code>, <code>antigravity</code>, <code>kiro</code> (project + user), <code>hermes</code>. See the <a href="#mcp-ide">Bootstrap sequence</a> for the recommended verb order.</p>
 

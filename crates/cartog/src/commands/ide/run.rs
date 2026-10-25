@@ -13,13 +13,15 @@ use super::catalogue::{
 use super::merge::{codex_section_name, entry_disabled, merge_codex_toml, merge_entry};
 use super::picker::{confirm, interactive_picker, picker_items, PickerOutcome};
 use super::remove::cmd_ide_remove;
+use super::rules::{apply_rule_plan, plan_rules, rule_selection, RuleSelection};
 use super::{
-    Action, ClientSpec, DiffPair, IdeReport, IdeStatus, IdeStep, IdeSummary, MergeStrategy,
-    Operation, Scope,
+    Action, ClientSpec, DiffPair, FileKind, IdeReport, IdeStatus, IdeStep, IdeSummary,
+    MergeStrategy, Operation, Scope,
 };
 use crate::cli::{ClientKind, IdeScope};
 
 /// Public CLI entry point.
+#[allow(clippy::too_many_arguments)] // thin CLI adapter; each arg is a distinct flag
 pub fn cmd_ide(
     client: Option<ClientKind>,
     scope: IdeScope,
@@ -27,29 +29,44 @@ pub fn cmd_ide(
     dry_run: bool,
     no_watch: bool,
     remove: bool,
+    rules: bool,
     json: bool,
 ) -> Result<()> {
     if remove {
         return cmd_ide_remove(client, scope, yes, dry_run, json);
     }
+    let cwd = std::env::current_dir()?;
+    check_rules_scope(rules, scope, &cwd, home_dir().as_deref())?;
     let interactive =
         !yes && !dry_run && !json && client.is_none() && std::io::stdin().is_terminal();
-    let cwd = std::env::current_dir()?;
     let homes = HomeDirs::detect();
+    let path_env = std::env::var_os("PATH");
 
     // Interactive picker: shown when the user invokes `cartog ide` with no
     // explicit filter and a real TTY. Skipped under --yes/--dry-run/--json,
     // when --client is set, or when stdin is piped (CI/scripts).
     let report = if interactive {
-        let items = picker_items(&cwd, &homes, std::env::var_os("PATH").as_deref());
+        let items = picker_items(&cwd, &homes, path_env.as_deref());
         match interactive_picker(&items)? {
             PickerOutcome::Cancelled => return Ok(()),
             PickerOutcome::Selected(chosen) => {
-                run_ide_for_clients(&chosen, dry_run, no_watch, &cwd, &homes)?
+                let picked: Vec<ClientKind> = chosen.iter().map(|&(kind, _)| kind).collect();
+                let selection = rules.then_some(RuleSelection::Named(&picked));
+                let plan = plan_rules(selection, &cwd, &homes, path_env.as_deref());
+                let mut report = run_ide_for_clients(&chosen, dry_run, no_watch, &cwd, &homes)?;
+                apply_rule_plan(&mut report, plan, &cwd, dry_run);
+                report
             }
         }
     } else {
-        run_ide(client, scope, interactive, dry_run, no_watch, &cwd, &homes)?
+        let named: Vec<ClientKind> = client.into_iter().collect();
+        let selection = rules.then_some(rule_selection(&named));
+        // Evidence is read before the MCP writes, so this run's own folders never count.
+        let plan = plan_rules(selection, &cwd, &homes, path_env.as_deref());
+        let mut report = run_ide(client, scope, interactive, dry_run, no_watch, &cwd, &homes)?;
+        ensure_ide_targets(client, scope, report.steps.len(), plan.targets.len())?;
+        apply_rule_plan(&mut report, plan, &cwd, dry_run);
+        report
     };
 
     if json {
@@ -116,15 +133,23 @@ pub fn cmd_install(
     scope: IdeScope,
     dry_run: bool,
     no_watch: bool,
+    rules: bool,
     json: bool,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
+    check_rules_scope(rules, scope, &cwd, home_dir().as_deref())?;
     let homes = HomeDirs::detect();
+    let path_env = std::env::var_os("PATH");
 
     let report = if clients.is_empty() {
         // No positional clients → install into every detected editor in scope,
         // exactly like `cartog ide --yes`. The picker is skipped (yes implied).
-        run_ide(None, scope, false, dry_run, no_watch, &cwd, &homes)?
+        let selection = rules.then_some(RuleSelection::Detected);
+        let plan = plan_rules(selection, &cwd, &homes, path_env.as_deref());
+        let mut report = run_ide(None, scope, false, dry_run, no_watch, &cwd, &homes)?;
+        ensure_ide_targets(None, scope, report.steps.len(), plan.targets.len())?;
+        apply_rule_plan(&mut report, plan, &cwd, dry_run);
+        report
     } else {
         // Dedupe so `cartog install cursor cursor` doesn't waste cycles; warn
         // so a script bug that produces dupes is visible.
@@ -144,7 +169,9 @@ pub fn cmd_install(
         // requested clients + scope. Reuses the picker's aggregation path so
         // multiple positional clients produce a single combined report.
         let chosen = filter_catalogue_by_clients(&clients, scope);
-        if chosen.is_empty() {
+        let selection = rules.then_some(RuleSelection::Named(&clients));
+        let plan = plan_rules(selection, &cwd, &homes, path_env.as_deref());
+        if chosen.is_empty() && plan.targets.is_empty() {
             // User asked for clients that don't exist at the requested scope
             // (e.g. `--scope project codex` — codex is user-only). Bail with
             // an actionable error rather than silently printing "0 clients".
@@ -156,7 +183,9 @@ pub fn cmd_install(
                 scope_slug(scope),
             );
         }
-        run_ide_for_clients(&chosen, dry_run, no_watch, &cwd, &homes)?
+        let mut report = run_ide_for_clients(&chosen, dry_run, no_watch, &cwd, &homes)?;
+        apply_rule_plan(&mut report, plan, &cwd, dry_run);
+        report
     };
 
     if json {
@@ -172,10 +201,65 @@ pub fn cmd_install(
     Ok(())
 }
 
+/// `--rules` writes project files, which a user-scope run never touches. In the home
+/// directory the same paths are user scope: `~/.claude/rules/` and `~/.kiro/steering/`
+/// apply to every project.
+pub(super) fn check_rules_scope(
+    rules: bool,
+    scope: IdeScope,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Result<()> {
+    if !rules {
+        return Ok(());
+    }
+    if scope == IdeScope::User {
+        anyhow::bail!("rule files are project files: --rules needs --scope project or --scope all");
+    }
+    if home.is_some_and(|home| same_dir(cwd, home)) {
+        anyhow::bail!(
+            "rule files are project files: run --rules from a project directory, not your \
+             home directory ({}), where agent rule dirs apply to every project",
+            cwd.display()
+        );
+    }
+    Ok(())
+}
+
+fn home_dir() -> Option<std::path::PathBuf> {
+    directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf())
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// A run with neither an MCP config row nor a rule file to touch is a filter mistake.
+pub(super) fn ensure_ide_targets(
+    client: Option<ClientKind>,
+    scope: IdeScope,
+    mcp_rows: usize,
+    rule_targets: usize,
+) -> Result<()> {
+    if mcp_rows + rule_targets > 0 {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "no clients match the requested filter (client={} + scope={}). \
+         Check `--client` and `--scope` are compatible \
+         (e.g. codex and copilot-cli are user-scoped only); `--scope all` covers both.",
+        client.map_or("all", client_name),
+        scope_slug(scope),
+    );
+}
+
 /// Run `run_ide` for an explicit set of (kind, scope) pairs chosen by the
 /// picker. Bypasses the catalog filter pipeline because the picker has
 /// already nailed the exact rows to apply.
-fn run_ide_for_clients(
+pub(super) fn run_ide_for_clients(
     chosen: &[(ClientKind, Scope)],
     dry_run: bool,
     no_watch: bool,
@@ -251,7 +335,9 @@ fn print_next_steps(report: &IdeReport, dry_run: bool) {
     }
 }
 
-/// Library entry point used by both `cmd_ide` and `cmd_init`.
+/// Wire every catalogue row matching `client` + `scope`. No matching row yields an
+/// empty report: the caller decides whether that is an error, since rule files may
+/// still be due (`ensure_ide_targets`).
 pub fn run_ide(
     client: Option<ClientKind>,
     scope: IdeScope,
@@ -262,15 +348,6 @@ pub fn run_ide(
     homes: &HomeDirs,
 ) -> Result<IdeReport> {
     let specs = build_specs(client, scope, no_watch, cwd, homes);
-    if specs.is_empty() {
-        anyhow::bail!(
-            "no clients match the requested filter (client={} + scope={}). \
-             Check `--client` and `--scope` are compatible \
-             (e.g. codex and copilot-cli are user-scoped only); `--scope all` covers both.",
-            client.map_or("all", client_name),
-            scope_slug(scope),
-        );
-    }
     let mut steps = Vec::with_capacity(specs.len());
     let mut summary = IdeSummary::default();
 
@@ -310,6 +387,7 @@ pub(super) fn process_spec(
         client: client.clone(),
         scope: scope.clone(),
         path: path.clone(),
+        file_kind: FileKind::McpConfig,
         status,
         message,
         diff,

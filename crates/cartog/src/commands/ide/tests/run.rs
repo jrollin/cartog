@@ -1,9 +1,10 @@
 use crate::cli::{ClientKind, IdeScope};
 use crate::commands::ide::catalogue::*;
+use crate::commands::ide::rules::{apply_rule_plan, plan_rules, RuleSelection};
 use crate::commands::ide::run::*;
-use crate::commands::ide::{ClientSpec, Detection, IdeStatus, MergeStrategy, Scope};
+use crate::commands::ide::{ClientSpec, Detection, FileKind, IdeStatus, MergeStrategy, Scope};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[test]
 fn install_filter_single_client_returns_only_that_kind() {
     let chosen = filter_catalogue_by_clients(&[ClientKind::Windsurf], IdeScope::All);
@@ -172,6 +173,14 @@ fn process_spec_creates_config_file() {
     let written = fs::read_to_string(&cfg).unwrap();
     assert!(written.contains("mcpServers"), "wrote the mcpServers entry");
     assert!(written.contains("cartog"), "wrote the cartog server");
+}
+
+#[test]
+fn install_steps_are_tagged_as_mcp_configs() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let spec = project_spec(tmp.path().join("mcp.json"));
+    let step = process_spec(&spec, tmp.path(), false, true, false);
+    assert_eq!(step.file_kind, FileKind::McpConfig);
 }
 
 #[test]
@@ -412,6 +421,7 @@ fn install_scope_mismatch_error_names_the_cli_slugs() {
         true,
         false,
         false,
+        false,
     )
     .unwrap_err()
     .to_string();
@@ -422,9 +432,9 @@ fn install_scope_mismatch_error_names_the_cli_slugs() {
 }
 
 #[test]
-fn ide_scope_mismatch_error_names_the_cli_slug() {
+fn run_ide_with_no_matching_row_reports_no_step() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let err = run_ide(
+    let report = run_ide(
         Some(ClientKind::Codex),
         IdeScope::Project,
         false,
@@ -433,8 +443,84 @@ fn ide_scope_mismatch_error_names_the_cli_slug() {
         tmp.path(),
         &HomeDirs::default(),
     )
-    .unwrap_err()
-    .to_string();
+    .unwrap();
+    assert_eq!(report.steps.len(), 0);
+}
+
+#[test]
+fn a_rule_target_satisfies_the_no_match_check() {
+    assert!(ensure_ide_targets(Some(ClientKind::Windsurf), IdeScope::Project, 0, 1).is_ok());
+}
+
+#[test]
+fn rules_at_user_scope_are_rejected() {
+    let err = check_rules_scope(true, IdeScope::User, Path::new("/repo"), None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("project files"), "got: {err}");
+}
+
+#[test]
+fn user_scope_without_rules_is_accepted() {
+    assert!(check_rules_scope(false, IdeScope::User, Path::new("/repo"), None).is_ok());
+}
+
+#[test]
+fn rules_from_the_home_directory_are_refused() {
+    let home = tempfile::TempDir::new().unwrap();
+    let err = check_rules_scope(true, IdeScope::All, home.path(), Some(home.path()))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("home directory"), "got: {err}");
+}
+
+#[test]
+fn rules_from_a_project_under_home_are_accepted() {
+    let home = tempfile::TempDir::new().unwrap();
+    let project = home.path().join("code/app");
+    fs::create_dir_all(&project).unwrap();
+    assert!(check_rules_scope(true, IdeScope::All, &project, Some(home.path())).is_ok());
+}
+
+#[test]
+fn the_home_directory_without_rules_is_accepted() {
+    let home = tempfile::TempDir::new().unwrap();
+    assert!(check_rules_scope(false, IdeScope::All, home.path(), Some(home.path())).is_ok());
+}
+
+fn rule_sandbox() -> (tempfile::TempDir, PathBuf, HomeDirs) {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cwd = tmp.path().join("repo");
+    fs::create_dir_all(&cwd).unwrap();
+    (tmp, cwd, HomeDirs::default())
+}
+
+#[test]
+fn rule_steps_follow_the_mcp_steps() {
+    let (_tmp, cwd, homes) = rule_sandbox();
+    let named = [ClientKind::Cursor];
+    let plan = plan_rules(Some(RuleSelection::Named(&named)), &cwd, &homes, None);
+    let mut report = run_ide_for_clients(
+        &[(ClientKind::Cursor, Scope::Project)],
+        false,
+        false,
+        &cwd,
+        &homes,
+    )
+    .unwrap();
+    apply_rule_plan(&mut report, plan, &cwd, false);
+    let kinds: Vec<FileKind> = report.steps.iter().map(|s| s.file_kind).collect();
+    assert_eq!(
+        (kinds, report.summary.created),
+        (vec![FileKind::McpConfig, FileKind::Rule], 2)
+    );
+}
+
+#[test]
+fn ide_scope_mismatch_error_names_the_cli_slug() {
+    let err = ensure_ide_targets(Some(ClientKind::Codex), IdeScope::Project, 0, 0)
+        .unwrap_err()
+        .to_string();
     assert!(
         err.contains("codex") && err.contains("project"),
         "got: {err}"

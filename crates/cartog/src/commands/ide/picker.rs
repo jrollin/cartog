@@ -12,6 +12,7 @@ use super::catalogue::{
     CLIENT_CATALOGUE,
 };
 use super::remove::process_removal;
+use super::rules::{remove_rule, RuleTarget};
 use super::{ClientSpec, IdeStatus, IdeStep, Scope, CARTOG_LOGO};
 use crate::cli::ClientKind;
 
@@ -227,7 +228,8 @@ pub(super) fn interactive_picker(items: &[PickerItem]) -> Result<PickerOutcome> 
     Ok(PickerOutcome::Selected(chosen))
 }
 
-/// One config file that holds a cartog entry, offered by `cartog ide --remove`.
+/// One file cartog can be removed from, offered by `cartog ide --remove`: a config
+/// holding a cartog entry, or a rule file cartog wrote.
 #[derive(Debug, Clone)]
 pub struct RemovalItem {
     pub kind: ClientKind,
@@ -242,7 +244,7 @@ pub enum RemovalChoice {
 }
 
 /// What `cartog ide --remove` can offer: the wired files to pick from, and the
-/// files it cannot read or parse (reported before the picker, never offered).
+/// files it cannot read, parse or claim (reported before the picker, never offered).
 #[derive(Default)]
 pub struct RemovalPlan {
     pub items: Vec<RemovalItem>,
@@ -250,15 +252,30 @@ pub struct RemovalPlan {
 }
 
 /// Dry-run every target: removable files become items, failures are kept as steps.
-pub fn removal_plan(targets: &[ClientSpec], cwd: &Path) -> RemovalPlan {
+pub fn removal_plan(targets: &[ClientSpec], rules: &[RuleTarget], cwd: &Path) -> RemovalPlan {
     let mut plan = RemovalPlan::default();
-    for spec in targets {
-        let step = process_removal(spec, cwd, true);
+    let configs = targets.iter().map(|spec| {
+        (
+            spec.kind,
+            spec.scope,
+            &spec.path,
+            process_removal(spec, cwd, true),
+        )
+    });
+    let rule_files = rules.iter().map(|rule| {
+        (
+            rule.kind,
+            Scope::Project,
+            &rule.path,
+            remove_rule(rule, true),
+        )
+    });
+    for (kind, scope, path, step) in configs.chain(rule_files) {
         match step.status {
             IdeStatus::Removed => plan.items.push(RemovalItem {
-                kind: spec.kind,
-                scope: spec.scope,
-                path: spec.path.clone(),
+                kind,
+                scope,
+                path: path.clone(),
             }),
             IdeStatus::Skipped | IdeStatus::Error => plan.skipped.push(step),
             IdeStatus::Created | IdeStatus::Updated | IdeStatus::Unchanged => {}
@@ -284,7 +301,7 @@ pub(super) fn removal_picker(items: &[RemovalItem]) -> Result<RemovalChoice> {
         .collect();
     let selection = MultiSelect::with_theme(&theme)
         .with_prompt(
-            "Which configs should lose their cartog entry? (space to toggle, enter to confirm)",
+            "Which files should cartog be removed from? (space to toggle, enter to confirm)",
         )
         .items(&labels)
         .defaults(&vec![true; items.len()])
@@ -295,7 +312,7 @@ pub(super) fn removal_picker(items: &[RemovalItem]) -> Result<RemovalChoice> {
         return Ok(RemovalChoice::Cancelled);
     };
     let confirmed = Confirm::with_theme(&theme)
-        .with_prompt(format!("Remove cartog from {} config(s)?", indices.len()))
+        .with_prompt(format!("Remove cartog from {} file(s)?", indices.len()))
         .default(true)
         .interact_opt()
         .context("confirmation failed")?

@@ -1,5 +1,6 @@
 //! `cartog uninstall` / `cartog ide --remove`: take the cartog MCP entry out of
-//! client configs. A removal never creates or deletes a file or directory.
+//! client configs and delete cartog's own rule files. A removal never creates a file,
+//! never deletes a directory, and deletes no file but a rule file holding cartog's marker.
 
 use std::fs;
 use std::io::IsTerminal;
@@ -9,13 +10,14 @@ use anyhow::Result;
 
 use super::catalogue::{build_specs, client_name, HomeDirs};
 use super::merge::codex_section_name;
-use super::picker::{removal_picker, removal_plan, RemovalChoice};
+use super::picker::{removal_picker, removal_plan, RemovalChoice, RemovalItem};
 use super::report::push_step;
+use super::rules::{removal_rule_targets, remove_rule, RuleTarget};
 use super::run::{atomic_write, scope_slug};
 use super::unmerge::{remove_entry, Removal};
 use super::{
-    ClientSpec, DiffPair, IdeReport, IdeStatus, IdeStep, IdeSummary, MergeStrategy, Operation,
-    Scope,
+    ClientSpec, DiffPair, FileKind, IdeReport, IdeStatus, IdeStep, IdeSummary, MergeStrategy,
+    Operation, Scope,
 };
 use crate::cli::{ClientKind, IdeScope};
 
@@ -30,7 +32,8 @@ pub fn cmd_uninstall(
     let cwd = std::env::current_dir()?;
     let homes = HomeDirs::detect();
     let targets = uninstall_targets(&clients, scope, &cwd, &homes)?;
-    let report = run_remove(&targets, &cwd, dry_run);
+    let mut report = run_remove(&targets.configs, &cwd, dry_run);
+    append_rule_removals(&mut report, &targets.rules, dry_run);
     print_removal(&report, json, dry_run)?;
     if report.has_errors() {
         std::process::exit(1);
@@ -52,14 +55,18 @@ pub(super) fn cmd_ide_remove(
         RemovalMode::Direct => return cmd_uninstall(clients, scope, dry_run, json),
         RemovalMode::Refuse => anyhow::bail!(
             "`cartog ide --remove` needs a terminal to confirm. Pass --yes to remove \
-             cartog from every config in scope, or use `cartog uninstall [client ...]`."
+             cartog from every config and rule file in scope, or use \
+             `cartog uninstall [client ...]`."
         ),
         RemovalMode::Picker => {}
     }
     let cwd = std::env::current_dir()?;
     let homes = HomeDirs::detect();
-    let targets = removal_targets(&[], scope, &cwd, &homes);
-    let plan = removal_plan(&targets, &cwd);
+    let targets = RemovalTargets {
+        configs: removal_targets(&[], scope, &cwd, &homes),
+        rules: removal_rule_targets(&[], scope, &cwd),
+    };
+    let plan = removal_plan(&targets.configs, &targets.rules, &cwd);
     let report = if plan.items.is_empty() {
         picker_report(plan.skipped, run_remove(&[], &cwd, false))
     } else {
@@ -72,11 +79,10 @@ pub(super) fn cmd_ide_remove(
         let RemovalChoice::Selected(chosen) = removal_picker(&plan.items)? else {
             return Ok(());
         };
-        let specs: Vec<ClientSpec> = targets
-            .into_iter()
-            .filter(|t| chosen.iter().any(|c| c.path == t.path))
-            .collect();
-        picker_report(plan.skipped, run_remove(&specs, &cwd, false))
+        let chosen = chosen_targets(targets, &chosen);
+        let mut removal = run_remove(&chosen.configs, &cwd, false);
+        append_rule_removals(&mut removal, &chosen.rules, false);
+        picker_report(plan.skipped, removal)
     };
     print_removal(&report, false, false)?;
     if report.has_errors() {
@@ -133,16 +139,31 @@ pub(super) fn removal_mode(
     }
 }
 
-/// `removal_targets` for `cartog uninstall`: named clients with no row at the scope
-/// are an error, so a typo'd scope does not silently report "not wired".
+/// What a removal looks at: MCP config files and cartog rule files.
+#[derive(Debug)]
+pub(super) struct RemovalTargets {
+    pub(super) configs: Vec<ClientSpec>,
+    pub(super) rules: Vec<RuleTarget>,
+}
+
+/// Targets for `cartog uninstall`: named clients with neither a config row nor a rule
+/// file on disk at the scope are an error, so a typo'd scope does not silently report
+/// "not wired". Every rule agent has a rule target, so only an existing file counts.
 pub(super) fn uninstall_targets(
     clients: &[ClientKind],
     scope: IdeScope,
     cwd: &Path,
     homes: &HomeDirs,
-) -> Result<Vec<ClientSpec>> {
-    let targets = removal_targets(clients, scope, cwd, homes);
-    if !clients.is_empty() && targets.is_empty() {
+) -> Result<RemovalTargets> {
+    let targets = RemovalTargets {
+        configs: removal_targets(clients, scope, cwd, homes),
+        rules: removal_rule_targets(clients, scope, cwd),
+    };
+    let rule_on_disk = targets
+        .rules
+        .iter()
+        .any(|t| fs::symlink_metadata(&t.path).is_ok());
+    if !clients.is_empty() && targets.configs.is_empty() && !rule_on_disk {
         let requested: Vec<&str> = clients.iter().map(|c| client_name(*c)).collect();
         anyhow::bail!(
             "no catalogue entries match clients=[{}] at scope={}. \
@@ -197,6 +218,32 @@ fn every_config_file(spec: ClientSpec) -> Vec<ClientSpec> {
         .collect()
 }
 
+/// The targets whose file was picked in `cartog ide --remove`.
+pub(super) fn chosen_targets(targets: RemovalTargets, chosen: &[RemovalItem]) -> RemovalTargets {
+    let picked = |path: &Path| chosen.iter().any(|c| c.path == path);
+    RemovalTargets {
+        configs: targets
+            .configs
+            .into_iter()
+            .filter(|t| picked(&t.path))
+            .collect(),
+        rules: targets
+            .rules
+            .into_iter()
+            .filter(|t| picked(&t.path))
+            .collect(),
+    }
+}
+
+/// Delete cartog's rule files after the config steps, counting each into the summary.
+pub(super) fn append_rule_removals(report: &mut IdeReport, rules: &[RuleTarget], dry_run: bool) {
+    for target in rules {
+        let step = remove_rule(target, dry_run);
+        report.summary.record(step.status);
+        report.steps.push(step);
+    }
+}
+
 /// Remove cartog from each target and collect one step per file.
 pub(super) fn run_remove(specs: &[ClientSpec], cwd: &Path, dry_run: bool) -> IdeReport {
     let mut summary = IdeSummary::default();
@@ -239,6 +286,7 @@ pub(super) fn process_removal(spec: &ClientSpec, cwd: &Path, dry_run: bool) -> I
         client: client_name(spec.kind).to_string(),
         scope: scope.to_string(),
         path: spec.path.display().to_string(),
+        file_kind: FileKind::McpConfig,
         status,
         message,
         diff,

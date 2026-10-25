@@ -355,10 +355,39 @@ cartog uninstall --dry-run   # see which configs hold it
 cartog uninstall             # take it out of every config in scope
 ```
 
-Only the `cartog` entry goes; other servers and the files themselves stay. A
-config cartog cannot parse (for example JSONC with comments) is reported as
+Only the `cartog` entry goes; other servers and the files themselves stay, except
+the rule files `--rules` wrote, which are deleted. A config cartog cannot parse (for example JSONC with comments) is reported as
 skipped: remove the entry by hand. A Claude Code plugin install is not a config
 entry: use `/plugin uninstall cartog` instead.
+
+### `--rules` skipped a rule file: "not written by cartog"
+
+A file already sits at cartog's path (for example `.cursor/rules/cartog.mdc`) and
+holds no `<!-- Managed by cartog` marker line, typically a hand copy of
+[agent-snippet.md](agent-snippet.md). cartog never edits or deletes a file it
+did not write, on install or on uninstall. Either keep yours, or delete it and
+re-run `cartog install <agent> --rules` to get the managed version.
+
+### `--rules` skipped Roo Code: ".roorules is in use"
+
+Roo Code reads a single `.roorules` (or `.clinerules`) file only while
+`.roo/rules/` has no file in it. Writing `.roo/rules/cartog.md` would silently
+switch your existing rules off, so cartog skips it. Copy the content of that
+file into a file under `.roo/rules/`, then re-run `cartog install roo --rules`.
+Copy rather than move a `.clinerules` file: Cline reads it too.
+
+### `--rules` refused: "run --rules from a project directory"
+
+From your home directory, `.claude/rules/` and `.kiro/steering/` are the
+user-level rule dirs, which apply to every project. cartog only writes rule
+files as project files, so `cd` into the repository first.
+
+### `--rules` skipped Cline: ".clinerules is a file"
+
+Cline reads `.clinerules` either as a single file or as a directory of rule
+files. Yours is a file, so cartog cannot create `.clinerules/cartog.md` in it.
+Paste the snippet from [agent-snippet.md](agent-snippet.md) into that file by
+hand, or turn it into a directory and re-run `cartog install cline --rules`.
 
 ### MCP stderr is full of `[ERROR]` lines that look like info-level messages
 

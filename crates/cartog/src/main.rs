@@ -473,13 +473,17 @@ fn main() -> Result<()> {
             dry_run,
             no_watch,
             remove,
-        } => commands::ide::cmd_ide(client, scope, yes, dry_run, no_watch, remove, cli.json),
+            rules,
+        } => commands::ide::cmd_ide(
+            client, scope, yes, dry_run, no_watch, remove, rules, cli.json,
+        ),
         Command::Install {
             clients,
             scope,
             dry_run,
             no_watch,
-        } => commands::ide::cmd_install(clients, scope, dry_run, no_watch, cli.json),
+            rules,
+        } => commands::ide::cmd_install(clients, scope, dry_run, no_watch, rules, cli.json),
         Command::Uninstall {
             clients,
             scope,

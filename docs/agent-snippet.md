@@ -1,18 +1,42 @@
 # Teach your agent to use cartog
 
-Copy the snippet below into your project's agent rules file so the LLM picks
-cartog tools over grep + read whenever it needs to navigate code.
+The snippet below tells the LLM to pick cartog tools over grep + read whenever
+it needs to navigate code.
 
-Drop it into one of:
+## Automatic: `cartog ide --rules`
+
+`cartog install --rules` (or `cartog ide --rules`) writes it as a rule file for
+every agent in use that reads a rules directory, with the header that loads it
+on every session:
+
+| Agent | Rule file | Header |
+|---|---|---|
+| Cursor | `.cursor/rules/cartog.mdc` | `alwaysApply: true` |
+| Windsurf | `.windsurf/rules/cartog.md` | `trigger: always_on` |
+| Kiro | `.kiro/steering/cartog.md` | `inclusion: always` |
+| Cline | `.clinerules/cartog.md` | none |
+| Roo Code | `.roo/rules/cartog.md` | none |
+| Antigravity | `.agents/rules/cartog.md` | `trigger: always_on` (required) |
+| Claude Code | `.claude/rules/cartog.md` | none |
+| VS Code Copilot | `.github/instructions/cartog.instructions.md` | `applyTo: '**'` |
+
+Each file it writes starts (after the header) with a marker line,
+`<!-- Managed by cartog: ... -->`. cartog rewrites or deletes only files that
+hold it: a re-run refreshes the text, and `cartog uninstall` deletes the file.
+Delete the marker line to take the file over. A file you created yourself at
+one of these paths is never touched. See
+[reference/cli.md](reference/cli.md#agent-rule-files---rules) for which agents
+count as in use and when cartog skips one.
+
+## By hand
+
+For agents that read a single shared file, or when you prefer to own the copy,
+paste the snippet into one of:
 
 - `AGENTS.md` (OpenCode, Codex, Aider, any agent that reads it)
 - `CLAUDE.md` (Claude Code)
-- `.cursor/rules/cartog.mdc` (Cursor, with frontmatter `alwaysApply: true`)
-- `.windsurf/rules/cartog.md` (Windsurf, with frontmatter `trigger: always_on`)
-- `.kiro/steering/cartog.md` (Kiro)
-- `.clinerules/cartog.md` (Cline)
-- `.roo/rules/cartog.md` (Roo Code)
 - `.github/copilot-instructions.md` (Copilot)
+- any rule file in the table above, with its header
 
 Tool names below are bare. Each client adds its own prefix. In Claude Code:
 

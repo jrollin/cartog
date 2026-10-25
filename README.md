@@ -66,9 +66,10 @@ cartog outline src/auth.py    # file structure, no cat       (< 15 µs)
 ## Teach your agent to use cartog
 
 Wiring MCP is half the job. The other half is telling the agent **when** to
-prefer cartog over grep + read. Drop the snippet from
-[docs/agent-snippet.md](docs/agent-snippet.md) into your project's `AGENTS.md`,
-`CLAUDE.md`, `.cursor/rules/`, or equivalent, and the agent will route
+prefer cartog over grep + read. `cartog install --rules` writes a rule file for
+each agent in use (Cursor, Windsurf, Kiro, Cline, Roo Code, Antigravity, Claude
+Code, VS Code Copilot); for `AGENTS.md`, `CLAUDE.md` or any other file, paste the
+snippet from [docs/agent-snippet.md](docs/agent-snippet.md). Either way the agent will route
 "where is X?" / "who calls X?" / "what breaks if I change X?" through
 cartog's 16 MCP tools instead of flooding context with raw text.
 

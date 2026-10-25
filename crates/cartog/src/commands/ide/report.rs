@@ -36,6 +36,16 @@ impl IdeStatus {
     }
 }
 
+/// What kind of file a step touched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKind {
+    /// A client config holding the `cartog` MCP entry.
+    McpConfig,
+    /// A cartog-owned agent rule file written by `--rules`.
+    Rule,
+}
+
 /// Before/after config content for one client, shown as a diff in `--json`.
 #[derive(Debug, Serialize)]
 pub struct DiffPair {
@@ -43,12 +53,14 @@ pub struct DiffPair {
     pub after: String,
 }
 
-/// One client's outcome in an `IdeReport`: where it wrote, the status, and the diff.
+/// One file's outcome in an `IdeReport`: which client, where, the status, and the diff.
 #[derive(Debug, Serialize)]
 pub struct IdeStep {
     pub client: String,
     pub scope: String,
+    /// Empty when the client has no file to touch (a named client without a rules dir).
     pub path: String,
+    pub file_kind: FileKind,
     pub status: IdeStatus,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -125,7 +137,7 @@ impl IdeReport {
         }
         let s = &self.summary;
         out.push_str(&format!(
-            "\n{} clients: {} created, {} updated, {} unchanged, {} skipped, {} errors\n",
+            "\n{} files: {} created, {} updated, {} unchanged, {} skipped, {} errors\n",
             s.total, s.created, s.updated, s.unchanged, s.skipped, s.error
         ));
         out
@@ -152,7 +164,7 @@ impl IdeReport {
             "removed"
         };
         out.push_str(&format!(
-            "\n{} configs: {} {removed}, {} not wired, {} skipped, {} errors\n",
+            "\n{} files: {} {removed}, {} not wired, {} skipped, {} errors\n",
             s.total, s.removed, s.unchanged, s.skipped, s.error
         ));
         out
@@ -160,12 +172,15 @@ impl IdeReport {
 }
 
 pub(super) fn push_step(out: &mut String, step: &IdeStep) {
+    let location = if step.path.is_empty() {
+        step.scope.clone()
+    } else {
+        format!("{}, {}", step.scope, step.path)
+    };
     out.push_str(&format!(
-        "{} {} ({}, {}): {}\n",
+        "{} {} ({location}): {}\n",
         step.status.icon(),
         step.client,
-        step.scope,
-        step.path,
         step.message,
     ));
     if let Some(diff) = &step.diff {
