@@ -124,12 +124,18 @@ pub enum ClientKind {
     Antigravity,
     ClaudeCode,
     ClaudeDesktop,
+    Cline,
+    ClineCli,
     Codex,
+    CopilotCli,
     Cursor,
     Gemini,
     Hermes,
+    Kilo,
     Kiro,
     Opencode,
+    Qwen,
+    Roo,
     Vscode,
     Windsurf,
     Zed,
@@ -402,8 +408,8 @@ pub enum Command {
 
     /// Wire `cartog serve` into one or all MCP-compatible editors.
     ///
-    /// See `--client` for the supported editors. User-scope clients whose
-    /// config directory does not exist are skipped (not installed).
+    /// See `--client` for the supported editors. Without `--client`, clients that
+    /// are not detected (no CLI on PATH, no config or project folder) are skipped.
     ///
     /// See also `cartog install <client>...` for a positional shorthand that
     /// matches the brew/npm/pip convention.
@@ -414,8 +420,9 @@ pub enum Command {
 
         /// Filter by scope
         ///
-        /// `project` writes only .mcp.json / .cursor/mcp.json; `user` writes
-        /// only user-scope configs; `all` writes both.
+        /// `project` writes only in-repo files (.mcp.json, .cursor/, .vscode/,
+        /// .kiro/, and .qwen/ .roo/ .kilo/ where in use); `user` writes only
+        /// user-scope configs; `all` writes both.
         #[arg(long, value_enum, default_value_t = IdeScope::All)]
         scope: IdeScope,
 
@@ -451,8 +458,9 @@ pub enum Command {
 
         /// Filter by scope
         ///
-        /// `project` writes only .mcp.json / .cursor/mcp.json; `user` writes
-        /// only user-scope configs; `all` writes both.
+        /// `project` writes only in-repo files (.mcp.json, .cursor/, .vscode/,
+        /// .kiro/, and .qwen/ .roo/ .kilo/ where in use); `user` writes only
+        /// user-scope configs; `all` writes both.
         #[arg(long, value_enum, default_value_t = IdeScope::All)]
         scope: IdeScope,
 

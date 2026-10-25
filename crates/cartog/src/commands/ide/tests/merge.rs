@@ -254,3 +254,170 @@ fn merge_hermes_yaml_rejects_invalid_yaml() {
     let err = merge_entry(Some("key: [unclosed"), MergeStrategy::HermesYaml, &args()).unwrap_err();
     assert!(err.to_string().contains("valid YAML"), "got: {err}");
 }
+
+#[test]
+fn merge_copilot_local_writes_local_entry_with_all_tools() {
+    let o = merge_entry(None, MergeStrategy::CopilotLocal, &args_watch()).unwrap();
+    assert_eq!(o.action, Action::Created);
+    let v: Value = serde_json::from_str(&o.new_json).unwrap();
+    assert_eq!(
+        v["mcpServers"]["cartog"],
+        json!({
+            "type": "local",
+            "command": "cartog",
+            "args": ["serve", "--watch"],
+            "tools": ["*"],
+        })
+    );
+}
+
+#[test]
+fn merge_copilot_local_idempotent() {
+    let first = merge_entry(None, MergeStrategy::CopilotLocal, &args()).unwrap();
+    let second = merge_entry(Some(&first.new_json), MergeStrategy::CopilotLocal, &args()).unwrap();
+    assert_eq!(second.action, Action::Unchanged);
+}
+
+#[test]
+fn merge_toggle_new_entry_is_enabled() {
+    let o = merge_entry(None, MergeStrategy::McpServersToggle, &args()).unwrap();
+    let v: Value = serde_json::from_str(&o.new_json).unwrap();
+    assert_eq!(
+        v["mcpServers"]["cartog"],
+        json!({ "command": "cartog", "args": ["serve"], "disabled": false })
+    );
+}
+
+#[test]
+fn merge_toggle_keeps_client_owned_fields_when_args_change() {
+    let existing = r#"{
+        "theme": "dark",
+        "mcpServers": {
+            "other": {"command": "x", "args": []},
+            "cartog": {
+                "command": "cartog",
+                "args": ["serve"],
+                "disabled": true,
+                "alwaysAllow": ["cartog_search"],
+                "timeout": 60
+            }
+        }
+    }"#;
+    let o = merge_entry(
+        Some(existing),
+        MergeStrategy::McpServersToggle,
+        &args_watch(),
+    )
+    .unwrap();
+    assert_eq!(o.action, Action::Updated);
+    let v: Value = serde_json::from_str(&o.new_json).unwrap();
+    assert_eq!(
+        v["mcpServers"]["cartog"],
+        json!({
+            "command": "cartog",
+            "args": ["serve", "--watch"],
+            "disabled": true,
+            "alwaysAllow": ["cartog_search"],
+            "timeout": 60,
+        })
+    );
+    assert_eq!(v["mcpServers"]["other"]["command"], "x");
+    assert_eq!(v["theme"], "dark");
+}
+
+#[test]
+fn merge_toggle_idempotent() {
+    let first = merge_entry(None, MergeStrategy::McpServersToggle, &args()).unwrap();
+    let second = merge_entry(
+        Some(&first.new_json),
+        MergeStrategy::McpServersToggle,
+        &args(),
+    )
+    .unwrap();
+    assert_eq!(second.action, Action::Unchanged);
+}
+
+#[test]
+fn merge_toggle_refuses_non_object_cartog_entry() {
+    let existing = r#"{"mcpServers": {"cartog": "cartog serve"}}"#;
+    let err = merge_entry(Some(existing), MergeStrategy::McpServersToggle, &args()).unwrap_err();
+    assert!(
+        err.to_string().contains("refusing to overwrite"),
+        "expected refusal: {err}"
+    );
+}
+
+#[test]
+fn merge_toggle_refuses_non_object_servers_map() {
+    let existing = r#"{"mcpServers": ["cartog"]}"#;
+    let err = merge_entry(Some(existing), MergeStrategy::McpServersToggle, &args()).unwrap_err();
+    assert!(
+        err.to_string().contains("refusing to overwrite"),
+        "expected refusal: {err}"
+    );
+}
+
+#[test]
+fn merge_mcp_keeps_client_owned_fields_when_command_changes() {
+    let existing = r#"{"mcp": {"cartog": {
+        "type": "local",
+        "command": ["cartog", "serve"],
+        "enabled": false,
+        "timeout": 30000,
+        "environment": {"A": "1"}
+    }}}"#;
+    let o = merge_entry(Some(existing), MergeStrategy::Mcp, &args_watch()).unwrap();
+    assert_eq!(o.action, Action::Updated);
+    let v: Value = serde_json::from_str(&o.new_json).unwrap();
+    assert_eq!(
+        v["mcp"]["cartog"],
+        json!({
+            "type": "local",
+            "command": ["cartog", "serve", "--watch"],
+            "enabled": false,
+            "timeout": 30000,
+            "environment": {"A": "1"},
+        })
+    );
+}
+
+#[test]
+fn merge_mcp_idempotent() {
+    let first = merge_entry(None, MergeStrategy::Mcp, &args()).unwrap();
+    let second = merge_entry(Some(&first.new_json), MergeStrategy::Mcp, &args()).unwrap();
+    assert_eq!(second.action, Action::Unchanged);
+}
+
+#[test]
+fn merge_mcp_refuses_non_object_cartog_entry() {
+    let existing = r#"{"mcp": {"cartog": "cartog serve"}}"#;
+    let err = merge_entry(Some(existing), MergeStrategy::Mcp, &args()).unwrap_err();
+    assert!(
+        err.to_string().contains("refusing to overwrite"),
+        "expected refusal: {err}"
+    );
+}
+
+#[test]
+fn merge_copilot_local_keeps_tool_filter_and_env_when_args_change() {
+    let existing = r#"{"mcpServers": {"cartog": {
+        "type": "local",
+        "command": "cartog",
+        "args": ["serve"],
+        "tools": ["cartog_search"],
+        "env": {"X": "1"}
+    }}}"#;
+    let o = merge_entry(Some(existing), MergeStrategy::CopilotLocal, &args_watch()).unwrap();
+    assert_eq!(o.action, Action::Updated);
+    let v: Value = serde_json::from_str(&o.new_json).unwrap();
+    assert_eq!(
+        v["mcpServers"]["cartog"],
+        json!({
+            "type": "local",
+            "command": "cartog",
+            "args": ["serve", "--watch"],
+            "tools": ["cartog_search"],
+            "env": {"X": "1"},
+        })
+    );
+}

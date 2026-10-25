@@ -228,10 +228,26 @@ cartog ide --dry-run                # preview without writing
 ```
 
 Supported clients (matches the per-client list below): `claude-code` (project
-+ user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`
-(project + user), `windsurf`, `zed`, `antigravity`, `kiro` (project + user),
-`hermes`. User-scope clients whose config directory does not exist are skipped
-(treated as "not installed").
++ user), `claude-desktop`, `cline`, `cline-cli`, `codex`, `copilot-cli`,
+`cursor` (project + user), `gemini`, `kilo` (project + user), `opencode`,
+`qwen` (project + user), `roo` (project + user), `vscode` (project + user),
+`windsurf`, `zed`, `antigravity`, `kiro` (project + user), `hermes`.
+User-scope clients whose config directory does not exist are skipped (treated
+as "not installed").
+
+With no client named, cartog writes the `kilo`, `qwen` and `roo` project files
+only when their folder (`.kilo/`, `.qwen/`, `.roo/`) exists in the repo or the
+client is detected for the user. For `cursor`, `qwen`, `kilo` and
+`copilot-cli`, a home folder holding only `skills/` (left by skill installers)
+does not count as an install. Name the client to write its files anyway. The
+`cline` and `roo` VS Code extension rows are the exception: they are skipped
+when VS Code's user dir is missing, because creating it would make VS Code look
+installed.
+
+On an existing entry cartog rewrites only the fields it owns (`command`,
+`args`, `type`), so an enable toggle, tool approvals, `env` and `timeout` set in
+the client survive a re-run. When the client keeps cartog disabled, the report
+says so.
 
 Codex stores all MCP servers in a single user-global `~/.codex/config.toml`,
 so cartog writes one per-project section named `cartog-<slug>-<hash8>` (slug
