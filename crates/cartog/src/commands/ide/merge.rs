@@ -76,14 +76,12 @@ fn apply_strategy(
             let mut command_array: Vec<Value> = Vec::with_capacity(1 + args.len());
             command_array.push(Value::String("cartog".into()));
             command_array.extend(args.iter().cloned().map(Value::String));
-            mcp.insert(
-                "cartog".into(),
-                json!({
-                    "type": "local",
-                    "command": Value::Array(command_array),
-                    "enabled": true,
-                }),
-            );
+            upsert_keeping_client_fields(
+                mcp,
+                "mcp",
+                json!({ "type": "local", "command": Value::Array(command_array) }),
+                json!({ "enabled": true }),
+            )?;
         }
         MergeStrategy::ContextServers => {
             let servers = ensure_object(root, "context_servers")?;
@@ -99,6 +97,24 @@ fn apply_strategy(
                 json!({ "type": "stdio", "command": "cartog", "args": args }),
             );
         }
+        MergeStrategy::CopilotLocal => {
+            let servers = ensure_object(root, "mcpServers")?;
+            upsert_keeping_client_fields(
+                servers,
+                "mcpServers",
+                json!({ "type": "local", "command": "cartog", "args": args }),
+                json!({ "tools": ["*"] }),
+            )?;
+        }
+        MergeStrategy::McpServersToggle => {
+            let servers = ensure_object(root, "mcpServers")?;
+            upsert_keeping_client_fields(
+                servers,
+                "mcpServers",
+                json!({ "command": "cartog", "args": args }),
+                json!({ "disabled": false }),
+            )?;
+        }
         // Dispatched out of `merge_entry` before this function is called;
         // return an error rather than panic if the dispatch is ever bypassed.
         MergeStrategy::CodexToml => {
@@ -109,6 +125,45 @@ fn apply_strategy(
         }
     }
     Ok(())
+}
+
+/// Set the fields cartog owns on the `cartog` entry and keep every other field, which
+/// the client's UI owns (enable toggle, approvals, env, timeout, tool filter). A missing
+/// (or `null`) entry is created from `owned` plus `on_create`. Both must be JSON objects.
+fn upsert_keeping_client_fields(
+    servers: &mut Map<String, Value>,
+    container: &str,
+    owned: Value,
+    on_create: Value,
+) -> Result<()> {
+    let (Value::Object(owned), Value::Object(on_create)) = (owned, on_create) else {
+        anyhow::bail!("internal: cartog entry fields must be JSON objects");
+    };
+    match servers.get_mut("cartog") {
+        Some(Value::Object(fields)) => fields.extend(owned),
+        None | Some(Value::Null) => {
+            let mut entry = owned;
+            entry.extend(on_create);
+            servers.insert("cartog".into(), Value::Object(entry));
+        }
+        Some(other) => anyhow::bail!(
+            "`{container}.cartog` is a {} (expected object); refusing to overwrite",
+            value_kind(other),
+        ),
+    }
+    Ok(())
+}
+
+/// True when the merged config keeps cartog switched off in the client
+/// (`disabled: true` for Cline / Roo, `enabled: false` for OpenCode / Kilo).
+pub(super) fn entry_disabled(strategy: MergeStrategy, merged: &str) -> bool {
+    let (container, flag, off) = match strategy {
+        MergeStrategy::McpServersToggle => ("mcpServers", "disabled", true),
+        MergeStrategy::Mcp => ("mcp", "enabled", false),
+        _ => return false,
+    };
+    serde_json::from_str::<Value>(merged)
+        .is_ok_and(|v| v[container]["cartog"][flag] == Value::Bool(off))
 }
 
 /// Merge a `[mcp_servers.<section>]` table into a Codex `config.toml` document.

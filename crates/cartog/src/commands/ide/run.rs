@@ -7,10 +7,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::catalogue::{
-    build_specs, client_installed, client_name, project_path, serve_args, user_path, HomeDirs,
-    CLIENT_CATALOGUE,
+    build_specs, client_installed, client_name, detection, project_path, required_dir, serve_args,
+    user_path, HomeDirs, CLIENT_CATALOGUE,
 };
-use super::merge::{codex_section_name, merge_codex_toml, merge_entry};
+use super::merge::{codex_section_name, entry_disabled, merge_codex_toml, merge_entry};
 use super::picker::{confirm, interactive_picker, picker_items, PickerOutcome};
 use super::{
     Action, ClientSpec, DiffPair, IdeReport, IdeStatus, IdeStep, IdeSummary, MergeStrategy, Scope,
@@ -35,7 +35,7 @@ pub fn cmd_ide(
     // explicit filter and a real TTY. Skipped under --yes/--dry-run/--json,
     // when --client is set, or when stdin is piped (CI/scripts).
     let report = if interactive {
-        let items = picker_items(&cwd, &homes);
+        let items = picker_items(&cwd, &homes, std::env::var_os("PATH").as_deref());
         match interactive_picker(&items)? {
             PickerOutcome::Cancelled => return Ok(()),
             PickerOutcome::Selected(chosen) => {
@@ -128,7 +128,7 @@ pub fn cmd_install(
                 "note: duplicate clients ignored: {}",
                 duplicates
                     .iter()
-                    .map(|c| format!("{c:?}"))
+                    .map(|c| client_name(*c))
                     .collect::<Vec<_>>()
                     .join(", ")
             );
@@ -142,12 +142,12 @@ pub fn cmd_install(
             // User asked for clients that don't exist at the requested scope
             // (e.g. `--scope project codex` — codex is user-only). Bail with
             // an actionable error rather than silently printing "0 clients".
-            let requested: Vec<String> = clients.iter().map(|c| format!("{c:?}")).collect();
+            let requested: Vec<&str> = clients.iter().map(|c| client_name(*c)).collect();
             anyhow::bail!(
-                "no catalogue entries match clients={:?} at scope={:?}. \
+                "no catalogue entries match clients=[{}] at scope={}. \
                  Try --scope all, or pick clients available at this scope.",
-                requested,
-                scope,
+                requested.join(", "),
+                scope_slug(scope),
             );
         }
         run_ide_for_clients(&chosen, dry_run, no_watch, &cwd, &homes)?
@@ -223,6 +223,8 @@ pub(super) fn spec_for(
         path,
         strategy: entry.strategy,
         args: serve_args(no_watch),
+        detection: detection(entry.kind, entry.scope, cwd, homes),
+        requires: required_dir(entry.kind, entry.scope, homes),
     })
 }
 
@@ -258,17 +260,17 @@ pub fn run_ide(
     let specs = build_specs(client, scope, no_watch, cwd, homes);
     if specs.is_empty() {
         anyhow::bail!(
-            "no clients match the requested filter ({:?} + scope={:?}). \
+            "no clients match the requested filter (client={} + scope={}). \
              Check `--client` and `--scope` are compatible \
-             (e.g. claude-code and cursor are project-scoped only).",
-            client,
-            scope,
+             (e.g. codex and copilot-cli are user-scoped only); `--scope all` covers both.",
+            client.map_or("all", client_name),
+            scope_slug(scope),
         );
     }
     let mut steps = Vec::with_capacity(specs.len());
     let mut summary = IdeSummary::default();
 
-    // No explicit client → only wire user clients we detect as installed.
+    // No explicit client → only wire clients we detect as in use.
     // An explicit `--client X` always proceeds, even if X isn't detected.
     let auto_only = client.is_none();
     for spec in specs {
@@ -311,20 +313,30 @@ pub(super) fn process_spec(
         diff,
     };
 
-    // In the auto path (no explicit client), skip user clients we can't detect
-    // as installed. An explicitly-requested client is always wired.
+    if let Some(dir) = spec.requires.as_deref().filter(|d| !d.is_dir()) {
+        return make(
+            IdeStatus::Skipped,
+            format!(
+                "{} not found; install VS Code and the extension first",
+                dir.display()
+            ),
+            None,
+        );
+    }
+
+    // In the auto path (no explicit client), skip clients we can't detect as in
+    // use. An explicitly-requested client is always wired.
     if auto_only
-        && spec.scope == Scope::User
         && !client_installed(
             spec.kind,
-            spec.scope,
             &spec.path,
+            &spec.detection,
             std::env::var_os("PATH").as_deref(),
         )
     {
         return make(
             IdeStatus::Skipped,
-            "client not detected (no CLI on PATH, no config directory)".into(),
+            "client not detected (no CLI on PATH, no config or project folder)".into(),
             None,
         );
     }
@@ -350,9 +362,17 @@ pub(super) fn process_spec(
     let outcome = match merge_result {
         Ok(o) => o,
         Err(e) => {
+            // Only a parse failure is about JSONC syntax; a wrong shape needs the generic fix.
+            let jsonc_syntax = spec.path.extension().is_some_and(|ext| ext == "jsonc")
+                && e.downcast_ref::<serde_json::Error>().is_some();
+            let next = if jsonc_syntax {
+                "JSONC comments or trailing commas are not rewritten; add the cartog entry by hand"
+            } else {
+                "fix the file or remove it and re-run"
+            };
             return make(
                 IdeStatus::Skipped,
-                format!("not modified ({e}); fix the file or remove it and re-run"),
+                format!("not modified ({e}); {next}"),
                 None,
             );
         }
@@ -362,9 +382,18 @@ pub(super) fn process_spec(
     // function only deals with the two write-causing variants. The bound
     // `write_action` lets us produce planned/done strings without an
     // `unreachable!()` arm later.
+    let note = if entry_disabled(spec.strategy, &outcome.new_json) {
+        " (cartog is disabled in this client; turn it on there)"
+    } else {
+        ""
+    };
     let write_action = match outcome.action {
         Action::Unchanged => {
-            return make(IdeStatus::Unchanged, "already up to date".into(), None);
+            return make(
+                IdeStatus::Unchanged,
+                format!("already up to date{note}"),
+                None,
+            );
         }
         Action::Created => WriteAction::Create,
         Action::Updated => WriteAction::Update,
@@ -385,7 +414,7 @@ pub(super) fn process_spec(
     if dry_run {
         return make(
             status,
-            write_action.planned().into(),
+            format!("{}{note}", write_action.planned()),
             Some(DiffPair {
                 before: existing,
                 after: outcome.new_json,
@@ -397,7 +426,15 @@ pub(super) fn process_spec(
         return make(IdeStatus::Error, format!("write failed: {e}"), None);
     }
 
-    make(status, write_action.done().into(), None)
+    make(status, format!("{}{note}", write_action.done()), None)
+}
+
+fn scope_slug(scope: IdeScope) -> &'static str {
+    match scope {
+        IdeScope::Project => "project",
+        IdeScope::User => "user",
+        IdeScope::All => "all",
+    }
 }
 
 /// Outcome that actually causes a write — projection of `Action` that excludes

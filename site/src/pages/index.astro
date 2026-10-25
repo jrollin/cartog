@@ -139,7 +139,7 @@ import { withBase } from "../lib/url";
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.16s;">
           <h3><span class="feature-icon">🛠️</span> <code>cartog ide</code> <span style="font-size: 11px; color: var(--text-tertiary); font-weight: 500;">(optional)</span></h3>
-          <p>Skip this if you only use the CLI. Need MCP in Claude Code, Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, Claude Desktop, Antigravity, Kiro, or Hermes Agent? Run it once per machine.</p>
+          <p>Skip this if you only use the CLI. Need MCP in Claude Code, Cursor, VS Code, Codex CLI, Copilot CLI, Gemini CLI, Qwen Code, OpenCode, Windsurf, Zed, Claude Desktop, Antigravity, Kiro, Hermes Agent, Cline, Roo Code, or Kilo Code? Run it once per machine.</p>
         </div>
       </div>
 
@@ -503,7 +503,7 @@ import { withBase } from "../lib/url";
             <img class="editor-mark" src={withBase("assets/claude.svg?v=2")} alt="">
             Claude Code
           </span>
-          <span class="lang-tag" title="Cursor — project-scoped (.cursor/mcp.json)">
+          <span class="lang-tag" title="Cursor — project-scoped (.cursor/mcp.json) + user-scope (~/.cursor/mcp.json)">
             <img class="editor-mark" src={withBase("assets/cursor.svg?v=2")} alt="">
             Cursor
           </span>
@@ -547,10 +547,26 @@ import { withBase } from "../lib/url";
             <img class="editor-mark" src={withBase("assets/hermes.svg?v=2")} alt="">
             Hermes Agent
           </span>
+          <span class="lang-tag" title="GitHub Copilot CLI — user-scope (~/.copilot/mcp-config.json)">
+            <img class="editor-mark" src={withBase("assets/githubcopilot.svg?v=2")} alt="">
+            Copilot CLI
+          </span>
+          <span class="lang-tag" title="Qwen Code — project-scoped (.qwen/settings.json) + user-scope (~/.qwen/settings.json)">
+            Qwen Code
+          </span>
+          <span class="lang-tag" title="Cline — VS Code extension (globalStorage) + Cline CLI (~/.cline/data/settings)">
+            Cline
+          </span>
+          <span class="lang-tag" title="Roo Code — project-scoped (.roo/mcp.json) + VS Code extension (globalStorage)">
+            Roo Code
+          </span>
+          <span class="lang-tag" title="Kilo Code — project-scoped (.kilo/kilo.json) + user-scope (~/.config/kilo/kilo.json)">
+            Kilo Code
+          </span>
         </div>
 
         <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 16px; text-align: center;">
-          Claude Code, VS Code, and Kiro get both project-scoped MCP files in your repo and user-scope configs; Cursor is project-scoped; the rest get user-scope configs in your home directory. Only editors actually installed are touched.
+          Claude Code, Cursor, VS Code, Kiro, Qwen Code, Roo Code and Kilo Code get both project-scoped MCP files in your repo and user-scope configs (Qwen, Roo and Kilo project files only in repos where that client is in use); the rest get user-scope configs in your home directory. Only editors actually installed are touched.
         </p>
       </div>
 
@@ -558,7 +574,7 @@ import { withBase } from "../lib/url";
         <div class="why-card" data-reveal style="--reveal-delay: 0s;">
           <div class="why-number">01</div>
           <h3>One command to wire it in</h3>
-          <p><code>cartog ide</code> writes <code>cartog serve</code> into installed editors (Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, Claude Desktop, Antigravity, Kiro, Hermes Agent). Idempotent merge, existing MCP servers preserved. Skip it if you only use the CLI.</p>
+          <p><code>cartog ide</code> writes <code>cartog serve</code> into installed editors (Cursor, VS Code, Codex CLI, Copilot CLI, Gemini CLI, Qwen Code, OpenCode, Windsurf, Zed, Claude Desktop, Antigravity, Kiro, Hermes Agent, Cline, Roo Code, Kilo Code). Idempotent merge, existing MCP servers preserved. Skip it if you only use the CLI.</p>
         </div>
         <div class="why-card" data-reveal style="--reveal-delay: 0.08s;">
           <div class="why-number">02</div>
@@ -590,7 +606,7 @@ import { withBase } from "../lib/url";
             <tr>
               <td>Editor MCP wiring (optional)</td>
               <td><code>cartog ide [--client X]</code></td>
-              <td>12 clients across 6 config shapes (incl. Codex TOML, Hermes YAML); idempotent, dry-run-able</td>
+              <td>18 clients across 8 config shapes (incl. Codex TOML, Hermes YAML); idempotent, dry-run-able</td>
             </tr>
             <tr>
               <td>Claude Code plugin</td>
@@ -617,7 +633,7 @@ import { withBase } from "../lib/url";
       </div>
 
       <p style="margin-top: 16px; font-size: 14px; color: var(--text-secondary);">
-        See <a href={withBase("usage.html#mcp-server")}>MCP Server docs</a> and <a href={withBase("usage.html#agent-skill")}>Agent Skill docs</a> for per-client setup. Supported clients: Claude Code (project + user), Claude Desktop, Codex CLI, Cursor, Gemini CLI, OpenCode, VS Code (project + user), Windsurf, Zed, Antigravity, Kiro (project + user), Hermes Agent.
+        See <a href={withBase("usage.html#mcp-server")}>MCP Server docs</a> and <a href={withBase("usage.html#agent-skill")}>Agent Skill docs</a> for per-client setup. Supported clients: Claude Code (project + user), Claude Desktop, Cline, Cline CLI, Codex CLI, Copilot CLI, Cursor (project + user), Gemini CLI, Kilo Code (project + user), OpenCode, Qwen Code (project + user), Roo Code (project + user), VS Code (project + user), Windsurf, Zed, Antigravity, Kiro (project + user), Hermes Agent.
       </p>
     </div>
   </section>
@@ -649,7 +665,7 @@ import { withBase } from "../lib/url";
       <div class="features-grid" style="margin-top: 56px;">
         <div class="feature-card" data-reveal style="--reveal-delay: 0s;">
           <h3><span class="feature-icon">🔌</span> One command to wire it in</h3>
-          <p><code>cartog ide</code> is the only verb that writes MCP configs. It merges <code>cartog serve</code> into Claude Code, Cursor, VS Code, Codex CLI, Gemini CLI, OpenCode, Windsurf, Zed, Claude Desktop, Antigravity, Kiro, and Hermes Agent. Existing servers preserved, dry-run-able.</p>
+          <p><code>cartog ide</code> is the only verb that writes MCP configs. It merges <code>cartog serve</code> into Claude Code, Cursor, VS Code, Codex CLI, Copilot CLI, Gemini CLI, Qwen Code, OpenCode, Windsurf, Zed, Claude Desktop, Antigravity, Kiro, Hermes Agent, Cline, Roo Code, and Kilo Code. Existing servers preserved, dry-run-able.</p>
         </div>
         <div class="feature-card" data-reveal style="--reveal-delay: 0.08s;">
           <h3><span class="feature-icon">🧰</span> 16 tools, typed output</h3>

@@ -2,7 +2,7 @@ use crate::cli::ClientKind;
 use crate::commands::ide::catalogue::*;
 use crate::commands::ide::picker::*;
 use crate::commands::ide::run::spec_for;
-use crate::commands::ide::Scope;
+use crate::commands::ide::{Detection, Scope};
 use std::path::{Path, PathBuf};
 // ── Picker helpers ────────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ fn picker_items_groups_claude_code_into_two_scopes() {
     // into one PickerItem with two ScopeOptions.
     let tmp = tempfile::tempdir().unwrap();
     let homes = HomeDirs::default();
-    let items = picker_items(tmp.path(), &homes);
+    let items = picker_items(tmp.path(), &homes, None);
     let cc = items
         .iter()
         .find(|i| i.kind == ClientKind::ClaudeCode)
@@ -60,9 +60,17 @@ fn picker_items_groups_claude_code_into_two_scopes() {
 fn picker_items_other_clients_have_a_single_scope() {
     let tmp = tempfile::tempdir().unwrap();
     let homes = HomeDirs::default();
-    let items = picker_items(tmp.path(), &homes);
-    // Claude Code, Kiro and VS Code are the dual-scope clients (project + user).
-    let dual_scope = [ClientKind::ClaudeCode, ClientKind::Kiro, ClientKind::Vscode];
+    let items = picker_items(tmp.path(), &homes, None);
+    // The dual-scope clients (project + user).
+    let dual_scope = [
+        ClientKind::ClaudeCode,
+        ClientKind::Kiro,
+        ClientKind::Vscode,
+        ClientKind::Cursor,
+        ClientKind::Qwen,
+        ClientKind::Roo,
+        ClientKind::Kilo,
+    ];
     for item in &items {
         if !dual_scope.contains(&item.kind) {
             assert_eq!(
@@ -80,9 +88,9 @@ fn picker_items_other_clients_have_a_single_scope() {
 fn picker_items_marks_project_clients_installed() {
     let tmp = tempfile::tempdir().unwrap();
     let homes = HomeDirs::default();
-    let items = picker_items(tmp.path(), &homes);
+    let items = picker_items(tmp.path(), &homes, None);
     let cursor = items.iter().find(|i| i.kind == ClientKind::Cursor).unwrap();
-    // Project-scoped rows always read as "installed" — the repo IS the parent.
+    // The original project rows always read as "installed": the repo is the evidence.
     assert!(cursor.scopes[0].installed);
     assert!(!cursor.scopes[0].file_present);
 }
@@ -97,7 +105,7 @@ fn picker_items_marks_no_cli_user_client_not_installed_when_parent_missing() {
         claude_desktop: tmp.path().join("does/not/exist/desktop.json"),
         ..HomeDirs::default()
     };
-    let items = picker_items(tmp.path(), &homes);
+    let items = picker_items(tmp.path(), &homes, None);
     let desktop = items
         .iter()
         .find(|i| i.kind == ClientKind::ClaudeDesktop)
@@ -128,13 +136,13 @@ fn binary_in_finds_executable_on_path() {
 }
 
 #[test]
-fn client_installed_is_always_true_for_project_scope() {
+fn client_installed_is_always_true_for_always_rows() {
     let tmp = tempfile::tempdir().unwrap();
     let missing = tmp.path().join("nope/mcp.json");
     assert!(client_installed(
         ClientKind::Cursor,
-        Scope::Project,
         &missing,
+        &Detection::Always,
         None
     ));
 }
@@ -147,14 +155,14 @@ fn client_installed_no_cli_client_uses_dir_proxy() {
                                                    // Claude Desktop has no CLI, so only the dir proxy applies.
     assert!(client_installed(
         ClientKind::ClaudeDesktop,
-        Scope::User,
         &present,
+        &Detection::ParentDir,
         None
     ));
     assert!(!client_installed(
         ClientKind::ClaudeDesktop,
-        Scope::User,
         &absent,
+        &Detection::ParentDir,
         None
     ));
 }
@@ -173,11 +181,16 @@ fn client_installed_detects_cli_only_via_injected_path() {
     let cfg = tmp.path().join("nope/config.toml"); // parent missing
 
     assert!(
-        client_installed(ClientKind::Codex, Scope::User, &cfg, Some(&with_codex)),
+        client_installed(
+            ClientKind::Codex,
+            &cfg,
+            &Detection::ParentDir,
+            Some(&with_codex)
+        ),
         "codex on the injected PATH counts as installed"
     );
     assert!(
-        !client_installed(ClientKind::Codex, Scope::User, &cfg, Some(&empty)),
+        !client_installed(ClientKind::Codex, &cfg, &Detection::ParentDir, Some(&empty)),
         "no codex on PATH and no config dir → not installed"
     );
 }
@@ -199,8 +212,8 @@ fn client_installed_ignores_path_when_home_is_relative_fallback() {
     assert!(
         !client_installed(
             ClientKind::Codex,
-            Scope::User,
             relative_cfg,
+            &Detection::ParentDir,
             Some(&with_codex)
         ),
         "PATH match must be ignored when the config path is relative (no real home)"
@@ -216,7 +229,7 @@ fn picker_items_marks_user_client_installed_when_parent_exists() {
         claude_desktop: claude_dir.join("claude_desktop_config.json"),
         ..HomeDirs::default()
     };
-    let items = picker_items(tmp.path(), &homes);
+    let items = picker_items(tmp.path(), &homes, None);
     let claude = items
         .iter()
         .find(|i| i.kind == ClientKind::ClaudeDesktop)
@@ -283,11 +296,11 @@ fn any_installed_false_when_no_scope_installed() {
 
 #[test]
 fn spec_for_returns_none_for_unknown_combination() {
-    // Cursor only exists at project scope; asking for user scope should
+    // Codex only exists at user scope; asking for project scope should
     // return None so the picker can't construct an impossible spec.
     let tmp = tempfile::tempdir().unwrap();
     let homes = HomeDirs::default();
-    assert!(spec_for(ClientKind::Cursor, Scope::User, false, tmp.path(), &homes).is_none());
+    assert!(spec_for(ClientKind::Codex, Scope::Project, false, tmp.path(), &homes).is_none());
 }
 
 #[test]
@@ -312,4 +325,42 @@ fn spec_for_builds_claude_code_with_or_without_watch() {
     .unwrap();
     assert_eq!(with.args, vec!["serve", "--watch"]);
     assert_eq!(without.args, vec!["serve"]);
+}
+
+#[test]
+fn picker_marks_skills_only_qwen_home_as_not_installed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(home.join(".qwen/skills")).unwrap();
+    let homes = HomeDirs {
+        qwen: home.join(".qwen/settings.json"),
+        ..HomeDirs::default()
+    };
+    let empty = std::env::join_paths::<_, &Path>([]).unwrap();
+    let items = picker_items(tmp.path(), &homes, Some(&empty));
+    let qwen = items.iter().find(|i| i.kind == ClientKind::Qwen).unwrap();
+    let user = qwen.scopes.iter().find(|o| o.scope == Scope::User).unwrap();
+    assert!(
+        !user.installed,
+        "a skills-only ~/.qwen is not a Qwen install"
+    );
+}
+
+#[test]
+fn picker_pre_checks_new_project_rows_only_when_detected() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".roo")).unwrap();
+    let empty = std::env::join_paths::<_, &Path>([]).unwrap();
+    let items = picker_items(tmp.path(), &HomeDirs::default(), Some(&empty));
+    let project = |kind: ClientKind| {
+        items
+            .iter()
+            .find(|i| i.kind == kind)
+            .and_then(|i| i.scopes.iter().find(|o| o.scope == Scope::Project))
+            .map(|o| o.installed)
+            .unwrap()
+    };
+    assert!(project(ClientKind::Roo), ".roo/ exists");
+    assert!(!project(ClientKind::Qwen), "no .qwen/, nothing detected");
+    assert!(!project(ClientKind::Kilo), "no .kilo/, nothing detected");
 }

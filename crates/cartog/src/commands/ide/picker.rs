@@ -1,5 +1,6 @@
 //! Interactive client/scope picker for `cartog ide` on a TTY.
 
+use std::ffi::OsStr;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
@@ -7,7 +8,8 @@ use anyhow::{Context, Result};
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect};
 
 use super::catalogue::{
-    client_display_name, client_installed, project_path, user_path, HomeDirs, CLIENT_CATALOGUE,
+    client_display_name, client_installed, detection, project_path, user_path, HomeDirs,
+    CLIENT_CATALOGUE,
 };
 use super::{Scope, CARTOG_LOGO};
 use crate::cli::ClientKind;
@@ -17,14 +19,14 @@ use crate::cli::ClientKind;
 pub struct ScopeOption {
     pub scope: Scope,
     pub path: PathBuf,
-    /// Parent directory of `path` exists — proxy for "client appears installed".
+    /// Client detected as installed (binary on PATH or its `Detection` evidence).
     pub installed: bool,
     /// Config file exists — distinguishes "will create" vs "will merge".
     pub file_present: bool,
 }
 
 /// One picker row: a client and every scope it supports. The catalogue has
-/// multiple entries per dual-scope client (Claude Code and Kiro each have
+/// multiple entries per dual-scope client (e.g. Claude Code and Kiro each have
 /// project + user rows) but the picker shows one row per *kind* and uses a
 /// follow-up `Select` to resolve scope only when there's a real choice to make.
 #[derive(Debug, Clone)]
@@ -35,8 +37,8 @@ pub struct PickerItem {
 
 impl PickerItem {
     /// Picker default: pre-check the row if any of its scopes look installed.
-    /// For project-scoped-only clients, "installed" is always true (the repo
-    /// is the parent), so the row defaults to checked unless filtered out.
+    /// The original project rows always read as installed (the repo is the
+    /// evidence); Qwen, Roo and Kilo project rows only where in use.
     pub fn any_installed(&self) -> bool {
         self.scopes.iter().any(|s| s.installed)
     }
@@ -60,14 +62,13 @@ pub enum PickerOutcome {
 }
 
 /// Build the picker rows from the static catalogue. Pure: no I/O beyond
-/// `Path::exists`, so it can be unit-tested with a `TempDir`-backed
-/// `HomeDirs` and a sandbox `cwd`.
+/// `Path::exists`, and `path_env` is injected, so it can be unit-tested with a
+/// `TempDir`-backed `HomeDirs`, a sandbox `cwd` and a controlled PATH.
 ///
 /// Returns one row per unique `ClientKind`, with one `ScopeOption` per
-/// (kind, scope) entry in the catalogue. Claude Code and Kiro end up with two
-/// scope options; every other client has one.
-pub fn picker_items(cwd: &Path, homes: &HomeDirs) -> Vec<PickerItem> {
-    let path_env = std::env::var_os("PATH");
+/// (kind, scope) entry in the catalogue: dual-scope clients get two scope
+/// options, the rest one.
+pub fn picker_items(cwd: &Path, homes: &HomeDirs, path_env: Option<&OsStr>) -> Vec<PickerItem> {
     let mut by_kind: Vec<PickerItem> = Vec::new();
     for entry in CLIENT_CATALOGUE.iter() {
         let path = match entry.scope {
@@ -80,7 +81,12 @@ pub fn picker_items(cwd: &Path, homes: &HomeDirs) -> Vec<PickerItem> {
                 None => continue,
             },
         };
-        let installed = client_installed(entry.kind, entry.scope, &path, path_env.as_deref());
+        let installed = client_installed(
+            entry.kind,
+            &path,
+            &detection(entry.kind, entry.scope, cwd, homes),
+            path_env,
+        );
         let opt = ScopeOption {
             scope: entry.scope,
             file_present: path.exists(),

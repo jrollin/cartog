@@ -711,11 +711,11 @@ cartog serve --federated      <span class="comment"># also expose the 2 cross-pr
         <h3 id="mcp-quickstart">Wiring cartog into editors: <code>cartog ide</code></h3>
         <p><code>cartog ide</code> is the only verb that writes MCP configs. Run it once per machine, plus any time you install a new editor.</p>
         <pre>cartog ide                          <span class="comment"># all installed clients, all scopes</span>
-cartog ide --scope project          <span class="comment"># .mcp.json, .cursor/, .vscode/</span>
+cartog ide --scope project          <span class="comment"># .mcp.json, .cursor/, .vscode/, .kiro/ (+ .qwen/ .roo/ .kilo/ where in use)</span>
 cartog ide --scope user             <span class="comment"># user-scope clients only</span>
 cartog ide --client cursor          <span class="comment"># one client</span>
 cartog ide --dry-run                <span class="comment"># preview with before/after diff</span></pre>
-        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code> (project + user), <code>windsurf</code>, <code>zed</code>, <code>antigravity</code>, <code>kiro</code> (project + user), <code>hermes</code>. User-scope clients whose config directory is missing are skipped (treated as "not installed"). Codex stores all servers in one global <code>~/.codex/config.toml</code>, so cartog writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section. Idempotent: existing servers in each file are preserved.</p>
+        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>cline</code>, <code>cline-cli</code>, <code>codex</code>, <code>copilot-cli</code>, <code>cursor</code> (project + user), <code>gemini</code>, <code>kilo</code> (project + user), <code>opencode</code>, <code>qwen</code> (project + user), <code>roo</code> (project + user), <code>vscode</code> (project + user), <code>windsurf</code>, <code>zed</code>, <code>antigravity</code>, <code>kiro</code> (project + user), <code>hermes</code>. User-scope clients whose config directory is missing are skipped (treated as "not installed"). With no client named, the <code>kilo</code>, <code>qwen</code> and <code>roo</code> project files are written only where that client is in use (its folder is in the repo, or it is detected for the user). Codex stores all servers in one global <code>~/.codex/config.toml</code>, so cartog writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section. Idempotent: existing servers in each file are preserved.</p>
         <p><strong>Known limitation:</strong> configs containing JSON-with-comments (JSONC) are left untouched and reported as skipped. Configure those clients manually using the snippets below.</p>
 
         <h3 id="mcp-ide">Bootstrap sequence</h3>
@@ -745,7 +745,7 @@ claude mcp add --scope project cartog -- cartog serve --watch       <span class=
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Cursor</strong> — project <code>.cursor/mcp.json</code></summary>
+          <summary><strong>Cursor</strong> — project <code>.cursor/mcp.json</code> or user <code>~/.cursor/mcp.json</code></summary>
           <pre>cartog ide --client cursor</pre>
           <p>Manual:</p>
           <pre>&#123;
@@ -864,6 +864,55 @@ args = ["serve"]</pre>
     command: cartog
     args:
       - serve</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Copilot CLI</strong> — <code>~/.copilot/mcp-config.json</code></summary>
+          <pre>cartog ide --client copilot-cli</pre>
+          <pre>&#123;
+  "mcpServers": &#123;
+    "cartog": &#123; "type": "local", "command": "cartog", "args": ["serve"], "tools": ["*"] &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Qwen Code</strong> — <code>.qwen/settings.json</code> or <code>~/.qwen/settings.json</code></summary>
+          <pre>cartog ide --client qwen</pre>
+          <pre>&#123;
+  "mcpServers": &#123;
+    "cartog": &#123; "command": "cartog", "args": ["serve"] &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Cline</strong> — VS Code extension or Cline CLI</summary>
+          <pre>cartog ide --client cline       # VS Code extension (globalStorage/saoudrizwan.claude-dev)
+cartog ide --client cline-cli   # ~/.cline/data/settings/cline_mcp_settings.json</pre>
+          <p>Only <code>command</code> and <code>args</code> are rewritten on an existing entry, so <code>disabled</code> and tool approvals stay.</p>
+          <pre>&#123;
+  "mcpServers": &#123;
+    "cartog": &#123; "command": "cartog", "args": ["serve"], "disabled": false &#125;
+  &#125;
+&#125;</pre>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Roo Code</strong> — <code>.roo/mcp.json</code> or the VS Code extension's global settings</summary>
+          <pre>cartog ide --client roo</pre>
+          <p>Same entry shape as Cline; <code>disabled</code> and <code>alwaysAllow</code> are kept on re-runs.</p>
+        </details>
+
+        <details class="mcp-client">
+          <summary><strong>Kilo Code</strong> — <code>.kilo/kilo.json</code> or <code>~/.config/kilo/kilo.json</code></summary>
+          <pre>cartog ide --client kilo</pre>
+          <p>An existing <code>kilo.jsonc</code> is edited when it holds plain JSON; one with comments is skipped, add the entry by hand.</p>
+          <pre>&#123;
+  "mcp": &#123;
+    "cartog": &#123; "type": "local", "command": ["cartog", "serve"], "enabled": true &#125;
+  &#125;
+&#125;</pre>
         </details>
 
         <details class="mcp-client">
@@ -1234,7 +1283,7 @@ cartog install cursor --dry-run       <span class="comment"># preview</span>
 
 cartog ide                            <span class="comment"># interactive picker (TTY only)</span>
 cartog ide --client cursor            <span class="comment"># single client via flag</span>
-cartog ide --scope project            <span class="comment"># only project-scoped (.mcp.json, .cursor/, .vscode/)</span>
+cartog ide --scope project            <span class="comment"># only project-scoped (.mcp.json, .cursor/, .vscode/, .kiro/, ...)</span>
 cartog ide --dry-run                  <span class="comment"># preview with before/after diff</span>
 cartog ide --no-watch                 <span class="comment"># drop --watch from Claude Code args</span></pre>
         <p class="example-label">Example output (<code>cartog ide --client cursor --dry-run</code>)</p>
@@ -1242,34 +1291,52 @@ cartog ide --no-watch                 <span class="comment"># drop --watch from 
   --- after ---
     &#123;
       "mcpServers": &#123;
-        "cartog": &#123;
-          "command": "cartog",
-          "args": ["serve"]
-        &#125;
+        "cartog": &#123; "command": "cartog", "args": ["serve", "--watch"] &#125;
+      &#125;
+    &#125;
++ cursor (user, ~/.cursor/mcp.json): would create
+  --- after ---
+    &#123;
+      "mcpServers": &#123;
+        "cartog": &#123; "command": "cartog", "args": ["serve", "--watch"] &#125;
       &#125;
     &#125;
 
-1 clients: 1 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+2 clients: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
 Dry run only. Re-run without --dry-run to apply.</pre>
         <p class="example-label">Example output (<code>cartog install cursor vscode --dry-run</code>)</p>
         <pre class="example-output">+ cursor (project, /your/repo/.cursor/mcp.json): would create
   --- after ---
     &#123;
       "mcpServers": &#123;
-        "cartog": &#123; "command": "cartog", "args": ["serve"] &#125;
+        "cartog": &#123; "command": "cartog", "args": ["serve", "--watch"] &#125;
       &#125;
     &#125;
 + vscode (project, /your/repo/.vscode/mcp.json): would create
   --- after ---
     &#123;
       "servers": &#123;
-        "cartog": &#123; "type": "stdio", "command": "cartog", "args": ["serve"] &#125;
+        "cartog": &#123; "type": "stdio", "command": "cartog", "args": ["serve", "--watch"] &#125;
+      &#125;
+    &#125;
++ vscode (user, ~/Library/Application Support/Code/User/mcp.json): would create
+  --- after ---
+    &#123;
+      "servers": &#123;
+        "cartog": &#123; "type": "stdio", "command": "cartog", "args": ["serve", "--watch"] &#125;
+      &#125;
+    &#125;
++ cursor (user, ~/.cursor/mcp.json): would create
+  --- after ---
+    &#123;
+      "mcpServers": &#123;
+        "cartog": &#123; "command": "cartog", "args": ["serve", "--watch"] &#125;
       &#125;
     &#125;
 
-2 clients: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+4 clients: 4 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
 Dry run only. Re-run without --dry-run to apply.</pre>
-        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>codex</code>, <code>cursor</code>, <code>gemini</code>, <code>opencode</code>, <code>vscode</code>, <code>windsurf</code>, <code>zed</code>, <code>antigravity</code>, <code>kiro</code> (project + user), <code>hermes</code>. See the <a href="#mcp-ide">Bootstrap sequence</a> for the recommended verb order.</p>
+        <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>cline</code>, <code>cline-cli</code>, <code>codex</code>, <code>copilot-cli</code>, <code>cursor</code> (project + user), <code>gemini</code>, <code>kilo</code> (project + user), <code>opencode</code>, <code>qwen</code> (project + user), <code>roo</code> (project + user), <code>vscode</code> (project + user), <code>windsurf</code>, <code>zed</code>, <code>antigravity</code>, <code>kiro</code> (project + user), <code>hermes</code>. See the <a href="#mcp-ide">Bootstrap sequence</a> for the recommended verb order.</p>
 
         <h2 id="cmd-projects"><code>cartog projects &lt;list|add|scan|forget|prune&gt;</code></h2>
         <p>Inspect the machine-local registry of indexed cartog projects — how a session in one repository discovers the <em>other</em> projects indexed on the same machine, where their databases live, and roughly what each holds, without merging their code graphs.</p>

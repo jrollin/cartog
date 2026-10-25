@@ -586,17 +586,24 @@ Example output (`cartog ide --client cursor --dry-run`):
   --- after ---
     {
       "mcpServers": {
-        "cartog": { "command": "cartog", "args": ["serve"] }
+        "cartog": { "command": "cartog", "args": ["serve", "--watch"] }
+      }
+    }
++ cursor (user, ~/.cursor/mcp.json): would create
+  --- after ---
+    {
+      "mcpServers": {
+        "cartog": { "command": "cartog", "args": ["serve", "--watch"] }
       }
     }
 
-1 clients: 1 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
+2 clients: 2 created, 0 updated, 0 unchanged, 0 skipped, 0 errors
 Dry run only. Re-run without --dry-run to apply.
 ```
 
 For `cartog ide --client claude-code --dry-run`, both project (`.mcp.json`) and user (`~/.claude/settings.json`) entries are previewed, and `args` includes `--watch` by default.
 
-Supported clients: `claude-code` (project + user), `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode` (project + user), `windsurf`, `zed`, `antigravity`, `kiro` (project + user), `hermes`. User-scope clients whose config dir is missing are skipped.
+Supported clients: `claude-code` (project + user), `claude-desktop`, `cline`, `cline-cli`, `codex`, `copilot-cli`, `cursor` (project + user), `gemini`, `kilo` (project + user), `opencode`, `qwen` (project + user), `roo` (project + user), `vscode` (project + user), `windsurf`, `zed`, `antigravity`, `kiro` (project + user), `hermes`. User-scope clients whose config dir is missing are skipped. With no client named, the `kilo`, `qwen` and `roo` project files are written only when their folder (`.kilo/`, `.qwen/`, `.roo/`) exists in the repo or the client is detected for the user; for `cursor`, `qwen`, `kilo` and `copilot-cli`, a home folder holding only `skills/` does not count as an install. The `cline` and `roo` VS Code extension rows are skipped when VS Code's user dir is missing, even when named. On an existing entry, cartog rewrites only the fields it owns (`command`, `args`, `type`), so enable toggles, tool approvals, `env` and `timeout` set in the client survive.
 
 ### `cartog install [client ...] [--scope ...] [--dry-run] [--no-watch]`
 

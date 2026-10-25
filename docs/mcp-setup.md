@@ -89,7 +89,8 @@ Open Settings > MCP Servers > Add Server:
 - **Type**: `command`
 - **Command**: `cartog serve`
 
-Or edit `.cursor/mcp.json` in your project root:
+Or edit `.cursor/mcp.json` in your project root, or `~/.cursor/mcp.json` to
+enable cartog in every project:
 
 ```json
 {
@@ -132,6 +133,9 @@ Edit `~/.config/opencode/opencode.json` (or your project's `opencode.json`):
   }
 }
 ```
+
+`cartog ide` rewrites only `type` and `command` on an existing entry, so
+`enabled`, `environment` and `timeout` stay.
 
 ## Zed
 
@@ -254,6 +258,115 @@ mcp_servers:
 
 `cartog ide` upserts only the `cartog` entry, leaving your other servers and
 top-level keys intact. You can also use Hermes' own `hermes mcp add` CLI.
+
+## GitHub Copilot CLI
+
+Edit `~/.copilot/mcp-config.json` (user-global; Copilot CLI's project file is
+the `.mcp.json` that the Claude Code section writes), or run
+`cartog ide --client copilot-cli`. With `COPILOT_HOME` set, the file is
+`$COPILOT_HOME/mcp-config.json`:
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "type": "local",
+      "command": "cartog",
+      "args": ["serve"],
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+## Qwen Code
+
+Edit `.qwen/settings.json` in your project root, or `~/.qwen/settings.json`
+(user scope):
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+## Cline
+
+The VS Code extension and the Cline CLI keep separate files:
+
+| Client | `cartog ide --client` | File |
+|---|---|---|
+| Cline (VS Code extension) | `cline` | `<VS Code user dir>/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
+| Cline CLI | `cline-cli` | `~/.cline/data/settings/cline_mcp_settings.json` (or `$CLINE_MCP_SETTINGS_PATH`) |
+
+`<VS Code user dir>` is `~/Library/Application Support/Code/User` on macOS,
+`~/.config/Code/User` on Linux and `%APPDATA%\Code\User` on Windows.
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"],
+      "disabled": false
+    }
+  }
+}
+```
+
+`cartog ide` rewrites only `command` and `args` on an existing entry, so the
+`disabled` toggle and tool approvals (`autoApprove`) you set in Cline stay.
+It skips the extension file when VS Code's user dir does not exist. For Cline
+running inside Cursor or Windsurf, add the entry from Cline's MCP settings.
+
+## Roo Code
+
+Edit `.roo/mcp.json` in your project root, or the extension's global file
+`<VS Code user dir>/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json`
+(same `<VS Code user dir>` as Cline):
+
+```json
+{
+  "mcpServers": {
+    "cartog": {
+      "command": "cartog",
+      "args": ["serve"],
+      "disabled": false
+    }
+  }
+}
+```
+
+As with Cline, `cartog ide` keeps `disabled` and `alwaysAllow` on an existing entry.
+
+## Kilo Code
+
+Kilo's extension and CLI share one config: `.kilo/kilo.jsonc` (or
+`.kilo/kilo.json`) in your project root, or `~/.config/kilo/kilo.jsonc` (or
+`kilo.json`) for every project. MCP servers live under the `mcp` key:
+
+```json
+{
+  "mcp": {
+    "cartog": {
+      "type": "local",
+      "command": ["cartog", "serve"],
+      "enabled": true
+    }
+  }
+}
+```
+
+`cartog ide` edits an existing `kilo.jsonc` when it holds plain JSON. A
+`kilo.jsonc` with comments or trailing commas is left untouched and reported as
+skipped: add the entry by hand. At user scope, an existing `config.json` is
+also accepted. On an existing entry, only `type` and `command` are rewritten,
+so `enabled`, `environment` and `timeout` stay.
 
 ## Any other MCP-compatible client
 

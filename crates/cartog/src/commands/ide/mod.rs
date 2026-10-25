@@ -37,8 +37,10 @@ pub enum MergeStrategy {
     /// `{"mcpServers": {"cartog": {"command","args"}}}` — Claude Code, Claude Desktop,
     /// Cursor, Windsurf, Gemini CLI.
     McpServers,
-    /// `{"mcp": {"cartog": {"type":"local","command":["cartog","serve"],"enabled":true}}}` — OpenCode.
-    /// OpenCode uses a single `command` array (program + args) and `type: "local"` for stdio servers.
+    /// `{"mcp": {"cartog": {"type":"local","command":["cartog","serve"],"enabled":true}}}` — OpenCode,
+    /// Kilo Code. A single `command` array (program + args) and `type: "local"` for stdio
+    /// servers. Only `type`/`command` are rewritten on an existing entry, so `enabled`,
+    /// `environment` and `timeout` set in the client survive.
     Mcp,
     /// `{"context_servers": {"cartog": {"command","args"}}}` — Zed.
     ContextServers,
@@ -53,6 +55,26 @@ pub enum MergeStrategy {
     /// `mcp_servers: {cartog: {command, args}}` YAML — Hermes Agent (`~/.hermes/config.yaml`).
     /// Shared config file; only the `cartog` entry is upserted, other keys preserved.
     HermesYaml,
+    /// `{"mcpServers": {"cartog": {"type":"local","command","args","tools":["*"]}}}` — GitHub Copilot CLI.
+    /// Only `type`/`command`/`args` are rewritten on an existing entry: a narrowed `tools`
+    /// list and `env` survive.
+    CopilotLocal,
+    /// `{"mcpServers": {"cartog": {"command","args","disabled":false}}}` — Cline, Cline CLI, Roo Code.
+    /// Only `command`/`args` are rewritten on an existing entry: the client's UI stores
+    /// `disabled` and tool approvals (`alwaysAllow`/`autoApprove`) in the same object.
+    McpServersToggle,
+}
+
+/// How auto mode (and the picker's pre-check) decides that a client is in use.
+/// Except for `Always`, a client binary on `PATH` also counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Detection {
+    /// Always wired: the original project rows (the repo is the evidence).
+    Always,
+    /// The config file's parent dir exists: right when only the client creates it.
+    ParentDir,
+    /// The config file itself, or one of these paths that only the client creates.
+    Evidence(Vec<PathBuf>),
 }
 
 /// Resolved target for one MCP client: where to write and how to merge.
@@ -63,6 +85,10 @@ pub struct ClientSpec {
     pub path: PathBuf,
     pub strategy: MergeStrategy,
     pub args: Vec<String>,
+    pub detection: Detection,
+    /// A dir that must already exist, even when the client is named: writing would
+    /// create it and fake an install signal for another client.
+    pub requires: Option<PathBuf>,
 }
 
 /// Pure outcome of merging a `cartog` entry into a (possibly empty) JSON document.

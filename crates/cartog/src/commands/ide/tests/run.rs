@@ -1,14 +1,14 @@
 use crate::cli::{ClientKind, IdeScope};
 use crate::commands::ide::catalogue::*;
 use crate::commands::ide::run::*;
-use crate::commands::ide::{ClientSpec, IdeStatus, MergeStrategy, Scope};
+use crate::commands::ide::{ClientSpec, Detection, IdeStatus, MergeStrategy, Scope};
 use std::fs;
 use std::path::PathBuf;
 #[test]
 fn install_filter_single_client_returns_only_that_kind() {
-    let chosen = filter_catalogue_by_clients(&[ClientKind::Cursor], IdeScope::All);
+    let chosen = filter_catalogue_by_clients(&[ClientKind::Windsurf], IdeScope::All);
     assert_eq!(chosen.len(), 1);
-    assert_eq!(chosen[0].0, ClientKind::Cursor);
+    assert_eq!(chosen[0].0, ClientKind::Windsurf);
 }
 
 #[test]
@@ -22,8 +22,8 @@ fn install_filter_multiple_clients_returns_each_in_catalogue_order() {
     assert!(kinds.contains(&ClientKind::Cursor));
     assert!(kinds.contains(&ClientKind::Vscode));
     assert!(kinds.contains(&ClientKind::Codex));
-    // Cursor (1) + VS Code project+user (2) + Codex (1) = 4.
-    assert_eq!(chosen.len(), 4);
+    // Cursor project+user (2) + VS Code project+user (2) + Codex (1) = 5.
+    assert_eq!(chosen.len(), 5);
 }
 
 #[test]
@@ -155,6 +155,8 @@ fn project_spec(path: PathBuf) -> ClientSpec {
         path,
         strategy: MergeStrategy::McpServers,
         args: vec!["serve".into()],
+        detection: Detection::ParentDir,
+        requires: None,
     }
 }
 
@@ -252,5 +254,189 @@ fn process_spec_skips_when_existing_file_is_malformed() {
         fs::read_to_string(&cfg).unwrap(),
         "{ this is not valid json",
         "original content preserved"
+    );
+}
+
+#[test]
+fn process_spec_leaves_commented_jsonc_untouched_with_a_manual_hint() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg = tmp.path().join("kilo.jsonc");
+    let original = "// my Kilo config\n{ \"model\": \"x\" }\n";
+    fs::write(&cfg, original).unwrap();
+    let spec = ClientSpec {
+        kind: ClientKind::Kilo,
+        scope: Scope::Project,
+        path: cfg.clone(),
+        strategy: MergeStrategy::Mcp,
+        args: vec!["serve".into()],
+        detection: Detection::ParentDir,
+        requires: None,
+    };
+
+    let step = process_spec(&spec, tmp.path(), false, false, false);
+    assert_eq!(step.status, IdeStatus::Skipped);
+    assert_eq!(fs::read_to_string(&cfg).unwrap(), original);
+    assert!(step.message.contains("JSONC"), "got: {}", step.message);
+    assert!(!step.message.contains("remove it"), "got: {}", step.message);
+}
+
+fn spec_at(path: PathBuf, strategy: MergeStrategy) -> ClientSpec {
+    ClientSpec {
+        kind: ClientKind::Roo,
+        scope: Scope::User,
+        path,
+        strategy,
+        args: vec!["serve".into()],
+        detection: Detection::ParentDir,
+        requires: None,
+    }
+}
+
+#[test]
+fn process_spec_skips_a_named_extension_row_without_the_vscode_user_dir() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vscode_user = tmp.path().join("Code/User");
+    let cfg =
+        vscode_user.join("globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json");
+    let mut spec = spec_at(cfg.clone(), MergeStrategy::McpServersToggle);
+    spec.requires = Some(vscode_user);
+
+    let step = process_spec(&spec, tmp.path(), false, false, false);
+    assert_eq!(step.status, IdeStatus::Skipped);
+    assert!(
+        !tmp.path().join("Code").exists(),
+        "VS Code dir must not be created"
+    );
+}
+
+#[test]
+fn process_spec_writes_a_named_extension_row_when_vscode_user_dir_exists() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let vscode_user = tmp.path().join("Code/User");
+    fs::create_dir_all(&vscode_user).unwrap();
+    let cfg =
+        vscode_user.join("globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json");
+    let mut spec = spec_at(cfg.clone(), MergeStrategy::McpServersToggle);
+    spec.requires = Some(vscode_user);
+
+    let step = process_spec(&spec, tmp.path(), false, false, false);
+    assert_eq!(step.status, IdeStatus::Created);
+    assert!(cfg.exists());
+}
+
+#[test]
+fn process_spec_jsonc_with_a_wrong_shape_gets_the_generic_hint() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg = tmp.path().join("kilo.jsonc");
+    fs::write(&cfg, r#"{"mcp": "not-an-object"}"#).unwrap();
+    let step = process_spec(
+        &spec_at(cfg, MergeStrategy::Mcp),
+        tmp.path(),
+        false,
+        false,
+        false,
+    );
+    assert_eq!(step.status, IdeStatus::Skipped);
+    assert!(!step.message.contains("JSONC"), "got: {}", step.message);
+}
+
+#[test]
+fn process_spec_jsonc_with_a_trailing_comma_gets_the_jsonc_hint() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg = tmp.path().join("kilo.jsonc");
+    fs::write(&cfg, "{\"mcp\": {},}").unwrap();
+    let step = process_spec(
+        &spec_at(cfg, MergeStrategy::Mcp),
+        tmp.path(),
+        false,
+        false,
+        false,
+    );
+    assert!(step.message.contains("JSONC"), "got: {}", step.message);
+}
+
+#[test]
+fn process_spec_notes_a_cartog_entry_disabled_in_the_client() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let toggle = tmp.path().join("cline.json");
+    fs::write(
+        &toggle,
+        r#"{"mcpServers": {"cartog": {"command": "cartog", "args": ["serve"], "disabled": true}}}"#,
+    )
+    .unwrap();
+    let step = process_spec(
+        &spec_at(toggle, MergeStrategy::McpServersToggle),
+        tmp.path(),
+        false,
+        false,
+        false,
+    );
+    assert_eq!(step.status, IdeStatus::Unchanged);
+    assert!(step.message.contains("disabled"), "got: {}", step.message);
+
+    let mcp = tmp.path().join("kilo.json");
+    fs::write(
+        &mcp,
+        r#"{"mcp": {"cartog": {"type": "local", "command": ["cartog", "serve"], "enabled": false}}}"#,
+    )
+    .unwrap();
+    let step = process_spec(
+        &spec_at(mcp, MergeStrategy::Mcp),
+        tmp.path(),
+        false,
+        false,
+        false,
+    );
+    assert!(step.message.contains("disabled"), "got: {}", step.message);
+}
+
+#[test]
+fn process_spec_enabled_entry_has_no_disabled_note() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg = tmp.path().join("cline.json");
+    let step = process_spec(
+        &spec_at(cfg, MergeStrategy::McpServersToggle),
+        tmp.path(),
+        false,
+        false,
+        false,
+    );
+    assert!(!step.message.contains("disabled"), "got: {}", step.message);
+}
+
+#[test]
+fn install_scope_mismatch_error_names_the_cli_slugs() {
+    let err = cmd_install(
+        vec![ClientKind::CopilotCli],
+        IdeScope::Project,
+        true,
+        false,
+        false,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("copilot-cli") && err.contains("project"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn ide_scope_mismatch_error_names_the_cli_slug() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let err = run_ide(
+        Some(ClientKind::Codex),
+        IdeScope::Project,
+        false,
+        true,
+        false,
+        tmp.path(),
+        &HomeDirs::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("codex") && err.contains("project"),
+        "got: {err}"
     );
 }

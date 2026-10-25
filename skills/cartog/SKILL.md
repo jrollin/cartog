@@ -25,7 +25,7 @@ Three states a repo can be in. Detect which one the user is in, then act.
 | State | Signal | What the user should run |
 |---|---|---|
 | Fresh repo, no cartog yet | No `.cartog.toml` **and** no `.cartog/db.sqlite` at the git root | Ask the user first, then `cartog init` then `cartog index` (see "Fresh-repo handling" below) |
-| Indexed but no editor MCP | `.cartog.toml` or `.cartog/db.sqlite` exists, no `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` | `cartog index` (refresh) — only suggest `cartog ide` if the user mentions Claude Code / Cursor / VS Code / Codex / Gemini / Windsurf / Zed / Claude Desktop / OpenCode |
+| Indexed but no editor MCP | `.cartog.toml` or `.cartog/db.sqlite` exists, no `.mcp.json` / `.cursor/mcp.json` / `.vscode/mcp.json` | `cartog index` (refresh) — only suggest `cartog ide` if the user mentions Claude Code / Cursor / VS Code / Codex / Copilot CLI / Gemini / Qwen / Windsurf / Zed / Claude Desktop / OpenCode / Cline / Roo / Kilo |
 | Fully wired | `.cartog.toml` + editor MCP files present | Just query: `cartog map`, `cartog rag search`, etc. |
 
 ### Fresh-repo handling (the most common pitfall)
@@ -492,7 +492,7 @@ cartog ide --dry-run                          # preview without writing
 
 **Agent gotcha**: `cartog ide` (bare) runs an interactive multi-select picker. **An agent calling it via Bash MUST pass `--yes` (or `--client X` / `--dry-run`)**, otherwise the command blocks waiting for input. `cartog install` is always non-interactive, so it's the safe default for agents.
 
-Supported clients: `claude-code`, `claude-desktop`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`, `zed`. User-scope clients whose config dir is missing are reported as "not installed" and skipped. Existing MCP entries for other servers are preserved (idempotent merge).
+Supported clients: `claude-code`, `claude-desktop`, `cline`, `cline-cli`, `codex`, `copilot-cli`, `cursor`, `gemini`, `kilo`, `opencode`, `qwen`, `roo`, `vscode`, `windsurf`, `zed`, `antigravity`, `kiro`, `hermes`. Clients not detected on this machine are reported as "not installed" and skipped. Existing MCP entries for other servers are preserved (idempotent merge).
 
 **When to suggest it**: the user explicitly asks to wire cartog into an editor, or mentions one of the supported clients. Do not run it speculatively; the answer "yes" should come from the user before the agent invokes this command.
 

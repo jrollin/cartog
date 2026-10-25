@@ -42,7 +42,7 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 - [product.md](product.md) — vision, target users, positioning
 - [tech.md](tech.md) — technology stack, dependencies, benchmarks
 - [structure.md](structure.md) — workspace layout and per-crate links
-- [mcp-setup.md](mcp-setup.md) — per-editor MCP wiring (Cursor, VS Code, Codex, Gemini, Claude Desktop, OpenCode, Windsurf, Zed, Antigravity, Kiro, Hermes)
+- [mcp-setup.md](mcp-setup.md) — per-editor MCP wiring (Cursor, VS Code, Codex, Copilot CLI, Gemini, Qwen Code, Claude Desktop, OpenCode, Windsurf, Zed, Antigravity, Kiro, Hermes, Cline, Roo Code, Kilo Code)
 - [agent-snippet.md](agent-snippet.md) — drop-in rules that teach your agent when to prefer cartog over grep
 - [editor-integration.md](editor-integration.md) — Neovim, VS Code, Emacs, Zed CLI recipes
 - [troubleshooting.md](troubleshooting.md) — common errors and fixes
