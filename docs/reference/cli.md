@@ -567,14 +567,15 @@ cartog init --dry-run        # preview without writing
 
 `cartog init` never overwrites an existing `.cartog.toml`. Re-running is a no-op (still prints the next-steps hint, useful when you've forgotten the next verb).
 
-### `cartog ide [--client <name>] [--scope project|user|all] [-y] [--dry-run] [--no-watch]`
+### `cartog ide [--client <name>] [--scope project|user|all] [-y] [--dry-run] [--no-watch] [--remove]`
 
-Wire `cartog serve` into one or all MCP-compatible editors. This is the only verb that touches editor configs.
+Wire `cartog serve` into one or all MCP-compatible editors. `cartog ide`, `cartog install` and `cartog uninstall` are the only verbs that touch editor configs.
 
 ```bash
 cartog ide                          # all installed clients, all scopes (interactive picker)
 cartog ide --client cursor          # one client
-cartog ide --scope project          # only project-scoped (.mcp.json, .cursor/, .vscode/)
+cartog ide --scope project          # only project-scoped (.mcp.json, .cursor/, .vscode/, .kiro/, ...)
+cartog ide --remove                 # pick configs to take cartog out of (see `cartog uninstall`)
 cartog ide --scope user             # only user-scope clients
 cartog ide --dry-run                # preview with before/after diff
 ```
@@ -621,6 +622,43 @@ cartog install claude-code --no-watch # wire Claude Code without --watch
 
 Same supported-client list as `cartog ide`. For the interactive multi-select
 picker (useful at a fresh-machine setup), use `cartog ide` directly.
+
+### `cartog uninstall [client ...] [--scope ...] [--dry-run]`
+
+Take the `cartog` MCP entry out of editor configs: the mirror of `cartog install`,
+positional and non-interactive. `cartog ide --remove` does the same with a picker
+that lists only the configs holding cartog.
+
+```bash
+cartog uninstall                      # every config in scope that holds cartog
+cartog uninstall cursor qwen          # named editors only
+cartog uninstall --scope project      # only in-repo files
+cartog uninstall --dry-run            # preview the removal (before/after diff)
+cartog ide --remove                   # interactive: pick the configs to clean
+```
+
+`cartog ide --remove` asks before removing anything. Without a terminal (an
+agent's shell, CI) or with `--json`, it refuses unless `--yes`, `--client` or
+`--dry-run` is given; scripts should call `cartog uninstall`.
+
+Example output (`cartog uninstall`):
+
+```text
+- claude-code (project, /your/repo/.mcp.json): removed
+- cursor (project, /your/repo/.cursor/mcp.json): removed
+
+25 configs: 2 removed, 23 not wired, 0 skipped, 0 errors
+```
+
+- **Scope of the edit:** only the `cartog` entry is removed, whatever it holds (custom args, env, approvals). Other servers and keys keep their values. An emptied server map stays as `{}`.
+- **No files created or deleted:** a missing config is reported "not wired", and folders `cartog install` created (`.cursor/`, `.qwen/`, ...) stay.
+- **No client named:** every config in scope that holds cartog is cleaned, whether or not its editor is detected as installed.
+- **Codex:** only this project's `[mcp_servers.cartog-<slug>-<hash8>]` section is removed; other projects keep theirs, and a comment written above the removed section moves to the next one.
+- **Kilo:** every `kilo.jsonc` / `kilo.json` present (and the user-level `config.json`) is checked, since install wrote to whichever existed at the time.
+- **Symlinks and permissions:** a symlinked config is edited at its target, and a rewritten file keeps its mode (`install` does the same).
+- **Unreadable files:** invalid JSON/TOML/YAML or a JSONC file with comments is left untouched and reported as skipped; remove the entry by hand.
+- **Formatting:** TOML keeps its comments and layout; JSON and YAML files are rewritten, as on install.
+- **Output:** with nothing to remove it prints `cartog is not wired in any config in scope.` and exits 0. `--json` reports every config with `"operation": "remove"` and a `removed` status. Exit code is 1 when a file cannot be read or written, or when a named client has no config at the requested scope (e.g. `cartog uninstall codex --scope project`).
 
 ### `cartog config`
 

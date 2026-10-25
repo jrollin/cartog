@@ -12,8 +12,10 @@ use super::catalogue::{
 };
 use super::merge::{codex_section_name, entry_disabled, merge_codex_toml, merge_entry};
 use super::picker::{confirm, interactive_picker, picker_items, PickerOutcome};
+use super::remove::cmd_ide_remove;
 use super::{
-    Action, ClientSpec, DiffPair, IdeReport, IdeStatus, IdeStep, IdeSummary, MergeStrategy, Scope,
+    Action, ClientSpec, DiffPair, IdeReport, IdeStatus, IdeStep, IdeSummary, MergeStrategy,
+    Operation, Scope,
 };
 use crate::cli::{ClientKind, IdeScope};
 
@@ -24,8 +26,12 @@ pub fn cmd_ide(
     yes: bool,
     dry_run: bool,
     no_watch: bool,
+    remove: bool,
     json: bool,
 ) -> Result<()> {
+    if remove {
+        return cmd_ide_remove(client, scope, yes, dry_run, json);
+    }
     let interactive =
         !yes && !dry_run && !json && client.is_none() && std::io::stdin().is_terminal();
     let cwd = std::env::current_dir()?;
@@ -188,18 +194,16 @@ fn run_ide_for_clients(
         // confirmation prompts would be redundant. `auto_only = false`: the user
         // explicitly picked these rows, so wire them even if detection is unsure.
         let step = process_spec(&spec, cwd, false, dry_run, false);
-        summary.total += 1;
-        match step.status {
-            IdeStatus::Created => summary.created += 1,
-            IdeStatus::Updated => summary.updated += 1,
-            IdeStatus::Unchanged => summary.unchanged += 1,
-            IdeStatus::Skipped => summary.skipped += 1,
-            IdeStatus::Error => summary.error += 1,
-        }
+        summary.record(step.status);
         steps.push(step);
     }
 
-    Ok(IdeReport { steps, summary })
+    Ok(IdeReport {
+        operation: Operation::Install,
+        dry_run,
+        steps,
+        summary,
+    })
 }
 
 /// Build a single `ClientSpec` for an explicit kind/scope pair (picker path).
@@ -275,18 +279,16 @@ pub fn run_ide(
     let auto_only = client.is_none();
     for spec in specs {
         let step = process_spec(&spec, cwd, interactive, dry_run, auto_only);
-        match step.status {
-            IdeStatus::Created => summary.created += 1,
-            IdeStatus::Updated => summary.updated += 1,
-            IdeStatus::Unchanged => summary.unchanged += 1,
-            IdeStatus::Skipped => summary.skipped += 1,
-            IdeStatus::Error => summary.error += 1,
-        }
-        summary.total += 1;
+        summary.record(step.status);
         steps.push(step);
     }
 
-    Ok(IdeReport { steps, summary })
+    Ok(IdeReport {
+        operation: Operation::Install,
+        dry_run,
+        steps,
+        summary,
+    })
 }
 
 pub(super) fn process_spec(
@@ -429,7 +431,7 @@ pub(super) fn process_spec(
     make(status, format!("{}{note}", write_action.done()), None)
 }
 
-fn scope_slug(scope: IdeScope) -> &'static str {
+pub(super) fn scope_slug(scope: IdeScope) -> &'static str {
     match scope {
         IdeScope::Project => "project",
         IdeScope::User => "user",
@@ -461,7 +463,15 @@ impl WriteAction {
     }
 }
 
-fn atomic_write(path: &Path, contents: &str) -> Result<()> {
+pub(super) fn atomic_write(path: &Path, contents: &str) -> Result<()> {
+    // Renaming over a symlink would replace it with a regular file and leave the
+    // real config (often in a dotfiles repo) stale: write at the link's target.
+    let resolved = match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(path)
+            .with_context(|| format!("could not resolve symlink {}", path.display()))?,
+        _ => path.to_path_buf(),
+    };
+    let path = resolved.as_path();
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)
@@ -478,8 +488,48 @@ fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     let mut tmp_name = file_name;
     tmp_name.push(format!(".cartog-{pid}.tmp"));
     let tmp = path.with_file_name(tmp_name);
-    fs::write(&tmp, contents).with_context(|| format!("could not write {}", tmp.display()))?;
-    fs::rename(&tmp, path)
-        .with_context(|| format!("could not move tmp file into {}", path.display()))?;
-    Ok(())
+    // Keep the original mode: a config can hold API keys in `env`.
+    let perms = fs::metadata(path).ok().map(|meta| meta.permissions());
+    let result = write_and_swap(&tmp, path, contents, perms.as_ref());
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn write_and_swap(
+    tmp: &Path,
+    path: &Path,
+    contents: &str,
+    perms: Option<&fs::Permissions>,
+) -> Result<()> {
+    use std::io::Write;
+
+    let mut file =
+        create_tmp(tmp, perms).with_context(|| format!("could not create {}", tmp.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("could not write {}", tmp.display()))?;
+    // `create_tmp`'s mode is masked by the umask: set the exact one.
+    if let Some(perms) = perms {
+        fs::set_permissions(tmp, perms.clone())
+            .with_context(|| format!("could not copy permissions onto {}", tmp.display()))?;
+    }
+    fs::rename(tmp, path)
+        .with_context(|| format!("could not move tmp file into {}", path.display()))
+}
+
+/// Create the temp file fresh (a stale or planted one is replaced, never written
+/// through) and, on Unix, with the final mode before any byte of the config lands.
+pub(super) fn create_tmp(tmp: &Path, perms: Option<&fs::Permissions>) -> std::io::Result<fs::File> {
+    let _ = fs::remove_file(tmp);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if let Some(perms) = perms {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(perms.mode());
+    }
+    #[cfg(not(unix))]
+    let _ = perms;
+    options.open(tmp)
 }

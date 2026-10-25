@@ -1,8 +1,10 @@
-//! `cartog ide` / `cartog install`: wire `cartog serve` into MCP-aware editor configs.
+//! `cartog ide` / `cartog install` / `cartog uninstall`: wire `cartog serve` into
+//! MCP-aware editor configs, or take it out again.
 //!
-//! Shared types live here; behavior is split across [`merge`] (config-file
-//! merging), [`catalogue`] (client specs + path resolution), [`picker`]
-//! (interactive TUI), and [`run`] (command entry + reporting + write).
+//! Shared spec types live here; behavior is split across `catalogue` (client
+//! specs + path resolution), `merge` / `unmerge` (adding / removing the entry
+//! per config format), `picker` (interactive TUI), `run` (install entry points
+//! + write), `remove` (uninstall entry points) and `report` (step report + rendering).
 
 use std::path::PathBuf;
 
@@ -78,7 +80,7 @@ pub enum Detection {
 }
 
 /// Resolved target for one MCP client: where to write and how to merge.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClientSpec {
     pub kind: ClientKind,
     pub scope: Scope,
@@ -107,124 +109,16 @@ pub enum Action {
     Unchanged,
 }
 
-/// Step-level status reported in `IdeReport`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum IdeStatus {
-    Created,
-    Updated,
-    Unchanged,
-    Skipped,
-    Error,
-}
-
-impl IdeStatus {
-    fn icon(self) -> &'static str {
-        match self {
-            IdeStatus::Created | IdeStatus::Updated | IdeStatus::Unchanged => "+",
-            IdeStatus::Skipped => "!",
-            IdeStatus::Error => "x",
-        }
-    }
-
-    fn from_action(action: Action) -> Self {
-        match action {
-            Action::Created => IdeStatus::Created,
-            Action::Updated => IdeStatus::Updated,
-            Action::Unchanged => IdeStatus::Unchanged,
-        }
-    }
-}
-
-/// Before/after config content for one client, shown as a diff in `--json`.
-#[derive(Debug, Serialize)]
-pub struct DiffPair {
-    pub before: Option<String>,
-    pub after: String,
-}
-
-/// One client's outcome in an `IdeReport`: where it wrote, the status, and the diff.
-#[derive(Debug, Serialize)]
-pub struct IdeStep {
-    pub client: String,
-    pub scope: String,
-    pub path: String,
-    pub status: IdeStatus,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub diff: Option<DiffPair>,
-}
-
-/// Per-status tallies across all steps in an `IdeReport`.
-#[derive(Debug, Serialize, Default)]
-pub struct IdeSummary {
-    pub total: usize,
-    pub created: usize,
-    pub updated: usize,
-    pub unchanged: usize,
-    pub skipped: usize,
-    pub error: usize,
-}
-
-/// Full result of an `ide`/`install` run: one step per client plus the summary.
-#[derive(Debug, Serialize)]
-pub struct IdeReport {
-    pub steps: Vec<IdeStep>,
-    pub summary: IdeSummary,
-}
-
-impl IdeReport {
-    /// Returns `true` when at least one client step ended in `IdeStatus::Error`.
-    /// Used by `cmd_ide` to decide the process exit code.
-    pub fn has_errors(&self) -> bool {
-        self.summary.error > 0
-    }
-
-    /// Render the report as a human-readable string: one line per client step
-    /// (status icon, client, scope, path, message), an optional before/after
-    /// diff block per step, and a trailing summary line of the counts.
-    pub fn render_human(&self) -> String {
-        let mut out = String::new();
-        for step in &self.steps {
-            out.push_str(&format!(
-                "{} {} ({}, {}): {}\n",
-                step.status.icon(),
-                step.client,
-                step.scope,
-                step.path,
-                step.message,
-            ));
-            if let Some(diff) = &step.diff {
-                if let Some(before) = &diff.before {
-                    out.push_str("  --- before ---\n");
-                    for line in before.lines() {
-                        out.push_str("    ");
-                        out.push_str(line);
-                        out.push('\n');
-                    }
-                }
-                out.push_str("  --- after ---\n");
-                for line in diff.after.lines() {
-                    out.push_str("    ");
-                    out.push_str(line);
-                    out.push('\n');
-                }
-            }
-        }
-        let s = &self.summary;
-        out.push_str(&format!(
-            "\n{} clients: {} created, {} updated, {} unchanged, {} skipped, {} errors\n",
-            s.total, s.created, s.updated, s.unchanged, s.skipped, s.error
-        ));
-        out
-    }
-}
-
 mod catalogue;
 mod merge;
 mod picker;
+mod remove;
+mod report;
 mod run;
+mod unmerge;
 
+pub use remove::cmd_uninstall;
+pub use report::{DiffPair, IdeReport, IdeStatus, IdeStep, IdeSummary, Operation};
 pub use run::{cmd_ide, cmd_install};
 
 #[cfg(test)]

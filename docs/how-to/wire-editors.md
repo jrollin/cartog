@@ -12,6 +12,21 @@ cartog ide --client cursor    # one client only
 cartog ide --dry-run          # preview without writing
 ```
 
+## Removing cartog from editors
+
+`cartog uninstall` takes the `cartog` entry out of every config that holds it;
+`cartog ide --remove` lets you pick which ones. Only that entry goes: other
+servers, files and folders stay.
+
+```bash
+cartog uninstall               # every config in scope that holds cartog
+cartog uninstall cursor        # one editor
+cartog uninstall --dry-run     # preview the removal
+cartog ide --remove            # interactive picker
+```
+
+See [../reference/cli.md](../reference/cli.md#cartog-uninstall-client----scope----dry-run) for the full behaviour.
+
 ## Manual config recipes (per editor)
 
 For the config-file snippets for every supported MCP client (Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode, Zed, Codex CLI, Gemini CLI, VS Code/Copilot, Antigravity, Kiro, Hermes Agent, Copilot CLI, Qwen Code, Cline, Roo Code, Kilo Code, and the generic stdio pattern):

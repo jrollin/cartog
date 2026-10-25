@@ -361,7 +361,7 @@ fn ensure_object<'a>(
         .ok_or_else(|| anyhow::anyhow!("internal: ensure_object slot is not Object after fixup"))
 }
 
-fn value_kind(v: &Value) -> &'static str {
+pub(super) fn value_kind(v: &Value) -> &'static str {
     match v {
         Value::Null => "null",
         Value::Bool(_) => "bool",

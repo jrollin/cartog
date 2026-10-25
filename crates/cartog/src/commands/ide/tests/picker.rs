@@ -364,3 +364,61 @@ fn picker_pre_checks_new_project_rows_only_when_detected() {
     assert!(!project(ClientKind::Qwen), "no .qwen/, nothing detected");
     assert!(!project(ClientKind::Kilo), "no .kilo/, nothing detected");
 }
+
+fn removal_spec(kind: ClientKind, path: PathBuf) -> crate::commands::ide::ClientSpec {
+    crate::commands::ide::ClientSpec {
+        kind,
+        scope: Scope::User,
+        path,
+        strategy: crate::commands::ide::MergeStrategy::McpServers,
+        args: vec!["serve".into()],
+        detection: Detection::ParentDir,
+        requires: None,
+    }
+}
+
+#[test]
+fn removal_plan_offers_only_files_that_hold_cartog() {
+    let tmp = tempfile::tempdir().unwrap();
+    let wired = tmp.path().join("wired.json");
+    let unwired = tmp.path().join("unwired.json");
+    std::fs::write(&wired, r#"{"mcpServers": {"cartog": {}}}"#).unwrap();
+    std::fs::write(&unwired, r#"{"mcpServers": {"other": {}}}"#).unwrap();
+    let specs = vec![
+        removal_spec(ClientKind::Cursor, wired.clone()),
+        removal_spec(ClientKind::Qwen, unwired),
+        removal_spec(ClientKind::Kiro, tmp.path().join("absent.json")),
+    ];
+    let plan = removal_plan(&specs, tmp.path());
+    let listed: Vec<_> = plan
+        .items
+        .iter()
+        .map(|i| (i.kind, i.path.clone()))
+        .collect();
+    assert_eq!(listed, vec![(ClientKind::Cursor, wired)]);
+    assert!(plan.skipped.is_empty());
+}
+
+#[test]
+fn removal_plan_reports_unparseable_files_as_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bad = tmp.path().join("kilo.jsonc");
+    std::fs::write(&bad, "// c\n{\"mcpServers\": {\"cartog\": {}}}").unwrap();
+    let plan = removal_plan(&[removal_spec(ClientKind::Kilo, bad)], tmp.path());
+    assert!(plan.items.is_empty());
+    let statuses: Vec<_> = plan.skipped.iter().map(|s| s.status).collect();
+    assert_eq!(statuses, vec![crate::commands::ide::IdeStatus::Skipped]);
+}
+
+#[test]
+fn removal_plan_is_empty_when_nothing_is_wired() {
+    let tmp = tempfile::tempdir().unwrap();
+    let plan = removal_plan(
+        &[removal_spec(
+            ClientKind::Cursor,
+            tmp.path().join("absent.json"),
+        )],
+        tmp.path(),
+    );
+    assert!(plan.items.is_empty() && plan.skipped.is_empty());
+}

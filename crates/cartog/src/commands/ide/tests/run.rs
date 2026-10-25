@@ -440,3 +440,72 @@ fn ide_scope_mismatch_error_names_the_cli_slug() {
         "got: {err}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn atomic_write_keeps_the_file_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    fs::write(&cfg, "a = 1\n").unwrap();
+    fs::set_permissions(&cfg, fs::Permissions::from_mode(0o600)).unwrap();
+
+    atomic_write(&cfg, "a = 2\n").unwrap();
+
+    let mode = fs::metadata(&cfg).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_write_edits_a_symlinked_config_at_its_target() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dotfiles = tmp.path().join("dotfiles");
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&dotfiles).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    let target = dotfiles.join("settings.json");
+    let link = home.join("settings.json");
+    fs::write(&target, "{}\n").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    atomic_write(&link, "{\"a\": 1}\n").unwrap();
+
+    assert!(fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read_to_string(&target).unwrap(), "{\"a\": 1}\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn temp_file_is_created_with_the_final_mode_before_any_content() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let path = tmp.path().join("config.toml.cartog-1.tmp");
+    let perms = fs::Permissions::from_mode(0o600);
+
+    let file = create_tmp(&path, Some(&perms)).unwrap();
+
+    assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(file.metadata().unwrap().len(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_write_removes_its_temp_file_when_the_rename_fails() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let target = tmp.path().join("config.json");
+    // A non-empty directory at the target path makes the final rename fail.
+    fs::create_dir_all(target.join("occupied")).unwrap();
+
+    assert!(atomic_write(&target, "{}\n").is_err());
+
+    let leftovers: Vec<String> = fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".cartog-"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}

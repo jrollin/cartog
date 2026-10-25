@@ -472,13 +472,19 @@ fn main() -> Result<()> {
             yes,
             dry_run,
             no_watch,
-        } => commands::ide::cmd_ide(client, scope, yes, dry_run, no_watch, cli.json),
+            remove,
+        } => commands::ide::cmd_ide(client, scope, yes, dry_run, no_watch, remove, cli.json),
         Command::Install {
             clients,
             scope,
             dry_run,
             no_watch,
         } => commands::ide::cmd_install(clients, scope, dry_run, no_watch, cli.json),
+        Command::Uninstall {
+            clients,
+            scope,
+            dry_run,
+        } => commands::ide::cmd_uninstall(clients, scope, dry_run, cli.json),
         Command::Serve {
             watch,
             rag,

@@ -439,6 +439,12 @@ pub enum Command {
         /// Omit `--watch` from every client's serve args (default wires `--watch` for all).
         #[arg(long)]
         no_watch: bool,
+
+        /// Remove the cartog entry instead of adding it
+        ///
+        /// On a TTY, lists the configs that hold cartog so you pick what to remove.
+        #[arg(long, conflicts_with = "no_watch")]
+        remove: bool,
     },
 
     /// Install cartog MCP config into one or more editors.
@@ -471,6 +477,29 @@ pub enum Command {
         /// Omit `--watch` from every client's serve args (default wires `--watch` for all).
         #[arg(long)]
         no_watch: bool,
+    },
+
+    /// Remove the cartog MCP entry from one or more editors' configs.
+    ///
+    /// Mirror of `cartog install`: editors as positional arguments, always
+    /// non-interactive. Only the `cartog` entry is removed; no file or directory
+    /// is created or deleted. For the interactive picker, use `cartog ide --remove`.
+    Uninstall {
+        /// One or more editors to unwire
+        ///
+        /// Omit to remove cartog from every config in scope that holds it.
+        clients: Vec<ClientKind>,
+
+        /// Filter by scope
+        ///
+        /// `project` edits only in-repo files; `user` only user-scope configs;
+        /// `all` both.
+        #[arg(long, value_enum, default_value_t = IdeScope::All)]
+        scope: IdeScope,
+
+        /// Print planned changes without writing.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Start MCP server over stdio (for Claude Code, Cursor, and other MCP clients)
@@ -681,7 +710,56 @@ pub enum SelfCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::ValueEnum;
+    use clap::{Parser, ValueEnum};
+
+    #[test]
+    fn uninstall_parses_positional_clients_scope_and_dry_run() {
+        let cli = Cli::try_parse_from([
+            "cartog",
+            "uninstall",
+            "cursor",
+            "qwen",
+            "--scope",
+            "user",
+            "--dry-run",
+        ])
+        .unwrap();
+        let Command::Uninstall {
+            clients,
+            scope,
+            dry_run,
+        } = cli.command
+        else {
+            panic!("expected Command::Uninstall");
+        };
+        assert_eq!(clients, vec![ClientKind::Cursor, ClientKind::Qwen]);
+        assert_eq!(scope, IdeScope::User);
+        assert!(dry_run);
+    }
+
+    #[test]
+    fn uninstall_defaults_to_every_client_at_every_scope() {
+        let cli = Cli::try_parse_from(["cartog", "uninstall"]).unwrap();
+        let Command::Uninstall { clients, scope, .. } = cli.command else {
+            panic!("expected Command::Uninstall");
+        };
+        assert!(clients.is_empty());
+        assert_eq!(scope, IdeScope::All);
+    }
+
+    #[test]
+    fn ide_remove_parses() {
+        let cli = Cli::try_parse_from(["cartog", "ide", "--remove", "--yes"]).unwrap();
+        let Command::Ide { remove, .. } = cli.command else {
+            panic!("expected Command::Ide");
+        };
+        assert!(remove);
+    }
+
+    #[test]
+    fn ide_remove_rejects_no_watch() {
+        assert!(Cli::try_parse_from(["cartog", "ide", "--remove", "--no-watch"]).is_err());
+    }
 
     /// `SymbolKindFilter` mirrors `SymbolKind` by hand, so a variant added to core
     /// compiles fine here while silently missing from `--kind`. Comparing wire

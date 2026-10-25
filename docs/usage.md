@@ -221,10 +221,11 @@ time you install a new editor.
 
 ```bash
 cartog ide                          # configure all installed clients
-cartog ide --scope project          # only .mcp.json + .cursor/mcp.json
+cartog ide --scope project          # only in-repo files (.mcp.json, .cursor/, .vscode/, .kiro/, ...)
 cartog ide --scope user             # only user-scope clients
 cartog ide --client cursor          # one client
 cartog ide --dry-run                # preview without writing
+cartog ide --remove                 # pick configs to take cartog out of
 ```
 
 Supported clients (matches the per-client list below): `claude-code` (project
@@ -247,7 +248,8 @@ installed.
 On an existing entry cartog rewrites only the fields it owns (`command`,
 `args`, `type`), so an enable toggle, tool approvals, `env` and `timeout` set in
 the client survive a re-run. When the client keeps cartog disabled, the report
-says so.
+says so. A symlinked config is edited at its target, and a rewritten file keeps
+its permissions.
 
 Codex stores all MCP servers in a single user-global `~/.codex/config.toml`,
 so cartog writes one per-project section named `cartog-<slug>-<hash8>` (slug
@@ -264,7 +266,23 @@ comments and ordering in the rest of the file.
 | `-y`, `--yes` | Skip interactive prompts. Also implied by `--dry-run`, `--client`, `--json`, or a non-TTY stdin. |
 | `--dry-run` | Print the planned changes (before/after diff per file) without writing. Implies non-interactive. |
 | `--no-watch` | Drop `--watch` from every client's serve args (default wires `serve --watch` for all). |
-| `--json` (global) | Emit a structured `IdeReport` on stdout instead of human text. |
+| `--remove` | Take the cartog entry out instead of adding it. On a TTY, lists only the configs that hold cartog, pre-checked. Without a terminal (or with `--json`) it refuses unless `--yes`, `--client` or `--dry-run` is given. Conflicts with `--no-watch`. |
+| `--json` (global) | Emit a structured `IdeReport` on stdout instead of human text (`"operation": "install"` or `"remove"`). |
+
+#### Removing cartog: `cartog uninstall`
+
+```bash
+cartog uninstall                    # every config in scope that holds cartog
+cartog uninstall cursor qwen        # named editors only
+cartog uninstall --dry-run          # preview the removal
+```
+
+Only the `cartog` entry is removed (Codex: this project's section). Other
+servers stay, no file or folder is created or deleted, and a config cartog
+cannot parse (for example JSONC with comments) is left untouched and reported.
+With no client named it cleans every config in scope that holds cartog, even
+for an editor that is no longer installed. See
+[reference/cli.md](reference/cli.md#cartog-uninstall-client----scope----dry-run).
 
 #### Troubleshooting
 
@@ -273,7 +291,7 @@ comments and ordering in the rest of the file.
 | `not modified (config file is not valid JSON); …` | The existing file is JSONC (JSON with comments) or malformed. Cartog refuses to clobber it. | Open the file, fix the JSON manually using the snippets below. |
 | `top-level <key> is a <kind> (expected object); refusing to overwrite` | The user file has the right path but the wrong shape at the container key. | Delete the offending key (or the whole file) and re-run. |
 | `config directory not found (client likely not installed)` | The user-scope config parent dir doesn't exist on this machine. | Install the editor (or skip with `--client X` targeting only what you have). |
-| `0 clients configured` | None of the targeted clients matched. | Check `--client` / `--scope` are compatible (e.g. `cursor` is project-only). |
+| `0 clients configured` | None of the targeted clients matched. | Check `--client` / `--scope` are compatible (e.g. `codex` and `copilot-cli` are user-only). |
 
 For deeper diagnostics on the index, embeddings, and language servers, run `cartog doctor`.
 
@@ -281,7 +299,9 @@ For deeper diagnostics on the index, embeddings, and language servers, run `cart
 
 See **[mcp-setup.md](mcp-setup.md)** for the config-file recipes for every
 supported client (Claude Code, Claude Desktop, Cursor, Windsurf, OpenCode,
-Zed, Codex CLI, Gemini CLI, VS Code/Copilot, and the generic stdio pattern).
+Zed, Codex CLI, Gemini CLI, VS Code/Copilot, Antigravity, Kiro, Hermes Agent,
+Copilot CLI, Qwen Code, Cline, Roo Code, Kilo Code, and the generic stdio
+pattern).
 
 `cartog ide` writes those files for you; the manual page is for users who
 want to edit by hand or audit what cartog wrote.

@@ -16,12 +16,12 @@ This documentation is organized by the [Diataxis](https://diataxis.fr) framework
 - [how-to/switch-embedding-provider.md](how-to/switch-embedding-provider.md) — local ONNX, Ollama, OpenAI-compatible
 - [how-to/set-up-s3-sync.md](how-to/set-up-s3-sync.md) — remote push/pull via S3-compatible storage
 - [how-to/update-cartog.md](how-to/update-cartog.md) — upgrade, rollback, deferred updates
-- [how-to/wire-editors.md](how-to/wire-editors.md) — `cartog ide` and manual MCP config
+- [how-to/wire-editors.md](how-to/wire-editors.md) — `cartog ide`, `cartog uninstall` and manual MCP config
 - [how-to/publish-vscode-extension.md](how-to/publish-vscode-extension.md) — maintainer runbook: publish the VS Code extension to the Marketplace + Open VSX
 
 ## Reference
 
-- [reference/cli.md](reference/cli.md) — all 28 commands and global flags
+- [reference/cli.md](reference/cli.md) — all 29 commands and global flags
 - [reference/config.md](reference/config.md) — all `.cartog.toml` keys and environment variables
 - [reference/mcp-tools.md](reference/mcp-tools.md) — 16 MCP tools (+2 opt-in cross-project), progress, cancellation, logging
 - [reference/exit-codes.md](reference/exit-codes.md) — `cartog self` exit codes and state file
