@@ -470,3 +470,141 @@ fn install_ignores_a_lone_copilot_binary() {
     assert_success(&sb.cmd_with_bins(&["install", "--scope", "user"], &["copilot"]));
     assert!(!sb.home.path().join(".copilot/mcp-config.json").exists());
 }
+
+fn json_file(path: &Path) -> serde_json::Value {
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn tree(root: &Path) -> std::collections::BTreeSet<PathBuf> {
+    let mut out = std::collections::BTreeSet::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path.clone());
+            }
+            out.insert(path);
+        }
+    }
+    out
+}
+
+#[test]
+fn uninstall_after_install_removes_cartog_and_keeps_files_and_other_servers() {
+    let sb = Sandbox::new();
+    fs::write(
+        sb.repo().join(".mcp.json"),
+        r#"{"mcpServers": {"other": {"command": "x"}}}"#,
+    )
+    .unwrap();
+    assert_success(&sb.cmd(&["install", "claude-code", "qwen", "--scope", "project"]));
+    let out = sb.cmd(&["uninstall", "--scope", "project"]);
+    assert_success(&out);
+    assert!(stdout(&out).contains(" 2 removed,"), "{}", stdout(&out));
+
+    let mcp = json_file(&sb.repo().join(".mcp.json"));
+    assert_eq!(
+        mcp["mcpServers"],
+        serde_json::json!({"other": {"command": "x"}})
+    );
+    let qwen = json_file(&sb.repo().join(".qwen/settings.json"));
+    assert_eq!(qwen["mcpServers"], serde_json::json!({}));
+}
+
+#[test]
+fn uninstall_without_client_removes_a_wired_config_of_an_undetected_client() {
+    let sb = Sandbox::new();
+    let cfg = sb.home.path().join(".qwen/settings.json");
+    fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+    fs::write(&cfg, r#"{"mcpServers": {"cartog": {"command": "cartog"}}}"#).unwrap();
+    assert_success(&sb.cmd(&["uninstall"]));
+    assert_eq!(json_file(&cfg)["mcpServers"], serde_json::json!({}));
+}
+
+#[test]
+fn uninstall_codex_keeps_another_projects_section() {
+    let sb = Sandbox::new();
+    fs::create_dir_all(sb.home.path().join(".codex")).unwrap();
+    assert_success(&sb.cmd(&["install", "codex"]));
+    let cfg = sb.home.path().join(".codex/config.toml");
+    let mut body = fs::read_to_string(&cfg).unwrap();
+    body.push_str("\n[mcp_servers.cartog-other-ffff0000]\ncommand = \"cartog\"\n");
+    fs::write(&cfg, body).unwrap();
+
+    assert_success(&sb.cmd(&["uninstall", "codex"]));
+    let after = fs::read_to_string(&cfg).unwrap();
+    assert_eq!(after.matches("[mcp_servers.cartog-").count(), 1, "{after}");
+    assert!(after.contains("cartog-other-ffff0000"), "{after}");
+}
+
+#[test]
+fn uninstall_dry_run_leaves_files_unchanged() {
+    let sb = Sandbox::new();
+    let wired = r#"{"mcpServers": {"cartog": {"command": "cartog"}}}"#;
+    fs::write(sb.repo().join(".mcp.json"), wired).unwrap();
+    let out = sb.cmd(&["uninstall", "--dry-run"]);
+    assert_success(&out);
+    assert_eq!(sb.read(".mcp.json").unwrap(), wired);
+    assert!(stdout(&out).contains("would remove"), "{}", stdout(&out));
+}
+
+#[test]
+fn uninstall_skips_a_commented_jsonc_and_leaves_it_byte_identical() {
+    let sb = Sandbox::new();
+    fs::create_dir_all(sb.repo().join(".kilo")).unwrap();
+    let original = "// team\n{\"mcp\": {\"cartog\": {\"type\": \"local\"}}}\n";
+    fs::write(sb.repo().join(".kilo/kilo.jsonc"), original).unwrap();
+    let out = sb.cmd(&["uninstall", "kilo", "--scope", "project"]);
+    assert_success(&out);
+    assert_eq!(sb.read(".kilo/kilo.jsonc").unwrap(), original);
+    assert!(stdout(&out).contains("not modified"), "{}", stdout(&out));
+}
+
+#[test]
+fn ide_remove_yes_removes_every_wired_entry() {
+    let sb = Sandbox::new();
+    assert_success(&sb.cmd(&["install", "claude-code", "cursor", "--scope", "project"]));
+    assert_success(&sb.cmd(&["ide", "--remove", "--yes"]));
+    assert_eq!(
+        json_file(&sb.repo().join(".mcp.json"))["mcpServers"],
+        serde_json::json!({})
+    );
+    assert_eq!(
+        json_file(&sb.repo().join(".cursor/mcp.json"))["mcpServers"],
+        serde_json::json!({})
+    );
+}
+
+#[test]
+fn a_second_uninstall_reports_cartog_not_wired() {
+    let sb = Sandbox::new();
+    assert_success(&sb.cmd(&["install", "claude-code", "--scope", "project"]));
+    assert_success(&sb.cmd(&["uninstall"]));
+    let out = sb.cmd(&["uninstall"]);
+    assert_success(&out);
+    assert_eq!(
+        stdout(&out),
+        "cartog is not wired in any config in scope.\n"
+    );
+}
+
+#[test]
+fn uninstall_in_a_fresh_sandbox_creates_nothing() {
+    let sb = Sandbox::new();
+    fs::create_dir_all(sb.home.path().join("fake-bin")).unwrap();
+    let before = (tree(sb.repo()), tree(sb.home.path()));
+    assert_success(&sb.cmd(&["uninstall"]));
+    assert_eq!((tree(sb.repo()), tree(sb.home.path())), before);
+}
+
+#[test]
+fn ide_remove_off_a_terminal_without_yes_refuses_and_changes_nothing() {
+    let sb = Sandbox::new();
+    assert_success(&sb.cmd(&["install", "claude-code", "--scope", "project"]));
+    let before = sb.read(".mcp.json").unwrap();
+    let out = sb.cmd(&["ide", "--remove"]);
+    assert!(!out.status.success(), "expected a refusal");
+    assert!(stderr(&out).contains("--yes"), "{}", stderr(&out));
+    assert_eq!(sb.read(".mcp.json").unwrap(), before);
+}

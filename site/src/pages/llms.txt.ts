@@ -17,7 +17,7 @@ const BODY = `# cartog
 > SQLite storage, 100% local.
 
 - Install: \`curl -fsSL ${SITE}/install.sh | sh\`, then \`cartog init && cartog index .\`
-- MCP: \`cartog serve\` exposes 16 tools over stdio (\`cartog ide\` wires your editor).
+- MCP: \`cartog serve\` exposes 16 tools over stdio (\`cartog ide\` wires your editor, \`cartog uninstall\` unwires it).
 - Every edge carries a provenance tag, so a language-server fact is
   distinguishable from a name-match guess.
 

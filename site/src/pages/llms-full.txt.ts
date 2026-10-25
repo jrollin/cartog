@@ -42,7 +42,7 @@ Then, in a repository: \`cartog init && cartog index .\`
 \`cartog serve\` speaks the Model Context Protocol over stdio and exposes 16 tools
 (18 when the opt-in cross-project tools are enabled with \`[mcp] federated = true\`
 or \`cartog serve --federated\`). \`cartog ide\` writes the config into installed
-editors. Reference: ${SITE}/usage.html#mcp-server
+editors; \`cartog uninstall\` takes it out again. Reference: ${SITE}/usage.html#mcp-server
 
 ## Markdown for agents
 

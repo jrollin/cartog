@@ -486,15 +486,20 @@ cartog install claude-code --no-watch         # drop --watch from Claude Code ar
 # `cartog ide` — original, supports the interactive multi-select picker.
 cartog ide --yes                              # all detected clients, non-interactive
 cartog ide --client cursor --yes              # one client (long-form)
-cartog ide --scope project --yes              # only .mcp.json / .cursor/mcp.json / .vscode/mcp.json
+cartog ide --scope project --yes              # only in-repo files (.mcp.json, .cursor/, .vscode/, ...)
 cartog ide --dry-run                          # preview without writing
+
+# `cartog uninstall` — the reverse. Always non-interactive; removes only the cartog entry.
+cartog uninstall cursor                       # one editor
+cartog uninstall                              # every config that holds cartog
+cartog uninstall --dry-run                    # preview the removal
 ```
 
 **Agent gotcha**: `cartog ide` (bare) runs an interactive multi-select picker. **An agent calling it via Bash MUST pass `--yes` (or `--client X` / `--dry-run`)**, otherwise the command blocks waiting for input. `cartog install` is always non-interactive, so it's the safe default for agents.
 
 Supported clients: `claude-code`, `claude-desktop`, `cline`, `cline-cli`, `codex`, `copilot-cli`, `cursor`, `gemini`, `kilo`, `opencode`, `qwen`, `roo`, `vscode`, `windsurf`, `zed`, `antigravity`, `kiro`, `hermes`. Clients not detected on this machine are reported as "not installed" and skipped. Existing MCP entries for other servers are preserved (idempotent merge).
 
-**When to suggest it**: the user explicitly asks to wire cartog into an editor, or mentions one of the supported clients. Do not run it speculatively; the answer "yes" should come from the user before the agent invokes this command.
+**When to suggest it**: the user explicitly asks to wire cartog into an editor (or to remove it: `cartog uninstall`), or mentions one of the supported clients. Do not run it speculatively; the answer "yes" should come from the user before the agent invokes this command.
 
 ### Config (print resolved configuration)
 ```bash

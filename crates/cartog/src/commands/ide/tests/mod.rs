@@ -11,4 +11,6 @@ pub(super) fn args_watch() -> Vec<String> {
 mod catalogue;
 mod merge;
 mod picker;
+mod remove;
 mod run;
+mod unmerge;

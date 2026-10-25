@@ -344,6 +344,22 @@ background update check, `doctor`'s version row, and the MCP server's drift
 sentence and `cartog_stats` pin fields. Asking for an update explicitly still
 works.
 
+### My editor still starts a cartog MCP server after I stopped using cartog
+
+The `cartog` entry that `cartog ide` / `cartog install` wrote is still in the
+editor's config, so the editor keeps launching `cartog serve` (and logs a failure
+once the binary is gone). Remove the entry:
+
+```bash
+cartog uninstall --dry-run   # see which configs hold it
+cartog uninstall             # take it out of every config in scope
+```
+
+Only the `cartog` entry goes; other servers and the files themselves stay. A
+config cartog cannot parse (for example JSONC with comments) is reported as
+skipped: remove the entry by hand. A Claude Code plugin install is not a config
+entry: use `/plugin uninstall cartog` instead.
+
 ### MCP stderr is full of `[ERROR]` lines that look like info-level messages
 
 Fixed in v0.17. When `cartog serve` runs as an MCP child (stderr not a

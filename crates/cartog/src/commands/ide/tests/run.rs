@@ -440,3 +440,40 @@ fn ide_scope_mismatch_error_names_the_cli_slug() {
         "got: {err}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn atomic_write_keeps_the_file_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    fs::write(&cfg, "a = 1\n").unwrap();
+    fs::set_permissions(&cfg, fs::Permissions::from_mode(0o600)).unwrap();
+
+    atomic_write(&cfg, "a = 2\n").unwrap();
+
+    let mode = fs::metadata(&cfg).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_write_edits_a_symlinked_config_at_its_target() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dotfiles = tmp.path().join("dotfiles");
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&dotfiles).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    let target = dotfiles.join("settings.json");
+    let link = home.join("settings.json");
+    fs::write(&target, "{}\n").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    atomic_write(&link, "{\"a\": 1}\n").unwrap();
+
+    assert!(fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read_to_string(&target).unwrap(), "{\"a\": 1}\n");
+}

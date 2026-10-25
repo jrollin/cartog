@@ -4,7 +4,7 @@ Code graph indexer for LLM coding agents. Map your codebase, navigate by graph.
 
 ## Overview
 
-Binary crate and library facade. Provides the `cartog` CLI with 27 top-level commands for code graph indexing, querying, and semantic search. Also re-exports workspace crates under the `cartog::` namespace for use by benches and integration tests.
+Binary crate and library facade. Provides the `cartog` CLI with 29 top-level commands for code graph indexing, querying, and semantic search. Also re-exports workspace crates under the `cartog::` namespace for use by benches and integration tests.
 
 ## CLI commands
 
@@ -13,6 +13,7 @@ Binary crate and library facade. Provides the `cartog` CLI with 27 top-level com
 | `init` | Scaffold a `.cartog.toml` config |
 | `ide` | Wire `cartog serve` into MCP-compatible editors |
 | `install [EDITORS...]` | Friendlier `ide`: install MCP config into named editors (or all detected) |
+| `uninstall [EDITORS...]` | Remove the cartog MCP entry from named editors (or every config that holds it) |
 | `index [PATH]` | Build or rebuild the code graph (`--force`, `--no-lsp`) |
 | `outline FILE` | Show symbols and structure of a file |
 | `callees NAME` | Find what a symbol calls |
@@ -22,6 +23,7 @@ Binary crate and library facade. Provides the `cartog` CLI with 27 top-level com
 | `hierarchy NAME` | Inheritance hierarchy for a class |
 | `deps FILE` | File-level import dependencies |
 | `stats` | Index statistics summary |
+| `savings` | Per-tool query counts + estimated tokens saved |
 | `search QUERY` | Search symbols by name (`--kind`, `--file`, `--limit`) |
 | `context TASK` | One-shot task bundle: relevant symbols + bodies (`--tokens`, default: 6000) |
 | `map` | Token-budget-aware codebase summary (`--tokens`, default: 4000) |
@@ -35,6 +37,7 @@ Binary crate and library facade. Provides the `cartog` CLI with 27 top-level com
 | `rag setup` | Download embedding and reranker models |
 | `rag index` | Build embedding index for semantic search |
 | `rag search` | Semantic search over code symbols |
+| `projects list/add/scan/forget/prune` | Inspect the machine-local registry of indexed cartog projects |
 | `self update/version/rollback/migrate-db` | Manage the installed binary and migrate a legacy DB |
 
 ## How it works

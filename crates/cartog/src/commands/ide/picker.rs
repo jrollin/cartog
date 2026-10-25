@@ -11,7 +11,8 @@ use super::catalogue::{
     client_display_name, client_installed, detection, project_path, user_path, HomeDirs,
     CLIENT_CATALOGUE,
 };
-use super::{Scope, CARTOG_LOGO};
+use super::remove::process_removal;
+use super::{ClientSpec, IdeStatus, IdeStep, Scope, CARTOG_LOGO};
 use crate::cli::ClientKind;
 
 /// Per-scope detection state, attached to a `PickerItem`.
@@ -224,6 +225,88 @@ pub(super) fn interactive_picker(items: &[PickerItem]) -> Result<PickerOutcome> 
     }
 
     Ok(PickerOutcome::Selected(chosen))
+}
+
+/// One config file that holds a cartog entry, offered by `cartog ide --remove`.
+#[derive(Debug, Clone)]
+pub struct RemovalItem {
+    pub kind: ClientKind,
+    pub scope: Scope,
+    pub path: PathBuf,
+}
+
+/// Outcome of the removal picker.
+pub enum RemovalChoice {
+    Selected(Vec<RemovalItem>),
+    Cancelled,
+}
+
+/// What `cartog ide --remove` can offer: the wired files to pick from, and the
+/// files it cannot read or parse (reported before the picker, never offered).
+#[derive(Default)]
+pub struct RemovalPlan {
+    pub items: Vec<RemovalItem>,
+    pub skipped: Vec<IdeStep>,
+}
+
+/// Dry-run every target: removable files become items, failures are kept as steps.
+pub fn removal_plan(targets: &[ClientSpec], cwd: &Path) -> RemovalPlan {
+    let mut plan = RemovalPlan::default();
+    for spec in targets {
+        let step = process_removal(spec, cwd, true);
+        match step.status {
+            IdeStatus::Removed => plan.items.push(RemovalItem {
+                kind: spec.kind,
+                scope: spec.scope,
+                path: spec.path.clone(),
+            }),
+            IdeStatus::Skipped | IdeStatus::Error => plan.skipped.push(step),
+            IdeStatus::Created | IdeStatus::Updated | IdeStatus::Unchanged => {}
+        }
+    }
+    plan
+}
+
+/// One MultiSelect line per wired file, all pre-checked, then a final Confirm.
+pub(super) fn removal_picker(items: &[RemovalItem]) -> Result<RemovalChoice> {
+    eprintln!("{CARTOG_LOGO}");
+    let theme = ColorfulTheme::default();
+    let labels: Vec<String> = items
+        .iter()
+        .map(|i| {
+            format!(
+                "{name:<16} {scope:<8} {path}",
+                name = client_display_name(i.kind),
+                scope = scope_label(i.scope),
+                path = home_relative(&i.path),
+            )
+        })
+        .collect();
+    let selection = MultiSelect::with_theme(&theme)
+        .with_prompt(
+            "Which configs should lose their cartog entry? (space to toggle, enter to confirm)",
+        )
+        .items(&labels)
+        .defaults(&vec![true; items.len()])
+        .interact_opt()
+        .context("removal picker failed")?;
+    let Some(indices) = selection.filter(|s| !s.is_empty()) else {
+        eprintln!("Nothing selected.");
+        return Ok(RemovalChoice::Cancelled);
+    };
+    let confirmed = Confirm::with_theme(&theme)
+        .with_prompt(format!("Remove cartog from {} config(s)?", indices.len()))
+        .default(true)
+        .interact_opt()
+        .context("confirmation failed")?
+        .unwrap_or(false);
+    if !confirmed {
+        eprintln!("Aborted, no files were modified.");
+        return Ok(RemovalChoice::Cancelled);
+    }
+    Ok(RemovalChoice::Selected(
+        indices.into_iter().map(|i| items[i].clone()).collect(),
+    ))
 }
 
 /// Run a `Select` prompt asking which scope to use for a multi-scope client.

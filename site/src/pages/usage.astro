@@ -709,7 +709,7 @@ cartog serve --federated      <span class="comment"># also expose the 2 cross-pr
         <p style="font-size: 13px; color: var(--text-tertiary);">In a client that doesn't render progress (Claude Code, Claude Desktop today), the index call is silent until it returns its summary — a client limitation, not a cartog one. To watch a live bar, run <code>cartog index</code> / <code>cartog rag index</code> from the CLI: the terminal spinner shows the same per-phase counters from the identical <code>ProgressUpdate</code> events.</p>
 
         <h3 id="mcp-quickstart">Wiring cartog into editors: <code>cartog ide</code></h3>
-        <p><code>cartog ide</code> is the only verb that writes MCP configs. Run it once per machine, plus any time you install a new editor.</p>
+        <p><code>cartog ide</code> (or <code>cartog install</code>) writes the MCP configs. Run it once per machine, plus any time you install a new editor. To undo it, run <code>cartog uninstall</code> (see <a href="#cmd-ide">cartog ide / install / uninstall</a>).</p>
         <pre>cartog ide                          <span class="comment"># all installed clients, all scopes</span>
 cartog ide --scope project          <span class="comment"># .mcp.json, .cursor/, .vscode/, .kiro/ (+ .qwen/ .roo/ .kilo/ where in use)</span>
 cartog ide --scope user             <span class="comment"># user-scope clients only</span>
@@ -1270,11 +1270,12 @@ cartog init --dry-run        <span class="comment"># preview without writing</sp
 Dry run only. Re-run without --dry-run to apply.</pre>
         <p>Never overwrites an existing <code>.cartog.toml</code>. Re-running is a no-op (still prints the next-steps hint).</p>
 
-        <h2 id="cmd-ide"><code>cartog ide</code> / <code>cartog install</code></h2>
-        <p>Wire <code>cartog serve</code> into one or all MCP-compatible editors. Two shapes:</p>
+        <h2 id="cmd-ide"><code>cartog ide</code> / <code>cartog install</code> / <code>cartog uninstall</code></h2>
+        <p>Wire <code>cartog serve</code> into one or all MCP-compatible editors, or take it out again. Three shapes:</p>
         <ul>
           <li><strong><code>cartog install &lt;client&gt;...</code></strong> — positional, brew/npm/pip convention, always non-interactive. Safe for scripts and agents.</li>
-          <li><strong><code>cartog ide</code></strong> — original, supports an interactive multi-select picker (bare) and the long-form flags below.</li>
+          <li><strong><code>cartog ide</code></strong> — original, supports an interactive multi-select picker (bare) and the long-form flags below. <code>--remove</code> lists only the configs that hold cartog so you pick what to take out; without a terminal it needs <code>--yes</code>.</li>
+          <li><strong><code>cartog uninstall [client]...</code></strong> — the mirror of <code>install</code>: removes the <code>cartog</code> entry, non-interactive.</li>
         </ul>
         <pre>cartog install cursor                 <span class="comment"># one editor</span>
 cartog install cursor vscode codex    <span class="comment"># several at once</span>
@@ -1285,7 +1286,18 @@ cartog ide                            <span class="comment"># interactive picker
 cartog ide --client cursor            <span class="comment"># single client via flag</span>
 cartog ide --scope project            <span class="comment"># only project-scoped (.mcp.json, .cursor/, .vscode/, .kiro/, ...)</span>
 cartog ide --dry-run                  <span class="comment"># preview with before/after diff</span>
-cartog ide --no-watch                 <span class="comment"># drop --watch from Claude Code args</span></pre>
+cartog ide --no-watch                 <span class="comment"># drop --watch from Claude Code args</span>
+cartog ide --remove                   <span class="comment"># interactive: pick configs to take cartog out of</span>
+
+cartog uninstall                      <span class="comment"># every config in scope that holds cartog</span>
+cartog uninstall cursor qwen          <span class="comment"># named editors only</span>
+cartog uninstall --dry-run            <span class="comment"># preview the removal</span></pre>
+        <p><code>cartog uninstall</code> removes only the <code>cartog</code> entry (Codex: this project's section) and keeps every other server. It never creates or deletes a file or folder, and a config it cannot parse (for example JSONC with comments) is left untouched and reported. With no client named it cleans every config in scope that holds cartog, even for an editor that is no longer installed.</p>
+        <p class="example-label">Example output (<code>cartog uninstall</code>)</p>
+        <pre class="example-output">- claude-code (project, /your/repo/.mcp.json): removed
+- cursor (project, /your/repo/.cursor/mcp.json): removed
+
+25 configs: 2 removed, 23 not wired, 0 skipped, 0 errors</pre>
         <p class="example-label">Example output (<code>cartog ide --client cursor --dry-run</code>)</p>
         <pre class="example-output">+ cursor (project, /your/repo/.cursor/mcp.json): would create
   --- after ---

@@ -2,7 +2,7 @@
 
 This page documents the config files cartog writes for each supported MCP client. Use it when you want to edit by hand instead of running `cartog ide`.
 
-> **Auto-setup**: `cartog ide` writes these files for you and handles scope (project vs user) and idempotent merging. See [usage.md — `cartog ide`](usage.md#cartog-ide---client-name---scope-projectuserall--y---dry-run---no-watch) for the auto-setup CLI.
+> **Auto-setup**: `cartog ide` writes these files for you and handles scope (project vs user) and idempotent merging; `cartog uninstall` takes the `cartog` entry out again. See [usage.md — `cartog ide`](usage.md#per-editor-wiring-cartog-ide) for the auto-setup CLI.
 
 All clients need `cartog` on your `PATH` first:
 

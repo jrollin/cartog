@@ -205,6 +205,8 @@ Three setup paths for agents and editors. Pick the one that matches your stack â
 | Claude Code plugin | You are on Claude Code and want install + skill + MCP wired in one step. | Bundled: binary install, behavioural skill, MCP server, all preconfigured. |
 | Agent skill | You use an agent that follows the skills protocol (Cursor, Copilot, others) and only need the behavioural rules, not MCP. | Skill files installed into the agent's skill directory; works alongside any install method. |
 
+To take the MCP entries out again, run `cartog uninstall` (or `cartog ide --remove` to pick which configs).
+
 ### Claude Code plugin
 
 Run these two commands **one at a time** in Claude Code:
