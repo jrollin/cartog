@@ -488,13 +488,48 @@ pub(super) fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     let mut tmp_name = file_name;
     tmp_name.push(format!(".cartog-{pid}.tmp"));
     let tmp = path.with_file_name(tmp_name);
-    fs::write(&tmp, contents).with_context(|| format!("could not write {}", tmp.display()))?;
     // Keep the original mode: a config can hold API keys in `env`.
-    if let Ok(meta) = fs::metadata(path) {
-        fs::set_permissions(&tmp, meta.permissions())
+    let perms = fs::metadata(path).ok().map(|meta| meta.permissions());
+    let result = write_and_swap(&tmp, path, contents, perms.as_ref());
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn write_and_swap(
+    tmp: &Path,
+    path: &Path,
+    contents: &str,
+    perms: Option<&fs::Permissions>,
+) -> Result<()> {
+    use std::io::Write;
+
+    let mut file =
+        create_tmp(tmp, perms).with_context(|| format!("could not create {}", tmp.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("could not write {}", tmp.display()))?;
+    // `create_tmp`'s mode is masked by the umask: set the exact one.
+    if let Some(perms) = perms {
+        fs::set_permissions(tmp, perms.clone())
             .with_context(|| format!("could not copy permissions onto {}", tmp.display()))?;
     }
-    fs::rename(&tmp, path)
-        .with_context(|| format!("could not move tmp file into {}", path.display()))?;
-    Ok(())
+    fs::rename(tmp, path)
+        .with_context(|| format!("could not move tmp file into {}", path.display()))
+}
+
+/// Create the temp file fresh (a stale or planted one is replaced, never written
+/// through) and, on Unix, with the final mode before any byte of the config lands.
+pub(super) fn create_tmp(tmp: &Path, perms: Option<&fs::Permissions>) -> std::io::Result<fs::File> {
+    let _ = fs::remove_file(tmp);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if let Some(perms) = perms {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(perms.mode());
+    }
+    #[cfg(not(unix))]
+    let _ = perms;
+    options.open(tmp)
 }
