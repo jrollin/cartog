@@ -11,8 +11,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  versions:
+    name: Version anchors match tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: bash scripts/check-versions.sh "$GITHUB_REF_NAME"
+
   build:
     name: Build ${{ matrix.target }}
+    needs: versions
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

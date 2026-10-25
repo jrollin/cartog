@@ -1,8 +1,8 @@
-.PHONY: check check-rust check-flaky check-fixtures check-fixtures-docker check-skill check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-csharp check-c check-cpp check-kt check-vue check-svelte check-astro check-react check-install-script tla loom bench bench-memory bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
+.PHONY: check check-rust check-flaky check-fixtures check-fixtures-docker check-skill check-versions check-py check-ts check-go check-rs check-rb check-java check-php check-dart check-swift check-csharp check-c check-cpp check-kt check-vue check-svelte check-astro check-react check-install-script tla loom bench bench-memory bench-resolution bench-resolution-docker bench-resolution-scale lsp-images bench-criterion bench-rag bench-onnx bench-agent eval-skill eval-agents
 
 # --- Full integrity check ---
 
-check: check-rust check-fixtures check-skill check-install-script ## Run all integrity checks
+check: check-rust check-fixtures check-skill check-versions check-install-script ## Run all integrity checks
 
 # --- Install script ---
 #
@@ -221,6 +221,9 @@ check-skill: ## Run skill tests (ensure_indexed.sh + drift_notice.sh + update_on
 	@bash skills/cartog/tests/test_drift_notice.sh
 	@bash skills/cartog/tests/test_update_on_exit.sh
 	@bash skills/cartog/tests/test_install.sh
+
+check-versions: ## Verify every version anchor bumped by release.sh matches Cargo.toml
+	@bash scripts/check-versions.sh
 
 eval-skill: ## Run LLM-as-judge skill evaluation (requires claude CLI)
 	bash skills/cartog/tests/eval.sh

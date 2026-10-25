@@ -5,13 +5,21 @@ on:
     branches: [main]
     paths:
       - "skills/**"
+      - "agents/**"
       - ".claude-plugin/**"
+      - "Cargo.toml"
+      - "editors/vscode/package.json"
+      - "scripts/check-versions.sh"
       - ".github/workflows/skill-tests.yml"
   pull_request:
     branches: [main]
     paths:
       - "skills/**"
+      - "agents/**"
       - ".claude-plugin/**"
+      - "Cargo.toml"
+      - "editors/vscode/package.json"
+      - "scripts/check-versions.sh"
       - ".github/workflows/skill-tests.yml"
 
 # These jobs run on `pull_request` and execute shell scripts from the branch
@@ -56,3 +64,25 @@ jobs:
         with:
           persist-credentials: false
       - run: bash skills/cartog/tests/test_install.sh
+
+  versions:
+    name: Version anchors in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: bash scripts/check-versions.sh
+
+  plugin-validate:
+    name: Claude plugin manifest valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Pinned: validator rules change between CLI releases; bump deliberately.
+      - run: npx --yes @anthropic-ai/claude-code@2.1.296 plugin validate .
