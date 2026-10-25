@@ -48,6 +48,7 @@ instead of duplicating an existing one.
 | RAG relevancy (`rag_relevancy.rs`) | Does hybrid search return the right symbols? | `cargo test --test rag_relevancy` | reused by `bench-rag` |
 | Fixture integrity | Do the 10 fixture codebases compile/parse? | `make check-fixtures` | validates inputs, not cartog |
 | Skill shell tests | Does `ensure_indexed.sh`/`install.sh` logic hold? | `make check-skill` | bash-level |
+| Version anchors | Do the plugin, VS Code and `cartog-install` versions match `Cargo.toml`? | `make check-versions` | also gates release tags |
 | Skill eval | Does the agent pick the **right cartog command first**? (tools off) | `make eval-skill` | LLM judge, tool-selection only |
 | Agent eval | Same, for the agent definitions | `make eval-agents` | LLM judge, tool-selection only |
 | Criterion benches | How fast is cartog's own CPU work (µs–ms)? | `make bench-criterion` | in-process latency |

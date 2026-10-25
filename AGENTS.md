@@ -27,11 +27,12 @@ cargo check --features provider-openai -p cartog-rag # verify OpenAI feature
 ### Integrity checks
 
 ```bash
-make check                 # all checks (Rust project + fixtures + skill)
+make check                 # all checks (Rust project + fixtures + skill + versions)
 make check-rust            # cargo fmt + clippy + test
 make check-fixtures        # validate all fixture codebases (py, ts, go, rs, rb, java, php, dart, swift, kt)
 make check-fixtures-docker # same, forcing the Docker fallback for every language
 make check-skill           # skill tests (ensure_indexed.sh unit tests)
+make check-versions        # every version anchor release.sh bumps matches Cargo.toml
 make check-flaky           # repeat the full suite 4x (N=8 for more) to surface cross-test interference
 make eval-skill            # LLM-as-judge skill evaluation (requires claude CLI)
 make eval-agents           # LLM-as-judge agent evaluation (requires claude CLI)
@@ -53,7 +54,7 @@ falls back to a pinned official Docker image, else fails. `check-ts` is now part
 claude plugin validate .   # validate the Claude plugin manifest (.claude-plugin/) — run after every plugin update
 ```
 
-Run `make check` before committing. Run `make eval-skill` after changing skill SKILL.md or search routing. Run `make eval-agents` after changing agent definitions. Run `claude plugin validate .` every time the Claude plugin is updated.
+Run `make check` before committing. Run `make eval-skill` after changing skill SKILL.md or search routing. Run `make eval-agents` after changing agent definitions. Run `claude plugin validate .` every time the Claude plugin is updated (CI runs it too, with a pinned CLI).
 
 ## Code Conventions
 
@@ -190,7 +191,8 @@ In order:
 - **Supply-chain gates** (CI, on every PR): `cargo audit` (RUSTSEC advisories), `cargo deny check` (license/ban/source policy in `deny.toml`), and a `cargo cyclonedx` SBOM. Adding or bumping a dependency means running `cargo audit` and `cargo deny check` locally first — CI is red without them, and a new CVE must be surfaced before the dep lands, not after. A newly-published advisory against an existing transitive dep can turn CI red on an unrelated PR (and on `main`); when no upstream fix exists, ignore the specific RUSTSEC ID in **both** `deny.toml [advisories].ignore` **and** `.cargo/audit.toml` (the two ignore lists must stay in sync) with a dated rationale + a removal condition — never blanket-disable the gate. Current ignores: none.
 - **Perf gate** (CI, on PRs): the `queries` and `rag_search` criterion benches run with `--baseline base` against the PR's merge base; a regression there fails CI. The `cartog-indexer/indexing` bench is report-only (artifact, not gated). So a hot-path change to symbol queries or hybrid search must hold its bench — re-run `cargo bench -p cartog --bench queries`/`--bench rag_search` locally to check before pushing.
 - **Git-sourced dependency**: `tree-sitter-ruby` is pinned by `[patch.crates-io]` to upstream commit `ad907a69`. That commit fixes a heredoc scanner bug whose C `assert` aborts the whole index (tree-sitter-ruby#269), and it has not been published to crates.io. `deny.toml` `allow-git` permits that one repository. The patch applies to binaries built from this workspace: GitHub Releases, `install.sh` and self-update. It does not apply to `cargo install cartog` from crates.io. Remove both entries once tree-sitter-ruby publishes a release newer than 0.23.1 (tree-sitter-ruby#300).
-- **Release** (`.github/workflows/release.yml`): runs on tag push (`v*`) — builds binaries for 4 targets, creates GitHub Release, publishes to crates.io
+- **Plugin + version gates** (`.github/workflows/skill-tests.yml`): on changes to `skills/`, `agents/`, `.claude-plugin/`, `Cargo.toml` or the VS Code manifest, runs `scripts/check-versions.sh` (each anchor `release.sh` bumps must equal `[workspace.package] version`) and `claude plugin validate .` with a pinned CLI. `ci.yml` ignores `skills/**` and `.claude-plugin/**`, which is why these live here.
+- **Release** (`.github/workflows/release.yml`): runs on tag push (`v*`) — checks the tag against `scripts/check-versions.sh`, builds binaries for 4 targets, creates GitHub Release, publishes to crates.io
 - **Targets** (4): `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`
 - **Secrets required**: `CARGO_REGISTRY_TOKEN` (crates.io), `CODECOV_TOKEN` (Codecov)
 
