@@ -217,6 +217,9 @@ fn build_minimal_index(repo_dir: &Path, db_path: &Path) {
         Command::new("git")
             .args(args)
             .current_dir(repo_dir)
+            // A developer's global config (e.g. commit.gpgsign) must not reach the fixture.
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
