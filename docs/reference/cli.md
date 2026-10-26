@@ -160,7 +160,7 @@ Indentation shows depth.
 One-shot task bundle for an agent. Fuses three signals into one token-budgeted bundle of symbols and bodies:
 
 - hybrid search seeds for the task text
-- 1-hop neighbors of each seed
+- 1-hop neighbors of the top 3 seeds (default)
 - centrality of the seed files
 
 Default budget is 6000 tokens.

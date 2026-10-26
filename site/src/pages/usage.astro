@@ -332,7 +332,7 @@ federated = false                <span class="comment"># DEFAULT — cross-proje
               <td><strong>Reranker</strong></td>
               <td><code>jinaai/jina-reranker-v1-turbo-en</code> (default)</td>
               <td><code>jinaai/jina-reranker-v1-turbo-en</code></td>
-              <td>, </td>
+              <td>-</td>
               <td>~150MB</td>
             </tr>
           </tbody>
@@ -652,7 +652,7 @@ cartog serve --federated      <span class="comment"># also expose the 2 cross-pr
             <tr><td><code>title</code></td><td>e.g. "Search symbols", "Find references"</td><td>e.g. "Index codebase"</td></tr>
             <tr><td><code>readOnlyHint</code></td><td><code>true</code> client can run without an approval prompt</td><td><code>false</code> mutates state (<code>cartog_update</code> writes the machine-level update file, not the index)</td></tr>
             <tr><td><code>openWorldHint</code></td><td><code>false</code> closed domain (the local index)</td><td><code>false</code></td></tr>
-            <tr><td><code>outputSchema</code></td><td>present, typed result schema</td><td>, </td></tr>
+            <tr><td><code>outputSchema</code></td><td>present, typed result schema</td><td>-</td></tr>
           </tbody>
         </table>
 
@@ -702,7 +702,7 @@ cartog serve --federated      <span class="comment"># also expose the 2 cross-pr
             <tr><td>Cursor (≥ 1.7.39)</td><td>yes</td><td>yes</td></tr>
             <tr><td>GitHub Copilot CLI (≥ 0.0.389)</td><td>yes</td><td>yes (text)</td></tr>
             <tr><td>Claude Code</td><td>no</td><td>no</td></tr>
-            <tr><td>Claude Desktop</td><td>, </td><td>no (received, not surfaced)</td></tr>
+            <tr><td>Claude Desktop</td><td>-</td><td>no (received, not surfaced)</td></tr>
             <tr><td>opencode</td><td>no</td><td>no (no progress handler wired today)</td></tr>
           </tbody>
         </table>
@@ -1482,7 +1482,7 @@ cartog --tokens 200 outline src/db.rs</pre>
             <tr><td>Vue</td><td>.vue</td><td>whole-file component symbol + &lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
             <tr><td>Svelte</td><td>.svelte</td><td>whole-file component symbol + &lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
             <tr><td>Astro</td><td>.astro</td><td>whole-file component symbol + frontmatter + &lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
-            <tr><td>Markdown</td><td>.md</td><td>document sections (chunked by heading)</td><td>, </td></tr>
+            <tr><td>Markdown</td><td>.md</td><td>document sections (chunked by heading)</td><td>-</td></tr>
           </tbody>
         </table>
         <p>Vue, Svelte, and Astro index the <code>&lt;script&gt;</code> block (Astro: the <code>---</code> frontmatter too), plus one whole-file <code>component</code> symbol per file named after the file stem (<code>login-form.vue</code> becomes <code>LoginForm</code>), which is what component imports and <code>&lt;X/&gt;</code> usages resolve to. An index built before component symbols existed only gains them as SFC files change, so run <code>cartog index --force</code> once after upgrading to backfill them. Template markup and component tags in the template are not extracted; the other symbols and edges above (including JSX usage) refer to code inside those script/frontmatter sections.</p>

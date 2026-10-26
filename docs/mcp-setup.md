@@ -378,6 +378,6 @@ The config pattern is always the same, point the client at `cartog serve` over s
 
 ## See also
 
-- [usage.md (`cartog ide`](usage.md)) auto-setup CLI (writes these files for you)
-- [usage.md (Available MCP tools](usage.md#available-tools)) what each `cartog_*` tool returns
+- [usage.md (`cartog ide`)](usage.md): auto-setup CLI (writes these files for you)
+- [mcp-tools.md (Available tools)](reference/mcp-tools.md#available-tools): what each `cartog_*` tool returns
 - [editor-integration.md](editor-integration.md), non-MCP integration (CLI shell-out, quickfix, picker) for Neovim, Emacs, etc.
