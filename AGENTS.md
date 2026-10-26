@@ -198,7 +198,7 @@ In order:
   - Marketplace: Entra workload identity (`azure/login` OIDC under the `marketplace-publish` environment), no PAT.
   - Open VSX: `OVSX_PAT`.
   - Recovery: `gh workflow run publish-vscode.yml -f tag=vX.Y.Z` republishes one tag to the Marketplace only.
-  - A green job does not prove a publish (each registry is `continue-on-error`): query both registries, and allow about 6 minutes for the Marketplace.
+  - A green job means at least one registry published, not both (each is `continue-on-error`, and the job fails only if both fail): query both registries, and allow about 6 minutes for the Marketplace.
 - **Secrets required**: `CARGO_REGISTRY_TOKEN` (crates.io), `CODECOV_TOKEN` (Codecov), `OVSX_PAT` (Open VSX), `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` (Marketplace Entra identity)
 
 ### Release Process
