@@ -169,8 +169,9 @@ Do this once:
    - Not entity type Tag: it matches one exact tag, not every `v*`.
 4. Create the GitHub environment `marketplace-publish` (*Settings →
    Environments*) and add `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` as secrets.
-   - Limit the environment to `v*` tags only after step 5, which runs from a
-     branch.
+   - Optionally limit it to `v*` tags and the `main` branch, but only after
+     step 5, which runs from another branch.
+   - `main` is needed by [Republish a tag](#republish-a-tag).
 5. Look up the identity's Marketplace profile id. It is not the Client ID, the
    Object ID or the resource ID. A managed identity cannot sign in from a
    laptop, so run this workflow once from a throwaway branch, copy the `id` from
@@ -202,6 +203,22 @@ Do this once:
 Do not rely on `vsce verify-pat --azure-credential` to check the setup: in
 vsce #1023 it passed while publish still failed. Check the Marketplace listing's
 version instead.
+
+### Republish a tag
+
+When the release run's Marketplace publish failed, publish that tag without
+re-running the release:
+
+```bash
+gh workflow run publish-vscode.yml -f tag=v0.35.0
+```
+
+- The workflow checks out the tag, packages the `.vsix` and publishes it to the
+  Marketplace only.
+- It runs under the `marketplace-publish` environment, from `main`.
+- It fails if the Marketplace already has that version.
+- Open VSX is not touched: publish there with the manual step above if it is
+  also missing.
 
 [adopat]: https://devblogs.microsoft.com/devops/retirement-of-global-personal-access-tokens-in-azure-devops/
 [vsce-entra]: https://code.visualstudio.com/api/working-with-extensions/publishing-extension#secure-automated-publishing-to-visual-studio-marketplace
