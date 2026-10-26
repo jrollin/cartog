@@ -22,7 +22,7 @@ measures cartog's retrieval quality directly, with no LLM edit loop.
 ## Setup
 
 ContextBench pins `tree-sitter==0.20.4` and `tree-sitter-languages`, which do not
-build/install on Python ≥ 3.12. Use the modern stack instead — the ContextBench
+build/install on Python ≥ 3.12. Use the modern stack instead, the ContextBench
 code already falls back to `tree_sitter_language_pack`:
 
 ```bash
@@ -80,7 +80,7 @@ EditLoc) is printed to stderr; per-instance breakdowns go to `results.jsonl`.
 - **Empty gold symbols.** Some gold contexts (often Python) annotate file-header /
   import regions that don't overlap a tree-sitter `function`/`class` node, so
   ContextBench extracts zero gold symbols. Symbol-level Coverage/Precision then
-  reads 1.000/1.000 vacuously — treat file + span + EditLoc as the trustworthy
+  reads 1.000/1.000 vacuously, treat file + span + EditLoc as the trustworthy
   axes for those instances.
 - **Wall-clock is dominated by clone+index** of large repos (django, transformers,
   cli). Scope runs by language and/or `--limit`; repos are cached under `--cache`
@@ -96,14 +96,14 @@ EditLoc) is printed to stderr; per-instance breakdowns go to `results.jsonl`.
   snake_case identifiers from the issue text. `--rag-index` (vector search on)
   also rescues prose queries.
 - **`cartog rag setup` is a prerequisite for `--rag-index`.** Without embeddings,
-  `vec_count=0` and only FTS keyword matching is live — which is what made the
+  `vec_count=0` and only FTS keyword matching is live, which is what made the
   first run's TypeScript coverage collapse.
 
 ## Interpreting results
 
 cartog is built for **high recall** retrieval (hybrid search + 1-hop graph
 neighbors + centrality), so expect strong file/span **coverage** and lower
-**precision** — exactly the recall-over-precision tradeoff the ContextBench paper
+**precision**, exactly the recall-over-precision tradeoff the ContextBench paper
 identifies across agents. The honest way to report cartog is a coverage-precision
 table per language, optionally sweeping `--tokens` to trace the tradeoff curve.
 
@@ -143,17 +143,17 @@ Evaluator pooled overall: file 0.477/0.115, span 0.139/0.094, line 0.130/0.096,
 EditLoc recall 0.013.
 
 Hybrid minus FTS-only, file coverage: java **+0.196**, typescript **+0.127**
-(plus 2× span coverage there), rust/go **0.000** (identifier-rich issues —
+(plus 2× span coverage there), rust/go **0.000** (identifier-rich issues, 
 keywords already saturate), python **−0.015** (a wash, within noise). Vector
 search pays where issue prose and code vocabulary diverge (java, typescript)
 and costs nothing elsewhere. Caveat: the ablation ran `--no-lsp` on all 38
-while the hybrid run had LSP on 34, so the deltas bundle both effects — but
+while the hybrid run had LSP on 34, so the deltas bundle both effects, but
 LSP only changes 1-hop neighbor expansion (heuristics resolve ~90% of edges),
 so the vector effect dominates.
 
 Caveats for reading these numbers:
 
-- **Symbol-level metrics are omitted — they are vacuous on this dataset.** The
+- **Symbol-level metrics are omitted, they are vacuous on this dataset.** The
   evaluator (under the `tree-sitter-language-pack` fallback) extracted zero
   gold symbols on every one of the 38 instances, so symbol coverage/precision
   read 1.000/1.000 by the 0/0 convention and carry no information.
@@ -165,17 +165,17 @@ Caveats for reading these numbers:
   1-hop graph neighbors; an agent can skim past extras, but it cannot use
   files that were never retrieved.
 - **File ceiling** is the max achievable file coverage: 5 of 86 gold files
-  are unreachable in principle (build/config files cartog doesn't index —
-  Makefile, 2× package.json, pom.xml — plus one issue-attached reproducer
+  are unreachable in principle (build/config files cartog doesn't index, 
+  Makefile, 2× package.json, pom.xml, plus one issue-attached reproducer
   outside the repo tree). rust/go sit at their ceiling; the
   python/typescript gaps are genuine retrieval headroom.
 - **Java span coverage (0.075) understates retrieval there**: java gold
   spans are whole-class regions (often 300+ lines from line 1, imports and
-  class header included) while cartog returns method-level spans — java's
+  class header included) while cartog returns method-level spans, java's
   span *precision* (0.404) is the highest of any language. Right
   neighborhoods, small slices.
 - 34 instances were indexed with LSP edge resolution; 4 oversized repos
   (transformers ×2, django-11603, material-ui-32626) used `--no-lsp` after
   blowing the index timeout. This affects only 1-hop neighbor expansion,
   not search seeds.
-- n is tiny for rust/go/java — single instances move those means a lot.
+- n is tiny for rust/go/java, single instances move those means a lot.

@@ -22,7 +22,7 @@ The qualified name encodes the parent chain with `.` separators:
 - Method in class: `src/auth.py:method:TokenService.validate`
 - Nested class: `src/auth.py:class:Outer.Inner`
 
-This ID is **invariant to line movements** within a file — renaming or moving lines won't change it, only renaming the symbol or its parent chain will.
+This ID is **invariant to line movements** within a file, renaming or moving lines won't change it, only renaming the symbol or its parent chain will.
 
 ### Builder pattern
 

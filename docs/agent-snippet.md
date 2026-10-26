@@ -86,9 +86,9 @@ microseconds — far cheaper than grep + read.
 
 ## Why this works
 
-- Tells the agent **when** to prefer cartog (the hard part — most agents default to grep)
+- Tells the agent **when** to prefer cartog (the hard part, most agents default to grep)
 - Lists the most-used of cartog's 16 MCP tools by their canonical names so the agent calls them directly
 - Names the fall-back conditions so the agent doesn't get stuck
-- Self-contained — no links to follow at decision time
+- Self-contained, no links to follow at decision time
 
-For the full tool reference, see [usage.md — Available tools](usage.md#available-tools).
+For the full tool reference, see [usage.md: Available tools](usage.md#available-tools).

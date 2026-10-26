@@ -3,9 +3,9 @@
 Code-graph navigation and semantic search for AI coding agents, inside VS Code.
 
 This extension registers [cartog](https://github.com/jrollin/cartog) as an MCP
-server with GitHub Copilot. Copilot's agent can then call cartog's 16 tools —
+server with GitHub Copilot. Copilot's agent can then call cartog's 16 tools, 
 symbol search, semantic search, references, call-path tracing, impact analysis,
-and more — across Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, C#, PHP,
+and more, across Python, TypeScript/JavaScript, Rust, Go, Ruby, Java, C#, PHP,
 C, C++, Dart, Swift, Kotlin, Vue, Svelte, Astro, and Markdown.
 
 ## What it does
@@ -16,7 +16,7 @@ on your machine and hands VS Code a stdio MCP server definition for
 editing `.vscode/mcp.json`** and without the GUI-launch `PATH` problem that a
 hand-written config hits when VS Code is opened from Finder or the Dock.
 
-It ships no binary and adds no new tools — the same `cartog` the CLI runs.
+It ships no binary and adds no new tools, the same `cartog` the CLI runs.
 
 Because of that, the extension's version tracks the `cartog` release it targets,
 and its [changelog](CHANGELOG.md) lists that release's changes: new languages,
@@ -30,11 +30,11 @@ isn't found you'll get a prompt offering to install it.
 
 On macOS and Linux, click **Install cartog** in that prompt: the extension opens
 a terminal with the installer command (pinned to the extension's version) typed
-in but **not run** — review the `curl … | sh` line and press Enter to install.
+in but **not run**, review the `curl … | sh` line and press Enter to install.
 When it finishes, run **cartog: Recheck** from the Command Palette to register
 the server; it then offers to set up and index the current repo (writing a
 `.cartog.toml`, then building the graph). (On Windows, follow the
-[install instructions](https://www.cartog.dev/usage.html) — download the
+[install instructions](https://www.cartog.dev/usage.html), download the
 `.zip` from Releases.)
 
 Or install cartog yourself (no Rust required):
@@ -49,7 +49,7 @@ Or with Cargo:
 cargo install cartog
 ```
 
-Then set up the repo once — two commands, the same as the
+Then set up the repo once, two commands, the same as the
 [CLI quickstart](https://www.cartog.dev/usage.html):
 
 ```bash
@@ -58,7 +58,7 @@ cartog index                  # 2. build the code graph
 ```
 
 Both are idempotent: `init` never overwrites an existing config, and `index` is
-incremental. `cartog init` is what opts the project in — without a
+incremental. `cartog init` is what opts the project in, without a
 `.cartog.toml` (or an existing index) `cartog index` refuses rather than
 creating one on its own.
 
@@ -72,7 +72,7 @@ In order, the first match wins:
 4. `~/.local/bin/cartog`, then `~/.cargo/bin/cartog`.
 
 This mirrors the cartog installer, so the extension finds whatever the
-installer placed — even when VS Code's process `PATH` is missing your shell's.
+installer placed, even when VS Code's process `PATH` is missing your shell's.
 
 ## Settings
 

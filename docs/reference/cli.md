@@ -21,9 +21,9 @@ auto = CPU count, clamped `1..=64`; use `1` for single-threaded). It overrides
 index; for daemons (`serve`/`watch`, which take no flag) set `CARTOG_JOBS` or
 `[index] jobs`.
 
-Incremental by default — skips unchanged files (git diff + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. Stable symbol IDs (`file:kind:qualified_name`) survive line movements, so edges from unchanged files remain valid. The LSP pass skips edges already classified as `resolution_state = 2` (unresolvable: typo, dynamic dispatch, or macro — retried when a matching symbol appears in-tree) or `3` (external: stdlib, dependency, or node_modules — also retried on new in-tree symbols). Use `--force` when results seem stale or after updating cartog itself — it resets state-2 and state-3 markers for a clean retry. See [../explanation/incremental-indexing.md](../explanation/incremental-indexing.md) for full details on change detection layers and edge states.
+Incremental by default, skips unchanged files (git diff + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. Stable symbol IDs (`file:kind:qualified_name`) survive line movements, so edges from unchanged files remain valid. The LSP pass skips edges already classified as `resolution_state = 2` (unresolvable: typo, dynamic dispatch, or macro, retried when a matching symbol appears in-tree) or `3` (external: stdlib, dependency, or node_modules, also retried on new in-tree symbols). Use `--force` when results seem stale or after updating cartog itself, it resets state-2 and state-3 markers for a clean retry. See [../explanation/incremental-indexing.md](../explanation/incremental-indexing.md) for full details on change detection layers and edge states.
 
-When a `cartog serve` for the same database is running (e.g. the MCP server of an active agent session), `cartog index` skips its own LSP pass — avoiding the language-server cold start (~20-40s for rust-analyzer) — and defers edge resolution to the serve peer's warm servers, which catch up on the server's next `cartog_index` call. In human mode the deferral prints a `note:` on stderr; under `--json`, stderr stays note-free and the result carries `lsp_deferred_to_peer: true` instead. The deferral never applies to a first-ever index. `--force` always runs the LSP pass locally.
+When a `cartog serve` for the same database is running (e.g. the MCP server of an active agent session), `cartog index` skips its own LSP pass (avoiding the language-server cold start (~20-40s for rust-analyzer)) and defers edge resolution to the serve peer's warm servers, which catch up on the server's next `cartog_index` call. In human mode the deferral prints a `note:` on stderr; under `--json`, stderr stays note-free and the result carries `lsp_deferred_to_peer: true` instead. The deferral never applies to a first-ever index. `--force` always runs the LSP pass locally.
 
 Files whose language cartog doesn't support are reported, not silently dropped: on a mixed repo the summary adds a line like `12 files in unsupported languages not indexed (8 .scala, 4 .ex)`. The `--json` output carries the same data as `files_unsupported` (count) and `unsupported_by_ext` (`[ext, count]`, descending). cartog's own database sidecars (`.cartog.db*`, `db.sqlite*`) are excluded from the tally.
 
@@ -33,7 +33,7 @@ On a TTY a spinner shows the live phase with a climbing counter (`parsing M/N fi
 
 ### `cartog search <query> [--kind <kind>] [--file <path>] [--limit N] [--all]`
 
-Find symbols by partial name — use this when you know roughly what you're looking for but need the exact name before calling `refs`, `callees`, or `impact`.
+Find symbols by partial name, use this when you know roughly what you're looking for but need the exact name before calling `refs`, `callees`, or `impact`.
 
 ```bash
 cartog search validate                       # prefix + substring match
@@ -95,9 +95,9 @@ on its own, and results stay grouped under the project they came from. So:
 how many databases are opened, most-symbols-first; when the cap elides
 candidates the output says so. A project that cannot be read is listed with the
 **reason** (a schema drift, a corrupt file and a permission error need different
-fixes) rather than silently skipped — including when *nothing* could be read, in
+fixes) rather than silently skipped, including when *nothing* could be read, in
 which case the output says the search could not run rather than reporting a
-no-match that would read as "the symbol is not there". `--under` accepts `~` and `~/path` — a bare `~` is your home directory, while `~user` is left as written rather than guessing another account's home — and composes with
+no-match that would read as "the symbol is not there". `--under` accepts `~` and `~/path`, a bare `~` is your home directory, while `~user` is left as written rather than guessing another account's home, and composes with
 `--lang` as an AND.
 
 `--file` is **not** combinable with `--all`: a path in one project means nothing
@@ -127,7 +127,7 @@ class Database  L62-500
 
 ### `cartog callees <name>`
 
-Find what a function calls — answers "what does this depend on?".
+Find what a function calls, answers "what does this depend on?".
 
 ```bash
 cartog callees validate_token
@@ -141,7 +141,7 @@ ExpiredTokenError  auth/tokens.py:42
 
 ### `cartog impact <name> [--depth N]`
 
-Transitive impact analysis — follows the caller chain up to N hops (default 3). Answers "what breaks if I change this?".
+Transitive impact analysis, follows the caller chain up to N hops (default 3). Answers "what breaks if I change this?".
 
 ```bash
 cartog impact validate_token --depth 3
@@ -154,6 +154,28 @@ cartog impact validate_token --depth 3
 ```
 
 Indentation shows depth.
+
+### `cartog context <task> [--tokens N]`
+
+One-shot task bundle for an agent. Fuses three signals into one token-budgeted bundle of symbols and bodies:
+
+- hybrid search seeds for the task text
+- 1-hop neighbors of each seed
+- centrality of the seed files
+
+Default budget is 6000 tokens.
+
+```bash
+cartog context "add rate limiting to the login endpoint" --tokens 4000
+```
+
+### `cartog trace <from> <to> [--depth N]`
+
+Shortest call path between two symbols. Search runs forward over static `calls` edges only. Each hop shows its body inline. Default maximum path length is 8.
+
+```bash
+cartog trace login_handler validate_token
+```
 
 ### `cartog refs <name> [--kind <kind>]`
 
@@ -175,7 +197,7 @@ Available `--kind` values: `calls`, `imports`, `inherits`, `references`, `raises
 
 ### `cartog hierarchy <class> [--mermaid]`
 
-Show inheritance relationships involving a class — both parents and children.
+Show inheritance relationships involving a class, both parents and children.
 Add `--mermaid` for a `graph TD` diagram you can paste into a PR or doc.
 
 ```bash
@@ -198,7 +220,7 @@ graph TD
 
 ### `cartog deps <file> [--mermaid]`
 
-List symbols imported by a file — answers "what does this file depend on?".
+List symbols imported by a file, answers "what does this file depend on?".
 Add `--mermaid` for a `graph LR` diagram rooted at the file.
 
 ```bash
@@ -224,7 +246,7 @@ graph LR
 
 ### `cartog stats [--savings]`
 
-Summary of the index — file count, symbol count, edge resolution rate. Pass
+Summary of the index, file count, symbol count, edge resolution rate. Pass
 `--savings` to instead show per-tool query counts and estimated tokens saved
 versus a grep+read baseline (or use the [`cartog savings`](#cartog-savings)
 top-level alias).
@@ -250,7 +272,7 @@ Symbols by kind:
 ```
 
 On an unindexed repo all counts are `0` and the output ends with
-`Index is empty — run \`cartog index .\` to build the code graph.`
+`Index is empty, run \`cartog index .\` to build the code graph.`
 
 ### `cartog savings`
 
@@ -286,7 +308,7 @@ Measured across 13 benchmark scenarios (see benchmarks/scenarios/).
 
 The header line is `cartog · <project> · <N> queries`, where `<project>` is
 the directory holding `.cartog/`. **By tool** lists *call counts*, not per-tool
-token savings — every tool uses the same baseline (1,420 tokens saved per
+token savings, every tool uses the same baseline (1,420 tokens saved per
 call), so the breakdown shows which navigation patterns the user actually
 relies on, not which one saved the most.
 
@@ -295,7 +317,7 @@ Empty-index calls, typo'd symbol names, and "no such file" outline calls are
 skipped so the figure reflects real work, not zero-value pings.
 
 Data comes from a local `query_log` table inside `.cartog/db.sqlite`. Nothing
-leaves the machine; no query payloads are recorded — only the tool name, call
+leaves the machine; no query payloads are recorded, only the tool name, call
 surface (`cli` / `mcp`), and a timestamp. Secondary read-only MCP attaches
 skip the write (they can't write at all), so multi-MCP-server setups *under-*
 report secondary traffic rather than double-counting it.
@@ -303,7 +325,7 @@ report secondary traffic rather than double-counting it.
 **JSON schema** (`cartog --json savings`): v0.18+ adds `tokens_used_cartog`,
 `tokens_used_grep`, and `percent_saved` to the existing
 `{by_tool, by_source, total_queries, estimated_tokens_saved, baseline_delta}`.
-Consumers must not parse with `deny_unknown_fields` — additive fields are
+Consumers must not parse with `deny_unknown_fields`, additive fields are
 expected as the metric evolves.
 
 ### `cartog push [--remote <s3-url>]`
@@ -341,7 +363,7 @@ a clear error pointing at the reinstall command.
 
 ### `cartog map [--tokens N] [--mermaid]`
 
-Token-budget-aware codebase summary — file tree + top symbols ranked by reference count (in-degree centrality). Add `--mermaid` for a `graph TD` rooted at "Repo"; the token budget still applies (the renderer stops adding nodes before it overflows).
+Token-budget-aware codebase summary, file tree + top symbols ranked by reference count (in-degree centrality). Add `--mermaid` for a `graph TD` rooted at "Repo"; the token budget still applies (the renderer stops adding nodes before it overflows).
 
 ```bash
 cartog map                    # default 4000 tokens
@@ -385,7 +407,7 @@ graph TD
 
 ### `cartog changes [--commits N] [--kind <kind>]`
 
-Show symbols affected by recent git changes — answers "what code changed recently?".
+Show symbols affected by recent git changes, answers "what code changed recently?".
 
 ```bash
 cartog changes                        # last 5 commits + working tree
@@ -433,7 +455,7 @@ cartog doctor
   [+] reranker: jinaai/jina-reranker-v1-turbo-en cached
   [+] remote: not configured (local-only)
   [+] description: "Invoice generation and payment reconciliation." (config)
-  [+] version: 0.33.0 is up to date
+  [+] version: 0.34.2 is up to date
 
 All 10 checks passed
 ```
@@ -442,16 +464,16 @@ All 10 checks passed
 
 | Check | OK | Warn | Error |
 |-------|-----|------|-------|
-| git | Inside a git repo | — | Not a git repo |
-| config | `.cartog.toml` found and parsed | No config file (using defaults) | — |
-| paths | Always — an inventory row, not a health check | — | — |
+| git | Inside a git repo | - | Not a git repo |
+| config | `.cartog.toml` found and parsed | No config file (using defaults) | - |
+| paths | Always, an inventory row, not a health check | - | |
 | database | DB exists with indexed data | DB empty or missing | DB cannot be opened |
-| lsp | A server is available for every indexed language | A server is missing, or clangd has no compile database | — |
+| lsp | A server is available for every indexed language | A server is missing, or clangd has no compile database | - |
 | embedding | Local model cached / Ollama reachable | Local model not downloaded | Ollama unreachable / unknown provider |
 | reranker | Model cached / disabled | Model not downloaded | Unknown provider |
 | remote | Not configured, or the bucket is reachable | `url` empty, unreachable, or config rejected | `[remote]` set but built without `remote-s3` |
-| description | `[project] description` or a `README.md` paragraph is available | No description from either source | — |
-| version | Up to date, or the check is disabled/unreachable | A newer stable release exists | — |
+| description | `[project] description` or a `README.md` paragraph is available | No description from either source | - |
+| version | Up to date, or the check is disabled/unreachable | A newer stable release exists | - |
 
 Exits with code 1 if any check is an error. Supports `--json` for structured output.
 
@@ -460,7 +482,7 @@ and registers normally, but `cartog_list_projects` and `cartog projects list` sh
 route on for it. Fix it with a `[project] description` line or a README opening paragraph, then
 `cartog index` (see [config.md § Project identity](config.md#project-identity-project)).
 
-**`version`** queries the GitHub releases API with an 800 ms timeout — much
+**`version`** queries the GitHub releases API with an 800 ms timeout, much
 shorter than the 5 s `cartog self update` allows, because there waiting for an
 answer *is* the task, while doctor is what you run when something is already
 broken. A failed probe reports `latest unknown` and stays OK: being offline is
@@ -482,7 +504,7 @@ candidate servers (Ruby: `ruby-lsp`, `solargraph`) lists all of them, since they
 carry different minimum runtimes. When C or C++ is indexed and `clangd` is
 reachable, it also checks for a `compile_commands.json` or `compile_flags.txt`
 covering the directories that actually hold the C/C++ sources, walking up to the
-project root — a polyglot repo (a Rust workspace with a C fixture, a vendored
+project root, a polyglot repo (a Rust workspace with a C fixture, a vendored
 native dependency) is never asked for a compile database at a root where one
 would be meaningless. Without a compile database clangd guesses bare flags and
 most cross-file includes go unresolved. The row is
@@ -522,15 +544,15 @@ cartog serve --federated      # also expose the 2 cross-project tools (off by de
 
 `--federated` exposes `cartog_list_projects` and `cartog_search_all`, the two tools that surface the paths and descriptions of this machine's *other* indexed projects. Off by default; `[mcp] federated = true` in `.cartog.toml` enables them for every client serving the project, and either source is sufficient. See [mcp-tools.md](mcp-tools.md#enabling-the-cross-project-tools).
 
-When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit, and (when the repo already has embeddings) refreshes RAG embeddings on a deferred timer — no `--rag` needed. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
+When `--watch` is passed, a background file watcher keeps the code graph up to date as you edit, and (when the repo already has embeddings) refreshes RAG embeddings on a deferred timer, no `--rag` needed. The MCP server and watcher share the same SQLite database via WAL mode (concurrent readers are safe).
 
-**Degraded start (consent gate).** Unlike the one-shot creators, `cartog serve` never refuses — on a project with no `.cartog.toml` and no index, it starts **degraded**: it creates no `.cartog/`, read tools return empty results, the 2 write tools refuse, and `cartog_stats` reports `"degraded": true` with a "run `cartog init`" banner. With `--watch`, the watcher pre-builds the index the moment a `.cartog.toml` appears (or an existing DB / `CARTOG_AUTO_INIT` is detected); the **running** server stays degraded until the client relaunches it, at which point the index is already built. See [config.md § Index-creation consent gate](config.md#index-creation-consent-gate).
+**Degraded start (consent gate).** Unlike the one-shot creators, `cartog serve` never refuses, on a project with no `.cartog.toml` and no index, it starts **degraded**: it creates no `.cartog/`, read tools return empty results, the 2 write tools refuse, and `cartog_stats` reports `"degraded": true` with a "run `cartog init`" banner. With `--watch`, the watcher pre-builds the index the moment a `.cartog.toml` appears (or an existing DB / `CARTOG_AUTO_INIT` is detected); the **running** server stays degraded until the client relaunches it, at which point the index is already built. See [config.md § Index-creation consent gate](config.md#index-creation-consent-gate).
 
 #### Multiple `cartog serve` instances on the same project
 
 Opening two Claude Code windows on the same project (or running `cartog serve` in a terminal while a Claude Code window has its own MCP child) is supported via **single-writer election**:
 
-- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary** — owns the file watcher, exposes every MCP tool (16, or 18 with `--federated`). The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
+- The first instance acquires `<state_dir>/serve-<hash>.pid` atomically (O_EXCL) and runs as **primary**, owns the file watcher, exposes every MCP tool (16, or 18 with `--federated`). The `<hash>` is a 16-char SHA-256 prefix of the canonical DB path, so two cartog peers on different projects coexist without colliding on the same slot.
 - Subsequent instances see the held lock, attach **read-only** (no migrations), and expose every tool but the two indexing ones. The two indexing tools (`cartog_index`, `cartog_rag_index`) return a clear error pointing at the primary; queries (`cartog_search`, `cartog_rag_search`, etc.) and `cartog_update` (which arms a machine-level deferred update, not a DB write) work normally. `cartog_stats` includes `"role": "read-only"` so you can tell which is which.
 - If the primary process dies (Cmd-Q, `kill`, crash), the secondary's background promoter detects this within ~10s, validates the on-disk schema hasn't drifted, atomically acquires the lock, and takes over without restart. The two indexing tools become available on what was the secondary; its tool count is otherwise unchanged.
 
@@ -551,10 +573,10 @@ Escape hatches:
 
 The directory holds `state.toml` (used by `cartog self update`) and PID lock files for live long-lived commands. Slots are scoped per DB so peers in different projects coexist:
 
-- `serve-<hash>.pid` — `cartog serve` (the MCP server)
-- `watch-<hash>.pid` — `cartog watch` or the `serve --watch` background watcher
+- `serve-<hash>.pid`, `cartog serve` (the MCP server)
+- `watch-<hash>.pid`, `cartog watch` or the `serve --watch` background watcher
 
-`<hash>` is a 16-char SHA-256 prefix of the canonical DB path. On every `cartog serve` / `cartog watch` startup, stale PID files (whose recorded process has exited) are reaped automatically — no manual cleanup needed.
+`<hash>` is a 16-char SHA-256 prefix of the canonical DB path. On every `cartog serve` / `cartog watch` startup, stale PID files (whose recorded process has exited) are reaped automatically, no manual cleanup needed.
 
 ### `cartog init [--dry-run]`
 
@@ -646,7 +668,7 @@ every session:
 
 ### `cartog install [client ...] [--scope ...] [--dry-run] [--no-watch] [--rules]`
 
-Friendlier shape of `cartog ide` — takes editors as positional args
+Friendlier shape of `cartog ide`, takes editors as positional args
 (brew/npm/pip/cargo convention) and is always non-interactive. Safe to call
 from scripts and agents (no picker, no `--yes` required).
 
@@ -710,7 +732,7 @@ cartog config            # human-readable
 cartog config --json     # JSON for scripts
 ```
 
-Useful for verifying `[rag]` tuning, watch debounce, and provider selection without running a full command. Also shows `[mcp] federated` (so you can confirm from the CLI whether the cross-project tools are enabled for this project, and whether the value came from config or the default), and the resolved `[project]` name and description (or `(none)` when neither `.cartog.toml` nor `README.md` supplies one), each labeled with its source. `cartog config` bails when the config was rejected rather than showing defaults, so it never misreports a broken `[project]` section as an absent one — see [config.md § Project identity](config.md#project-identity-project).
+Useful for verifying `[rag]` tuning, watch debounce, and provider selection without running a full command. Also shows `[mcp] federated` (so you can confirm from the CLI whether the cross-project tools are enabled for this project, and whether the value came from config or the default), and the resolved `[project]` name and description (or `(none)` when neither `.cartog.toml` nor `README.md` supplies one), each labeled with its source. `cartog config` bails when the config was rejected rather than showing defaults, so it never misreports a broken `[project]` section as an absent one, see [config.md § Project identity](config.md#project-identity-project).
 
 ### `cartog completions <shell>`
 
@@ -741,8 +763,8 @@ On macOS the path is the same. On Linux distros some packagers prefer
 ### `cartog projects <list|add|scan|forget|prune>`
 
 Inspect the machine-local registry of indexed cartog projects. This is how a session in one
-repository discovers the *other* projects indexed on the same machine — where their databases
-live and roughly what they hold — without merging their code graphs.
+repository discovers the *other* projects indexed on the same machine, where their databases
+live and roughly what they hold, without merging their code graphs.
 
 Every `cartog index`, `cartog rag index`, `cartog pull`, `cartog watch` re-index, and
 `cartog serve` startup records its project here. Nothing is recorded for a project cartog was
@@ -761,7 +783,7 @@ cartog projects prune --dry-run     # report what would be dropped, change nothi
 ```
 
 `list`, `forget` and `prune` are **read/maintenance** commands over the registry, not over any
-project index: they take no `--db`, never create a `.cartog/`, and work from any directory —
+project index: they take no `--db`, never create a `.cartog/`, and work from any directory, 
 including one that was never indexed.
 
 #### Backfilling projects indexed earlier (`add` / `scan`)
@@ -772,10 +794,10 @@ not appear**. Opening it again in an editor re-registers it for free (the plugin
 making a whole fleet visible now instead of repo-by-repo:
 
 - **`add [PATH]`** registers one project (default: the current directory). It reads the counts
-  off the index that is already there and **refuses when there is no index** — it registers an
+  off the index that is already there and **refuses when there is no index**, it registers an
   existing index, it never creates one, so it cannot put a row in the registry describing
   nothing.
-- **`scan <DIR>`** walks **only the directory you name** — never `$HOME` by default — and
+- **`scan <DIR>`** walks **only the directory you name** (never `$HOME` by default) and
   registers every indexed project it finds. `--depth N` bounds the walk (default `2`), and
   `--dry-run` prints what it would register without writing. Symlinked directories are not
   followed, and dependency/build sinks (`node_modules`, `target`, `vendor`, dotdirs, …) are
@@ -783,7 +805,7 @@ making a whole fleet visible now instead of repo-by-repo:
 
 Both open the project's database **read-only**: a backfill never migrates a schema and never
 takes a write lock on a project you have open elsewhere. A database on an older graph schema
-cannot be measured, so its row is written from the metadata alone — it appears with `?` counts
+cannot be measured, so its row is written from the metadata alone, it appears with `?` counts
 and a `stale-schema` marker (see the marker table below), which is precisely when
 being able to find it matters.
 
@@ -791,8 +813,8 @@ Neither stamps `last_indexed`: nothing here indexed anything, so the row reads `
 than claiming a month-old graph is fresh. The counts, languages, name and description are all
 recorded, so a backfilled project is immediately routable.
 
-Each project shows its **display name** — `[project] name` from that project's `.cartog.toml`
-if set, else the root directory's basename — and, when known, a one-line **description**,
+Each project shows its **display name**, `[project] name` from that project's `.cartog.toml`
+if set, else the root directory's basename, and, when known, a one-line **description**,
 suffixed `(readme)` when it was inferred from `README.md` rather than declared in config. A
 project with no description from either source shows none; see
 [`cartog doctor`](#cartog-doctor) for the advisory. `--json` adds `"description"` and
@@ -801,7 +823,7 @@ above. See [config.md § Project identity](config.md#project-identity-project) f
 and description are resolved, and [project-registry.md](../explanation/project-registry.md#step-3--self-populated-description)
 for when the registry refreshes them.
 
-`forget` accepts a project id, root path, database path, or name — including the declared
+`forget` accepts a project id, root path, database path, or name, including the declared
 `[project] name`. A **name** is only acted on when it identifies exactly one project: two
 workspaces each holding an `api` directory produce two rows named `api`, so an ambiguous name
 drops nothing and lists the candidate ids instead.
@@ -811,14 +833,14 @@ drops nothing and lists the candidate ids instead.
 | Marker | Meaning |
 |--------|---------|
 | `live` | A `cartog serve` / `cartog watch` peer currently holds this project's lock. Advisory only. |
-| `stale-schema vN` | The index was written at schema vN, not this binary's. It still lists — the cached counts are the last thing known true — but querying it needs a re-index. |
+| `stale-schema vN` | The index was written at schema vN, not this binary's. It still lists (the cached counts are the last thing known true) but querying it needs a re-index. |
 | `missing` | The database file is gone. A `prune` candidate. |
 | `embed-mismatch` | This project's embedding provider/model/dimension differs from the majority of your other projects, so its vectors are not comparable with theirs. |
 
 An unknown count renders as `?`, never `0`: the registry caches what each trigger happened to
 know, and "not known" is a different fact from "empty".
 
-**Cross-project queries.** `db_path` is the actionable field — pass it to any cartog command:
+**Cross-project queries.** `db_path` is the actionable field, pass it to any cartog command:
 
 ```bash
 DB=$(cartog projects list --json | jq -r '.projects[] | select(.name=="order-service").db_path')
@@ -827,7 +849,7 @@ cartog outline ship.go --db "$DB"
 ```
 
 Set `CARTOG_REGISTRY` to relocate the registry (absolute paths only), or to an empty value to
-disable it entirely — both reads and writes. See [config.md](config.md#environment-variables).
+disable it entirely, both reads and writes. See [config.md](config.md#environment-variables).
 
 ### `cartog self <update|version|rollback|migrate-db>`
 
@@ -898,7 +920,7 @@ Returns arrays of objects with fields like `name`, `kind`, `file_path`, `start_l
 cartog --json --compact rag search "authentication"   # ~60% smaller payload
 ```
 
-Dropped in compact mode: symbol bodies (`content` in `rag search`/`trace`), `docstring`, and the `content_hash`/`subtree_hash` cache fields. Kept: `id`, `name`, `kind`, `file_path`, line/byte spans, `signature`, scores, `sources`, and edge `provenance`. `cartog context` is the exception — it keeps its inline bodies (already budgeted by `--tokens`), trimming only the per-entry symbol noise. The output stays valid JSON of the same shape (omitting optional fields), so it validates against the same schema as full output.
+Dropped in compact mode: symbol bodies (`content` in `rag search`/`trace`), `docstring`, and the `content_hash`/`subtree_hash` cache fields. Kept: `id`, `name`, `kind`, `file_path`, line/byte spans, `signature`, scores, `sources`, and edge `provenance`. `cartog context` is the exception, it keeps its inline bodies (already budgeted by `--tokens`), trimming only the per-entry symbol noise. The output stays valid JSON of the same shape (omitting optional fields), so it validates against the same schema as full output.
 
 MCP tools are **compact by default** (agents are the consumer and the response cap already implies token pressure); set `CARTOG_MCP_COMPACT=0` to restore full bodies. There, `cartog_rag_search` and `cartog_trace` bound bodies to a ~500-byte snippet rather than dropping them, matching their "snippet excerpt" contract.
 

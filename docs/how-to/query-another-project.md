@@ -5,8 +5,8 @@
 > for why the registry stores metadata rather than merging graphs see
 > [../explanation/project-registry.md](../explanation/project-registry.md).
 
-cartog indexes one project per database. When a question spans two repositories — a sibling
-service, a shared library — you do not need a merged index: you need the *other* project's
+cartog indexes one project per database. When a question spans two repositories, a sibling
+service, a shared library, you do not need a merged index: you need the *other* project's
 database path, then any ordinary cartog command with `--db`.
 
 ## The two steps
@@ -23,7 +23,7 @@ There is nothing to enable.
 ## When the other project is not listed
 
 Registration rides on a write, so a project you indexed a while ago and have not touched since
-may not appear yet. Opening it again is enough — the plugin launches `cartog serve --watch`, and
+may not appear yet. Opening it again is enough, the plugin launches `cartog serve --watch`, and
 a `serve` startup records the project. To make one (or a whole fleet) visible without waiting:
 
 ```bash
@@ -50,7 +50,7 @@ cartog search Shift --all --under ~/work --lang ruby   # and only Ruby projects
 
 Results are grouped per project and ranked within each one, and each group prints the `--db`
 path to drill in with. `--limit` applies per project; `--max-projects` (default 10) bounds how
-many databases are opened. Only `search` federates — there is no `--all` for `rag search`,
+many databases are opened. Only `search` federates, there is no `--all` for `rag search`,
 because vectors from differently-embedded projects are not comparable. See
 [`cartog search --all`](../reference/cli.md#searching-the-machines-other-projects---all).
 
@@ -65,17 +65,17 @@ cartog outline internal/order/order.go --db "$DB"
 cartog impact CreateOrder --db "$DB"
 ```
 
-Any command that accepts `--db` works this way — `search`, `outline`, `refs`, `callees`,
+Any command that accepts `--db` works this way, `search`, `outline`, `refs`, `callees`,
 `impact`, `hierarchy`, `deps`, `trace`, `context`, `map`, `stats`, `rag search`.
 
 ## From an agent (MCP)
 
 The `cartog_list_projects` tool returns the same rows, and `cartog_search_all` mirrors
 `search --all`. Both are **hidden by default**: enable them with `[mcp] federated = true` in the
-project's `.cartog.toml` (or `cartog serve --federated`) and restart the client — see
+project's `.cartog.toml` (or `cartog serve --federated`) and restart the client, see
 [mcp-tools.md](../reference/mcp-tools.md#enabling-the-cross-project-tools). An agent asked about a different
 repository should call it, take the `db_path`, and shell out with `--db` rather than guessing
-paths or reading files. `current: true` marks the project the server is already serving — use
+paths or reading files. `current: true` marks the project the server is already serving, use
 the normal tools for that one.
 
 ## Reading the markers
@@ -96,7 +96,7 @@ old-thing             ? symbols      ? files  —                 never   [missi
 | `missing` | The database is gone. `cartog projects prune` drops the row. |
 | `embed-mismatch` | Its embeddings use a different provider/model/dimension, so `rag search` scores are not comparable with your other projects. Re-run `cartog rag index` there to align. |
 
-A `?` count means "not known", not zero — the registry caches whatever the writing command
+A `?` count means "not known", not zero, the registry caches whatever the writing command
 happened to measure.
 
 ## Give your project a description so agents can route to it
@@ -113,12 +113,12 @@ description = "Order creation, tracking, and fulfilment."
 No config? cartog falls back to the first prose paragraph of `README.md`, truncated to 280
 characters. A tagline in a blockquote counts as that paragraph; a blockquote that leads with
 a link or image, or that opens a `Note:`/`Warning:` callout, is skipped. Either way, the description
-shows up the next time you `cartog index` — even a no-op incremental pass refreshes it,
+shows up the next time you `cartog index`, even a no-op incremental pass refreshes it,
 since the registry compares config and README content independently of whether any code
 changed.
 
 `cartog doctor` flags a project with no description from either source (advisory, not an
-error) — see [config.md § Project identity](../reference/config.md#project-identity-project).
+error), see [config.md § Project identity](../reference/config.md#project-identity-project).
 
 ## Housekeeping
 
@@ -132,7 +132,7 @@ cartog projects forget <target>   # drop one row; the index itself is untouched
 when it identifies exactly one project: two workspaces each holding an `api` directory produce
 two rows named `api`, so an ambiguous name drops nothing and prints the candidate ids.
 
-Forgetting a project does not delete its index — a later `cartog index` there re-registers it.
+Forgetting a project does not delete its index, a later `cartog index` there re-registers it.
 
 ## Turning the registry off
 
@@ -142,7 +142,7 @@ export CARTOG_REGISTRY=/shared/projects.sqlite   # or relocate it (absolute path
 ```
 
 With it disabled, `cartog projects list` reports that there is no registry rather than an
-empty list, and no command records anything. A relative path is refused — it would give every
+empty list, and no command records anything. A relative path is refused, it would give every
 directory its own registry, which defeats the purpose.
 
 ## What this does not do

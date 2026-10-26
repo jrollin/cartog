@@ -13,7 +13,7 @@ Everything cartog keeps **per user** rather than per project. The graph crates
 (`cartog-db`, `cartog-indexer`, …) are all per-project; this crate is the one
 place that knows about the machine as a whole.
 
-- **State directory resolution** — the XDG-compliant per-user directory that
+- **State directory resolution**, the XDG-compliant per-user directory that
   hosts `state.toml` and the PID lock files written by `cartog serve` /
   `cartog watch`:
 
@@ -23,7 +23,7 @@ macOS:   ~/Library/Application Support/cartog/
 Windows: %LOCALAPPDATA%\cartog\
 ```
 
-- **Slot derivation** — `slot_for_db("serve", db_path)` reduces a database
+- **Slot derivation**, `slot_for_db("serve", db_path)` reduces a database
   path to a stable, filesystem-safe `serve-<16 hex chars>` name. Two peers
   reaching the same physical database by different paths (relative vs
   absolute, through a symlink, macOS `/tmp` → `/private/tmp`) agree on the
@@ -31,13 +31,13 @@ Windows: %LOCALAPPDATA%\cartog\
   generator lives next to nothing else that could drift from it: the slot it
   produces is the slot `cartog-process-lock` writes as `<slot>.pid`.
 
-- **Live-peer detection** — `detect_live_serve_peer` finds a running
+- **Live-peer detection**, `detect_live_serve_peer` finds a running
   `cartog serve` holding a given database's serve lock. Used by
   `cartog index` to defer its LSP pass to a peer's warm language servers.
 
-- **The project registry** — `projects.sqlite` in the state directory, one row
+- **The project registry**, `projects.sqlite` in the state directory, one row
   per indexed project. It lets a session in one repository discover the *other*
-  indexed projects on the machine — where their databases live, and a summary
+  indexed projects on the machine, where their databases live, and a summary
   of what each holds:
 
 ```text
@@ -48,14 +48,14 @@ prune_projects_at(..)      drop rows whose database file is gone
 ```
 
   It stores paths, counts, languages, a description and the embedding
-  fingerprint — never any code. `CARTOG_REGISTRY` relocates the file (absolute
+  fingerprint, never any code. `CARTOG_REGISTRY` relocates the file (absolute
   paths only); set it to an empty value to disable reads and writes entirely.
 
   A registry write never fails its caller: registration is bookkeeping riding
   on an index pass, so an unwritable state directory, a contended file or a
   corrupt registry costs the caller a log line and nothing else.
 
-- **Project identity** — a project's display name and one-line description,
+- **Project identity**, a project's display name and one-line description,
   so a session in one repository can tell what the *others* are for:
 
 ```rust,ignore
@@ -86,11 +86,11 @@ let facts = ProjectFacts {
   when there is one and the project root's basename otherwise; `name` always
   means the basename.
 
-- **Description inference** — `readme_description(root)` returns the first
+- **Description inference**, `readme_description(root)` returns the first
   prose paragraph of `<root>/README.md` (or `README.markdown`, or `README`) as
   plain text: headings, badges, fenced code, tables, lists and blockquotes are
   skipped, inline markup is stripped, and the result is truncated at a word
-  boundary to `DESCRIPTION_MAX_CHARS` (280). Best-effort throughout — a
+  boundary to `DESCRIPTION_MAX_CHARS` (280). Best-effort throughout, a
   missing or prose-free README yields `None`, which is a normal state.
 
   The stored description is **repository-authored, untrusted text**. It exists
@@ -105,7 +105,7 @@ let facts = ProjectFacts {
 ## Why it is a separate crate
 
 These helpers began in the `cartog` binary crate, which made them unreachable
-from `cartog-mcp` and `cartog-watch` — the crates that *derive* the slots they
+from `cartog-mcp` and `cartog-watch`, the crates that *derive* the slots they
 lock on, since the binary depends on them and not the reverse. Both crates
 documented the binary's function as the way to build a slot while being unable
 to call it. Extracting them here makes that reference real.

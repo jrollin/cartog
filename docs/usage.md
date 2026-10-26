@@ -1,4 +1,4 @@
-# cartog — Usage
+# cartog: Usage
 
 > For editor-specific setup (Neovim keymaps, VS Code tasks, Emacs compile-mode, Zed MCP), see [editor-integration.md](editor-integration.md). For common errors, see [troubleshooting.md](troubleshooting.md).
 
@@ -74,9 +74,9 @@ Download embedding and re-ranker models from HuggingFace. Run once before using 
 cartog rag setup
 ```
 
-**First-time download**: ~230MB of ONNX models (embedding ~80MB + reranker `jinaai/jina-reranker-v1-turbo-en` ~150MB). Models are cached in `~/.cache/cartog/models/` and reused across all projects — subsequent runs are instant. `rag setup` downloads the configured reranker, so pinning `[reranker] model` fetches that one instead.
+**First-time download**: ~230MB of ONNX models (embedding ~80MB + reranker `jinaai/jina-reranker-v1-turbo-en` ~150MB). Models are cached in `~/.cache/cartog/models/` and reused across all projects, subsequent runs are instant. `rag setup` downloads the configured reranker, so pinning `[reranker] model` fetches that one instead.
 
-Note: `rag setup` downloads models for the **local** provider only. When using Ollama, models are managed by the Ollama server — run `ollama pull nomic-embed-text` instead.
+Note: `rag setup` downloads models for the **local** provider only. When using Ollama, models are managed by the Ollama server, run `ollama pull nomic-embed-text` instead.
 
 ### `cartog rag index [path] [--force]`
 
@@ -88,11 +88,11 @@ cartog rag index src/         # embed a subdirectory
 cartog rag index --force      # re-embed everything
 ```
 
-After a cartog upgrade that changes the embedding strategy, `cartog rag index` automatically detects the format change and re-embeds all symbols — no `--force` needed.
+After a cartog upgrade that changes the embedding strategy, `cartog rag index` automatically detects the format change and re-embeds all symbols, no `--force` needed.
 
 ### `cartog rag search <query> [--kind <kind>] [--limit N]`
 
-Semantic search over code and documentation — use natural language to find code by what it does, or search project docs alongside code.
+Semantic search over code and documentation, use natural language to find code by what it does, or search project docs alongside code.
 
 ```bash
 cartog rag search "validate authentication tokens"
@@ -107,7 +107,7 @@ Available `--kind` values: `function`, `class`, `method`, `variable`, `import`, 
 
 ## Claude Plugin
 
-cartog is available as a [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code) — the recommended way to install for Claude Code users. Plugins bundle skills, scripts, and MCP server configuration into a single installable package.
+cartog is available as a [Claude Code plugin](https://docs.anthropic.com/en/docs/claude-code), the recommended way to install for Claude Code users. Plugins bundle skills, scripts, and MCP server configuration into a single installable package.
 
 ### Installation
 
@@ -146,7 +146,7 @@ skills/
 
 ## Agent Skill
 
-cartog also ships as an [Agent Skill](https://agentskills.io) — behavioral instructions that teach your AI agent *when and how* to use cartog, including search routing, refactoring workflows, and fallback heuristics. Use this method for non-Claude Code environments or any LLM with bash access.
+cartog also ships as an [Agent Skill](https://agentskills.io), behavioral instructions that teach your AI agent *when and how* to use cartog, including search routing, refactoring workflows, and fallback heuristics. Use this method for non-Claude Code environments or any LLM with bash access.
 
 ### Installation
 
@@ -162,9 +162,9 @@ cp -r skills/cartog ~/.claude/skills/
 
 The plugin wires two Claude Code hooks plus a user-typed skill:
 
-- **SessionStart** (`ensure_indexed.sh`): non-blocking. If the binary is missing, forks a background pipeline (install.sh pinned to the plugin version → optionally `cartog index .` → `cartog rag setup` → `cartog rag index .`) and exits fast — MCP becomes available on the next session. If the binary is present, runs `cartog index .` foreground (incremental, typically <1s) and backgrounds the rest. The background pipeline's first step (B0) now **arms** the plugin pin on drift (`cartog self update --defer --to <PIN> --quiet`, idempotent, skipped when the armed target already equals the pin, and never for a cargo-installed binary) instead of only applying a previously-armed update; it does not also apply in the same run, so a drifted binary always converges by the next session boundary even if this session never ends cleanly. When nothing needs arming, B0 instead runs `cartog self update --apply-pending --at-startup` so an update armed in a prior session converges here. Prints a one-line drift warning: when nothing is armed yet, "cartog binary X is out of sync with plugin Y (arming the update now; it applies when this session ends — run /cartog-install to update sooner)"; when an update is armed for an older pin, "cartog has a deferred update to P armed, but the plugin now wants Y — re-arming to Y; it applies when this session ends."; when already armed for the current pin, "cartog X will be applied when this session ends". Surfaces a "cartog updated to X" breadcrumb once after a completed boundary swap. Missing `.cartog.toml` on an interactive session prints a hint pointing at `cartog init`; on a non-interactive session it exits silently.
+- **SessionStart** (`ensure_indexed.sh`): non-blocking. If the binary is missing, forks a background pipeline (install.sh pinned to the plugin version → optionally `cartog index .` → `cartog rag setup` → `cartog rag index .`) and exits fast: MCP becomes available on the next session. If the binary is present, runs `cartog index .` foreground (incremental, typically <1s) and backgrounds the rest. The background pipeline's first step (B0) now **arms** the plugin pin on drift (`cartog self update --defer --to <PIN> --quiet`, idempotent, skipped when the armed target already equals the pin, and never for a cargo-installed binary) instead of only applying a previously-armed update; it does not also apply in the same run, so a drifted binary always converges by the next session boundary even if this session never ends cleanly. When nothing needs arming, B0 instead runs `cartog self update --apply-pending --at-startup` so an update armed in a prior session converges here. Prints a one-line drift warning: when nothing is armed yet, "cartog binary X is out of sync with plugin Y (arming the update now; it applies when this session ends, run /cartog-install to update sooner)"; when an update is armed for an older pin, "cartog has a deferred update to P armed, but the plugin now wants Y, re-arming to Y; it applies when this session ends."; when already armed for the current pin, "cartog X will be applied when this session ends". Surfaces a "cartog updated to X" breadcrumb once after a completed boundary swap. Missing `.cartog.toml` on an interactive session prints a hint pointing at `cartog init`; on a non-interactive session it exits silently.
 - **SessionStart** (`drift_notice.sh`): non-blocking, runs alongside `ensure_indexed.sh` on the same `startup` matcher. `ensure_indexed.sh`'s drift line is plain stdout, which Claude Code feeds to the model but never shows in the terminal, so this script exists purely to put a **user-visible** notice on screen. It prints exactly one JSON object (`systemMessage` shown to the user, `additionalContext` reaching the model) or nothing at all. Silent unless all hold: `CARTOG_NO_UPDATE_CHECK` is unset, the plugin manifest has a version and `cartog` is on PATH, the project is cartog-configured (same consent gate as `ensure_indexed.sh`), the installed version is behind the pin, and the same (installed, pin) pair was not announced in the last 24 hours (a marker file in the cartog cache dir). Whether an update is already armed is deliberately **not** a condition: `ensure_indexed.sh` arms during the same startup and sibling hooks are unordered, so suppressing on it drops the notice whenever that arm wins the race, and suppressing on the marker instead would mute an update that has been armed and stuck for over a day. An arm that applies cleanly changes the installed version, so the pair stops matching on its own. Concurrent windows are serialised by an atomic claim, so exactly one prints. If no private cache directory can be created there is nowhere safe to record the marker, and the script stays silent rather than falling back to a world-writable path. A cargo-installed binary gets: "cartog X is older than the cartog plugin (Y) and was installed via cargo, so it cannot auto-update. Run: cargo install cartog --force". Everyone else gets: "cartog X is older than the cartog plugin (Y). It updates automatically when this session ends; to update now, run /cartog-install." An unconfigured project gets no cartog output of any kind.
-- **SessionEnd** (`update_on_exit.sh`): brings the binary in line with the plugin pin at the safe boundary, gated by what the binary can actually do (probed via `self update --help`, not assumed from the version). Deferred-capable binaries (>= 0.20.0) run `cartog self update --apply-pending` once the serve process has exited (no-op if nothing was armed; skipped while a RAG pipeline lock is active; exit 6 means a peer is still live and it retries next session). The peer-wait budget is sized by which lock is blocking, so a hook can't be killed waiting on a lock that will never clear (`Hook cancelled`, [#154](https://github.com/jrollin/cartog/issues/154)): a lock **this project** owns gets a bounded ~2s grace to absorb its own `serve` shutting down, while a lock held **outside** this project is not waited on at all, since it stays held for as long as that session stays open. Nothing is lost when the wait gives up: the intent stays armed and the SessionStart `--at-startup` catch-up applies it, so you never have to stop another session's cartog server (doing so would break that session's live MCP connection). Note the lock name is a hash of the database path, so a second window on the **same** repo is indistinguishable from this project's own peer and takes the bounded grace rather than the no-wait path. Any older binary — the 0.14.0–0.20.0 band (has `cartog self update` but lacks the deferred flags) and pre-0.14.0 (lacks it entirely) — upgrades via the bundled `install.sh` pinned to the plugin version; using a plain `cartog self update` for the 0.14–0.20 band would fetch the latest release and overshoot the pin. The pre-0.14.0 leg is transitional and scheduled for removal.
+- **SessionEnd** (`update_on_exit.sh`): brings the binary in line with the plugin pin at the safe boundary, gated by what the binary can actually do (probed via `self update --help`, not assumed from the version). Deferred-capable binaries (>= 0.20.0) run `cartog self update --apply-pending` once the serve process has exited (no-op if nothing was armed; skipped while a RAG pipeline lock is active; exit 6 means a peer is still live and it retries next session). The peer-wait budget is sized by which lock is blocking, so a hook can't be killed waiting on a lock that will never clear (`Hook cancelled`, [#154](https://github.com/jrollin/cartog/issues/154)): a lock **this project** owns gets a bounded ~2s grace to absorb its own `serve` shutting down, while a lock held **outside** this project is not waited on at all, since it stays held for as long as that session stays open. Nothing is lost when the wait gives up: the intent stays armed and the SessionStart `--at-startup` catch-up applies it, so you never have to stop another session's cartog server (doing so would break that session's live MCP connection). Note the lock name is a hash of the database path, so a second window on the **same** repo is indistinguishable from this project's own peer and takes the bounded grace rather than the no-wait path. Any older binary, the 0.14.0–0.20.0 band (has `cartog self update` but lacks the deferred flags) and pre-0.14.0 (lacks it entirely), upgrades via the bundled `install.sh` pinned to the plugin version; using a plain `cartog self update` for the 0.14–0.20 band would fetch the latest release and overshoot the pin. The pre-0.14.0 leg is transitional and scheduled for removal.
 - **`/cartog-install` skill** (`skills/cartog-install/SKILL.md`): user-typed verb. Installs the binary (when missing) or upgrades it to match the plugin's pinned version. On >=0.14.0 it runs `cartog self update`; inside a Claude Code session, where the MCP server is the live peer (exit 6), it arms a deferred update with `cartog self update --defer` instead. On <0.14.0 it upgrades via `install.sh`. Use this to repair a failed background install or to bring a drifted binary back in sync.
 
 To run the SessionStart steps manually:
@@ -195,9 +195,9 @@ bash skills/cartog/scripts/ensure_indexed.sh
 
 `cartog serve` runs cartog as an MCP server over stdio, exposing 16 tools by default (18 with the opt-in cross-project tools) for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 13 query tools are read-only (including `cartog_trace` for call paths and `cartog_context` for one-shot task bundles); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones.
 
-When `cartog serve --watch` is running and a file changes (or RAG embeddings are still catching up — including symbols whose body was just edited and not yet re-embedded), affected read-tool responses are prefixed with a `⚠️` staleness banner so the agent knows the answer may be momentarily behind the working tree. Read-only secondaries and `cartog serve` without `--watch` never show the banner.
+When `cartog serve --watch` is running and a file changes (or RAG embeddings are still catching up, including symbols whose body was just edited and not yet re-embedded), affected read-tool responses are prefixed with a `⚠️` staleness banner so the agent knows the answer may be momentarily behind the working tree. Read-only secondaries and `cartog serve` without `--watch` never show the banner.
 
-Read tools also declare an `outputSchema` and return `structuredContent` (the typed result mirrored alongside the human-readable text block) so schema-aware clients get validated, machine-readable output. Per the MCP spec, a tool that declares an `outputSchema` must always return `structuredContent`, so the structured copy is kept on every successful call — including large ones. The size cap (`CARTOG_MCP_MAX_BYTES`, default 64 KB) bounds the whole response: an oversized result is trimmed at the *element* level (trailing items dropped) before both the text block and the structured copy are built from the same trimmed set, so both stay under the cap and mutually consistent. The response then carries a notice reporting how many items were omitted and pointing at a narrower tool.
+Read tools also declare an `outputSchema` and return `structuredContent` (the typed result mirrored alongside the human-readable text block) so schema-aware clients get validated, machine-readable output. Per the MCP spec, a tool that declares an `outputSchema` must always return `structuredContent`, so the structured copy is kept on every successful call, including large ones. The size cap (`CARTOG_MCP_MAX_BYTES`, default 64 KB) bounds the whole response: an oversized result is trimmed at the *element* level (trailing items dropped) before both the text block and the structured copy are built from the same trimmed set, so both stay under the cap and mutually consistent. The response then carries a notice reporting how many items were omitted and pointing at a narrower tool.
 
 For editor-specific recipes (Neovim keymaps, VS Code tasks, Emacs `compile`, Telescope picker, `cartog watch --json` floating buffer), see **[Editor integration](editor-integration.md)**.
 
@@ -208,7 +208,7 @@ cartog serve --watch --rag    # force auto-embed even on a not-yet-embedded repo
 ```
 
 Under `--watch`, embeddings auto-refresh on edits when the repo already has
-embeddings (i.e. you have run `cartog rag index` at least once) — no `--rag`
+embeddings (i.e. you have run `cartog rag index` at least once), no `--rag`
 needed. Repos that never used RAG pay nothing: no model loads. Force it on/off
 with three controls, highest precedence first: `CARTOG_WATCH_RAG` (env) overrides
 `[embedding] auto_embed` (config), which overrides `--rag` (flag). `--rag` without
@@ -351,17 +351,17 @@ cartog ships autonomous agents that execute multi-step workflows end-to-end. Age
 
 | Agent | Description | Invocation |
 |-------|-------------|------------|
-| `codebase-onboarding` | Structured onboarding report — adapts to project type and size | `@codebase-onboarding` or "help me understand this project" |
+| `codebase-onboarding` | Structured onboarding report, adapts to project type and size | `@codebase-onboarding` or "help me understand this project" |
 | `refactoring-scout` | Pre-flight blast radius analysis before a refactoring | `@refactoring-scout` or "is it safe to change X?" |
 
 ### How Agents Work
 
 Agents differ from the cartog skill:
 
-- **Skill** (reactive): Claude uses cartog commands in response to your questions — you drive the workflow
+- **Skill** (reactive): Claude uses cartog commands in response to your questions, you drive the workflow
 - **Agent** (autonomous): you give a goal, the agent executes a multi-step plan using cartog, and produces a deliverable
 
-Agents use the CLI via Bash (not MCP), so they work as subagents with isolated context. They are self-contained — no skill injection overhead.
+Agents use the CLI via Bash (not MCP), so they work as subagents with isolated context. They are self-contained, no skill injection overhead.
 
 ### Manual Installation
 
@@ -373,13 +373,13 @@ cp agents/*.md ~/.claude/agents/
 
 ### Agent: `codebase-onboarding`
 
-Produces a structured onboarding report for an unfamiliar codebase. The agent adapts to the project — a CLI tool gets different treatment than a web API or a library.
+Produces a structured onboarding report for an unfamiliar codebase. The agent adapts to the project, a CLI tool gets different treatment than a web API or a library.
 
 **Workflow:**
-1. **Discover** — `cartog stats` + `cartog map` + manifest/README to determine project type and scale
-2. **Architecture** — trace top-centrality symbols with `callees`/`refs` to map module layout
-3. **Entry points** — targeted searches based on project type (CLI commands, API routes, public surface, etc.)
-4. **Conventions** — test patterns, code style config, recent git activity
+1. **Discover**, `cartog stats` + `cartog map` + manifest/README to determine project type and scale
+2. **Architecture**, trace top-centrality symbols with `callees`/`refs` to map module layout
+3. **Entry points**, targeted searches based on project type (CLI commands, API routes, public surface, etc.)
+4. **Conventions**, test patterns, code style config, recent git activity
 
 Output: a structured markdown report. Sections that don't apply are omitted.
 
@@ -397,10 +397,10 @@ claude --agent codebase-onboarding
 Pre-flight analysis before changing a symbol, module, or file. Maps the full blast radius and produces a go/no-go recommendation.
 
 **Workflow:**
-1. **Locate** — confirm exact symbol with `cartog search`, disambiguate if needed
-2. **Map blast radius** — `refs` + `impact --depth 3` + `callees` + `hierarchy` (for classes)
-3. **Assess risk** — Low / Medium / High based on affected file count and transitive depth
-4. **Report** — affected files, risk warnings, and a concrete update checklist
+1. **Locate**, confirm exact symbol with `cartog search`, disambiguate if needed
+2. **Map blast radius**, `refs` + `impact --depth 3` + `callees` + `hierarchy` (for classes)
+3. **Assess risk**: Low / Medium / High based on affected file count and transitive depth
+4. **Report**, affected files, risk warnings, and a concrete update checklist
 
 **Usage:**
 ```text
@@ -414,7 +414,7 @@ claude --agent refactoring-scout
 ## Multiple Projects
 
 cartog indexes one project per database. When a question spans two repositories, you do not
-need a merged index — you need the other project's database path:
+need a merged index, you need the other project's database path:
 
 ```bash
 cartog projects list                 # every indexed project on this machine
@@ -422,8 +422,8 @@ cartog search Foo --db /path/to/other/.cartog/db.sqlite
 ```
 
 Every index, `rag index`, `pull`, watcher re-index, and `serve` startup registers its project,
-so there is nothing to enable. Each entry carries a one-line description — from `.cartog.toml`'s
-`[project] description`, or the target repo's `README.md` — so an agent can route by intent, not
+so there is nothing to enable. Each entry carries a one-line description, from `.cartog.toml`'s
+`[project] description`, or the target repo's `README.md`, so an agent can route by intent, not
 just by name. Agents get the same rows from the `cartog_list_projects` MCP tool once a project opts in with `[mcp] federated = true` (or `cartog serve --federated`); the cross-project tools are hidden by default. Full
 walkthrough: **[how-to/query-another-project.md](how-to/query-another-project.md)**.
 

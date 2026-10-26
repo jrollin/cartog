@@ -44,9 +44,9 @@ swallowed so it never panics).
 
 ### Cross-platform liveness
 
-- **Unix**: `kill(pid, 0)` — `0` means alive, `ESRCH` means gone, `EPERM` means
+- **Unix**: `kill(pid, 0)`, `0` means alive, `ESRCH` means gone, `EPERM` means
   alive but unreachable (still treated as alive).
-- **Windows**: `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, …)` — a non-null
+- **Windows**: `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, …)`, a non-null
   handle means alive; the handle is closed immediately.
 - **Other platforms**: fail safe by reporting "alive" so a possibly-running peer
   is never clobbered.

@@ -4,13 +4,13 @@
 
 ## Why small models
 
-BERT attention is **O(n²) in sequence length**. Keeping input short is the single biggest performance lever — more impactful than model size, quantization, or batching.
+BERT attention is **O(n²) in sequence length**. Keeping input short is the single biggest performance lever, more impactful than model size, quantization, or batching.
 
 This drives two key decisions:
 
-1. **Small embedding model** — BGE-small-en-v1.5 quantized (`Qdrant/bge-small-en-v1.5-onnx-Q`, default, 384 dimensions). 2-3x faster than full precision with negligible quality loss for code symbol matching. Outputs are L2-normalized, enabling L2 distance in sqlite-vec (equivalent to cosine ranking). Model and dimension are configurable via `.cartog.toml`. Trade-off: English-only model — non-English identifiers/comments get degraded embeddings.
+1. **Small embedding model**: BGE-small-en-v1.5 quantized (`Qdrant/bge-small-en-v1.5-onnx-Q`, default, 384 dimensions). 2-3x faster than full precision with negligible quality loss for code symbol matching. Outputs are L2-normalized, enabling L2 distance in sqlite-vec (equivalent to cosine ranking). Model and dimension are configurable via `.cartog.toml`. Trade-off: English-only model, non-English identifiers/comments get degraded embeddings.
 
-2. **AST-aware embedding text** — For code: header + signature + significant body lines (skipping blanks, comments, closing braces) up to ~200 tokens (~800 bytes):
+2. **AST-aware embedding text**: For code: header + signature + significant body lines (skipping blanks, comments, closing braces) up to ~200 tokens (~800 bytes):
    ```text
    // File: auth/tokens.py | function validate_token
    def validate_token(token: str) -> bool:
@@ -32,8 +32,8 @@ This drives two key decisions:
 
 - **Functions, classes, methods**: embedded with AST-aware text (header + significant body lines)
 - **Markdown documents**: chunked by heading, each section embedded with heading in header field. Large sections sub-chunked at paragraph boundaries (~1500 bytes). Files without headings use fixed-size paragraph chunking.
-- **Variables**: excluded — too numerous, low signal for semantic search
-- **Imports**: excluded at content extraction time — they exist as graph edges, not search targets
+- **Variables**: excluded, too numerous, low signal for semantic search
+- **Imports**: excluded at content extraction time, they exist as graph edges, not search targets
 
 ## Search pipeline
 
@@ -64,11 +64,11 @@ Query
 
 | Tier | Query form | Example for "validate token" |
 |------|-----------|------------------------------|
-| 1 | Phrase | `"validate token"` — exact adjacent match |
-| 2 | AND | `"validate" AND "token"` — all terms, any order |
-| 3 | OR | `"validate" OR "token"` — any term present |
+| 1 | Phrase | `"validate token"`, exact adjacent match |
+| 2 | AND | `"validate" AND "token"`, all terms, any order |
+| 3 | OR | `"validate" OR "token"`, any term present |
 
-Returns the first non-empty result. Only FTS5 syntax errors trigger fallback — real DB errors propagate.
+Returns the first non-empty result. Only FTS5 syntax errors trigger fallback, real DB errors propagate.
 
 ## Key constants
 
@@ -90,8 +90,8 @@ Returns the first non-empty result. Only FTS5 syntax errors trigger fallback —
 
 ## Provider architecture
 
-Embedding providers implement the `EmbeddingProvider` trait with `embed_query()`/`embed_document()` separation for asymmetric models. Providers are selected at runtime via `.cartog.toml` (default `provider = "local"`) and gated behind Cargo feature flags (`provider-local`, `provider-ollama`, `provider-openai`). The `cartog` binary compiles all three in by default; selecting Ollama or an OpenAI-compatible endpoint is a config choice, not a rebuild. The generic `openai` provider speaks the OpenAI `/v1/embeddings` shape, so one HTTP client covers OpenAI, Mistral, Voyage, Jina, OVHcloud, and local `/v1` servers — switch vendors by changing `base_url`. (Azure OpenAI's deployment-path + `api-key:` header shape is out of scope.)
+Embedding providers implement the `EmbeddingProvider` trait with `embed_query()`/`embed_document()` separation for asymmetric models. Providers are selected at runtime via `.cartog.toml` (default `provider = "local"`) and gated behind Cargo feature flags (`provider-local`, `provider-ollama`, `provider-openai`). The `cartog` binary compiles all three in by default; selecting Ollama or an OpenAI-compatible endpoint is a config choice, not a rebuild. The generic `openai` provider speaks the OpenAI `/v1/embeddings` shape, so one HTTP client covers OpenAI, Mistral, Voyage, Jina, OVHcloud, and local `/v1` servers, switch vendors by changing `base_url`. (Azure OpenAI's deployment-path + `api-key:` header shape is out of scope.)
 
-**Dimension changes are safe.** Each provider reports its embedding dimension (auto-detected via a one-shot probe at construction for remote providers, or pinned via `[embedding] dimension`). The `symbol_vec` vec0 table is sized to that dimension, and the dimension + `(provider, model)` identity are stored as a fingerprint in `metadata`. On the next RAG open, `reconcile_embedding_fingerprint` compares the live provider's fingerprint to the stored one: a full match is a zero-write no-op; **any** difference (dimension, provider, or model) atomically drops `symbol_vec`, clears `symbol_embedding_map`, recreates the table at the new dimension, and logs "fingerprint changed — run `cartog rag index` to re-embed." Stale vectors are never queried at the wrong dimension. (Switching from local 384-dim BGE to OpenAI's 1536-dim `text-embedding-3-small` triggers exactly this rebuild.) Read-only graph commands open with the static default dimension and never wipe a non-default vector index — `handle_embedding_dimension` preserves the stored dimension when the caller passes the default.
+**Dimension changes are safe.** Each provider reports its embedding dimension (auto-detected via a one-shot probe at construction for remote providers, or pinned via `[embedding] dimension`). The `symbol_vec` vec0 table is sized to that dimension, and the dimension + `(provider, model)` identity are stored as a fingerprint in `metadata`. On the next RAG open, `reconcile_embedding_fingerprint` compares the live provider's fingerprint to the stored one: a full match is a zero-write no-op; **any** difference (dimension, provider, or model) atomically drops `symbol_vec`, clears `symbol_embedding_map`, recreates the table at the new dimension, and logs "fingerprint changed, run `cartog rag index` to re-embed." Stale vectors are never queried at the wrong dimension. (Switching from local 384-dim BGE to OpenAI's 1536-dim `text-embedding-3-small` triggers exactly this rebuild.) Read-only graph commands open with the static default dimension and never wipe a non-default vector index, `handle_embedding_dimension` preserves the stored dimension when the caller passes the default.
 
-**Concurrent network embedding.** The `EmbeddingProvider` trait stays sync/blocking; the network providers fan out via a shared `providers::concurrent` runner (`std::thread::scope` work-queue over indexed sub-batches → a slot-indexed collector that reconstructs input order). `[embedding] max_concurrent_requests` (env `CARTOG_EMBED_CONCURRENCY`, default 4, clamped `1..=16`) caps in-flight requests; `1` is a serial path byte-identical to the single-request behavior. Failures return the lowest-ordinal error deterministically; transient ones (429/503/timeout/connect) retry with capped backoff + deterministic per-(ordinal, attempt) jitter (no `Retry-After` — `error_for_status()` consumes the response before the error is built). `max_concurrent_requests` is transport-only, excluded from the embedding fingerprint. The fan-out is gated behind a live batch-composition parity test per provider (Ollama returns positional, un-indexed vectors, a stronger split assumption than OpenAI's `index`-tagged array); until each gate passes, `create_embedding_provider` forces that provider to concurrency 1. Note: against a single local Ollama the fan-out gives ~1.0× (one model instance serializes inference server-side); the speedup is for remote endpoints where requests parallelize and round-trip latency dominates.
+**Concurrent network embedding.** The `EmbeddingProvider` trait stays sync/blocking; the network providers fan out via a shared `providers::concurrent` runner (`std::thread::scope` work-queue over indexed sub-batches → a slot-indexed collector that reconstructs input order). `[embedding] max_concurrent_requests` (env `CARTOG_EMBED_CONCURRENCY`, default 4, clamped `1..=16`) caps in-flight requests; `1` is a serial path byte-identical to the single-request behavior. Failures return the lowest-ordinal error deterministically; transient ones (429/503/timeout/connect) retry with capped backoff + deterministic per-(ordinal, attempt) jitter (no `Retry-After`, `error_for_status()` consumes the response before the error is built). `max_concurrent_requests` is transport-only, excluded from the embedding fingerprint. The fan-out is gated behind a live batch-composition parity test per provider (Ollama returns positional, un-indexed vectors, a stronger split assumption than OpenAI's `index`-tagged array); until each gate passes, `create_embedding_provider` forces that provider to concurrency 1. Note: against a single local Ollama the fan-out gives ~1.0× (one model instance serializes inference server-side); the speedup is for remote endpoints where requests parallelize and round-trip latency dominates.

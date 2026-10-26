@@ -44,8 +44,8 @@ export function docsIndex(): DocEntry[] {
       group = heading[1];
       continue;
     }
-    // `- [path/to.md](path/to.md) — description`, em-dash or hyphen separator.
-    const bullet = line.match(/^-\s+\[[^\]]+\]\(([^)]+)\)\s*[—-]\s*(.+?)\s*$/);
+    // `- [path/to.md](path/to.md): description`, colon or hyphen separator.
+    const bullet = line.match(/^-\s+\[[^\]]+\]\(([^)]+)\)\s*[:-]\s*(.+?)\s*$/);
     if (!bullet) continue;
 
     const [, href, rawSummary] = bullet;
