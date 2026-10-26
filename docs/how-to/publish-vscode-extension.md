@@ -115,32 +115,110 @@ Both registries reject re-publishing an already-published version, so bump
 
 ## Wire CI (after the manual publish works)
 
-Both registries authenticate with a token stored as a GitHub repo secret
-(*Settings → Secrets and variables → Actions*):
+The Marketplace authenticates through Microsoft Entra workload identity, with no
+token stored ([setup below](#set-up-entra-for-the-marketplace)). Open VSX uses a
+token stored as a GitHub secret (*Settings → Secrets and variables → Actions*):
 
 | Secret | Registry | Where it comes from |
 |---|---|---|
-| `VSCE_PAT` | Visual Studio Marketplace | Azure DevOps PAT, scope `Marketplace → Manage`, organization `All accessible organizations` |
+| `AZURE_CLIENT_ID` | Visual Studio Marketplace | Client ID of the managed identity |
+| `AZURE_TENANT_ID` | Visual Studio Marketplace | Tenant ID of the managed identity |
 | `OVSX_PAT` | Open VSX | open-vsx.org access token |
 
-The `VSCE_PAT` is the same kind of Marketplace token you paste at the
-`vsce login` prompt in the manual step above. The `OVSX_PAT` is the open-vsx.org
-token from that step.
+The `OVSX_PAT` is the open-vsx.org token from the manual step above.
 
 Each registry publishes independently (`continue-on-error`), so a missing
-secret or an outage on one registry does not skip the other. The job fails
-only if **both** publishes fail. A same-tag re-run is therefore safe: the
+secret or an outage on one registry does not skip the other. A failed Azure
+login is tolerated the same way: the Marketplace publish then fails on its own.
+The job fails only if **both** publishes fail. A same-tag re-run is therefore safe: the
 registry that already has the version errors with "already published" and is
 tolerated, while the other still publishes if it was behind.
 
-### Migrate off the PAT before 2026-12-01
+### Set up Entra for the Marketplace
 
 Azure DevOps is **retiring global PATs on 2026-12-01** ([notice][adopat]). A
-Marketplace PAT spans all organizations, so it is a global PAT and stops working
-on that date. The successor is Microsoft Entra ID workload-identity federation:
-`vsce publish --azure-credential` authenticated by `azure/login` (OIDC), with no
-token secret. See the [official secure-publishing guide][vsce-entra]. Migrate
-the `publish-vscode` job before the cutoff.
+Marketplace PAT spans all organizations, so it stops working on that date. CI
+therefore uses Microsoft Entra ID workload-identity federation (see the
+[official secure-publishing guide][vsce-entra]):
+
+- GitHub OIDC signs in as an Azure managed identity.
+- That identity is a Contributor on the Marketplace publisher.
+- `vsce publish --azure-credential` uses the signed-in identity.
+
+Do this once:
+
+1. Create a **user-assigned managed identity** (Azure portal, *Managed
+   Identities*). A free subscription is enough.
+   - Do not use an App Registration or a service principal. Both sign in but
+     fail at publish ([vsce #1023](https://github.com/microsoft/vscode-vsce/issues/1023)).
+   - Copy the Client ID and Tenant ID from the identity's *Properties* page.
+2. Opt the repo in to the immutable OIDC subject:
+
+   ```bash
+   gh api -X PUT repos/<owner>/<repo>/actions/oidc/customization/sub \
+     -F use_default=true -F use_immutable_subject=true
+   ```
+
+   - Repos created before 2026-07-15 emit the name-based subject by default.
+   - The Azure portal writes the ID-based subject, so without this step login
+     fails with `AADSTS70021`.
+3. On the identity, add a federated credential (*Federated credentials*,
+   scenario *GitHub Actions deploying Azure resources*):
+   - Entity type: Environment, name `marketplace-publish`.
+   - Subject: `repo:<owner>@<owner-id>/<repo>@<repo-id>:environment:marketplace-publish`.
+   - Not entity type Tag: it matches one exact tag, not every `v*`.
+4. Create the GitHub environment `marketplace-publish` (*Settings →
+   Environments*) and add `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` as secrets.
+   - Optionally limit it to `v*` tags and the `main` branch, but only after
+     step 5, which runs from another branch.
+   - `main` is needed by [Republish a tag](#republish-a-tag).
+5. Look up the identity's Marketplace profile id. It is not the Client ID, the
+   Object ID or the resource ID. A managed identity cannot sign in from a
+   laptop, so run this workflow once from a throwaway branch, copy the `id` from
+   the output, then delete the branch:
+
+   ```yaml
+   on:
+     push:
+       branches: ["tmp/marketplace-whoami"]
+   permissions: { id-token: write, contents: read }
+   jobs:
+     whoami:
+       runs-on: ubuntu-latest
+       environment: marketplace-publish
+       steps:
+         - uses: azure/login@v2
+           with:
+             client-id: ${{ secrets.AZURE_CLIENT_ID }}
+             tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+             allow-no-subscriptions: true
+         - run: az rest -u https://app.vssps.visualstudio.com/_apis/profile/profiles/me --resource 499b84ac-1321-427f-aa17-267ca6975798
+   ```
+
+6. Open the publisher's *Members* page
+   (`https://marketplace.visualstudio.com/manage/publishers/<publisher>`) and
+   add that id with the role Contributor.
+7. After the first successful publish, delete the `VSCE_PAT` secret.
+
+Do not rely on `vsce verify-pat --azure-credential` to check the setup: in
+vsce #1023 it passed while publish still failed. Check the Marketplace listing's
+version instead.
+
+### Republish a tag
+
+When the release run's Marketplace publish failed, publish that tag without
+re-running the release:
+
+```bash
+gh workflow run publish-vscode.yml -f tag=v0.35.0
+```
+
+- The workflow checks out the tag, packages the `.vsix` and publishes it to the
+  Marketplace only.
+- It runs under the `marketplace-publish` environment, from `main`.
+- It fails if the Marketplace already has that version.
+- Open VSX is not touched: publish there with the manual step above if it is
+  also missing.
 
 [adopat]: https://devblogs.microsoft.com/devops/retirement-of-global-personal-access-tokens-in-azure-devops/
 [vsce-entra]: https://code.visualstudio.com/api/working-with-extensions/publishing-extension#secure-automated-publishing-to-visual-studio-marketplace
