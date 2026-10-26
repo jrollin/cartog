@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.35.0] - 2026-10-26
+
+### Bug Fixes
+
+- **deps**: Bump rustls-webpki and webpki-roots for emSign advisories ([`41f4334`](https://github.com/jrollin/cartog/commit/41f4334c12f702153b50e1547f5213893184ffe7))
+- **ide**: Count preflight failures in the ide --remove report ([`051b5b5`](https://github.com/jrollin/cartog/commit/051b5b58d8a4a0bbf771b9a3573531b646ec7f53))
+- **ide**: Create the config temp file with its final mode and clean it up ([`3fffd7b`](https://github.com/jrollin/cartog/commit/3fffd7b92ed7f7785f1110f4cfd4194901f5b33d))
+- **deps**: Clear undici and msal-node advisories in vscode extension ([`6ca158c`](https://github.com/jrollin/cartog/commit/6ca158cbf8b4d727075d2832f410c4deca4dde3c))
+
+### Build
+
+- **deps**: Bump dompurify from 3.4.16 to 3.4.17 in /site ([`ca8c634`](https://github.com/jrollin/cartog/commit/ca8c634456a7090dc30fdeb8b3822a8bad4ca194))
+- **deps**: Bump undici from 8.11.2 to 8.12.3 in /site ([`90847b0`](https://github.com/jrollin/cartog/commit/90847b08006a278c88cfc6de9461300c21637379))
+- **deps**: Bump zod from 4.6.5 to 4.6.7 in /site ([`78c4579`](https://github.com/jrollin/cartog/commit/78c457906d18faaefcf01efb160040a954673561))
+- **deps**: Bump fast-uri from 3.1.8 to 3.1.9 in /editors/vscode ([`c2e881d`](https://github.com/jrollin/cartog/commit/c2e881dc9fde0b0a1635d848c9579193e84476b3))
+- **deps**: Bump markdown-it from 14.3.2 to 14.3.3 in /editors/vscode ([`56dcb49`](https://github.com/jrollin/cartog/commit/56dcb4981d61c85f12f480051e230379bac72845))
+
+### Documentation
+
+- Fix agent snippet, skill size, client list and subagent guidance ([`4e9383f`](https://github.com/jrollin/cartog/commit/4e9383f1adeff4e5d06f964a10fa904de0aa86c2))
+- Sync cli reference and tool counts, drop em-dashes ([`7e5539f`](https://github.com/jrollin/cartog/commit/7e5539fad46714697b1473f4a05a0b2d15d0bc58))
+- Fix links, index entry and placeholder cells from review ([`67e429c`](https://github.com/jrollin/cartog/commit/67e429cf53008ef935a98cf392fbd5d2f1a16b64))
+
+### Features
+
+- **ide**: Wire Copilot CLI, Qwen, Cline, Kilo and Roo; Cursor user scope ([`e1c2eb5`](https://github.com/jrollin/cartog/commit/e1c2eb5a15e34124a6e5ed92bd9b23e82098430b))
+- **ide**: Add cartog uninstall and ide --remove ([`ff17be5`](https://github.com/jrollin/cartog/commit/ff17be51b1c86181b8e04a3d0b1f682482d0fab9))
+- **ide**: Add --rules to write cartog agent rule files ([`4142c7a`](https://github.com/jrollin/cartog/commit/4142c7a1f896f9d1576bc9cffe4235af48d29350))
+
+### Testing
+
+- **remote**: Isolate fixture git from user-global config ([`cc0f434`](https://github.com/jrollin/cartog/commit/cc0f434b6c360fbc777692e1fd1124402c7df001))
+
 ## [0.34.2] - 2026-10-19
 
 ### Bug Fixes
