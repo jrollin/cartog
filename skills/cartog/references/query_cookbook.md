@@ -65,7 +65,7 @@ cartog changes --kind function           # only functions that changed
 
 ## Combining Commands
 
-Run each cartog command as a **separate tool call** — don't chain with `&&` or pipe through `grep`. Each CLI invocation opens a fresh SQLite connection with full initialization overhead. Separate calls let the agent inspect each result before deciding the next step.
+Run each cartog command as a **separate tool call**, don't chain with `&&` or pipe through `grep`. Each CLI invocation opens a fresh SQLite connection with full initialization overhead. Separate calls let the agent inspect each result before deciding the next step.
 
 ### Understand a function before modifying it
 ```bash
@@ -97,7 +97,7 @@ cartog callees validate_token          # Keep going deeper
 
 ### Assess refactoring scope (narrow first, LSP if needed)
 
-**Step 1 — Fast heuristic pass (~1s):**
+**Step 1: Fast heuristic pass (~1s):**
 ```bash
 cartog search OldClassName             # Confirm exact name and file first
 cartog refs OldClassName               # All references
@@ -107,7 +107,7 @@ cartog impact OldClassName --depth 5   # Full blast radius
 
 If results look complete → proceed with refactoring.
 
-**Step 2 — Upgrade to LSP if gaps found (~15-60s):**
+**Step 2: Upgrade to LSP if gaps found (~15-60s):**
 
 Signs you need LSP:
 - `refs` shows fewer callers than expected
@@ -119,7 +119,7 @@ cartog index .                         # Re-index with LSP (auto-detected if on 
 cartog impact OldClassName --depth 5   # Re-check with higher-precision graph
 ```
 
-**Step 3 — After refactoring:**
+**Step 3: After refactoring:**
 ```bash
 cartog index . --no-lsp                # Fast re-index to update the graph
 cartog refs OldClassName               # Verify no stale references remain
@@ -172,14 +172,14 @@ cartog rag index .                  # embed via the OpenAI endpoint
 cartog rag search "error handling"  # search works the same
 ```
 
-Like Ollama, the OpenAI provider supplies only embeddings; the reranker is independent (`[reranker] provider = "local"` by default, or `"none"`). There is no OpenAI reranker — the cross-encoder always comes from HuggingFace via `cartog rag setup`. Switching from local (384-dim) to an OpenAI model (e.g. 1536-dim) is detected automatically and re-embeds on the next `cartog rag index`.
+Like Ollama, the OpenAI provider supplies only embeddings; the reranker is independent (`[reranker] provider = "local"` by default, or `"none"`). There is no OpenAI reranker, the cross-encoder always comes from HuggingFace via `cartog rag setup`. Switching from local (384-dim) to an OpenAI model (e.g. 1536-dim) is detected automatically and re-embeds on the next `cartog rag index`.
 
 #### Troubleshooting
 
-- **"Unknown or disabled embedding provider: 'ollama'/'openai'"** — Usually a build compiled with `--no-default-features` (both providers ship by default), but can also be a missing feature flag or a `provider` typo/misconfiguration. Check `[embedding] provider` in `.cartog.toml` first; if the value is correct, reinstall with `cargo install cartog` or add the matching feature (`--features ollama-embedding` / `--features openai-embedding`).
-- **"Failed to connect to Ollama server"** — Ensure Ollama is running (`ollama serve`). For non-default hosts, set `base_url` under `[embedding.ollama]` in `.cartog.toml`.
-- **"cannot reach OpenAI endpoint"** — Check `[embedding.openai] base_url` and that the endpoint is reachable. **"auth failed"** — set the env var named by `api_key_env` (default `OPENAI_API_KEY`).
-- **"Embedding dimension changed"** — Provider/model switch detected. Run `cartog rag index` to re-embed.
+- **"Unknown or disabled embedding provider: 'ollama'/'openai'"**: Usually a build compiled with `--no-default-features` (both providers ship by default), but can also be a missing feature flag or a `provider` typo/misconfiguration. Check `[embedding] provider` in `.cartog.toml` first; if the value is correct, reinstall with `cargo install cartog` or add the matching feature (`--features ollama-embedding` / `--features openai-embedding`).
+- **"Failed to connect to Ollama server"**: Ensure Ollama is running (`ollama serve`). For non-default hosts, set `base_url` under `[embedding.ollama]` in `.cartog.toml`.
+- **"cannot reach OpenAI endpoint"**: Check `[embedding.openai] base_url` and that the endpoint is reachable. **"auth failed"**, set the env var named by `api_key_env` (default `OPENAI_API_KEY`).
+- **"Embedding dimension changed"**: Provider/model switch detected. Run `cartog rag index` to re-embed.
 
 ### "Find code related to a concept"
 ```bash
@@ -195,7 +195,7 @@ cartog rag search "API rate limiting" --kind document
 cartog rag search "error handling strategy" --kind document
 ```
 
-Markdown files (`.md`) are indexed alongside code — each heading section becomes a searchable document. By default, `rag search` returns code only. Use `--kind document` for docs only, or `--kind all` for both code and docs together.
+Markdown files (`.md`) are indexed alongside code, each heading section becomes a searchable document. By default, `rag search` returns code only. Use `--kind document` for docs only, or `--kind all` for both code and docs together.
 
 ### After code changes, re-index embeddings
 ```bash
@@ -211,10 +211,10 @@ After upgrading cartog, `rag index` auto-detects embedding format changes and re
 |---|---|---|
 | `"authentication token validation"` | Best | Describes behavior, multiple relevant terms |
 | `"handle HTTP request errors"` | Best | Natural language, matches content in function bodies |
-| `"config"` | Good | Single keyword works — FTS5 matches token in names and content |
+| `"config"` | Good | Single keyword works: FTS5 matches token in names and content |
 | `"validate_token"` | Good | FTS5 matches the full token; use `cartog search` only if you need substring matching |
 | `"parse"` | OK | Short queries return broad results; add context if too many hits |
-| `"auth*"` | Bad | FTS5 wraps queries in quotes, disabling wildcards. Use `cartog search auth` for prefix matching instead — it walks the symbol table with substring semantics. |
+| `"auth*"` | Bad | FTS5 wraps queries in quotes, disabling wildcards. Use `cartog search auth` for prefix matching instead, it walks the symbol table with substring semantics. |
 
 ### Interpreting results
 
@@ -223,11 +223,11 @@ After upgrading cartog, `rag index` auto-detects embedding format changes and re
 2. Class AuthService  auth/service.py:1-11  [fts5] score=0.0164 rerank=-4.32
 ```
 
-- `[fts5+vector]` — found by both keyword and semantic search (most confident)
-- `[fts5]` — found by keyword search only
-- `[vector]` — found by semantic similarity only (model must be set up)
-- `score` — RRF rank score; only meaningful for ordering within one query
-- `rerank` — cross-encoder relevance score (higher = more relevant). Shown when re-ranker model is available. Results are re-sorted by this score.
+- `[fts5+vector]`, found by both keyword and semantic search (most confident)
+- `[fts5]`, found by keyword search only
+- `[vector]`, found by semantic similarity only (model must be set up)
+- `score`: RRF rank score; only meaningful for ordering within one query
+- `rerank`, cross-encoder relevance score (higher = more relevant). Shown when re-ranker model is available. Results are re-sorted by this score.
 - If all results show `[fts5]` only, run `cartog rag setup && cartog rag index .` to enable vector search
 
 ### When RAG search returns nothing useful
@@ -255,4 +255,4 @@ Ignored with `--json`. Uses len/4 byte-to-token approximation.
 - `cartog search` matches symbol names (prefix + substring, case-insensitive)
 - `cartog rag search` matches symbol names AND content (FTS5 tokens + vector similarity)
 - For method queries, use the method name (e.g., `authenticate`), not dotted names
-- RAG search does NOT do substring matching: `"valid"` won't match `validate_token` — use `cartog search valid` for that
+- RAG search does NOT do substring matching: `"valid"` won't match `validate_token`, use `cartog search valid` for that

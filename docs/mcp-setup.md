@@ -2,7 +2,7 @@
 
 This page documents the config files cartog writes for each supported MCP client. Use it when you want to edit by hand instead of running `cartog ide`.
 
-> **Auto-setup**: `cartog ide` writes these files for you and handles scope (project vs user) and idempotent merging; `cartog uninstall` takes the `cartog` entry out again. See [usage.md — `cartog ide`](usage.md#per-editor-wiring-cartog-ide) for the auto-setup CLI.
+> **Auto-setup**: `cartog ide` writes these files for you and handles scope (project vs user) and idempotent merging; `cartog uninstall` takes the `cartog` entry out again. See [usage.md, `cartog ide`](usage.md#per-editor-wiring-cartog-ide) for the auto-setup CLI.
 
 All clients need `cartog` on your `PATH` first:
 
@@ -19,7 +19,7 @@ cargo install cartog@<version>   # specific version (see Releases)
 
 Claude Code reads MCP servers from two places. `cartog ide --client claude-code` writes both (project + user scope). To write only the project file by hand, use the snippet below.
 
-Project-scoped — committable, recommended (`<repo>/.mcp.json`):
+Project-scoped, committable, recommended (`<repo>/.mcp.json`):
 
 ```json
 {
@@ -32,7 +32,7 @@ Project-scoped — committable, recommended (`<repo>/.mcp.json`):
 }
 ```
 
-User-scoped — applies to every repo on your machine (`~/.claude/settings.json`):
+User-scoped, applies to every repo on your machine (`~/.claude/settings.json`):
 
 ```json
 {
@@ -53,14 +53,14 @@ claude mcp add --scope project cartog -- cartog serve --watch
 ```
 
 Under `--watch`, embeddings auto-refresh on file change when the repo already
-has embeddings (run `cartog rag index` once to opt in) — no `--rag` needed. Add
+has embeddings (run `cartog rag index` once to opt in), no `--rag` needed. Add
 `"--rag"` to `args` only to force embedding on a repo that has never been
 indexed.
 
 > **`--watch` for every client.** `cartog ide`/`install` registers
 > `["serve", "--watch"]` for all editors. The single-writer election makes
 > concurrent watchers safe: the first `cartog serve` instance owns the watcher,
-> the rest attach read-only and ride its updates over WAL — no lock contention,
+> the rest attach read-only and ride its updates over WAL, no lock contention,
 > no double-indexing. Drop the watcher with `cartog ide --no-watch`, or call
 > `cartog index` manually when you prefer a manual refresh.
 
@@ -155,7 +155,7 @@ Edit `~/.config/zed/settings.json`:
 ## Codex CLI
 
 Edit `~/.codex/config.toml` (Codex reads MCP servers only from this user-global
-file — there is no per-project Codex config):
+file, there is no per-project Codex config):
 
 ```toml
 [mcp_servers.cartog]
@@ -186,10 +186,10 @@ Edit `~/.gemini/settings.json`:
 
 ## VS Code (GitHub Copilot)
 
-Two scopes — `cartog ide` (or `cartog install vscode`) writes both:
+Two scopes, `cartog ide` (or `cartog install vscode`) writes both:
 
 - **Project**: `.vscode/mcp.json` in your repo root (per-workspace).
-- **User** (every workspace): `Code/User/mcp.json` under the VS Code config dir —
+- **User** (every workspace): `Code/User/mcp.json` under the VS Code config dir, 
   `~/Library/Application Support/Code/User/mcp.json` (macOS),
   `~/.config/Code/User/mcp.json` (Linux), `%APPDATA%\Code\User\mcp.json` (Windows).
 
@@ -370,7 +370,7 @@ so `enabled`, `environment` and `timeout` stay.
 
 ## Any other MCP-compatible client
 
-The config pattern is always the same — point the client at `cartog serve` over stdio:
+The config pattern is always the same, point the client at `cartog serve` over stdio:
 
 - **Command**: `cartog`
 - **Args**: `["serve"]`
@@ -378,6 +378,6 @@ The config pattern is always the same — point the client at `cartog serve` ove
 
 ## See also
 
-- [usage.md — `cartog ide`](usage.md) — auto-setup CLI (writes these files for you)
-- [usage.md — Available MCP tools](usage.md#available-tools) — what each `cartog_*` tool returns
-- [editor-integration.md](editor-integration.md) — non-MCP integration (CLI shell-out, quickfix, picker) for Neovim, Emacs, etc.
+- [usage.md (`cartog ide`)](usage.md): auto-setup CLI (writes these files for you)
+- [mcp-tools.md (Available tools)](reference/mcp-tools.md#available-tools): what each `cartog_*` tool returns
+- [editor-integration.md](editor-integration.md), non-MCP integration (CLI shell-out, quickfix, picker) for Neovim, Emacs, etc.

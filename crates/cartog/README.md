@@ -48,8 +48,8 @@ Database path is resolved with a 4-tier priority:
 
 1. `--db` CLI flag / `CARTOG_DB` environment variable
 2. `[database.path]` in `.cartog.toml` (found by walking up to git root)
-3. Auto git-root detection — `.cartog/db.sqlite` next to `.git/` (legacy `.cartog.db` is still read with a one-shot warning if only it exists; `cartog self migrate-db` moves it)
-4. Fallback — `.cartog/db.sqlite` in the current directory
+3. Auto git-root detection, `.cartog/db.sqlite` next to `.git/` (legacy `.cartog.db` is still read with a one-shot warning if only it exists; `cartog self migrate-db` moves it)
+4. Fallback, `.cartog/db.sqlite` in the current directory
 
 `.cartog.toml` also configures RAG providers via `[embedding]` (provider, model, dimension) and `[reranker]` (provider) sections. See `crates/cartog-rag/README.md` for details.
 

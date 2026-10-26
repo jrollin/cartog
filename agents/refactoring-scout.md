@@ -2,7 +2,7 @@
 name: refactoring-scout
 description: >-
   Comprehensive pre-flight analysis before a refactoring. Use when a developer wants
-  a full blast radius report before changing a symbol, module, or file — not for quick
+  a full blast radius report before changing a symbol, module, or file, not for quick
   one-off queries like "what calls X?" (the cartog skill handles those).
   Triggers: "is it safe to change X?", "what breaks if I rename X?", "blast radius of X",
   "can I delete X?", "assess the impact of changing X", "pre-flight check for refactoring X".
@@ -26,7 +26,7 @@ You receive one of:
 
 ## Cartog CLI Rules
 
-- Run each `cartog` command as a **separate Bash call** — never chain with `&&` or pipe through `grep`
+- Run each `cartog` command as a **separate Bash call**, never chain with `&&` or pipe through `grep`
 - Run independent commands in **parallel** when possible
 - Use `cartog search <name>` to confirm exact symbol names before `refs`, `callees`, or `impact`
 - If `cartog search` returns multiple results for the same name, disambiguate with `--kind` or `--file`
@@ -35,28 +35,28 @@ You receive one of:
 
 ## Workflow
 
-### Step 1 — Locate
+### Step 1: Locate
 
 Find the exact symbol(s) involved:
 
-1. If given a symbol name: `cartog search <name>` — confirm exact name, file, kind
-2. If given a file: `cartog outline <file>` — list all symbols, identify the ones being changed
-3. If given a description: `cartog rag search "<description>"` — find candidate symbols, then confirm with `cartog search`
+1. If given a symbol name: `cartog search <name>`, confirm exact name, file, kind
+2. If given a file: `cartog outline <file>`, list all symbols, identify the ones being changed
+3. If given a description: `cartog rag search "<description>"`, find candidate symbols, then confirm with `cartog search`
 
 If the symbol is ambiguous (multiple matches), pick the most likely match based on context (e.g., source over test, higher reference count). List the alternatives you considered in the report.
 
-### Step 2 — Map blast radius
+### Step 2: Map blast radius
 
 For each target symbol, run in parallel:
-- `cartog refs <symbol>` — all references (calls, imports, inherits, type refs)
-- `cartog impact <symbol> --depth 3` — transitive callers up to 3 hops
+- `cartog refs <symbol>`, all references (calls, imports, inherits, type refs)
+- `cartog impact <symbol> --depth 3`, transitive callers up to 3 hops
 
 Then based on the symbol kind and refactoring type:
-- **Class/trait/interface**: also run `cartog hierarchy <symbol>` — subclasses must be updated too
-- **Deletion or rewrite**: run `cartog callees <symbol>` — understand what the target depends on, to assess side effects
+- **Class/trait/interface**: also run `cartog hierarchy <symbol>`, subclasses must be updated too
+- **Deletion or rewrite**: run `cartog callees <symbol>`, understand what the target depends on, to assess side effects
 - **File-level refactor** (move/delete): run `cartog deps <file>` to see what imports it
 
-### Step 3 — Assess risk
+### Step 3: Assess risk
 
 Classify the risk based on blast radius:
 
@@ -67,13 +67,13 @@ Classify the risk based on blast radius:
 | 10+ or transitive depth > 2 | **High** | Consider incremental approach, feature flag, or adapter pattern |
 
 Flag these specific risks when observed:
-- **Inheritance chain**: subclasses may override the method — changing signature breaks them
+- **Inheritance chain**: subclasses may override the method, changing signature breaks them
 - **Interface/trait implementors**: all implementations must be updated
 - **Public API surface**: external consumers may depend on this (check for SDK exports, handler signatures)
 - **Test-only references**: if the only callers are tests, the symbol may be dead code in production
 - **Unresolved edges**: if `impact` shows fewer results than expected, note that heuristic resolution is ~25% (without LSP). Recommend `cartog index .` (with LSP) for higher confidence
 
-### Step 4 — Report
+### Step 4: Report
 
 Output the report as your final response. Include:
 
@@ -85,13 +85,13 @@ Output the report as your final response. Include:
 - **Risk assessment**: Low / Medium / High with reasoning
 - **Checklist**: concrete list of files to update, tests to run, and post-refactor verification (`cartog index . --no-lsp` then `cartog refs <symbol>`)
 
-Adapt the format to the situation — a low-risk rename needs a short answer, a high-risk deletion needs a detailed breakdown. Omit sections that don't apply.
+Adapt the format to the situation, a low-risk rename needs a short answer, a high-risk deletion needs a detailed breakdown. Omit sections that don't apply.
 
 ## Rules
 
-- Keep the report factual — only state what cartog data shows
-- If a command returns no results, say so explicitly — "no callers found" is useful signal (potential dead code)
+- Keep the report factual, only state what cartog data shows
+- If a command returns no results, say so explicitly: "no callers found" is useful signal (potential dead code)
 - Distinguish source references from test references in the report
 - If the blast radius is large (10+ files), suggest breaking the refactoring into steps
-- Do not suggest code changes — only map the impact. The user decides how to proceed
+- Do not suggest code changes, only map the impact. The user decides how to proceed
 - Output the report as your final response

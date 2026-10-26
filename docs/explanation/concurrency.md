@@ -26,11 +26,11 @@ Two principles hold everywhere:
    (single-writer promotion) is model-checked (TLA+ + Loom).
 
 The 95% of commands that are plain sync CLI (`index`, `search`, `refs`, …) never
-touch tokio at all — the async runtime is created on demand only by `serve`.
+touch tokio at all, the async runtime is created on demand only by `serve`.
 
 ---
 
-## 2. File parsing — rayon `par_iter`
+## 2. File parsing, rayon `par_iter`
 
 **Where:** `crates/cartog-indexer/src/lib.rs` (parse phase; the
 `THREAD_EXTRACTORS` thread-local).
@@ -66,7 +66,7 @@ worker, not once per file; out-of-order completion is reported monotonically via
 
 ---
 
-## 3. Model inference — ONNX intra-op threads
+## 3. Model inference: ONNX intra-op threads
 
 **Where:** `crates/cartog-rag/src/providers/local.rs` (`onnx_intra_threads`,
 `EMBED_BATCH_SIZE`).
@@ -82,11 +82,11 @@ inference graph. This is the parallelism lever for embedding/rerank throughput.
 
 **Limitations.**
 - Only **intra-op** is exposed; there is no inter-op / pipeline parallelism.
-- RAG *indexing* itself is **sequential** by design — texts are processed in
+- RAG *indexing* itself is **sequential** by design, texts are processed in
   fixed chunks (`EMBED_BATCH_SIZE = 64`, larger DB-flush chunks above that) for
   clean progress reporting and Ctrl-C cancellation. Throughput comes from the
   ONNX pool, not from fanning batches across rayon. (Pushing embed throughput
-  further — a dedicated rayon pool or pipelined batches — is a known open lever,
+  further (a dedicated rayon pool or pipelined batches) is a known open lever,
   not a shipped feature.)
 - Applies to the **local** provider only; Ollama / OpenAI providers are network
   I/O, serialized per request.
@@ -98,14 +98,14 @@ roughly 30–50% on the inference pass.
 
 ---
 
-## 4. MCP tool handlers — `tokio::task::spawn_blocking`
+## 4. MCP tool handlers, `tokio::task::spawn_blocking`
 
 **Where:** `crates/cartog-mcp/src/lib.rs` (all 17 tool handlers); runtime is
 `tokio` with `rt-multi-thread`.
 
 **Usage.** `cartog serve` is an async MCP server over stdio. Every tool handler
 (`cartog_search`, `cartog_rag_search`, `cartog_index`, …) wraps its blocking
-work — DB queries, parsing, embedding — in `spawn_blocking`, runs it on tokio's
+work (DB queries, parsing, embedding) in `spawn_blocking`, runs it on tokio's
 blocking thread pool, and `.await`s the result.
 
 **Why.** Tool bodies are synchronous and can take 100 ms–seconds. Running them
@@ -116,7 +116,7 @@ overlap.
 **Limitations.**
 - The DB is a **single** `Arc<Mutex<Database>>` connection, not a pool, so
   concurrent tool calls serialize on DB access. This is fine because an MCP
-  server backs one agent session — contention is negligible — but it means a
+  server backs one agent session (contention is negligible) but it means a
   slow query does hold the DB mutex for its duration (relevant to any future
   feature that adds a *second* caller of that mutex).
 - SQLite WAL gives concurrent **readers** + one writer; reader-vs-checkpoint and
@@ -131,7 +131,7 @@ because the lock never spans an await.
 
 ---
 
-## 5. Single-writer promoter — `tokio::spawn` background task
+## 5. Single-writer promoter, `tokio::spawn` background task
 
 **Where:** `crates/cartog-mcp/src/single_writer.rs` (the promoter task and
 `AtomicRole`).
@@ -150,7 +150,7 @@ a writer. Automatic failover restores write capability without user action.
   secondary is read-only and may serve slightly stale data.
 - Only the primary writes; secondaries are read-only by construction.
 - Disabling the election (`CARTOG_SINGLE_WRITER=0`) removes the single-owner
-  guarantee — multiple primaries can then run on one DB.
+  guarantee, multiple primaries can then run on one DB.
 
 **Impact.** ~10 s automatic failover. This is the one protocol where ad-hoc
 reasoning is not trusted: it is specified in TLA+ (`specs/tla/`) and
@@ -160,7 +160,7 @@ lock swap, never across `.await`.
 
 ---
 
-## 6. MCP progress forwarder — `tokio::spawn` + bounded channel
+## 6. MCP progress forwarder, `tokio::spawn` + bounded channel
 
 **Where:** `crates/cartog-mcp/src/progress.rs`.
 
@@ -176,7 +176,7 @@ drain cleanly.
 - Progress is **best-effort**: the channel is bounded (capacity 64) and
   producers use `try_send`, so under a stalled client some progress events are
   dropped (and logged) rather than backpressuring the indexer.
-- Notifications are advisory — never rely on them for correctness.
+- Notifications are advisory, never rely on them for correctness.
 
 **Impact.** Real-time progress with zero risk of a slow client throttling actual
 indexing. The bounded-channel + `try_send` choice is the safety mechanism: a
@@ -184,7 +184,7 @@ consumer that can't keep up cannot stall the producer.
 
 ---
 
-## 7. LSP client — reader thread + writer thread + 64-request pipelining
+## 7. LSP client, reader thread + writer thread + 64-request pipelining
 
 **Where:** `crates/cartog-lsp/src/client.rs` (reader thread, writer thread),
 `crates/cartog-lsp/src/manager.rs` (`DEFINITION_BATCH_WINDOW = 64`).
@@ -223,7 +223,7 @@ hang the whole index (there are read deadlines but, without this, no write one).
   so ~100k writes add ~0.6 s to a ~3.5 min resolution pass (~0.3 %). The ack
   channel is reused per client, not allocated per call, to keep it off the
   per-edge allocation path.
-- This crate is **not** tokio — it is plain `std::thread` + channels.
+- This crate is **not** tokio, it is plain `std::thread` + channels.
 
 **Impact.** ~33% faster edge resolution on large repos (≈5:12 → 3:29 on a 98k-edge
 run); the writer-thread ack cost above does not dent that. Safety: the reader
@@ -233,7 +233,7 @@ unblocks a writer parked on a non-reading server).
 
 ---
 
-## 8. File watcher — `std::thread` + debouncer
+## 8. File watcher, `std::thread` + debouncer
 
 **Where:** `crates/cartog-watch/src/lib.rs`.
 
@@ -247,7 +247,7 @@ thread keeps the CLI / daemon responsive. Debouncing avoids re-indexing on every
 keystroke-save.
 
 **Limitations.**
-- Deliberately **no tokio** — it is pure `std::thread` + an mpsc channel.
+- Deliberately **no tokio**, it is pure `std::thread` + an mpsc channel.
 - DB writes inside the loop are sequential; concurrent-writer contention is
   handled by SQLite `busy_timeout`, not by the watcher.
 - `Drop` signals shutdown and joins with a bounded (~1.5 s) deadline; callers
@@ -259,15 +259,15 @@ channel close coordinate a clean stop.
 
 ---
 
-## 9. Fire-and-forget helpers — detached `std::thread`
+## 9. Fire-and-forget helpers, detached `std::thread`
 
 **Where:** `crates/cartog/src/auto_check.rs` (update check),
 `crates/cartog/src/commands/mod.rs` (CLI spinner).
 
 **Usage.** Two small detached threads:
-- **Update check** — a background HTTP call to the GitHub releases API so
+- **Update check**, a background HTTP call to the GitHub releases API so
   `cartog self update --check` adds no latency to normal commands.
-- **CLI spinner** — animates progress frames / elapsed time while a foreground
+- **CLI spinner**, animates progress frames / elapsed time while a foreground
   command runs.
 
 **Why.** Neither should add latency to the main command. Both are pure
@@ -299,8 +299,8 @@ inputs (no shared mutable state beyond an `AtomicBool` stop flag and an
 
 ## See also
 
-- [incremental-indexing.md](incremental-indexing.md) — the change-detection
+- [incremental-indexing.md](incremental-indexing.md), the change-detection
   pipeline that feeds the parallel parse phase (§2).
-- [architecture.md](architecture.md) — DB-mutex, WAL, and tokio decision rows (link back here).
-- `specs/tla/` and `crates/cartog-loom-models` — formal models of the
+- [architecture.md](architecture.md): DB-mutex, WAL, and tokio decision rows (link back here).
+- `specs/tla/` and `crates/cartog-loom-models`, formal models of the
   single-writer protocol (§5).

@@ -28,7 +28,7 @@ Expected:
   `/cartog-install`.
 - No spinner / no hang.
 
-If the prompt takes more than 2 seconds, the SessionStart hook regressed —
+If the prompt takes more than 2 seconds, the SessionStart hook regressed, 
 something is running in the foreground that shouldn't be.
 
 ## 2. First-session MCP miss is graceful
@@ -65,7 +65,7 @@ Expected:
 Goal: confirm the explicit upgrade verb works.
 
 1. Manually downgrade the binary. Pick the target slug that matches your
-   platform from this table (the published artifact suffixes — adapt if
+   platform from this table (the published artifact suffixes, adapt if
    release.yml ever changes them):
 
    | OS / arch | Target slug |

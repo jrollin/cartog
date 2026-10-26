@@ -1,10 +1,10 @@
-# cartog — Architecture Decisions
+# cartog: Architecture Decisions
 
 > RAG pipeline design: [rag-pipeline.md](rag-pipeline.md) | Incremental indexing: [incremental-indexing.md](incremental-indexing.md) | Concurrency: [concurrency.md](concurrency.md)
 
 ## Language
 
-**Rust** — Performance, tree-sitter native bindings, single binary distribution.
+**Rust**: Performance, tree-sitter native bindings, single binary distribution.
 
 ## Architecture Decisions
 
@@ -13,7 +13,7 @@
 | Parser | tree-sitter (CST + query API) | Incremental, multi-language, structural. JS/TS and Python use declarative tree-sitter queries for call/throw/type-ref extraction; other languages use cursor walks. Handles 90% of what LSP provides without running a language server |
 | Storage | SQLite (single `.cartog/db.sqlite`) | Zero infra, ~1 MB, persists across sessions. WAL mode enables concurrent readers (watcher + MCP server). Legacy `.cartog.db` at the project root is still read for backwards-compatibility |
 | Packaging | Skill (primary) | Changes agent workflow, not just adds a tool. Works with any LLM that has bash access |
-| MCP server | `cartog serve` (stdio) | Skill remains primary; MCP as secondary for zero-context-cost tool access. 1:1 mapping with CLI commands — same `db.*()` code paths |
+| MCP server | `cartog serve` (stdio) | Skill remains primary; MCP as secondary for zero-context-cost tool access. 1:1 mapping with CLI commands, same `db.*()` code paths |
 | Change detection | Layered: git diff → file SHA-256 → symbol Merkle (+ `--force`) | Each layer prunes a different unit (files, then symbols). Full design, layer diagram, hash invariants, and failure modes in [incremental-indexing.md](incremental-indexing.md) |
 | Edge resolution | Name-based, scope-aware, multi-pass, scoped | 6-tier priority: same file > import-path > same dir > parent scope > unique global > kind disambiguation (type def > function > method). Two passes so import edges resolved in pass 1 feed pass 2. Incremental mode: invalidates dangling edges after symbol changes, then re-resolves only affected edges. Each resolved edge records the resolving tier/source in `edges.resolution_source` (`EdgeProvenance`), surfaced as `provenance` in `--json`/MCP output; LSP overwrites the heuristic tag, reset paths clear it |
 | Symbol ID | `file_path:kind:qualified_name` | Stable across line movements. `kind` = function/class/method/etc. Qualified name encodes parent chain: `auth.py:method:TokenService.validate`. Deterministic, human-readable, no UUIDs |
@@ -23,7 +23,7 @@
 | Serialization (embeddings) | Raw little-endian f32 bytes | Zero-overhead, directly compatible with sqlite-vec `MATCH` operator. 384 dims × 4 bytes = 1536 bytes per symbol |
 | Language detection | File extension | Simple, predictable, covers 99%. TSX is a separate key from TS (different grammar for JSX nodes) |
 | Async boundary | Manual `tokio::Runtime` for `serve` only | 95% of commands are sync. Avoids async overhead for index/search/refs. `spawn_blocking` offloads sync SQLite calls from the async MCP handler. Full model in [concurrency.md](concurrency.md) |
-| DB concurrency | `Arc<Mutex<Database>>` | Single connection, not a pool. MCP serves one agent session — contention is negligible. `std::sync::Mutex` (not tokio) because lock is never held across `.await`. See [concurrency.md](concurrency.md) |
+| DB concurrency | `Arc<Mutex<Database>>` | Single connection, not a pool. MCP serves one agent session, contention is negligible. `std::sync::Mutex` (not tokio) because lock is never held across `.await`. See [concurrency.md](concurrency.md) |
 | Path security | Canonical CWD validation | MCP tool parameters come from LLM agents. Rejects paths outside CWD subtree via `canonicalize` + `starts_with`. Defense-in-depth against prompt injection |
 | Secret redaction | Default-on, best-effort | Scrubs common secret patterns from stored symbol text and skips sensitive files. See [Secret redaction](#secret-redaction) below |
 | Watch mode | Debounced re-index + deferred RAG | 5s debounce, 30s RAG delay. Auto-embeds when the repo already has embeddings (auto-detected; `--rag`/`[embedding] auto_embed`/`CARTOG_WATCH_RAG` override). Edited symbols' stale embeddings are invalidated on re-index so they re-embed. Embedding only fires after editing stops |
@@ -36,7 +36,7 @@
 | RAG tuning | `[rag]` section in `.cartog.toml` | `retrieval_multiplier`, `retrieval_floor`, `rerank_max`, `rerank_min` control FTS5/vector candidate pool size and cross-encoder cost. See [../reference/config.md](../reference/config.md) |
 | Workspace | Cargo workspace (10 published crates + `cartog-loom-models`, test-only) | Incremental compilation, explicit dependency boundaries, independent crate reuse. See [../structure.md](../structure.md) for layout and dependency graph |
 | Monorepo | Deferred | Index from CWD, user can `cd` into subproject |
-| Remote index sync | Opt-in S3-compatible push/pull (default-on feature, inert without config) | `remote-s3` feature ON by default — single distributable binary, no rebuild from source for teams. Inert until `[remote]` is set or `--remote` passed: no network traffic, no impact on air-gapped use. Credentials resolved from the AWS env chain only; `.cartog.toml` rejects credential-shaped keys at parse time. `rust-s3` (~5 MB) over `aws-sdk-s3` (~18 MB) for binary size. Push records git-commit provenance (`x-amz-meta-git-commit` from the index's `last_commit`); pull reports it and cross-checks header vs file, but never blocks on staleness — the read-mostly "CI builds, devs pull" flow. See [../how-to/set-up-s3-sync.md](../how-to/set-up-s3-sync.md) |
+| Remote index sync | Opt-in S3-compatible push/pull (default-on feature, inert without config) | `remote-s3` feature ON by default, single distributable binary, no rebuild from source for teams. Inert until `[remote]` is set or `--remote` passed: no network traffic, no impact on air-gapped use. Credentials resolved from the AWS env chain only; `.cartog.toml` rejects credential-shaped keys at parse time. `rust-s3` (~5 MB) over `aws-sdk-s3` (~18 MB) for binary size. Push records git-commit provenance (`x-amz-meta-git-commit` from the index's `last_commit`); pull reports it and cross-checks header vs file, but never blocks on staleness, the read-mostly "CI builds, devs pull" flow. See [../how-to/set-up-s3-sync.md](../how-to/set-up-s3-sync.md) |
 
 ## Secret redaction
 
@@ -73,14 +73,14 @@ changes, scrubbing already-stored content, and prints a one-time notice.
 
 ## SQLite Tuning
 
-The database is a regenerable index — crash-recovery safety is traded for throughput.
+The database is a regenerable index, crash-recovery safety is traded for throughput.
 
 | Pragma | Value | Rationale |
 |--------|-------|-----------|
 | `journal_mode` | WAL | Write-Ahead Logging enables concurrent readers. Watch thread and MCP server read while indexer writes |
 | `busy_timeout` | 5000 (5 s) | Bounded retry on a locked DB. WAL removes reader-vs-writer contention but not writer-vs-writer (one WAL writer at a time) or reader-vs-checkpoint contention. Without it, a connection hitting those locks fails immediately with `SQLITE_BUSY`. WAL and `busy_timeout` are both required: WAL for read concurrency, `busy_timeout` so the rarer write/checkpoint contention waits instead of aborting. Applied to every on-disk connection, including the WAL-checkpoint connection |
 | `foreign_keys` | ON | Enforce referential integrity |
-| `synchronous` | NORMAL | Reduced fsync frequency. Safe with WAL for a regenerable index — power failure loses at most the last transaction, recoverable via `cartog index --force` |
+| `synchronous` | NORMAL | Reduced fsync frequency. Safe with WAL for a regenerable index, power failure loses at most the last transaction, recoverable via `cartog index --force` |
 | `cache_size` | -65536 (64 MB) | Large page cache for repeated queries in MCP sessions |
 | `temp_store` | MEMORY | Temp tables in RAM, not disk |
 | `mmap_size` | 268435456 (256 MB) | Memory-mapped I/O for large index scans |
@@ -137,7 +137,7 @@ Two consequences worth knowing:
 `describe ... do` is an expression, not a declaration, so it has no name of its own
 in the grammar. Each block is emitted as a `function` symbol named by its string
 label and nested under its enclosing block, which is what makes the calls inside it
-reachable — `cartog refs <symbol>` shows the tests that exercise a symbol. Before
+reachable, `cartog refs <symbol>` shows the tests that exercise a symbol. Before
 this, an entire spec file indexed to zero symbols and zero edges.
 
 **Ranking demotes tests, and semantic search does it in two places.**
@@ -150,7 +150,7 @@ equally-matched implementation code.
 every candidate a distinct score so ties never occur. Two mechanisms apply:
 
 1. **Retrieval** fetches production code and tests as separate FTS5 arms. A
-   single ranked list lets test names — which restate the query — fill the whole
+   single ranked list lets test names (which restate the query) fill the whole
    budget before the implementation is reached.
 2. **Ranking** subtracts a fixed penalty from a test's rerank score. It is
    subtractive because the cross-encoder emits raw logits that are frequently
@@ -185,7 +185,7 @@ with those fixes.
 
 ## Further Reading
 
-- [Product Overview](../product.md) — purpose, target users, differentiation
-- [Project Structure](../structure.md) — module layout, conventions
-- [CLI Reference](../reference/cli.md) — all commands
-- [Configuration Reference](../reference/config.md) — all `.cartog.toml` keys
+- [Product Overview](../product.md), purpose, target users, differentiation
+- [Project Structure](../structure.md), module layout, conventions
+- [CLI Reference](../reference/cli.md), all commands
+- [Configuration Reference](../reference/config.md), all `.cartog.toml` keys

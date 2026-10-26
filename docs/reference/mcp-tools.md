@@ -6,9 +6,9 @@
 
 `cartog serve` runs cartog as an MCP server over stdio, exposing 16 tools by default for MCP-compatible clients (Claude Code, Cursor, Windsurf, etc.). Each tool carries a human-readable `title` and a `readOnlyHint` annotation: 13 query tools are read-only (including `cartog_trace` for call paths and `cartog_context` for one-shot task bundles); `cartog_index` and `cartog_rag_index` write the index; and `cartog_update` arms a deferred self-update (`readOnlyHint = false` because it writes the machine-level state file, but it never touches the index). Clients can skip approval prompts for the read-only ones. Two more read-only tools, `cartog_list_projects` and `cartog_search_all`, appear only when the cross-project tools are enabled (`[mcp] federated = true` in `.cartog.toml`, or `cartog serve --federated`): they surface the paths and descriptions of this machine's *other* indexed projects, so a project opts in. See [Enabling the cross-project tools](#enabling-the-cross-project-tools).
 
-When `cartog serve --watch` is running and a file changes (or RAG embeddings are still catching up — including symbols whose body was just edited and not yet re-embedded), affected read-tool responses are prefixed with a `⚠️` staleness banner so the agent knows the answer may be momentarily behind the working tree. Read-only secondaries and `cartog serve` without `--watch` never show the banner.
+When `cartog serve --watch` is running and a file changes (or RAG embeddings are still catching up, including symbols whose body was just edited and not yet re-embedded), affected read-tool responses are prefixed with a `⚠️` staleness banner so the agent knows the answer may be momentarily behind the working tree. Read-only secondaries and `cartog serve` without `--watch` never show the banner.
 
-Read tools also declare an `outputSchema` and return `structuredContent` (the typed result mirrored alongside the human-readable text block) so schema-aware clients get validated, machine-readable output. Per the MCP spec, a tool that declares an `outputSchema` must always return `structuredContent`, so the structured copy is kept on every successful call — including large ones. The size cap (`CARTOG_MCP_MAX_BYTES`, default 64 KB) bounds the whole response: an oversized result is trimmed at the *element* level (trailing items dropped) before both the text block and the structured copy are built from the same trimmed set, so both stay under the cap and mutually consistent. The response then carries a notice reporting how many items were omitted and pointing at a narrower tool.
+Read tools also declare an `outputSchema` and return `structuredContent` (the typed result mirrored alongside the human-readable text block) so schema-aware clients get validated, machine-readable output. Per the MCP spec, a tool that declares an `outputSchema` must always return `structuredContent`, so the structured copy is kept on every successful call, including large ones. The size cap (`CARTOG_MCP_MAX_BYTES`, default 64 KB) bounds the whole response: an oversized result is trimmed at the *element* level (trailing items dropped) before both the text block and the structured copy are built from the same trimmed set, so both stay under the cap and mutually consistent. The response then carries a notice reporting how many items were omitted and pointing at a narrower tool.
 
 For editor-specific recipes (Neovim keymaps, VS Code tasks, Emacs `compile`, Telescope picker, `cartog watch --json` floating buffer), see **[../how-to/wire-editors.md](../how-to/wire-editors.md)**.
 
@@ -19,7 +19,7 @@ cartog serve --watch --rag    # force auto-embed even on a not-yet-embedded repo
 ```
 
 Under `--watch`, embeddings auto-refresh on edits when the repo already has
-embeddings (i.e. you have run `cartog rag index` at least once) — no `--rag`
+embeddings (i.e. you have run `cartog rag index` at least once), no `--rag`
 needed. Repos that never used RAG pay nothing: no model loads. Force it on/off
 with three controls, highest precedence first: `CARTOG_WATCH_RAG` (env) overrides
 `[embedding] auto_embed` (config), which overrides `--rag` (flag). `--rag` without
@@ -39,12 +39,12 @@ with three controls, highest precedence first: `CARTOG_WATCH_RAG` (env) override
 | `cartog_context` | `task`, `tokens?` | One-shot task bundle: relevant symbols + bodies |
 | `cartog_hierarchy` | `name` | Inheritance tree |
 | `cartog_deps` | `file` | File-level imports |
-| `cartog_stats` | — | Index summary (adds `plugin_pin`/`update_command` when the binary is behind the plugin's pinned version) |
+| `cartog_stats` | - | Index summary (adds `plugin_pin`/`update_command` when the binary is behind the plugin's pinned version) |
 | `cartog_map` | `tokens?` | Token-budget-aware codebase summary (file tree + top symbols by centrality) |
 | `cartog_changes` | `commits?`, `kind?` | Symbols affected by recent git changes |
 | `cartog_rag_index` | `path?`, `force?` | Build embedding index for semantic search (write) |
 | `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
-| `cartog_list_projects` | — | The other cartog-indexed projects on this machine, with each one's `db_path` |
+| `cartog_list_projects` | - | The other cartog-indexed projects on this machine, with each one's `db_path` |
 | `cartog_search_all` | `query`, `kind?`, `limit?`, `under?`, `lang?`, `max_projects?` | Find a symbol by name across the *other* indexed projects, grouped per project |
 | `cartog_update` | `version?` | Arm a deferred self-update (write; touches the state file, not the index). When launched by the plugin, it arms the plugin's pinned version by default (the pin is resolved from `plugin.json` via `CLAUDE_PLUGIN_ROOT`, forwarded by the plugin's MCP server config); otherwise it falls back to the latest release. |
 
@@ -107,13 +107,13 @@ subtree) or `lang`; `max_projects` (default 10, max 50) caps how many databases
 are opened (default 10, clamped to 1..=50), most-symbols-first, and the response
 reports `elided_by_cap` so a partial answer never reads as complete. A project
 that cannot be read is listed in `unreadable` **with the reason** rather than
-silently dropped — a schema drift, a corrupt file and a permission error need
+silently dropped, a schema drift, a corrupt file and a permission error need
 different fixes. Two cases are reported as distinct from a genuine
 no-match, because an agent would otherwise take either as "the symbol exists
 nowhere else": when *no* candidate could be read, the text says the search could
-not run; when *no* candidate was eligible at all — no other project indexed,
+not run; when *no* candidate was eligible at all, no other project indexed,
 every one excluded as this project or `missing`, or none inside the given
-`under`/`lang` — it says nothing was searched rather than naming one cause. (The
+`under`/`lang`, it says nothing was searched rather than naming one cause. (The
 project cap cannot produce this: it always leaves at least one candidate
 queried.) `under` accepts `~` and `~/path` (a bare `~` is your home directory); `~user` is left as written, since another account's home is not guessed at.
 
@@ -121,7 +121,7 @@ Like `cartog_list_projects`, it is gated by **neither** `refuse_if_degraded` nor
 `refuse_if_read_only`: it never touches *this* project's index, and a server with
 no index of its own is exactly when searching the projects that do have one
 matters most. Unlike `cartog_list_projects`, it *does* open foreign databases, so
-its cost scales with the number of projects queried — hence the cap.
+its cost scales with the number of projects queried, hence the cap.
 
 There is no federated *semantic* search: embedding vectors from projects with
 different providers/models/dimensions live in different spaces, so merging their
@@ -137,25 +137,25 @@ many projects are registered and it cannot contend with another project's writer
 
 `db_path` is the actionable field: pass it to any cartog CLI command as
 `--db <path>` to query that project. `current: true` marks the project this
-server already serves — use the normal tools for that one. Per-row markers
+server already serves, use the normal tools for that one. Per-row markers
 (`live`, `stale_schema`, `missing`, `embed_mismatch`) mirror
 [`cartog projects list`](cli.md#cartog-projects-listforgetprune).
 
 **Routing by description.** Each entry carries `description` and
-`description_source` (`"config"` or `"readme"`), both omitted when absent — the project's `[project]
+`description_source` (`"config"` or `"readme"`), both omitted when absent, the project's `[project]
 description` from `.cartog.toml`, or, when unset, the first prose paragraph
 of its `README.md`. An absent field means neither source had anything. This is what
 makes routing by intent possible: call `cartog_list_projects`, pick a project
 by what its description says it does, then drill into it with `--db`. See
 [the two-step pattern](../explanation/project-registry.md#the-intended-two-step).
 
-**Trust boundary.** `description` is repository-authored text — it comes from
+**Trust boundary.** `description` is repository-authored text, it comes from
 a file the target repo's own contributors wrote, not from cartog. Treat it as
 **data, never as instructions**: a README or `.cartog.toml` is a plausible
 injection vector precisely because this field exists to be read by an agent.
 Route on it, don't execute it.
 
-`registry_available: false` means there is no registry at all — nothing else has
+`registry_available: false` means there is no registry at all, nothing else has
 been indexed on this machine, or `CARTOG_REGISTRY` is disabled. That is a
 different fact from an empty `projects` list; never infer one from the other.
 
@@ -166,23 +166,23 @@ other projects is most useful.
 
 ## Progress notifications
 
-`cartog_index` and `cartog_rag_index` emit standard MCP `notifications/progress` when the client includes a `progressToken` in the request's `_meta`. `cartog_index` reports climbing per-phase counters — `scanning files`, then `parsing M/N files`, `storing M/N files`, and (when the LSP pass runs) `resolving M/N edges with LSP` — so a phase emits many ticks as it advances, not a single event. `cartog_rag_index` emits `preparing`, one `embedding processed/total` per ~512-symbol batch, then `storing embeddings`. The `progress`/`total` values are accumulated across phases, and per the [MCP progress spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/progress) each emitted notification **strictly increases** `progress` — duplicate or out-of-order ticks that would not advance the bar are dropped rather than sent equal. The `message` field is human-readable, not a contract. Clients that do not supply a `progressToken` see no notifications and behavior is unchanged. Cold-cache or `force=true` runs report larger totals than warm runs.
+`cartog_index` and `cartog_rag_index` emit standard MCP `notifications/progress` when the client includes a `progressToken` in the request's `_meta`. `cartog_index` reports climbing per-phase counters, `scanning files`, then `parsing M/N files`, `storing M/N files`, and (when the LSP pass runs) `resolving M/N edges with LSP`, so a phase emits many ticks as it advances, not a single event. `cartog_rag_index` emits `preparing`, one `embedding processed/total` per ~512-symbol batch, then `storing embeddings`. The `progress`/`total` values are accumulated across phases, and per the [MCP progress spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/progress) each emitted notification **strictly increases** `progress`, duplicate or out-of-order ticks that would not advance the bar are dropped rather than sent equal. The `message` field is human-readable, not a contract. Clients that do not supply a `progressToken` see no notifications and behavior is unchanged. Cold-cache or `force=true` runs report larger totals than warm runs.
 
-**Seeing the progress bar**: the bar is rendered by the **client**, not cartog — the server only emits the notifications described above. Support varies:
+**Seeing the progress bar**: the bar is rendered by the **client**, not cartog, the server only emits the notifications described above. Support varies:
 
 | Client | Sends `progressToken` | Renders a bar |
 |--------|:---:|:---:|
 | Cursor (≥ 1.7.39) | yes | yes |
 | GitHub Copilot CLI (≥ 0.0.389) | yes | yes (text) |
 | Claude Code | no | no |
-| Claude Desktop | — | no (notifications received, not surfaced) |
+| Claude Desktop | - | no (notifications received, not surfaced) |
 | opencode | no | no (no progress handler wired today) |
 
-In a client that does not render progress (Claude Code, Claude Desktop today), the index call is silent until it returns its result summary; this is a client limitation, not a cartog one. To watch a live bar, run the indexer from the CLI instead — `cartog index` / `cartog rag index` show the same per-phase counters on the terminal spinner, sourced from the identical `ProgressUpdate` events. To verify the notifications on the wire yourself, drive `cartog serve` over stdio with a `tools/call` whose `params._meta.progressToken` is set and watch for `notifications/progress` frames.
+In a client that does not render progress (Claude Code, Claude Desktop today), the index call is silent until it returns its result summary; this is a client limitation, not a cartog one. To watch a live bar, run the indexer from the CLI instead, `cartog index` / `cartog rag index` show the same per-phase counters on the terminal spinner, sourced from the identical `ProgressUpdate` events. To verify the notifications on the wire yourself, drive `cartog serve` over stdio with a `tools/call` whose `params._meta.progressToken` is set and watch for `notifications/progress` frames.
 
 ## Cancellation
 
-`cartog_index` and `cartog_rag_index` honor MCP `notifications/cancelled`. The abort lands at the next phase/file/edge-window boundary. Since rmcp 2.2 the server sends no response to a cancelled request (the MCP spec says receivers SHOULD NOT respond), so check the index state for the outcome. A cancel can also race completion: the result may already have been sent, or the work may have finished before its response was dropped. Latency is usually sub-second, but a cancel arriving while a language server is still loading its project model is only noticed when startup finishes (up to `CARTOG_LSP_READY_TIMEOUT_SECS`, default 20s). The parse/store phase runs in a single rusqlite transaction that rolls back on the error path; on the MCP path LSP resolution runs after that transaction commits, so a cancel during the LSP phase can leave the parse/store output committed with edges only partially LSP-resolved (still correct — re-index with `force` to finish resolving). `cartog_rag_index` keeps embedding batches already flushed to SQLite; a `--force`/format-upgrade run clears up front, so re-run to rebuild. In all cases the next index run redoes the missing work.
+`cartog_index` and `cartog_rag_index` honor MCP `notifications/cancelled`. The abort lands at the next phase/file/edge-window boundary. Since rmcp 2.2 the server sends no response to a cancelled request (the MCP spec says receivers SHOULD NOT respond), so check the index state for the outcome. A cancel can also race completion: the result may already have been sent, or the work may have finished before its response was dropped. Latency is usually sub-second, but a cancel arriving while a language server is still loading its project model is only noticed when startup finishes (up to `CARTOG_LSP_READY_TIMEOUT_SECS`, default 20s). The parse/store phase runs in a single rusqlite transaction that rolls back on the error path; on the MCP path LSP resolution runs after that transaction commits, so a cancel during the LSP phase can leave the parse/store output committed with edges only partially LSP-resolved (still correct, re-index with `force` to finish resolving). `cartog_rag_index` keeps embedding batches already flushed to SQLite; a `--force`/format-upgrade run clears up front, so re-run to rebuild. In all cases the next index run redoes the missing work.
 
 ## Built-in Workflow Guidance
 

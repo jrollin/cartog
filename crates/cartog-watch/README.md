@@ -27,8 +27,8 @@ The delay avoids re-embedding after every single file save during active editing
 
 ### Execution modes
 
-- **`spawn_watch(config, db_path)`** — runs the watch loop on a background thread, returns a `WatchHandle` for stop/drop
-- **`run_watch(config, db_path)`** — runs the watch loop in the foreground (blocking), with Ctrl+C handler for graceful shutdown
+- **`spawn_watch(config, db_path)`**, runs the watch loop on a background thread, returns a `WatchHandle` for stop/drop
+- **`run_watch(config, db_path)`**, runs the watch loop in the foreground (blocking), with Ctrl+C handler for graceful shutdown
 
 Both modes open their own `Database` connection (SQLite WAL allows concurrent readers).
 

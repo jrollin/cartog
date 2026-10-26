@@ -1,4 +1,4 @@
-# cartog — Quick Start
+# cartog: Quick Start
 
 > Full CLI reference: [../reference/cli.md](../reference/cli.md) | Configuration: [../reference/config.md](../reference/config.md)
 
@@ -36,7 +36,7 @@ cartog ide                    # optional — wire MCP into installed editors
 |---|---|---|
 | `cartog init` | Always (once per project) | `.cartog.toml` only |
 | `cartog index` | Always (after every code change) | `.cartog/db.sqlite` |
-| `cartog ide` | Only if you want MCP in your editor — writes config for Claude Code, Cursor, VS Code, and others | `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, user-scope configs |
+| `cartog ide` | Only if you want MCP in your editor, writes config for Claude Code, Cursor, VS Code, and others | `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, user-scope configs |
 
 Edit `.cartog.toml` between steps 1 and 2 to change the DB path or embedding
 provider before any heavy work runs. CLI-only users stop after step 2.
@@ -47,8 +47,8 @@ servers in the file are preserved); `cartog index` is incremental.
 
 ## Next steps
 
-- [../reference/cli.md](../reference/cli.md) — full command and flag reference
-- [../reference/config.md](../reference/config.md) — all `.cartog.toml` keys and environment variables
-- [../how-to/wire-editors.md](../how-to/wire-editors.md) — wire MCP into editors (`cartog ide` and per-editor manual config)
-- [../how-to/configure-lsp-servers.md](../how-to/configure-lsp-servers.md) — configure LSP servers for edge resolution
-- [../explanation/rag-pipeline.md](../explanation/rag-pipeline.md) — how semantic search works (FTS5 + vector + RRF + reranker)
+- [../reference/cli.md](../reference/cli.md), full command and flag reference
+- [../reference/config.md](../reference/config.md), all `.cartog.toml` keys and environment variables
+- [../how-to/wire-editors.md](../how-to/wire-editors.md), wire MCP into editors (`cartog ide` and per-editor manual config)
+- [../how-to/configure-lsp-servers.md](../how-to/configure-lsp-servers.md), configure LSP servers for edge resolution
+- [../explanation/rag-pipeline.md](../explanation/rag-pipeline.md), how semantic search works (FTS5 + vector + RRF + reranker)

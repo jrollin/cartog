@@ -15,7 +15,7 @@ own: a real agent, real tasks, with/without arms, median of N runs.
 
 The shell suite asks "is a cartog query smaller than grep output?". This suite
 asks "does giving an agent cartog reduce the *total* cost of finishing a task?"
-— a different, more real-world question. See
+a different, more real-world question. See
 [docs/tech.md → Benchmarks](../../docs/tech.md#benchmarks) for the full matrix.
 
 ## Two target modes
@@ -27,27 +27,27 @@ asks "does giving an agent cartog reduce the *total* cost of finishing a task?"
 
 The win lives in **task difficulty and repo size**: on a tiny synthetic fixture a
 1-hop lookup is cheap for the baseline too, and the MCP tool-schema adds a fixed
-prompt cost to the cartog arm — so the fixture mode can show a flat or slightly
+prompt cost to the cartog arm, so the fixture mode can show a flat or slightly
 negative token delta. The real win shows on the **repo** mode's deep mechanism
 questions, where the baseline thrashes through many grep/read round-trips.
 
 ## Methodology
 
-- **Two arms per task** — **no system prompt** either arm (bare question), so the
+- **Two arms per task**: **no system prompt** either arm (bare question), so the
   MCP config is the *only* variable and the model selects tools purely from their
   descriptions:
-  - `baseline` — empty MCP config; only the built-in `Read`/`Grep`/`Glob`/`Bash`.
-  - `cartog` — cartog's MCP server over a prebuilt index.
+  - `baseline`, empty MCP config; only the built-in `Read`/`Grep`/`Glob`/`Bash`.
+  - `cartog`, cartog's MCP server over a prebuilt index.
   - Both run with `--strict-mcp-config` (no ambient MCP servers leak in) and a
     per-run `--max-budget-usd` cap.
 - **`tool_breakdown`** per arm records which tools the model actually called
-  (a `{tool: count}` map from the first PASS run) — so you can see whether the
+  (a `{tool: count}` map from the first PASS run), so you can see whether the
   cartog arm self-selected the answer-shaped `cartog_context` vs. grep-walking
   via granular tools.
 - **N runs per arm** (default 4) → report the **median** to damp LLM variance.
   Variance is large run-to-run; treat single runs as directional only.
 - **Cost (USD) is the headline metric**, not a lump-sum token total. A token
-  total sums fresh input, cache-creation, cache-read, and output as if equal —
+  total sums fresh input, cache-creation, cache-read, and output as if equal, 
   but they are priced ~10× apart. cartog's granular MCP tools generate many
   *cheap cache-read* tokens (the agent re-reads the conversation each round-trip),
   which inflates the lump-sum total while *lowering* cost. Reporting cost prices
@@ -55,7 +55,7 @@ questions, where the baseline thrashes through many grep/read round-trips.
   effect stays visible rather than hidden in one misleading number.
 - **Metrics** (parsed from `stream-json`): cost (USD, primary), tool calls,
   wall-time, total tokens, and cache-read tokens (the category that diverges).
-- **Correctness gate** — an LLM judge (shared `scripts/lib/llm_judge.sh`) scores
+- **Correctness gate**, an LLM judge (shared `scripts/lib/llm_judge.sh`) scores
   each run PASS/FAIL against the task's `expected` rubric. **Only PASS runs feed
   the medians**, so a cheaper-but-wrong answer cannot win. A failed judge *call*
   (not a wrong answer) is recorded as SKIP, so it neither counts as a FAIL nor
@@ -100,11 +100,11 @@ time on large repos and is single-threaded).
 Targets live in `repos.yaml`, one curated repo per language. Select by `id`
 (`--repo`) or by `lang` (`--lang`); to swap which repo represents a language,
 edit that entry in place. Every field (`id`, `url`, `rev`, `lang`, `prompt`,
-`expected`) is required — `parse_repos.py` rejects an incomplete entry.
+`expected`) is required, `parse_repos.py` rejects an incomplete entry.
 
 ## Adding a language
 
-A new language is **one new entry in `repos.yaml`** — no code change. Pick a real
+A new language is **one new entry in `repos.yaml`**, no code change. Pick a real
 repo whose language cartog supports (py/ts/rs/go/rb/java/php/dart):
 
 ```yaml
@@ -126,12 +126,12 @@ Run it with `./benchmarks/agent/run.sh --lang rb` (or `--repo rails`).
 
 Repo-mode tasks are open "how does X work?" questions with no ground-truth file,
 so `expected` is a **short prose rubric** of what a correct answer must *explain*
-— not a list of exact symbols. The judge passes a run when the answer covers a
+not a list of exact symbols. The judge passes a run when the answer covers a
 clear majority of it.
 
 - **Name the key types/methods** an answer must mention, and the **mechanism
   path** between them ("how a Call proceeds through the interceptors to a
-  Response") — not just loose keywords.
+  Response"), not just loose keywords.
 - **Specific enough that a vague or wrong answer fails**, but not so exhaustive
   (10 exact internal method names) that a correct-but-differently-worded answer
   fails.
@@ -140,10 +140,10 @@ clear majority of it.
 
 ## Prerequisites
 
-- `claude` CLI (Claude Code) — drives both arms and the judge. Uses your
+- `claude` CLI (Claude Code), drives both arms and the judge. Uses your
   existing auth; no API key needed.
-- `jq`, `python3`, `git` — parsing, medians, and repo-mode cloning.
-- `cartog` binary — built by `make bench-agent`, or pass `CARTOG=/path/to/cartog`.
+- `jq`, `python3`, `git`, parsing, medians, and repo-mode cloning.
+- `cartog` binary, built by `make bench-agent`, or pass `CARTOG=/path/to/cartog`.
 
 > **Not run in CI.** Each run spends real model tokens (agent + judge across two
 > arms × N runs). Run locally when validating the cost/efficiency claim.
@@ -160,6 +160,6 @@ Prints a per-target table (cost-headlined) and a median summary, and writes
 `median_cost_usd` is the headline (cache priced correctly). `median_tokens` is
 the lump sum and `median_cache_read_tokens` is broken out so you can see how much
 of the token total is cheap cache reads. `tool_breakdown` is the `{tool: count}`
-map from each arm's first PASS run — check the cartog arm for `cartog_context`.
+map from each arm's first PASS run, check the cartog arm for `cartog_context`.
 `pass` is how many of the N runs the judge scored correct; only those count
 toward the medians.

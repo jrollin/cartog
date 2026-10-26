@@ -38,7 +38,7 @@ All user-supplied paths are validated against the project root:
 1. Canonicalize CWD once at server startup (stored in `Arc<Path>`)
 2. Resolve user path relative to CWD (or keep absolute)
 3. Canonicalize if the path exists; otherwise normalize with a stack-based algorithm (handles `..` without filesystem access)
-4. Reject any path that doesn't `starts_with(cwd)` — prevents directory traversal escapes
+4. Reject any path that doesn't `starts_with(cwd)`, prevents directory traversal escapes
 
 ### Concurrency
 

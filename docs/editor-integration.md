@@ -1,11 +1,11 @@
 # Editor integration
 
-> See [usage.md](usage.md) for the full CLI reference and [README — Install](../README.md#install) for installation.
+> See [usage.md](usage.md) for the full CLI reference and [README: Install](../README.md#install) for installation.
 
 Two ways to wire cartog into an editor:
 
-1. **CLI shell-out** — run `cartog refs`, `cartog outline`, etc. from a keymap and show results in a quickfix / picker. Works with any editor. No MCP client required.
-2. **MCP server** — run `cartog serve` once, have the editor's AI pane (CodeCompanion, Avante, Cursor, etc.) call cartog tools. This is what Claude Code / Cursor / Zed already use — see [MCP Server Setup](usage.md#mcp-server) for generic client config.
+1. **CLI shell-out**, run `cartog refs`, `cartog outline`, etc. from a keymap and show results in a quickfix / picker. Works with any editor. No MCP client required.
+2. **MCP server**, run `cartog serve` once, have the editor's AI pane (CodeCompanion, Avante, Cursor, etc.) call cartog tools. This is what Claude Code / Cursor / Zed already use, see [MCP Server Setup](usage.md#mcp-server) for generic client config.
 
 The snippets below prefer `--json` where available so the output is easy to parse.
 
@@ -22,7 +22,7 @@ cartog index .
 
 ### Quickfix on word-under-cursor (lua)
 
-Drop this anywhere in your config. No plugin dependencies — uses `vim.fn.systemlist` + `vim.fn.setqflist`.
+Drop this anywhere in your config. No plugin dependencies, uses `vim.fn.systemlist` + `vim.fn.setqflist`.
 
 ```lua
 local function cartog_qf(subcommand)
@@ -154,7 +154,7 @@ require("codecompanion").setup({
 })
 ```
 
-For Avante or other MCP-aware plugins, configure the MCP server the same way you would in Claude Code / Cursor. `--watch` auto-refreshes embeddings when the repo already has them — add `--rag` only to force embedding on a not-yet-indexed repo:
+For Avante or other MCP-aware plugins, configure the MCP server the same way you would in Claude Code / Cursor. `--watch` auto-refreshes embeddings when the repo already has them, add `--rag` only to force embedding on a not-yet-indexed repo:
 
 ```json
 {
@@ -197,7 +197,7 @@ Add to `.vscode/tasks.json` so `Ctrl+Shift+P → Tasks: Run Task` can run cartog
 
 ### MCP (Continue, Copilot Chat with MCP extensions)
 
-Same pattern as Claude Code — extensions that speak MCP read a config with an `mcpServers` entry. See [mcp-setup.md](mcp-setup.md) for per-client recipes.
+Same pattern as Claude Code, extensions that speak MCP read a config with an `mcpServers` entry. See [mcp-setup.md](mcp-setup.md) for per-client recipes.
 
 ---
 
@@ -225,12 +225,12 @@ The output format (`path:line  kind  source`) happens to match compilation-mode'
 
 ## Zed
 
-Already supports cartog via MCP; see [mcp-setup.md — Zed](mcp-setup.md#zed).
+Already supports cartog via MCP; see [mcp-setup.md: Zed](mcp-setup.md#zed).
 
 ---
 
 ## Troubleshooting
 
-- **Command not found** — make sure `~/.cargo/bin` is on `$PATH` or you installed the prebuilt binary (see [README install section](../README.md#install)).
-- **Stale results** — if you're using the CLI snippets above, they only see whatever `cartog index` captured. Run `cartog watch .` in a background terminal (or use the floating-buffer lua snippet above) to keep it current.
-- **`--json` changes your editor's output handling** — if a picker shows no results, check `vim.v.shell_error` / `$?` first; cartog exits non-zero on bad queries and the body is a JSON error object, not an array.
+- **Command not found**, make sure `~/.cargo/bin` is on `$PATH` or you installed the prebuilt binary (see [README install section](../README.md#install)).
+- **Stale results**, if you're using the CLI snippets above, they only see whatever `cartog index` captured. Run `cartog watch .` in a background terminal (or use the floating-buffer lua snippet above) to keep it current.
+- **`--json` changes your editor's output handling**, if a picker shows no results, check `vim.v.shell_error` / `$?` first; cartog exits non-zero on bad queries and the body is a JSON error object, not an array.

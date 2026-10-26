@@ -3,7 +3,7 @@ import Base from "../layouts/Base.astro";
 ---
 
 <Base
-  title="Cartog Docs — CLI Reference, MCP Server & Semantic Search Setup"
+  title="Cartog Docs: CLI Reference, MCP Server & Semantic Search Setup"
   description="Cartog documentation: install, the cartog CLI (search, refs, impact, map), MCP server wiring for Claude Code, Cursor & VS Code, embedding providers, and hybrid semantic search."
   markdownUrl="https://www.cartog.dev/usage.md"
   ogType="article"
@@ -111,7 +111,7 @@ cartog impact validate_token <span class="comment"># what breaks if I change thi
 
 <span class="comment"># Optional — wire cartog into your editor for AI agents</span>
 cartog ide                   <span class="comment"># Cursor, VS Code, Claude Desktop, Codex CLI, ...</span></pre>
-        <p>Two commands to start: <code>init</code> writes <code>.cartog.toml</code>, <code>index</code> builds the graph. Add <code>cartog ide</code> only if you want MCP wired into an editor — CLI users can skip it.</p>
+        <p>Two commands to start: <code>init</code> writes <code>.cartog.toml</code>, <code>index</code> builds the graph. Add <code>cartog ide</code> only if you want MCP wired into an editor: CLI users can skip it.</p>
 
         <h3>Add semantic search (optional, still fully local)</h3>
         <pre>cartog rag setup             <span class="comment"># download models (~230MB, one-time)</span>
@@ -174,18 +174,18 @@ cartog index .          <span class="comment"># 6. re-index after changes</span>
           </thead>
           <tbody>
             <tr><td><code>[database]</code></td><td><code>.cartog/db.sqlite</code> (git-root relative)</td><td>you want the DB elsewhere</td></tr>
-            <tr><td><code>[embedding]</code></td><td><code>provider = "local"</code> (ONNX, CPU)</td><td>using Ollama / a different model — see <a href="#config-providers">Embedding Providers</a></td></tr>
+            <tr><td><code>[embedding]</code></td><td><code>provider = "local"</code> (ONNX, CPU)</td><td>using Ollama / a different model, see <a href="#config-providers">Embedding Providers</a></td></tr>
             <tr><td><code>[reranker]</code></td><td><code>provider = "local"</code>, <code>model = "jinaai/jina-reranker-v1-turbo-en"</code> (default)</td><td>picking a different cross-encoder, or disabling rerank (<code>enabled = false</code>)</td></tr>
             <tr><td><code>[rag]</code></td><td>tuned retrieval/rerank pools</td><td>tuning hybrid-search recall vs. cost</td></tr>
-            <tr><td><code>[remote]</code></td><td>unset (no sync)</td><td>sharing an index over S3 — see <a href="#config-remote">Remote Storage</a></td></tr>
-            <tr><td><code>[security]</code></td><td><code>redact_secrets = true</code></td><td>opting out of pattern redaction — see <a href="#config-secrets">Secret Redaction</a></td></tr>
-            <tr><td><code>[lsp]</code></td><td><code>max_concurrent_servers</code> = auto; <code>[lsp.&lt;lang&gt;]</code> unset (server from <code>PATH</code>)</td><td>capping concurrent LSP servers, or a custom/Dockerized server — see <a href="#config-lsp">LSP Server Overrides</a></td></tr>
-            <tr><td><code>[index]</code></td><td><code>exclude = []</code>, <code>respect_gitignore = true</code>, <code>jobs = 0</code> (auto)</td><td>excluding extra paths, indexing git-ignored files, or capping parse threads — see <a href="#config-index">Index Filtering</a></td></tr>
-            <tr><td><code>[project]</code></td><td>unset — name defaults to the root dir name, no description</td><td>naming the project and giving agents a description to route on — see <a href="#config-project">Project Identity</a></td></tr>
-            <tr><td><code>[mcp]</code></td><td><code>federated = false</code></td><td>exposing the 2 cross-project MCP tools to agents — see <a href="#config-mcp">Cross-project tools</a></td></tr>
+            <tr><td><code>[remote]</code></td><td>unset (no sync)</td><td>sharing an index over S3, see <a href="#config-remote">Remote Storage</a></td></tr>
+            <tr><td><code>[security]</code></td><td><code>redact_secrets = true</code></td><td>opting out of pattern redaction, see <a href="#config-secrets">Secret Redaction</a></td></tr>
+            <tr><td><code>[lsp]</code></td><td><code>max_concurrent_servers</code> = auto; <code>[lsp.&lt;lang&gt;]</code> unset (server from <code>PATH</code>)</td><td>capping concurrent LSP servers, or a custom/Dockerized server, see <a href="#config-lsp">LSP Server Overrides</a></td></tr>
+            <tr><td><code>[index]</code></td><td><code>exclude = []</code>, <code>respect_gitignore = true</code>, <code>jobs = 0</code> (auto)</td><td>excluding extra paths, indexing git-ignored files, or capping parse threads, see <a href="#config-index">Index Filtering</a></td></tr>
+            <tr><td><code>[project]</code></td><td>unset, name defaults to the root dir name, no description</td><td>naming the project and giving agents a description to route on, see <a href="#config-project">Project Identity</a></td></tr>
+            <tr><td><code>[mcp]</code></td><td><code>federated = false</code></td><td>exposing the 2 cross-project MCP tools to agents, see <a href="#config-mcp">Cross-project tools</a></td></tr>
           </tbody>
         </table>
-        <p>Example — override just the DB path and switch to Ollama, leaving everything else at its default:</p>
+        <p>Example, override just the DB path and switch to Ollama, leaving everything else at its default:</p>
         <pre><span class="comment"># .cartog.toml — only the keys you change; the rest stay default</span>
 [database]
 path = "~/.local/share/cartog/myproject.db"
@@ -202,7 +202,7 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
           </thead>
           <tbody>
             <tr><td><code>CARTOG_DB</code></td><td>auto-detect</td><td>Database path (same as <code>--db</code>).</td></tr>
-            <tr><td><code>CARTOG_AUTO_INIT</code></td><td>unset</td><td>Opt a config-less project into indexing. Any non-empty value lets <code>cartog index</code> / <code>rag index</code> / <code>watch</code> create a <code>.cartog/</code> with defaults — <strong>no <code>.cartog.toml</code> is written</strong>. Unset, with no config and no existing index, those write paths refuse and <code>cartog serve</code> starts degraded (see <a href="#config-consent">the consent gate</a>).</td></tr>
+            <tr><td><code>CARTOG_AUTO_INIT</code></td><td>unset</td><td>Opt a config-less project into indexing. Any non-empty value lets <code>cartog index</code> / <code>rag index</code> / <code>watch</code> create a <code>.cartog/</code> with defaults: <strong>no <code>.cartog.toml</code> is written</strong>. Unset, with no config and no existing index, those write paths refuse and <code>cartog serve</code> starts degraded (see <a href="#config-consent">the consent gate</a>).</td></tr>
             <tr><td><code>CARTOG_JOBS</code></td><td>CPU count</td><td>Parse worker pool size for <code>cartog index</code> (clamped <code>1..=64</code>). Overrides <code>[index] jobs</code>; the <code>--jobs</code> flag overrides it.</td></tr>
             <tr><td><code>CARTOG_LSP_MAX_SERVERS</code></td><td><code>min(langs, 4)</code></td><td>Max concurrent LSP servers in the indexer's edge pass. Overrides <code>[lsp] max_concurrent_servers</code>; <code>1</code> forces serial.</td></tr>
             <tr><td><code>CARTOG_ONNX_THREADS</code></td><td>all cores</td><td>Caps ONNX CPU threads for <code>rag index</code> + reranking. Overrides <code>[embedding.local] intra_threads</code>; <code>1</code> forces single-core.</td></tr>
@@ -220,7 +220,7 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
         </table>
 
         <h3 id="config-consent">Index-creation consent gate</h3>
-        <p>cartog will not create a <code>.cartog/</code> index for a project on its own. A fresh, config-less repository stays untouched until you opt in via <strong>any one</strong> of: a present <code>.cartog.toml</code> (run <code>cartog init</code>); an existing index (an existing <code>.cartog/db.sqlite</code> is itself consent, so steady-state updates keep working); or <code>CARTOG_AUTO_INIT</code> set to any non-empty value (indexes with defaults, <strong>never</strong> writing a config file). A broken <code>.cartog.toml</code> <strong>is</strong> still consent — the file existing is the opt-in; its contents parsing is a separate question. The error is printed and settings fall back to defaults. One exception protects you: with no existing index and no <code>--db</code>, creating a <em>new</em> one is refused, since the rejected file may name a <code>[database] path</code> cartog cannot read and it will not guess a location you configured away from.</p>
+        <p>cartog will not create a <code>.cartog/</code> index for a project on its own. A fresh, config-less repository stays untouched until you opt in via <strong>any one</strong> of: a present <code>.cartog.toml</code> (run <code>cartog init</code>); an existing index (an existing <code>.cartog/db.sqlite</code> is itself consent, so steady-state updates keep working); or <code>CARTOG_AUTO_INIT</code> set to any non-empty value (indexes with defaults, <strong>never</strong> writing a config file). A broken <code>.cartog.toml</code> <strong>is</strong> still consent, the file existing is the opt-in; its contents parsing is a separate question. The error is printed and settings fall back to defaults. One exception protects you: with no existing index and no <code>--db</code>, creating a <em>new</em> one is refused, since the rejected file may name a <code>[database] path</code> cartog cannot read and it will not guess a location you configured away from.</p>
         <table class="config-table">
           <thead>
             <tr><th>Surface</th><th>Behavior with no config and no index</th></tr>
@@ -230,13 +230,13 @@ provider = "ollama"              <span class="comment"># default is "local"</spa
             <tr><td><code>cartog serve</code> / <code>serve --watch</code> (the MCP plugin default)</td><td>Start <strong>degraded</strong>: no <code>.cartog/</code>, read tools return empty + a hint, the 2 write tools refuse, and <code>cartog_stats</code> reports <code>"degraded": true</code>. With <code>--watch</code>, the watcher pre-builds the index the moment <code>cartog init</code> runs; the running server stays degraded until the client relaunches it.</td></tr>
             <tr><td>Read commands (<code>search</code>, <code>map</code>, …) and read MCP tools</td><td>Return empty results + a hint; no <code>.cartog/</code> created.</td></tr>
             <tr><td><code>init</code> / <code>config</code> / <code>doctor</code> / <code>install</code> / <code>ide</code> / <code>self *</code></td><td>Unchanged, never gated. Install + editor wiring touch only the binary and MCP config files.</td></tr>
-            <tr><td><code>cartog pull</code> / <code>push</code></td><td>Not gated — invoking them <strong>is</strong> the opt-in (an explicit user action, like <code>cartog init</code>). <code>pull</code> materializes <code>.cartog/</code> because downloading a remote index is its whole job.</td></tr>
+            <tr><td><code>cartog pull</code> / <code>push</code></td><td>Not gated, invoking them <strong>is</strong> the opt-in (an explicit user action, like <code>cartog init</code>). <code>pull</code> materializes <code>.cartog/</code> because downloading a remote index is its whole job.</td></tr>
           </tbody>
         </table>
         <p>The guarantee is that cartog never creates a <code>.cartog/</code> <em>on its own</em> (a background hook, an MCP server, or a stray read). An explicit <code>cartog pull</code> you typed is consent in itself.</p>
 
         <details class="mcp-client">
-          <summary><strong>Example <code>.cartog.toml</code></strong> — every section, with defaults annotated (read it, don't copy it wholesale)</summary>
+          <summary><strong>Example <code>.cartog.toml</code></strong> every section, with defaults annotated (read it, don't copy it wholesale)</summary>
           <pre><span class="comment"># Every key below shows its DEFAULT value. Delete any line you don't</span>
 <span class="comment"># override — cartog applies these defaults whether the file exists or not.</span>
 
@@ -310,7 +310,7 @@ federated = false                <span class="comment"># DEFAULT — cross-proje
               <td><strong>openai</strong></td>
               <td><code>[embedding]<br>provider = "openai"</code></td>
               <td>Reachable OpenAI-compatible <code>/v1</code> endpoint; API key in an env var</td>
-              <td>One generic client for OpenAI, Mistral, Voyage, Jina, OVHcloud, and local <code>/v1</code> servers (Ollama, LM Studio, vLLM) — switch vendors by changing <code>base_url</code>. API key read from the <code>api_key_env</code> env var, <strong>never stored in <code>.cartog.toml</code></strong>; unset = keyless local. Dimension auto-detected. (Azure OpenAI's deployment-path shape is not supported.)</td>
+              <td>One generic client for OpenAI, Mistral, Voyage, Jina, OVHcloud, and local <code>/v1</code> servers (Ollama, LM Studio, vLLM), switch vendors by changing <code>base_url</code>. API key read from the <code>api_key_env</code> env var, <strong>never stored in <code>.cartog.toml</code></strong>; unset = keyless local. Dimension auto-detected. (Azure OpenAI's deployment-path shape is not supported.)</td>
             </tr>
           </tbody>
         </table>
@@ -332,7 +332,7 @@ federated = false                <span class="comment"># DEFAULT — cross-proje
               <td><strong>Reranker</strong></td>
               <td><code>jinaai/jina-reranker-v1-turbo-en</code> (default)</td>
               <td><code>jinaai/jina-reranker-v1-turbo-en</code></td>
-              <td>—</td>
+              <td>-</td>
               <td>~150MB</td>
             </tr>
           </tbody>
@@ -340,7 +340,7 @@ federated = false                <span class="comment"># DEFAULT — cross-proje
         <p>
           Sizes above are <strong>on-disk download size, not resident memory</strong>. Loading a
           model costs more than its weights (ONNX Runtime arenas scale with thread count), so these
-          figures are not a memory budget — set <code>[reranker] enabled = false</code> to avoid the
+          figures are not a memory budget, set <code>[reranker] enabled = false</code> to avoid the
           cross-encoder's footprint entirely.
         </p>
         <p>
@@ -348,14 +348,14 @@ federated = false                <span class="comment"># DEFAULT — cross-proje
           <code>[embedding] model</code>; cartog downloads the matching ONNX-quantized repo from
           HuggingFace into the shared model cache (<code>$FASTEMBED_CACHE_DIR</code>, else
           <code>$XDG_CACHE_HOME/cartog/models</code>, else <code>~/.cache/cartog/models</code>).
-          English-only — non-English identifiers and comments get degraded embeddings. Override the
+          English-only, non-English identifiers and comments get degraded embeddings. Override the
           embedding model with any fastembed built-in via <code>[embedding] model = "..."</code>.
         </p>
         <p>
           The reranker is configurable the same way via <code>[reranker] model</code> (a fastembed
           reranker repo path). The default <code>jina-reranker-v1-turbo-en</code> is small, fast, and
           scores higher on BEIR than the older <code>BAAI/bge-reranker-base</code> (~1.1GB), which you
-          can opt back into. Switching needs no re-index — the reranker runs at query time and isn't
+          can opt back into. Switching needs no re-index, the reranker runs at query time and isn't
           persisted.
         </p>
 
@@ -470,8 +470,8 @@ cartog push                       <span class="comment"># or: cartog push --remo
         <h2 id="config-secrets">Secret Redaction</h2>
         <p>Cartog scrubs your code before it is stored or embedded, so secrets don't leak into the index, semantic search, or MCP responses. Two layers, both on by default:</p>
         <ul>
-          <li><strong>Pattern redaction</strong> — common secret shapes (AWS / GitHub / Slack / Stripe keys, JWTs, and quoted <code>key=value</code> assignments) are stripped from <code>symbol_content</code>, signatures, docstrings, and embeddings. Toggle with <code>[security] redact_secrets</code>.</li>
-          <li><strong>Sensitive-file deny-list</strong> — files like <code>.env</code>, <code>*.pem</code>, <code>*.key</code>, <code>id_rsa</code> are never indexed at all. This is <em>always</em> enforced, regardless of the <code>redact_secrets</code> flag.</li>
+          <li><strong>Pattern redaction</strong> common secret shapes (AWS / GitHub / Slack / Stripe keys, JWTs, and quoted <code>key=value</code> assignments) are stripped from <code>symbol_content</code>, signatures, docstrings, and embeddings. Toggle with <code>[security] redact_secrets</code>.</li>
+          <li><strong>Sensitive-file deny-list</strong> files like <code>.env</code>, <code>*.pem</code>, <code>*.key</code>, <code>id_rsa</code> are never indexed at all. This is <em>always</em> enforced, regardless of the <code>redact_secrets</code> flag.</li>
         </ul>
         <p>Redaction is best-effort, not a guarantee. Changing <code>redact_secrets</code> forces a full re-index so the stored content matches the new policy.</p>
 
@@ -487,11 +487,11 @@ EOF
 cartog index .                    <span class="comment"># toggling redact_secrets re-indexes everything</span></pre>
 
         <h2 id="config-lsp">LSP Server Overrides</h2>
-        <p>By default cartog resolves each language's LSP server from <code>PATH</code> (<code>rust-analyzer</code>, <code>gopls</code>, …). <code>[lsp.&lt;lang&gt;]</code> overrides that with an explicit command — most usefully a Dockerized server, so cartog can resolve edges on a host without the language's native toolchain installed.</p>
+        <p>By default cartog resolves each language's LSP server from <code>PATH</code> (<code>rust-analyzer</code>, <code>gopls</code>, …). <code>[lsp.&lt;lang&gt;]</code> overrides that with an explicit command, most usefully a Dockerized server, so cartog can resolve edges on a host without the language's native toolchain installed.</p>
         <ul>
           <li><code>command</code> is the full argv; <code>command[0]</code> is the executable (on <code>PATH</code> or an absolute path), the rest are its arguments.</li>
           <li><code>$&#123;ROOT&#125;</code> in any element expands to the indexed project root (host-absolute).</li>
-          <li><strong>Path mirroring is required.</strong> cartog exchanges <code>file://</code> URIs built from the host path, so a container must see the repo at the <em>same</em> path — hence <code>-v $&#123;ROOT&#125;:$&#123;ROOT&#125; -w $&#123;ROOT&#125;</code>. A differing container path makes every definition resolve as "external" and is unsupported.</li>
+          <li><strong>Path mirroring is required.</strong> cartog exchanges <code>file://</code> URIs built from the host path, so a container must see the repo at the <em>same</em> path, hence <code>-v $&#123;ROOT&#125;:$&#123;ROOT&#125; -w $&#123;ROOT&#125;</code>. A differing container path makes every definition resolve as "external" and is unsupported.</li>
           <li>The override applies only to the keyed cartog language, which must be one cartog already supports. The server's stderr is logged to <code>$&#123;TMPDIR&#125;/cartog-lsp/&lt;language&gt;.log</code>.</li>
         </ul>
 
@@ -508,14 +508,14 @@ cartog index --force .            <span class="comment"># server spawns during t
         <p>On a polyglot repo the indexer's edge-resolution pass starts one LSP server per language and runs them concurrently (up to a cap), so the wall-clock is closer to the slowest single server than the sum of all of them.</p>
         <pre>[lsp]
 max_concurrent_servers = 2</pre>
-        <p>Absent or <code>0</code> = auto (<code>min(languages, 4)</code>); <code>CARTOG_LSP_MAX_SERVERS</code> overrides (env &gt; TOML); <code>1</code> forces serial. Each server is RAM-heavy (rust-analyzer ~1-2GB resident) — lower the cap on a constrained host. Applies to a bare <code>cartog index</code> with no live <code>serve</code> peer (a serve peer resolves serially on its warm servers). Resolution output is byte-identical regardless of the cap.</p>
+        <p>Absent or <code>0</code> = auto (<code>min(languages, 4)</code>); <code>CARTOG_LSP_MAX_SERVERS</code> overrides (env &gt; TOML); <code>1</code> forces serial. Each server is RAM-heavy (rust-analyzer ~1-2GB resident), lower the cap on a constrained host. Applies to a bare <code>cartog index</code> with no live <code>serve</code> peer (a serve peer resolves serially on its warm servers). Resolution output is byte-identical regardless of the cap.</p>
 
         <h2 id="config-index">Index Filtering</h2>
-        <p>cartog skips files three ways, all composing: it honors <code>.gitignore</code> (see below); it prunes a built-in list of dependency and build directories (<code>node_modules</code>, <code>target</code>, <code>vendor</code>, <code>dist</code>, <code>build</code>, <code>.dart_tool</code>, dot-directories, …); and <code>[index] exclude</code> adds repo-root-relative globs for paths the other two miss — vendored or generated trees under non-standard names.</p>
+        <p>cartog skips files three ways, all composing: it honors <code>.gitignore</code> (see below); it prunes a built-in list of dependency and build directories (<code>node_modules</code>, <code>target</code>, <code>vendor</code>, <code>dist</code>, <code>build</code>, <code>.dart_tool</code>, dot-directories, …); and <code>[index] exclude</code> adds repo-root-relative globs for paths the other two miss, vendored or generated trees under non-standard names.</p>
         <ul>
           <li>Globs match both files and directories; a matched <strong>directory is pruned</strong> (never descended into), so excluding a large vendored tree also saves the walk cost.</li>
           <li><code>dir/**</code> excludes everything under <code>dir</code> and prunes <code>dir</code> itself; <code>**/*.ext</code> excludes files by extension anywhere in the tree.</li>
-          <li><code>*</code> and <code>?</code> are segment-local (they don't cross <code>/</code>), like <code>.gitignore</code>. <code>src/*</code> matches every direct entry of <code>src</code> — including subdirectories, which are then pruned — so it excludes the whole of <code>src</code>. Use a suffix glob like <code>src/*.rs</code> to exclude only files at one level, or <code>src/**</code> for an explicit subtree.</li>
+          <li><code>*</code> and <code>?</code> are segment-local (they don't cross <code>/</code>), like <code>.gitignore</code>. <code>src/*</code> matches every direct entry of <code>src</code> including subdirectories, which are then pruned, so it excludes the whole of <code>src</code>. Use a suffix glob like <code>src/*.rs</code> to exclude only files at one level, or <code>src/**</code> for an explicit subtree.</li>
           <li>A malformed or empty glob is rejected when the config loads, not at first index.</li>
           <li>The same globs are honored by <code>cartog watch</code> / <code>serve --watch</code>, so the live index and a manual <code>cartog index</code> always agree on scope.</li>
           <li>This is a cartog-specific filter applied on top of <code>.gitignore</code> and the built-in prune list (see below).</li>
@@ -530,30 +530,30 @@ EOF
 cartog index --force .            <span class="comment"># removes now-excluded paths from the index</span></pre>
 
         <h3><code>.gitignore</code> awareness</h3>
-        <p>cartog honors <code>.gitignore</code> (and <code>.git/info/exclude</code>) by default, including <strong>nested</strong> <code>.gitignore</code> files in subdirectories — so vendored or generated trees git already ignores (a CocoaPods <code>Pods/</code>, build output, …) are skipped with no cartog config, even in a tree with no <code>.git</code> directory. A <code>.cartogignore</code> file (same syntax) adds cartog-specific ignores. The built-in prune list and <code>[index] exclude</code> apply on top (they prune even where <code>.gitignore</code> would keep a path). To index files git ignores (e.g. committed generated code), opt out — the prune list and <code>exclude</code> still apply:</p>
+        <p>cartog honors <code>.gitignore</code> (and <code>.git/info/exclude</code>) by default, including <strong>nested</strong> <code>.gitignore</code> files in subdirectories, so vendored or generated trees git already ignores (a CocoaPods <code>Pods/</code>, build output, …) are skipped with no cartog config, even in a tree with no <code>.git</code> directory. A <code>.cartogignore</code> file (same syntax) adds cartog-specific ignores. The built-in prune list and <code>[index] exclude</code> apply on top (they prune even where <code>.gitignore</code> would keep a path). To index files git ignores (e.g. committed generated code), opt out, the prune list and <code>exclude</code> still apply:</p>
         <pre>[index]
 respect_gitignore = false</pre>
 
         <h3>Parse parallelism</h3>
-        <p>The CPU-bound parse phase runs across a rayon worker pool. Cap it for low-CPU or memory-constrained hosts (e.g. shared CI). Absent or <code>0</code> means auto (CPU count), not serial — use <code>1</code> for single-threaded; any value is clamped to <code>1..=64</code>.</p>
+        <p>The CPU-bound parse phase runs across a rayon worker pool. Cap it for low-CPU or memory-constrained hosts (e.g. shared CI). Absent or <code>0</code> means auto (CPU count), not serial, use <code>1</code> for single-threaded; any value is clamped to <code>1..=64</code>.</p>
         <pre>[index]
 jobs = 4</pre>
         <p>Precedence: <code>cartog index --jobs N</code> &gt; <code>CARTOG_JOBS</code> env &gt; this key. The parse phase runs inside a dedicated pool sized to this value, so the cap applies on <strong>every</strong> index, including under a long-lived <code>cartog serve</code> / <code>serve --watch</code>. The <code>--jobs</code> flag is per-invocation; for daemons set the env var or this key.</p>
 
         <h2 id="config-project">Project Identity</h2>
-        <p>Purely descriptive: nothing in <code>[project]</code> changes how the repo is indexed, walked, embedded, or queried. It feeds the <a href="#cmd-projects">project registry</a> — the name and description shown in <code>cartog projects list</code> and returned by <code>cartog_list_projects</code>, so a session in a different repository can route to this one by what it is for.</p>
+        <p>Purely descriptive: nothing in <code>[project]</code> changes how the repo is indexed, walked, embedded, or queried. It feeds the <a href="#cmd-projects">project registry</a> the name and description shown in <code>cartog projects list</code> and returned by <code>cartog_list_projects</code>, so a session in a different repository can route to this one by what it is for.</p>
         <pre>[project]
 name        = "billing-service"                                 <span class="comment"># optional, &lt;= 100 chars, defaults to the root dir name</span>
 description = "Invoice generation and payment reconciliation."  <span class="comment"># optional, &lt;= 280 chars, one line</span></pre>
-        <p>Both fields are optional and resolve independently, highest wins: <strong>name</strong> — <code>[project] name</code> → the project root's directory basename. <strong>Description</strong> — <code>[project] description</code> → the first prose paragraph of <code>README.md</code>, truncated to 280 characters at a word boundary → none. A tagline in a blockquote counts as that paragraph; a blockquote that leads with a link or image, or that opens a <code>Note:</code>/<code>Warning:</code> callout, is skipped. No environment-variable override for either — a project's identity isn't the kind of per-machine knob the other sections' env vars exist for.</p>
-        <p>Validated at config load: a <code>name</code> over 100 characters or a <code>description</code> over 280 rejects the whole config, naming the field and the limit; so does either field being empty, whitespace-only, or containing a control character or newline. An unknown key inside <code>[project]</code> is salvaged like any other section — the config still loads and indexing still proceeds, only the lost key's value is gone.</p>
-        <p>Only config-aware writers refresh the registry from this section: <code>cartog index</code>, <code>cartog rag index</code>, and <code>cartog pull</code>. <code>cartog serve</code> startup and the watcher have no config in scope and leave the registry's stored name and description untouched, so a README or config edit shows up after the next <code>cartog index</code> — even a no-op incremental one.</p>
+        <p>Both fields are optional and resolve independently, highest wins: <strong>name</strong> <code>[project] name</code> → the project root's directory basename. <strong>Description</strong> <code>[project] description</code> → the first prose paragraph of <code>README.md</code>, truncated to 280 characters at a word boundary → none. A tagline in a blockquote counts as that paragraph; a blockquote that leads with a link or image, or that opens a <code>Note:</code>/<code>Warning:</code> callout, is skipped. No environment-variable override for either, a project's identity isn't the kind of per-machine knob the other sections' env vars exist for.</p>
+        <p>Validated at config load: a <code>name</code> over 100 characters or a <code>description</code> over 280 rejects the whole config, naming the field and the limit; so does either field being empty, whitespace-only, or containing a control character or newline. An unknown key inside <code>[project]</code> is salvaged like any other section, the config still loads and indexing still proceeds, only the lost key's value is gone.</p>
+        <p>Only config-aware writers refresh the registry from this section: <code>cartog index</code>, <code>cartog rag index</code>, and <code>cartog pull</code>. <code>cartog serve</code> startup and the watcher have no config in scope and leave the registry's stored name and description untouched, so a README or config edit shows up after the next <code>cartog index</code> even a no-op incremental one.</p>
 
         <h2 id="config-mcp">Cross-project tools</h2>
-        <p>Controls what <code>cartog serve</code> exposes; nothing in <code>[mcp]</code> changes how the repo is indexed or queried. <code>cartog_list_projects</code> and <code>cartog_search_all</code> are the only MCP tools that read <em>other</em> repositories' paths and README text into the agent session, so they are <strong>hidden by default</strong> — not listed, not callable — and a project opts in:</p>
+        <p>Controls what <code>cartog serve</code> exposes; nothing in <code>[mcp]</code> changes how the repo is indexed or queried. <code>cartog_list_projects</code> and <code>cartog_search_all</code> are the only MCP tools that read <em>other</em> repositories' paths and README text into the agent session, so they are <strong>hidden by default</strong> not listed, not callable, and a project opts in:</p>
         <pre>[mcp]
 federated = true                 <span class="comment"># expose cartog_list_projects + cartog_search_all (default: false)</span></pre>
-        <p><code>cartog serve --federated</code> turns them on for one launch or one client config; either source is sufficient, and an explicit <code>false</code> here does not veto the flag. There is no environment variable — this is a per-project privacy decision, not a per-machine knob. The Claude Code plugin cannot change its <code>serve</code> arguments, so plugin users opt in here. The CLI <code>cartog search --all</code> is unaffected: it is explicit per invocation. Restart the MCP client after changing the setting so it re-reads the tool list.</p>
+        <p><code>cartog serve --federated</code> turns them on for one launch or one client config; either source is sufficient, and an explicit <code>false</code> here does not veto the flag. There is no environment variable, this is a per-project privacy decision, not a per-machine knob. The Claude Code plugin cannot change its <code>serve</code> arguments, so plugin users opt in here. The CLI <code>cartog search --all</code> is unaffected: it is explicit per invocation. Restart the MCP client after changing the setting so it re-reads the tool list.</p>
 
         <!-- ── Semantic Search ───────────────────── -->
 
@@ -561,7 +561,7 @@ federated = true                 <span class="comment"># expose cartog_list_proj
         <p>Download embedding and re-ranker models from HuggingFace. Run once before using semantic search with the <strong>local</strong> provider.</p>
         <pre>cartog rag setup</pre>
         <p>Downloads ~230MB of ONNX models (embedding <code>Qdrant/bge-small-en-v1.5-onnx-Q</code> ~80MB + reranker <code>jinaai/jina-reranker-v1-turbo-en</code> ~150MB). Cached in <code>~/.cache/cartog/models/</code>. Pinning <code>[reranker] model</code> fetches that reranker instead.</p>
-        <p><strong>Note:</strong> When using Ollama, skip this — models are managed by the Ollama server.</p>
+        <p><strong>Note:</strong> When using Ollama, skip this, models are managed by the Ollama server.</p>
         <pre><span class="comment"># To also skip the reranker download:</span>
 [reranker]
 enabled = false</pre>
@@ -576,7 +576,7 @@ cartog rag index --force      <span class="comment"># re-embed all</span></pre>
 RAG index ready: 697 vectors, 384 dimensions, sqlite-vec</pre>
 
         <h2 id="rag-search"><code>cartog rag search &lt;query&gt;</code></h2>
-        <p>Semantic search — use natural language to find code by behavior or concept. Returns code only by default; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
+        <p>Semantic search, use natural language to find code by behavior or concept. Returns code only by default; use <code>--kind document</code> for docs or <code>--kind all</code> for both.</p>
         <pre>cartog rag search "validate authentication tokens"
 cartog rag search "error handling" --kind function
 cartog rag search "database connection" --limit 5
@@ -598,7 +598,7 @@ cartog rag search "deployment architecture" --kind document</pre>
         <pre>npx skills add jrollin/cartog</pre>
         <p>Or install manually:</p>
         <pre>cp -r skills/cartog ~/.claude/skills/</pre>
-        <p>The skill teaches your AI agent when and how to use cartog — including search routing, refactoring workflows, and fallback heuristics.</p>
+        <p>The skill teaches your AI agent when and how to use cartog, including search routing, refactoring workflows, and fallback heuristics.</p>
 
         <h3>Claude Plugin</h3>
         <p>For Claude Code users, the simplest setup. Run each command separately:</p>
@@ -606,7 +606,7 @@ cartog rag search "deployment architecture" --kind document</pre>
         <pre>/plugin install cartog@cartog-plugins</pre>
 
         <h2 id="mcp-server">MCP Server</h2>
-        <p><code>cartog serve</code> runs cartog as a <a href="https://modelcontextprotocol.io">Model Context Protocol</a> server over stdio, exposing the code graph as 16 tools any MCP-compatible client (Claude Code, Cursor, VS Code, Codex CLI, …) can call. No HTTP port, no daemon to manage — the client launches <code>cartog serve</code> as a subprocess and talks JSON-RPC over stdin/stdout.</p>
+        <p><code>cartog serve</code> runs cartog as a <a href="https://modelcontextprotocol.io">Model Context Protocol</a> server over stdio, exposing the code graph as 16 tools any MCP-compatible client (Claude Code, Cursor, VS Code, Codex CLI, …) can call. No HTTP port, no daemon to manage, the client launches <code>cartog serve</code> as a subprocess and talks JSON-RPC over stdin/stdout.</p>
         <pre>cartog serve                  <span class="comment"># MCP server only</span>
 cartog serve --watch          <span class="comment"># + watcher; auto-embeds if the repo already has embeddings</span>
 cartog serve --watch --rag    <span class="comment"># force auto-embed even on a not-yet-embedded repo</span>
@@ -614,7 +614,7 @@ cartog serve --federated      <span class="comment"># also expose the 2 cross-pr
         <p>Most users never run <code>cartog serve</code> by hand: <a href="#mcp-quickstart"><code>cartog ide</code></a> writes it into your editor's MCP config and the editor spawns it on demand. Run it directly only when wiring a client cartog doesn't know about, or to debug the JSON-RPC stream.</p>
 
         <h3 id="mcp-tools">The 16 tools (+2 opt-in)</h3>
-        <p>13 are read-only (safe to run without an approval prompt); 2 mutate the index and 1 arms a deferred self-update. Each ships with a description telling the agent <em>when</em> to reach for it. Two more read-only tools, <code>cartog_list_projects</code> and <code>cartog_search_all</code>, are <strong>hidden by default</strong>: they surface the paths and descriptions of this machine's <em>other</em> indexed projects, so a project opts in with <code>[mcp] federated = true</code> (or <code>cartog serve --federated</code>) — see <a href="#config-mcp">Cross-project tools</a>.</p>
+        <p>13 are read-only (safe to run without an approval prompt); 2 mutate the index and 1 arms a deferred self-update. Each ships with a description telling the agent <em>when</em> to reach for it. Two more read-only tools, <code>cartog_list_projects</code> and <code>cartog_search_all</code>, are <strong>hidden by default</strong>: they surface the paths and descriptions of this machine's <em>other</em> indexed projects, so a project opts in with <code>[mcp] federated = true</code> (or <code>cartog serve --federated</code>), see <a href="#config-mcp">Cross-project tools</a>.</p>
         <table>
           <thead>
             <tr><th>Tool</th><th>Kind</th><th>Description</th></tr>
@@ -642,7 +642,7 @@ cartog serve --federated      <span class="comment"># also expose the 2 cross-pr
         </table>
 
         <h3 id="mcp-tool-shape">Tool metadata &amp; output</h3>
-        <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 14 read-only tools (plus <code>cartog_update</code>) declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
+        <p>Every tool ships with MCP <strong>annotations</strong> (a human-readable <code>title</code> and behavior <em>hints</em>), and the 13 read-only tools (plus <code>cartog_update</code>) declare an <code>outputSchema</code>. Clients use these to label tools in their picker and to skip approval prompts for tools that can't change anything.</p>
 
         <table>
           <thead>
@@ -650,9 +650,9 @@ cartog serve --federated      <span class="comment"># also expose the 2 cross-pr
           </thead>
           <tbody>
             <tr><td><code>title</code></td><td>e.g. "Search symbols", "Find references"</td><td>e.g. "Index codebase"</td></tr>
-            <tr><td><code>readOnlyHint</code></td><td><code>true</code> — client can run without an approval prompt</td><td><code>false</code> — mutates state (<code>cartog_update</code> writes the machine-level update file, not the index)</td></tr>
-            <tr><td><code>openWorldHint</code></td><td><code>false</code> — closed domain (the local index)</td><td><code>false</code></td></tr>
-            <tr><td><code>outputSchema</code></td><td>present — typed result schema</td><td>—</td></tr>
+            <tr><td><code>readOnlyHint</code></td><td><code>true</code> client can run without an approval prompt</td><td><code>false</code> mutates state (<code>cartog_update</code> writes the machine-level update file, not the index)</td></tr>
+            <tr><td><code>openWorldHint</code></td><td><code>false</code> closed domain (the local index)</td><td><code>false</code></td></tr>
+            <tr><td><code>outputSchema</code></td><td>present, typed result schema</td><td>-</td></tr>
           </tbody>
         </table>
 
@@ -689,11 +689,11 @@ cartog serve --federated      <span class="comment"># also expose the 2 cross-pr
   &#125;
 &#125;</pre>
 
-        <p style="font-size: 13px; color: var(--text-tertiary);">Per the MCP spec, a tool that declares an <code>outputSchema</code> must always return <code>structuredContent</code>, so the structured copy is kept on every successful call — including large ones. The size cap (<code>CARTOG_MCP_MAX_BYTES</code>, default 64&nbsp;KB) bounds the whole response: an oversized result is trimmed at the <em>element</em> level (trailing items dropped) before both the text block and the structured copy are built from the same trimmed set, so both stay under the cap and mutually consistent, with a notice reporting how many items were omitted. The two index-write tools (<code>cartog_index</code>, <code>cartog_rag_index</code>) have no <code>outputSchema</code> and report <code>readOnlyHint: false</code> with <code>destructiveHint: false</code> (they only add to the index).</p>
+        <p style="font-size: 13px; color: var(--text-tertiary);">Per the MCP spec, a tool that declares an <code>outputSchema</code> must always return <code>structuredContent</code>, so the structured copy is kept on every successful call, including large ones. The size cap (<code>CARTOG_MCP_MAX_BYTES</code>, default 64&nbsp;KB) bounds the whole response: an oversized result is trimmed at the <em>element</em> level (trailing items dropped) before both the text block and the structured copy are built from the same trimmed set, so both stay under the cap and mutually consistent, with a notice reporting how many items were omitted. The two index-write tools (<code>cartog_index</code>, <code>cartog_rag_index</code>) have no <code>outputSchema</code> and report <code>readOnlyHint: false</code> with <code>destructiveHint: false</code> (they only add to the index).</p>
 
-        <p><strong>Progress notifications:</strong> <code>cartog_index</code> and <code>cartog_rag_index</code> emit standard MCP <code>notifications/progress</code> when the client includes a <code>progressToken</code> in the request's <code>_meta</code>. <code>cartog_index</code> reports climbing per-phase counters — <code>scanning files</code>, then <code>parsing M/N files</code>, <code>storing M/N files</code>, and (when the LSP pass runs) <code>resolving M/N edges with LSP</code> — so a phase emits many ticks as it advances. <code>cartog_rag_index</code> emits <code>preparing</code>, one <code>embedding processed/total</code> per ~512-symbol batch, then <code>storing embeddings</code>. The <code>progress</code>/<code>total</code> values accumulate across phases, and per the <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/progress">MCP progress spec</a> each emitted notification <strong>strictly increases</strong> <code>progress</code> — duplicate or out-of-order ticks that would not advance the bar are dropped rather than sent equal. The <code>message</code> field is human-readable, not a contract. Clients that don't supply a <code>progressToken</code> see no notifications.</p>
+        <p><strong>Progress notifications:</strong> <code>cartog_index</code> and <code>cartog_rag_index</code> emit standard MCP <code>notifications/progress</code> when the client includes a <code>progressToken</code> in the request's <code>_meta</code>. <code>cartog_index</code> reports climbing per-phase counters: <code>scanning files</code>, then <code>parsing M/N files</code>, <code>storing M/N files</code>, and (when the LSP pass runs) <code>resolving M/N edges with LSP</code> so a phase emits many ticks as it advances. <code>cartog_rag_index</code> emits <code>preparing</code>, one <code>embedding processed/total</code> per ~512-symbol batch, then <code>storing embeddings</code>. The <code>progress</code>/<code>total</code> values accumulate across phases, and per the <a href="https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/progress">MCP progress spec</a> each emitted notification <strong>strictly increases</strong> <code>progress</code> duplicate or out-of-order ticks that would not advance the bar are dropped rather than sent equal. The <code>message</code> field is human-readable, not a contract. Clients that don't supply a <code>progressToken</code> see no notifications.</p>
 
-        <p><strong>Seeing the progress bar:</strong> the bar is drawn by the <em>client</em>, not cartog — the server only emits the notifications above. Support varies:</p>
+        <p><strong>Seeing the progress bar:</strong> the bar is drawn by the <em>client</em>, not cartog, the server only emits the notifications above. Support varies:</p>
         <table>
           <thead>
             <tr><th>Client</th><th>Sends <code>progressToken</code></th><th>Renders a bar</th></tr>
@@ -702,11 +702,11 @@ cartog serve --federated      <span class="comment"># also expose the 2 cross-pr
             <tr><td>Cursor (≥ 1.7.39)</td><td>yes</td><td>yes</td></tr>
             <tr><td>GitHub Copilot CLI (≥ 0.0.389)</td><td>yes</td><td>yes (text)</td></tr>
             <tr><td>Claude Code</td><td>no</td><td>no</td></tr>
-            <tr><td>Claude Desktop</td><td>—</td><td>no (received, not surfaced)</td></tr>
+            <tr><td>Claude Desktop</td><td>-</td><td>no (received, not surfaced)</td></tr>
             <tr><td>opencode</td><td>no</td><td>no (no progress handler wired today)</td></tr>
           </tbody>
         </table>
-        <p style="font-size: 13px; color: var(--text-tertiary);">In a client that doesn't render progress (Claude Code, Claude Desktop today), the index call is silent until it returns its summary — a client limitation, not a cartog one. To watch a live bar, run <code>cartog index</code> / <code>cartog rag index</code> from the CLI: the terminal spinner shows the same per-phase counters from the identical <code>ProgressUpdate</code> events.</p>
+        <p style="font-size: 13px; color: var(--text-tertiary);">In a client that doesn't render progress (Claude Code, Claude Desktop today), the index call is silent until it returns its summary, a client limitation, not a cartog one. To watch a live bar, run <code>cartog index</code> / <code>cartog rag index</code> from the CLI: the terminal spinner shows the same per-phase counters from the identical <code>ProgressUpdate</code> events.</p>
 
         <h3 id="mcp-quickstart">Wiring cartog into editors: <code>cartog ide</code></h3>
         <p><code>cartog ide</code> (or <code>cartog install</code>) writes the MCP configs. Run it once per machine, plus any time you install a new editor. To undo it, run <code>cartog uninstall</code> (see <a href="#cmd-ide">cartog ide / install / uninstall</a>).</p>
@@ -730,7 +730,7 @@ cartog ide                   <span class="comment"># optional — wire MCP into 
         <p>Each block below shows the <code>cartog ide</code> one-liner that writes the right file, plus the manual JSON / TOML if you prefer to edit by hand.</p>
 
         <details class="mcp-client">
-          <summary><strong>Claude Code</strong> — project <code>.mcp.json</code> + user <code>~/.claude/settings.json</code></summary>
+          <summary><strong>Claude Code</strong> project <code>.mcp.json</code> + user <code>~/.claude/settings.json</code></summary>
           <pre>cartog ide --client claude-code
 <span class="comment"># or:</span>
 claude mcp add cartog -- cartog serve --watch                       <span class="comment"># user scope</span>
@@ -741,11 +741,11 @@ claude mcp add --scope project cartog -- cartog serve --watch       <span class=
     "cartog": &#123; "command": "cartog", "args": ["serve", "--watch"] &#125;
   &#125;
 &#125;</pre>
-          <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px;">Every client gets <code>--watch</code> by default. The single-writer election makes concurrent watchers safe — the first <code>serve</code> owns the watcher, the rest attach read-only and ride its updates over WAL. Drop it with <code>cartog ide --no-watch</code>.</p>
+          <p style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px;">Every client gets <code>--watch</code> by default. The single-writer election makes concurrent watchers safe, the first <code>serve</code> owns the watcher, the rest attach read-only and ride its updates over WAL. Drop it with <code>cartog ide --no-watch</code>.</p>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Cursor</strong> — project <code>.cursor/mcp.json</code> or user <code>~/.cursor/mcp.json</code></summary>
+          <summary><strong>Cursor</strong> project <code>.cursor/mcp.json</code> or user <code>~/.cursor/mcp.json</code></summary>
           <pre>cartog ide --client cursor</pre>
           <p>Manual:</p>
           <pre>&#123;
@@ -756,7 +756,7 @@ claude mcp add --scope project cartog -- cartog serve --watch       <span class=
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Codex CLI</strong> — user-global <code>~/.codex/config.toml</code></summary>
+          <summary><strong>Codex CLI</strong> user-global <code>~/.codex/config.toml</code></summary>
           <pre>cartog ide --client codex</pre>
           <p>Codex stores all MCP servers in this one user-global file (no per-project config), so <code>cartog ide</code> writes a per-project <code>[mcp_servers.cartog-&lt;slug&gt;-&lt;hash8&gt;]</code> section.</p>
           <pre>[mcp_servers.cartog]
@@ -765,7 +765,7 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Windsurf</strong> — <code>~/.codeium/windsurf/mcp_config.json</code></summary>
+          <summary><strong>Windsurf</strong> <code>~/.codeium/windsurf/mcp_config.json</code></summary>
           <pre>cartog ide --client windsurf</pre>
           <pre>&#123;
   "mcpServers": &#123;
@@ -775,9 +775,9 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>VS Code (Copilot)</strong> — Marketplace extension, or project <code>.vscode/mcp.json</code> + user <code>Code/User/mcp.json</code></summary>
-          <p>Easiest: install the <strong>cartog</strong> extension from the VS Code Marketplace (or Open VSX, for Cursor / Windsurf / VSCodium). It registers the cartog MCP server with Copilot automatically — no config file, and it resolves the binary path itself so a GUI-launched VS Code never hits the <code>PATH</code>-spawn problem.</p>
-          <p>If the binary isn't installed, the extension offers an <strong>Install cartog</strong> action (macOS/Linux): it opens a terminal with the version-pinned installer typed in but not run, so you review the <code>curl … | sh</code> line before pressing Enter. After it finishes, run <strong>cartog: Recheck</strong> from the Command Palette to register the server — it then offers to index the repo.</p>
+          <summary><strong>VS Code (Copilot)</strong> Marketplace extension, or project <code>.vscode/mcp.json</code> + user <code>Code/User/mcp.json</code></summary>
+          <p>Easiest: install the <strong>cartog</strong> extension from the VS Code Marketplace (or Open VSX, for Cursor / Windsurf / VSCodium). It registers the cartog MCP server with Copilot automatically, no config file, and it resolves the binary path itself so a GUI-launched VS Code never hits the <code>PATH</code>-spawn problem.</p>
+          <p>If the binary isn't installed, the extension offers an <strong>Install cartog</strong> action (macOS/Linux): it opens a terminal with the version-pinned installer typed in but not run, so you review the <code>curl … | sh</code> line before pressing Enter. After it finishes, run <strong>cartog: Recheck</strong> from the Command Palette to register the server, it then offers to index the repo.</p>
           <p>Or wire the config files by hand with the CLI:</p>
           <pre>cartog ide --client vscode</pre>
           <p>Writes both scopes: project <code>.vscode/mcp.json</code> and the user file under VS Code's config dir (<code>~/Library/Application Support/Code/User/mcp.json</code> on macOS, <code>~/.config/Code/User/mcp.json</code> on Linux, <code>%APPDATA%\Code\User\mcp.json</code> on Windows). Top-level key is <code>servers</code>, not <code>mcpServers</code>.</p>
@@ -789,7 +789,7 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Zed</strong> — <code>~/.config/zed/settings.json</code></summary>
+          <summary><strong>Zed</strong> <code>~/.config/zed/settings.json</code></summary>
           <pre>cartog ide --client zed</pre>
           <pre>&#123;
   "context_servers": &#123;
@@ -799,7 +799,7 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>OpenCode</strong> — <code>~/.config/opencode/opencode.json</code></summary>
+          <summary><strong>OpenCode</strong> <code>~/.config/opencode/opencode.json</code></summary>
           <pre>cartog ide --client opencode</pre>
           <pre>&#123;
   "mcp": &#123;
@@ -813,7 +813,7 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Gemini CLI</strong> — <code>~/.gemini/settings.json</code></summary>
+          <summary><strong>Gemini CLI</strong> <code>~/.gemini/settings.json</code></summary>
           <pre>cartog ide --client gemini</pre>
           <pre>&#123;
   "mcpServers": &#123;
@@ -823,7 +823,7 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Claude Desktop</strong> — <code>claude_desktop_config.json</code></summary>
+          <summary><strong>Claude Desktop</strong> <code>claude_desktop_config.json</code></summary>
           <pre>cartog ide --client claude-desktop</pre>
           <p>macOS: <code>~/Library/Application Support/Claude/</code>. Windows: <code>%APPDATA%\Claude\</code>. Restart Claude Desktop after editing.</p>
           <pre>&#123;
@@ -834,7 +834,7 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Antigravity</strong> — <code>~/.gemini/config/mcp_config.json</code></summary>
+          <summary><strong>Antigravity</strong> <code>~/.gemini/config/mcp_config.json</code></summary>
           <pre>cartog ide --client antigravity</pre>
           <p>User-global only, shared by Antigravity 2.0, IDE and CLI (no per-project config).</p>
           <pre>&#123;
@@ -845,7 +845,7 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Kiro</strong> — <code>.kiro/settings/mcp.json</code> or <code>~/.kiro/settings/mcp.json</code></summary>
+          <summary><strong>Kiro</strong> <code>.kiro/settings/mcp.json</code> or <code>~/.kiro/settings/mcp.json</code></summary>
           <pre>cartog ide --client kiro</pre>
           <p>Workspace config takes precedence over user config.</p>
           <pre>&#123;
@@ -856,7 +856,7 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Hermes Agent</strong> — <code>~/.hermes/config.yaml</code></summary>
+          <summary><strong>Hermes Agent</strong> <code>~/.hermes/config.yaml</code></summary>
           <pre>cartog ide --client hermes</pre>
           <p>YAML under the <code>mcp_servers</code> key; only the <code>cartog</code> entry is upserted.</p>
           <pre>mcp_servers:
@@ -867,7 +867,7 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Copilot CLI</strong> — <code>~/.copilot/mcp-config.json</code></summary>
+          <summary><strong>Copilot CLI</strong> <code>~/.copilot/mcp-config.json</code></summary>
           <pre>cartog ide --client copilot-cli</pre>
           <pre>&#123;
   "mcpServers": &#123;
@@ -877,7 +877,7 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Qwen Code</strong> — <code>.qwen/settings.json</code> or <code>~/.qwen/settings.json</code></summary>
+          <summary><strong>Qwen Code</strong> <code>.qwen/settings.json</code> or <code>~/.qwen/settings.json</code></summary>
           <pre>cartog ide --client qwen</pre>
           <pre>&#123;
   "mcpServers": &#123;
@@ -887,7 +887,7 @@ args = ["serve"]</pre>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Cline</strong> — VS Code extension or Cline CLI</summary>
+          <summary><strong>Cline</strong> VS Code extension or Cline CLI</summary>
           <pre>cartog ide --client cline       # VS Code extension (globalStorage/saoudrizwan.claude-dev)
 cartog ide --client cline-cli   # ~/.cline/data/settings/cline_mcp_settings.json</pre>
           <p>Only <code>command</code> and <code>args</code> are rewritten on an existing entry, so <code>disabled</code> and tool approvals stay.</p>
@@ -899,13 +899,13 @@ cartog ide --client cline-cli   # ~/.cline/data/settings/cline_mcp_settings.json
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Roo Code</strong> — <code>.roo/mcp.json</code> or the VS Code extension's global settings</summary>
+          <summary><strong>Roo Code</strong> <code>.roo/mcp.json</code> or the VS Code extension's global settings</summary>
           <pre>cartog ide --client roo</pre>
           <p>Same entry shape as Cline; <code>disabled</code> and <code>alwaysAllow</code> are kept on re-runs.</p>
         </details>
 
         <details class="mcp-client">
-          <summary><strong>Kilo Code</strong> — <code>.kilo/kilo.json</code> or <code>~/.config/kilo/kilo.json</code></summary>
+          <summary><strong>Kilo Code</strong> <code>.kilo/kilo.json</code> or <code>~/.config/kilo/kilo.json</code></summary>
           <pre>cartog ide --client kilo</pre>
           <p>An existing <code>kilo.jsonc</code> is edited when it holds plain JSON; one with comments is skipped, add the entry by hand.</p>
           <pre>&#123;
@@ -961,8 +961,8 @@ cartog index . --no-lsp     <span class="comment"># heuristic-only (~1-4s)</span
         <pre class="example-output">Indexed 70 files (0 skipped, 0 removed)
   697 symbols, 1921 edges (1019 resolved)
   1 files in unsupported languages not indexed (1 .toml)</pre>
-        <p>Incremental by default — skips unchanged files (git + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. The LSP pass skips edges already classified as unresolvable (typo, dyn dispatch, macro) or external (stdlib, deps, node_modules); both auto-retry when a matching symbol is added in-tree. <code>--force</code> resets those markers for a clean retry.</p>
-        <p>When a <code>cartog serve</code> for the same database is running (e.g. an active agent session's MCP server), <code>cartog index</code> skips its own LSP pass — avoiding the language-server cold start — and defers resolution to the peer's warm servers, which catch up on the server's next <code>cartog_index</code> call. A <code>note:</code> on stderr names the peer (<code>lsp_deferred_to_peer: true</code> under <code>--json</code>); a first-ever index never defers, and <code>--force</code> always runs LSP locally.</p>
+        <p>Incremental by default, skips unchanged files (git + SHA-256), and within changed files, uses Merkle-tree diffing to update only modified symbols. The LSP pass skips edges already classified as unresolvable (typo, dyn dispatch, macro) or external (stdlib, deps, node_modules); both auto-retry when a matching symbol is added in-tree. <code>--force</code> resets those markers for a clean retry.</p>
+        <p>When a <code>cartog serve</code> for the same database is running (e.g. an active agent session's MCP server), <code>cartog index</code> skips its own LSP pass (avoiding the language-server cold start) and defers resolution to the peer's warm servers, which catch up on the server's next <code>cartog_index</code> call. A <code>note:</code> on stderr names the peer (<code>lsp_deferred_to_peer: true</code> under <code>--json</code>); a first-ever index never defers, and <code>--force</code> always runs LSP locally.</p>
         <p>Files in unsupported languages are reported, not silently dropped: on a mixed repo the summary adds a line like <code>12 files in unsupported languages not indexed (8 .scala, 4 .ex)</code> (also as <code>files_unsupported</code> / <code>unsupported_by_ext</code> under <code>--json</code>).</p>
 
         <h2 id="cmd-search"><code>cartog search &lt;query&gt;</code></h2>
@@ -982,7 +982,7 @@ document  Validate           README.md:8</pre>
         <p>Available <code>--kind</code> values: <code>function</code>, <code>class</code>, <code>method</code>, <code>variable</code>, <code>import</code>, <code>interface</code>, <code>enum</code>, <code>enum-member</code>, <code>type-alias</code>, <code>trait</code>, <code>module</code>, <code>document</code>, <code>macro</code>, <code>component</code>.</p>
         <h3><code>--all</code>: search this machine's other projects</h3>
         <p><strong>The situation:</strong> you know the symbol, not the repository. Your agent is working in the API gateway, the function it needs lives in the orders service, and neither you nor the agent remembers which of your dozen checkouts that is. Grep cannot cross a repository boundary, and opening each one to look is the tax this removes.</p>
-        <p><code>--all</code> answers "which project defines this?" — it searches the <em>other</em> indexed projects (a plain <code>cartog search</code> covers the current one), taking candidates from the <a href="#cmd-projects">project registry</a>, and hands back each match with the <code>--db</code> path to drill into it. Skip this whole section if you work in one repository: nothing here needs configuring.</p>
+        <p><code>--all</code> answers "which project defines this?", it searches the <em>other</em> indexed projects (a plain <code>cartog search</code> covers the current one), taking candidates from the <a href="#cmd-projects">project registry</a>, and hands back each match with the <code>--db</code> path to drill into it. Skip this whole section if you work in one repository: nothing here needs configuring.</p>
         <pre>cartog search CreateOrder --all                        <span class="comment"># every eligible project</span>
 cartog search Invoice --all --under ~/work             <span class="comment"># only that subtree</span>
 cartog search Invoice --all --under ~/work --lang ruby <span class="comment"># and only Ruby projects</span>
@@ -999,7 +999,7 @@ api-gateway (/home/u/work/api-gateway)
   CreateOrderInput            src/graphql/order.ts:18
   --db /home/u/work/api-gateway/.cartog/db.sqlite</pre>
         <p><strong>Fan-out, not consolidation.</strong> Each candidate database is opened <strong>read-only</strong> and queried on its own, and results stay grouped under the project they came from. Consequently: <strong>ranking is within a project only</strong> (<code>in_degree</code> centrality is per-graph, so a flat cross-project ordering cannot be justified without a ranking benchmark that does not exist), <strong>nothing is merged</strong> (a combined database is a deliberate non-goal, so every hit is read live from the project that owns it), and <strong>nothing is written</strong> (a registry row grants discovery, not write access).</p>
-        <p><code>--limit</code> applies <strong>per project</strong>, so output is bounded by <code>limit x max-projects</code>. <code>--max-projects</code> (default 10, clamped to 1..=50) caps how many databases are opened, most-symbols-first; when the cap elides candidates the output says so. A project that cannot be read is listed with the <strong>reason</strong> (a schema drift, a corrupt file and a permission error need different fixes) rather than silently skipped — including when <em>nothing</em> could be read, in which case the output says the search could not run rather than reporting a no-match that would read as "the symbol is not there". <code>--under</code> accepts <code>~</code> and <code>~/path</code> — a bare <code>~</code> is your home directory, while <code>~user</code> is left as written rather than guessing another account's home — and composes with <code>--lang</code> as an AND. <code>--file</code> is <strong>not</strong> combinable with <code>--all</code>: a path in one project means nothing in another, so cartog rejects the pair rather than silently ignoring the filter.</p>
+        <p><code>--limit</code> applies <strong>per project</strong>, so output is bounded by <code>limit x max-projects</code>. <code>--max-projects</code> (default 10, clamped to 1..=50) caps how many databases are opened, most-symbols-first; when the cap elides candidates the output says so. A project that cannot be read is listed with the <strong>reason</strong> (a schema drift, a corrupt file and a permission error need different fixes) rather than silently skipped, including when <em>nothing</em> could be read, in which case the output says the search could not run rather than reporting a no-match that would read as "the symbol is not there". <code>--under</code> accepts <code>~</code> and <code>~/path</code> a bare <code>~</code> is your home directory, while <code>~user</code> is left as written rather than guessing another account's home, and composes with <code>--lang</code> as an AND. <code>--file</code> is <strong>not</strong> combinable with <code>--all</code>: a path in one project means nothing in another, so cartog rejects the pair rather than silently ignoring the filter.</p>
         <p>There is no <code>--all</code> for semantic search: vectors from projects embedded with different providers, models, or dimensions live in different spaces, so merging their scores would be meaningless.</p>
 
         <h2 id="cmd-outline"><code>cartog outline &lt;file&gt;</code></h2>
@@ -1018,7 +1018,7 @@ function refresh_token(old_token: str) -&gt; str  L60-64
 function revoke_token(token: str) -&gt; bool  L67-73</pre>
 
         <h2 id="cmd-refs"><code>cartog refs &lt;name&gt;</code></h2>
-        <p>All references to a symbol — calls, imports, inherits, type references.</p>
+        <p>All references to a symbol, calls, imports, inherits, type references.</p>
         <pre>cartog refs UserService                  <span class="comment"># all reference types</span>
 cartog refs validate_token --kind calls  <span class="comment"># only call sites</span></pre>
         <p class="example-label">Example output (<code>cartog refs validate_token</code>)</p>
@@ -1032,7 +1032,7 @@ calls    refresh_token     auth/tokens.py:62</pre>
         <p>Available <code>--kind</code> values: <code>calls</code>, <code>imports</code>, <code>inherits</code>, <code>references</code>, <code>raises</code>, <code>implements</code>, <code>type-of</code>.</p>
 
         <h2 id="cmd-callees"><code>cartog callees &lt;name&gt;</code></h2>
-        <p>Find what a function calls — answers "what does this depend on?".</p>
+        <p>Find what a function calls, answers "what does this depend on?".</p>
         <pre>cartog callees validate_token</pre>
         <p class="example-label">Example output</p>
         <pre class="example-output">lookup_session    auth/tokens.py:45
@@ -1041,7 +1041,7 @@ datetime.utcnow   auth/tokens.py:49
 ExpiredTokenError auth/tokens.py:50</pre>
 
         <h2 id="cmd-impact"><code>cartog impact &lt;name&gt;</code></h2>
-        <p>Transitive impact analysis — follows the caller chain up to N hops (default 3).</p>
+        <p>Transitive impact analysis, follows the caller chain up to N hops (default 3).</p>
         <pre>cartog impact validate_token --depth 3</pre>
         <p class="example-label">Example output (indentation shows hop depth)</p>
         <pre class="example-output">  imports  middleware/auth_mw.py:7
@@ -1055,7 +1055,7 @@ ExpiredTokenError auth/tokens.py:50</pre>
         <p>Answers "what breaks if I change this?".</p>
 
         <h2 id="cmd-trace"><code>cartog trace &lt;from&gt; &lt;to&gt; [--depth N]</code></h2>
-        <p>Find the shortest call path between two symbols, with each hop's body inline — answers "how does A reach B?". Follows only statically-resolved <code>calls</code> edges (dynamic dispatch is not traced); default depth 8.</p>
+        <p>Find the shortest call path between two symbols, with each hop's body inline, answers "how does A reach B?". Follows only statically-resolved <code>calls</code> edges (dynamic dispatch is not traced); default depth 8.</p>
         <pre>cartog trace handle_request validate_token</pre>
         <p class="example-label">Example output</p>
         <pre class="example-output">handle_request → authenticate  api/routes.py:31
@@ -1066,7 +1066,7 @@ authenticate → validate_token  auth/service.py:18
         return validate_token(token)</pre>
 
         <h2 id="cmd-context"><code>cartog context &lt;task&gt; [--tokens N]</code></h2>
-        <p>Build a one-shot context bundle for a task: semantic-search seeds, their 1-hop call neighbors, and high-centrality definitions in the same files — bodies inline, trimmed to a token budget (default 6000). The single call an agent makes to scope a task.</p>
+        <p>Build a one-shot context bundle for a task: semantic-search seeds, their 1-hop call neighbors, and high-centrality definitions in the same files, bodies inline, trimmed to a token budget (default 6000). The single call an agent makes to scope a task.</p>
         <pre>cartog context "validate an auth token" --tokens 6000</pre>
         <p class="example-label">Example output</p>
         <pre class="example-output">Context for 'validate an auth token' (5 symbols, ~520 tokens)
@@ -1078,7 +1078,7 @@ authenticate → validate_token  auth/service.py:18
 [Central] class AuthService  auth/service.py:1</pre>
 
         <h2 id="cmd-hierarchy"><code>cartog hierarchy &lt;class&gt; [--mermaid]</code></h2>
-        <p>Show inheritance relationships — both parents and children. Add <code>--mermaid</code> for a <code>graph TD</code> diagram you can paste into a PR description, doc, or mermaid.live.</p>
+        <p>Show inheritance relationships, both parents and children. Add <code>--mermaid</code> for a <code>graph TD</code> diagram you can paste into a PR description, doc, or mermaid.live.</p>
         <pre>cartog hierarchy AuthService
 cartog hierarchy AuthService --mermaid</pre>
         <p class="example-label">Example output</p>
@@ -1094,7 +1094,7 @@ AdminService -&gt; AuthService</pre>
     AdminService["AdminService"] --> AuthService["AuthService"]</pre>
 
         <h2 id="cmd-deps"><code>cartog deps &lt;file&gt; [--mermaid]</code></h2>
-        <p>List symbols imported by a file — answers "what does this file depend on?". Add <code>--mermaid</code> for a <code>graph LR</code> diagram rooted at the file.</p>
+        <p>List symbols imported by a file, answers "what does this file depend on?". Add <code>--mermaid</code> for a <code>graph LR</code> diagram rooted at the file.</p>
         <pre>cartog deps auth/service.py
 cartog deps auth/service.py --mermaid</pre>
         <p class="example-label">Example output</p>
@@ -1118,7 +1118,7 @@ get_logger       L7</pre>
     auth_service_py --> User["User (L6)"]</pre>
 
         <h2 id="cmd-stats"><code>cartog stats [--savings]</code></h2>
-        <p>Summary of the index — file count, symbol count, edge resolution rate. On an unindexed repo all counts are <code>0</code> and the output ends with a hint to run <code>cartog index .</code>. Pass <code>--savings</code> to show per-tool query counts and estimated tokens saved instead (or use the <a href="#cmd-savings"><code>cartog savings</code></a> alias).</p>
+        <p>Summary of the index, file count, symbol count, edge resolution rate. On an unindexed repo all counts are <code>0</code> and the output ends with a hint to run <code>cartog index .</code>. Pass <code>--savings</code> to show per-tool query counts and estimated tokens saved instead (or use the <a href="#cmd-savings"><code>cartog savings</code></a> alias).</p>
         <pre>cartog stats
 cartog stats --savings</pre>
         <p class="example-label">Example output</p>
@@ -1157,9 +1157,9 @@ By tool (call counts):
 
 Baseline: ~1700 tokens for an equivalent grep+read sweep vs cartog's ~280.
 Measured across 13 benchmark scenarios (see crates/cartog/benches/queries.rs).</pre>
-        <p>The header reads <code>cartog · &lt;project&gt; · &lt;N&gt; queries</code>. <strong>By tool</strong> lists <em>call counts</em> — every tool uses the same flat baseline (1,420 tokens saved per call), so the breakdown shows which navigation patterns you rely on, not which tool saved the most.</p>
+        <p>The header reads <code>cartog · &lt;project&gt; · &lt;N&gt; queries</code>. <strong>By tool</strong> lists <em>call counts</em> every tool uses the same flat baseline (1,420 tokens saved per call), so the breakdown shows which navigation patterns you rely on, not which tool saved the most.</p>
         <p>Only queries returning a non-empty result count toward the totals. Empty-index calls, typo'd symbol names, and outline against missing files are skipped so the figure reflects real work.</p>
-        <p>Data comes from a local <code>query_log</code> table inside <code>.cartog/db.sqlite</code>. Nothing leaves the machine; no query payloads are recorded — only the tool name, call surface (<code>cli</code> / <code>mcp</code>), and a timestamp. Secondary read-only MCP attaches can't write, so multi-MCP-server setups under-report secondary traffic rather than double-counting it.</p>
+        <p>Data comes from a local <code>query_log</code> table inside <code>.cartog/db.sqlite</code>. Nothing leaves the machine; no query payloads are recorded, only the tool name, call surface (<code>cli</code> / <code>mcp</code>), and a timestamp. Secondary read-only MCP attaches can't write, so multi-MCP-server setups under-report secondary traffic rather than double-counting it.</p>
 
         <h2 id="cmd-doctor"><code>cartog doctor</code></h2>
         <p>Validate that all requirements are met and everything is working. Checks the git repo, config, key paths, database, LSP servers, embedding provider, reranker, remote, description, and the release version.</p>
@@ -1182,17 +1182,17 @@ cartog --json doctor          <span class="comment"># structured JSON output</sp
   [+] reranker: jinaai/jina-reranker-v1-turbo-en cached
   [+] remote: not configured (local-only)
   [+] description: "Invoice generation and payment reconciliation." (config)
-  [+] version: 0.33.0 is up to date
+  [+] version: 0.34.2 is up to date
 
 All 10 checks passed</pre>
         <p>Each check reports <strong>OK</strong>, <strong>Warn</strong>, or <strong>Error</strong>. Exits with code 1 if any check is an error. Run this when commands fail unexpectedly or after first setup.</p>
         <p><strong>description</strong> is advisory only, never an error: a project with no <code>[project] description</code> and no <code>README.md</code> paragraph still indexes and registers normally, but has nothing for <code>cartog_list_projects</code> to route on. See <a href="#config-project">Project Identity</a>.</p>
-        <p><strong>version</strong> queries the GitHub releases API with an 800&nbsp;ms timeout — much shorter than the 5&nbsp;s <code>cartog self update</code> allows, because there waiting for an answer <em>is</em> the task, while doctor is what you run when something is already broken. A failed probe reports <code>latest unknown</code> and stays OK: being offline is not a broken environment. Measured: ~0.1&nbsp;s normally, ~0.8&nbsp;s worst case on a blackholed network. Set <code>CARTOG_NO_UPDATE_CHECK=1</code> to skip the request entirely.</p>
+        <p><strong>version</strong> queries the GitHub releases API with an 800&nbsp;ms timeout, much shorter than the 5&nbsp;s <code>cartog self update</code> allows, because there waiting for an answer <em>is</em> the task, while doctor is what you run when something is already broken. A failed probe reports <code>latest unknown</code> and stays OK: being offline is not a broken environment. Measured: ~0.1&nbsp;s normally, ~0.8&nbsp;s worst case on a blackholed network. Set <code>CARTOG_NO_UPDATE_CHECK=1</code> to skip the request entirely.</p>
         <p><strong>paths</strong> is an inventory row, not a health check: it collects every location a bug report needs into one block. In <code>--json</code> these are discrete strings under <code>details</code>.</p>
-        <p><strong>lsp</strong> reports only the languages you have actually indexed, so it never nags about a language you do not use. A <code>[lsp.&lt;lang&gt;] command</code> override counts as available without a <code>PATH</code> probe. A language with several candidate servers (Ruby: <code>ruby-lsp</code>, <code>solargraph</code>) lists all of them, since they carry different minimum runtimes. When C or C++ is indexed and <code>clangd</code> is reachable, it also checks for a <code>compile_commands.json</code> or <code>compile_flags.txt</code> covering the directories that actually hold the C/C++ sources, walking up to the project root — a polyglot repo is never asked for a compile database at a root where one would be meaningless. Without one clangd guesses bare flags and most cross-file includes go unresolved.</p>
+        <p><strong>lsp</strong> reports only the languages you have actually indexed, so it never nags about a language you do not use. A <code>[lsp.&lt;lang&gt;] command</code> override counts as available without a <code>PATH</code> probe. A language with several candidate servers (Ruby: <code>ruby-lsp</code>, <code>solargraph</code>) lists all of them, since they carry different minimum runtimes. When C or C++ is indexed and <code>clangd</code> is reachable, it also checks for a <code>compile_commands.json</code> or <code>compile_flags.txt</code> covering the directories that actually hold the C/C++ sources, walking up to the project root, a polyglot repo is never asked for a compile database at a root where one would be meaningless. Without one clangd guesses bare flags and most cross-file includes go unresolved.</p>
 
         <h2 id="cmd-map"><code>cartog map</code></h2>
-        <p>Token-budget-aware codebase summary — file tree + top symbols ranked by reference count. Add <code>--mermaid</code> for a <code>graph TD</code> rooted at "Repo"; the token budget still applies (renderer stops adding nodes before it overflows).</p>
+        <p>Token-budget-aware codebase summary, file tree + top symbols ranked by reference count. Add <code>--mermaid</code> for a <code>graph TD</code> rooted at "Repo"; the token budget still applies (renderer stops adding nodes before it overflows).</p>
         <pre>cartog map                    <span class="comment"># default 4000 tokens</span>
 cartog map --tokens 2000      <span class="comment"># compact</span>
 cartog map --tokens 8000      <span class="comment"># detailed</span>
@@ -1266,18 +1266,18 @@ cartog watch --rag                 <span class="comment"># force auto-embed (eve
 cartog watch --rag --rag-delay 60  <span class="comment"># embed after 60s idle</span>
 cartog watch --debounce 10         <span class="comment"># 10s debounce window</span>
 cartog watch --json                <span class="comment"># NDJSON event stream</span></pre>
-        <p>Refuses to start if another watch holds the lock for this database — fail-fast prevents two writers stomping each other:</p>
+        <p>Refuses to start if another watch holds the lock for this database, fail-fast prevents two writers stomping each other:</p>
         <pre class="example-output">Error: another cartog process holds the watch lock for this database
        (slot watch-a902bb89f9a6b484, PID 64311); stop it before running `cartog watch`</pre>
 
         <h2 id="cmd-serve"><code>cartog serve</code></h2>
-        <p>Start cartog as an MCP server over stdio. No banner — stdio is reserved for JSON-RPC traffic between the client and the server. Run <code>cartog stats</code> in another shell to confirm it's up; <code>role: primary</code> means the writer, <code>role: read-only</code> means an attached secondary. See <a href="#mcp-server">MCP Server</a> for the full tool list and client wiring.</p>
+        <p>Start cartog as an MCP server over stdio. No banner, stdio is reserved for JSON-RPC traffic between the client and the server. Run <code>cartog stats</code> in another shell to confirm it's up; <code>role: primary</code> means the writer, <code>role: read-only</code> means an attached secondary. See <a href="#mcp-server">MCP Server</a> for the full tool list and client wiring.</p>
         <pre>cartog serve                  <span class="comment"># MCP server only</span>
 cartog serve --watch          <span class="comment"># + watcher; auto-embeds if the repo has embeddings</span>
 cartog serve --watch --rag    <span class="comment"># force auto-embed even on a not-yet-embedded repo</span></pre>
 
         <h2 id="cmd-init"><code>cartog init</code></h2>
-        <p>Scaffold a <code>.cartog.toml</code> template in the current project. That's all it does — config only, no editor wiring, no indexing. The next-steps hint points at <code>cartog ide</code> and <code>cartog index</code>.</p>
+        <p>Scaffold a <code>.cartog.toml</code> template in the current project. That's all it does, config only, no editor wiring, no indexing. The next-steps hint points at <code>cartog ide</code> and <code>cartog index</code>.</p>
         <pre>cartog init                  <span class="comment"># scaffold .cartog.toml</span>
 cartog init --dry-run        <span class="comment"># preview without writing</span></pre>
         <p class="example-label">Example output (already-initialized project, <code>--dry-run</code>)</p>
@@ -1289,9 +1289,9 @@ Dry run only. Re-run without --dry-run to apply.</pre>
         <h2 id="cmd-ide"><code>cartog ide</code> / <code>cartog install</code> / <code>cartog uninstall</code></h2>
         <p>Wire <code>cartog serve</code> into one or all MCP-compatible editors, or take it out again. Three shapes:</p>
         <ul>
-          <li><strong><code>cartog install &lt;client&gt;...</code></strong> — positional, brew/npm/pip convention, always non-interactive. Safe for scripts and agents.</li>
-          <li><strong><code>cartog ide</code></strong> — original, supports an interactive multi-select picker (bare) and the long-form flags below. <code>--remove</code> lists only the configs and rule files that hold cartog so you pick what to take out; without a terminal it needs <code>--yes</code>.</li>
-          <li><strong><code>cartog uninstall [client]...</code></strong> — the mirror of <code>install</code>: removes the <code>cartog</code> entry and the rule files <code>--rules</code> wrote, non-interactive.</li>
+          <li><strong><code>cartog install &lt;client&gt;...</code></strong> positional, brew/npm/pip convention, always non-interactive. Safe for scripts and agents.</li>
+          <li><strong><code>cartog ide</code></strong> original, supports an interactive multi-select picker (bare) and the long-form flags below. <code>--remove</code> lists only the configs and rule files that hold cartog so you pick what to take out; without a terminal it needs <code>--yes</code>.</li>
+          <li><strong><code>cartog uninstall [client]...</code></strong> the mirror of <code>install</code>: removes the <code>cartog</code> entry and the rule files <code>--rules</code> wrote, non-interactive.</li>
         </ul>
         <p><code>--rules</code> (on <code>ide</code> and <code>install</code>) also writes a cartog rule file for each agent that reads a rules directory, so it prefers cartog over grep: see <a href="#teach-agent">Teach your agent</a>. Rule files are project files: <code>--rules</code> with <code>--scope user</code>, or run from your home directory, is an error, and with no client named only agents in use get one. Each <code>--json</code> step carries <code>file_kind</code> (<code>mcp_config</code> or <code>rule</code>).</p>
         <pre>cartog install cursor                 <span class="comment"># one editor</span>
@@ -1369,7 +1369,7 @@ Dry run only. Re-run without --dry-run to apply.</pre>
         <p>Clients: <code>claude-code</code> (project + user), <code>claude-desktop</code>, <code>cline</code>, <code>cline-cli</code>, <code>codex</code>, <code>copilot-cli</code>, <code>cursor</code> (project + user), <code>gemini</code>, <code>kilo</code> (project + user), <code>opencode</code>, <code>qwen</code> (project + user), <code>roo</code> (project + user), <code>vscode</code> (project + user), <code>windsurf</code>, <code>zed</code>, <code>antigravity</code>, <code>kiro</code> (project + user), <code>hermes</code>. See the <a href="#mcp-ide">Bootstrap sequence</a> for the recommended verb order.</p>
 
         <h2 id="cmd-projects"><code>cartog projects &lt;list|add|scan|forget|prune&gt;</code></h2>
-        <p>Inspect the machine-local registry of indexed cartog projects — how a session in one repository discovers the <em>other</em> projects indexed on the same machine, where their databases live, and roughly what each holds, without merging their code graphs.</p>
+        <p>Inspect the machine-local registry of indexed cartog projects, how a session in one repository discovers the <em>other</em> projects indexed on the same machine, where their databases live, and roughly what each holds, without merging their code graphs.</p>
         <pre>cartog projects list             <span class="comment"># every indexed project on this machine</span>
 cartog projects list --json      <span class="comment"># same, machine-readable</span>
 cartog projects add [PATH]       <span class="comment"># register an existing index, no re-indexing</span>
@@ -1387,11 +1387,11 @@ order-service      2201 symbols    98 files  go                3d ago
   /home/u/work/order-service/.cartog/db.sqlite
 
 2 projects registered. Query another with `cartog &lt;command&gt; --db &lt;db_path&gt;`.</pre>
-        <p>Every <code>cartog index</code>, <code>rag index</code>, <code>pull</code>, <code>watch</code> re-index, and <code>serve</code> startup records its project. Nothing is recorded for a project cartog was not allowed to index, or for a <code>serve</code> running degraded — registration can never precede the consent gate. A registry write never fails the command it rides on.</p>
-        <p><code>list</code>, <code>forget</code> and <code>prune</code> operate on the registry, not on any project index: they take no <code>--db</code>, never create a <code>.cartog/</code>, and work from any directory — including one that was never indexed. <code>forget</code> accepts an id, root path, database path, or the declared <code>[project] name</code>; an ambiguous name (two workspaces each holding an <code>api</code> directory) drops nothing and lists the candidate ids instead.</p>
-        <p><strong>Backfilling projects indexed earlier.</strong> Because registration rides on a write, a project indexed a while ago and untouched since does not appear. Opening it again re-registers it for free (the plugin launches <code>serve --watch</code>, and a <code>serve</code> startup records the project). <code>add</code> and <code>scan</code> make a whole fleet visible now instead of repo-by-repo. <code>add [PATH]</code> registers one project (default: the current directory) and <strong>refuses when there is no index</strong> — it registers an existing index, it never creates one. <code>scan &lt;DIR&gt;</code> walks <strong>only the directory you name</strong> (never <code>$HOME</code> by default), bounded by <code>--depth N</code> (default <code>2</code>), skipping symlinks and dependency/build sinks; <code>--dry-run</code> previews it. Both open the database <strong>read-only</strong>, so a backfill never migrates a schema or takes a write lock on a project you have open elsewhere — a database on an older schema is still registered, from its metadata alone, appearing with <code>?</code> counts and a <code>stale-schema</code> marker. Neither stamps <code>last_indexed</code>: nothing indexed anything, so the row reads <code>never</code> rather than claiming a month-old graph is fresh.</p>
-        <p><strong>Description.</strong> Each project's listing shows a one-line description — from that project's <code>[project] description</code> in <code>.cartog.toml</code>, or, when unset, the first prose paragraph of its <code>README.md</code> (a blockquote tagline included; a blockquote leading with a link, or opening a <code>Note:</code> callout, is skipped) (suffixed <code>(readme)</code> above to mark it as inferred). <code>--json</code> adds <code>"description"</code> and <code>"description_source"</code> (<code>"config"</code> or <code>"readme"</code>), both omitted when the project has no description. A project with neither source shows nothing — <code>cartog doctor</code> flags that as advisory. See <a href="#config-project">Project Identity</a>.</p>
-        <p><strong>Markers:</strong> <code>live</code> (a <code>serve</code>/<code>watch</code> peer holds the lock), <code>stale-schema vN</code> (written at an older schema — it still lists, its cached counts are the last thing known true), <code>missing</code> (database gone, a <code>prune</code> candidate), <code>embed-mismatch</code> (its embedding provider/model/dimension differs from most of your other projects, so the vectors are not comparable). An unknown count renders as <code>?</code>, never <code>0</code> — "not known" is a different fact from "empty".</p>
+        <p>Every <code>cartog index</code>, <code>rag index</code>, <code>pull</code>, <code>watch</code> re-index, and <code>serve</code> startup records its project. Nothing is recorded for a project cartog was not allowed to index, or for a <code>serve</code> running degraded, registration can never precede the consent gate. A registry write never fails the command it rides on.</p>
+        <p><code>list</code>, <code>forget</code> and <code>prune</code> operate on the registry, not on any project index: they take no <code>--db</code>, never create a <code>.cartog/</code>, and work from any directory, including one that was never indexed. <code>forget</code> accepts an id, root path, database path, or the declared <code>[project] name</code>; an ambiguous name (two workspaces each holding an <code>api</code> directory) drops nothing and lists the candidate ids instead.</p>
+        <p><strong>Backfilling projects indexed earlier.</strong> Because registration rides on a write, a project indexed a while ago and untouched since does not appear. Opening it again re-registers it for free (the plugin launches <code>serve --watch</code>, and a <code>serve</code> startup records the project). <code>add</code> and <code>scan</code> make a whole fleet visible now instead of repo-by-repo. <code>add [PATH]</code> registers one project (default: the current directory) and <strong>refuses when there is no index</strong> it registers an existing index, it never creates one. <code>scan &lt;DIR&gt;</code> walks <strong>only the directory you name</strong> (never <code>$HOME</code> by default), bounded by <code>--depth N</code> (default <code>2</code>), skipping symlinks and dependency/build sinks; <code>--dry-run</code> previews it. Both open the database <strong>read-only</strong>, so a backfill never migrates a schema or takes a write lock on a project you have open elsewhere, a database on an older schema is still registered, from its metadata alone, appearing with <code>?</code> counts and a <code>stale-schema</code> marker. Neither stamps <code>last_indexed</code>: nothing indexed anything, so the row reads <code>never</code> rather than claiming a month-old graph is fresh.</p>
+        <p><strong>Description.</strong> Each project's listing shows a one-line description, from that project's <code>[project] description</code> in <code>.cartog.toml</code>, or, when unset, the first prose paragraph of its <code>README.md</code> (a blockquote tagline included; a blockquote leading with a link, or opening a <code>Note:</code> callout, is skipped) (suffixed <code>(readme)</code> above to mark it as inferred). <code>--json</code> adds <code>"description"</code> and <code>"description_source"</code> (<code>"config"</code> or <code>"readme"</code>), both omitted when the project has no description. A project with neither source shows nothing: <code>cartog doctor</code> flags that as advisory. See <a href="#config-project">Project Identity</a>.</p>
+        <p><strong>Markers:</strong> <code>live</code> (a <code>serve</code>/<code>watch</code> peer holds the lock), <code>stale-schema vN</code> (written at an older schema, it still lists, its cached counts are the last thing known true), <code>missing</code> (database gone, a <code>prune</code> candidate), <code>embed-mismatch</code> (its embedding provider/model/dimension differs from most of your other projects, so the vectors are not comparable). An unknown count renders as <code>?</code>, never <code>0</code> "not known" is a different fact from "empty".</p>
         <p><strong>Cross-project queries.</strong> <code>db_path</code> is the actionable field; pass it to any cartog command:</p>
         <pre>DB=$(cartog projects list --json | jq -r '.projects[] | select(.name=="order-service").db_path')
 cartog search CreateOrder --db "$DB"</pre>
@@ -1457,7 +1457,7 @@ cartog --tokens 200 outline src/db.rs</pre>
         <h2 id="compact-json">Compact JSON</h2>
         <p>Add <code>--compact</code> to strip heavy fields from <code>--json</code> and save agent tokens (~60% smaller). Symbol bodies, docstrings, and cache hashes are dropped; ids, names, kinds, locations, signatures, and scores are kept. No-op without <code>--json</code>; <code>cartog context</code> keeps its budgeted bodies.</p>
         <pre>cartog --json --compact rag search "authentication"</pre>
-        <p style="font-size: 13px; color: var(--text-tertiary);">MCP tools are compact by default — <code>cartog_rag_search</code>/<code>cartog_trace</code> bodies are bounded to a ~500-byte snippet and <code>cartog_context</code> keeps full budgeted bodies. Set <code>CARTOG_MCP_COMPACT=0</code> to restore full bodies on every tool.</p>
+        <p style="font-size: 13px; color: var(--text-tertiary);">MCP tools are compact by default: <code>cartog_rag_search</code>/<code>cartog_trace</code> bodies are bounded to a ~500-byte snippet and <code>cartog_context</code> keeps full budgeted bodies. Set <code>CARTOG_MCP_COMPACT=0</code> to restore full bodies on every tool.</p>
 
         <h2 id="languages">Supported Languages</h2>
         <table>
@@ -1482,10 +1482,10 @@ cartog --tokens 200 outline src/db.rs</pre>
             <tr><td>Vue</td><td>.vue</td><td>whole-file component symbol + &lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
             <tr><td>Svelte</td><td>.svelte</td><td>whole-file component symbol + &lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
             <tr><td>Astro</td><td>.astro</td><td>whole-file component symbol + frontmatter + &lt;script&gt; symbols (functions, classes, variables, imports)</td><td>calls, imports, inherits, type refs, JSX component usage</td></tr>
-            <tr><td>Markdown</td><td>.md</td><td>document sections (chunked by heading)</td><td>—</td></tr>
+            <tr><td>Markdown</td><td>.md</td><td>document sections (chunked by heading)</td><td>-</td></tr>
           </tbody>
         </table>
-        <p>Vue, Svelte, and Astro index the <code>&lt;script&gt;</code> block (Astro: the <code>---</code> frontmatter too), plus one whole-file <code>component</code> symbol per file named after the file stem (<code>login-form.vue</code> becomes <code>LoginForm</code>), which is what component imports and <code>&lt;X/&gt;</code> usages resolve to. An index built before component symbols existed only gains them as SFC files change, so run <code>cartog index --force</code> once after upgrading to backfill them. Template markup and component tags in the template are not extracted; the other symbols and edges above — including JSX usage — refer to code inside those script/frontmatter sections.</p>
+        <p>Vue, Svelte, and Astro index the <code>&lt;script&gt;</code> block (Astro: the <code>---</code> frontmatter too), plus one whole-file <code>component</code> symbol per file named after the file stem (<code>login-form.vue</code> becomes <code>LoginForm</code>), which is what component imports and <code>&lt;X/&gt;</code> usages resolve to. An index built before component symbols existed only gains them as SFC files change, so run <code>cartog index --force</code> once after upgrading to backfill them. Template markup and component tags in the template are not extracted; the other symbols and edges above (including JSX usage) refer to code inside those script/frontmatter sections.</p>
 
         <h2 id="performance">Performance</h2>
         <p>Indexing: <strong>69 files / 4k LOC in 95ms</strong> (Python fixture, release build).</p>
@@ -1532,14 +1532,14 @@ cartog --tokens 200 outline src/db.rs</pre>
             <tr><td>Missing symbols / low recall</td><td>Wait for the watcher (or run <code>cartog index</code>); check the file's language is supported and not <code>.gitignore</code>d. A language server on PATH lifts edge resolution from ~25% to up to ~81%.</td></tr>
             <tr><td><code>cartog projects list</code> shows no registry</td><td>Nothing indexed on this machine yet, or <code>CARTOG_REGISTRY</code> is empty (disabled) / relative (refused). <code>cartog doctor</code> prints the resolved path.</td></tr>
             <tr><td>A project is listed <code>missing</code></td><td>Its database file is gone. <code>cartog projects prune</code> drops those rows (<code>--dry-run</code> previews); an index that still exists is never touched.</td></tr>
-            <tr><td>A project's description is missing or stale</td><td>Missing: add <code>[project] description</code> or a README opening paragraph, then <code>cartog index</code>. Stale: only <code>index</code>/<code>rag index</code>/<code>pull</code> refresh it — <code>serve</code> startup and the watcher leave it untouched.</td></tr>
-            <tr><td>Anything else</td><td>Run <code>cartog doctor</code> — it checks git, config, database, and model status.</td></tr>
+            <tr><td>A project's description is missing or stale</td><td>Missing: add <code>[project] description</code> or a README opening paragraph, then <code>cartog index</code>. Stale: only <code>index</code>/<code>rag index</code>/<code>pull</code> refresh it: <code>serve</code> startup and the watcher leave it untouched.</td></tr>
+            <tr><td>Anything else</td><td>Run <code>cartog doctor</code> it checks git, config, database, and model status.</td></tr>
           </tbody>
         </table>
 
       </main>
 
-      <!-- Right rail: "On this page" — the current section's sub-headings,
+      <!-- Right rail: "On this page", the current section's sub-headings,
            populated and scroll-spied by the script below. -->
       <aside class="docs-toc" aria-label="On this page">
         <div class="docs-toc-label">On this page</div>

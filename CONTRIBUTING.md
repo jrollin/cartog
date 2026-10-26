@@ -39,7 +39,7 @@ no language toolchains.
 
 ## Commit style
 
-This project uses [conventional commits](https://www.conventionalcommits.org/). git-cliff generates the changelog from commit messages automatically — no manual CHANGELOG edits needed.
+This project uses [conventional commits](https://www.conventionalcommits.org/). git-cliff generates the changelog from commit messages automatically, no manual CHANGELOG edits needed.
 
 Format: `type(scope): description`
 
@@ -71,7 +71,7 @@ is the benchmark fixture.
 
 > **Pick the grammar carefully.** The `tree-sitter-<lang>` crate must export a
 > `LANGUAGE: LanguageFn` constant (i.e. depend on `tree-sitter-language`), not a
-> legacy `language() -> Language` function — only the former links against the
+> legacy `language() -> Language` function, only the former links against the
 > `tree-sitter` core version cartog pins. Confirm with a one-line smoke test
 > (`parser.set_language(&Language::new(tree_sitter_<lang>::LANGUAGE))` then parse
 > a snippet) before writing the extractor. Dumping `node.to_sexp()` for the
@@ -88,7 +88,7 @@ is the benchmark fixture.
        fn extract(&mut self, source: &str, file_path: &str) -> Result<ExtractionResult> { ... }
    }
    ```
-   Keep all per-language helpers private to this module — don't add anything to
+   Keep all per-language helpers private to this module, don't add anything to
    `lib.rs` beyond the registration below. Never panic on malformed input: degrade
    and return partial results (the indexer feeds arbitrary source). Guard recursive
    walkers against pathologically deep input (see `swift.rs`'s depth check).
@@ -96,7 +96,7 @@ is the benchmark fixture.
    - Module declaration + `get_extractor()` arm + a `test_get_extractor` assert +
      the module-doc language list in `crates/cartog-languages/src/lib.rs`
    - Extension mapping + a `detect_language()` test in `crates/cartog-core/src/lib.rs`
-4. Add unit tests in the new module (mirror `dart.rs` / `swift.rs` tests — one
+4. Add unit tests in the new module (mirror `dart.rs` / `swift.rs` tests, one
    behaviour-named test per construct: symbols, edges, visibility, async, docstrings,
    plus empty-file and syntax-error cases).
 
@@ -104,7 +104,7 @@ is the benchmark fixture.
 
 5. Create `benchmarks/fixtures/webapp_<lang>/` mirroring the shape of an existing
    fixture (e.g. `webapp_php` or `webapp_swift`). Symbol names must match cross-language
-   so the 13 shared bench scenarios apply unchanged — in particular `validateToken`/
+   so the 13 shared bench scenarios apply unchanged, in particular `validateToken`/
    `validate_token`, `AuthService`, `BaseService`, `handleLogin`→`authenticate`→`login`→
    `generateToken`→`executeQuery`→`getConnection` (deep chain), `getLogger`, `TokenError`,
    `DatabaseConnection`. Exercise the constructs your extractor handles (don't author the
@@ -113,7 +113,7 @@ is the benchmark fixture.
    so the criterion per-language indexing bench picks it up.
 7. Add `benchmarks/ground_truth/webapp_<lang>.json`: index the fixture locally, **derive**
    the 13 scenario entries from real `cartog --json` query output, then **hand-verify each**
-   — don't invent counts, and don't let a buggy extractor's output become the expected value.
+   don't invent counts, and don't let a buggy extractor's output become the expected value.
 8. Wire the fixture into the bench harness:
    - Add the `<tag>` to the `--fixture` filter in `benchmarks/lib/common.sh` (the single source of truth both `token_savings.sh` and `resolution_rate.sh` source)
    - Add `run_scenario "webapp_<lang>" ...` lines in every script under `benchmarks/scenarios/`
@@ -156,25 +156,25 @@ is the benchmark fixture.
 Every doc that enumerates supported languages or LSP servers must mention the new one.
 Note the two counting conventions and bump both consistently: the **marketing count**
 ("N languages") counts code languages **plus** Markdown, while the **code-language count**
-excludes Markdown — a doc may use either, so check what each sentence means before editing.
+excludes Markdown, a doc may use either, so check what each sentence means before editing.
 
 Surfaces to update (all confirmed by the Swift PR):
 
-- `README.md` — headline count, comparison table, the supported-languages table, and the
+- `README.md`, headline count, comparison table, the supported-languages table, and the
   LSP-server auto-detect list
-- `docs/product.md`, `docs/tech.md`, `docs/structure.md` — language counts, grammar list,
+- `docs/product.md`, `docs/tech.md`, `docs/structure.md`, language counts, grammar list,
   LSP-server list, and the "N language webapps" bench count
-- `docs/troubleshooting.md` — the LSP-server enumeration (+ an SDK/install note if the
+- `docs/troubleshooting.md`, the LSP-server enumeration (+ an SDK/install note if the
   server doesn't ship on a common PATH)
 - `skills/cartog/SKILL.md` (description + limitations + supported-servers list) and
   `skills/cartog/references/supported_languages.md` (count header + a per-language section)
-- `crates/cartog-languages/README.md` — supported-languages line + the per-module API table
-- `crates/cartog-mcp/src/lib.rs` — the MCP server "Languages:" instruction string
-- `AGENTS.md` (= `CLAUDE.md`) — the architecture comment, language list, and bench count
-- `site/src/pages/index.astro` and `site/src/pages/usage.astro` — counts + a language card
+- `crates/cartog-languages/README.md`, supported-languages line + the per-module API table
+- `crates/cartog-mcp/src/lib.rs`, the MCP server "Languages:" instruction string
+- `AGENTS.md` (= `CLAUDE.md`), the architecture comment, language list, and bench count
+- `site/src/pages/index.astro` and `site/src/pages/usage.astro`, counts + a language card
   (edit the `.astro` source; the Pages workflow rebuilds `site/dist`, which is gitignored)
 
-Grep before committing — every match must mention the new language/server:
+Grep before committing, every match must mention the new language/server:
 
 ```bash
 grep -rn 'Java, PHP, Dart\|jdtls, intelephense' \

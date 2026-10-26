@@ -30,7 +30,7 @@ with git-cliff, using the **same config and commit range as the root
 notes users care about are the bundled binary's changes. A path-scoped run over
 `editors/vscode/` would emit empty sections, because most releases touch that
 directory solely via the `chore: bump version` commit that `cliff.toml` skips.
-Keep the file's header bare (`# Changelog`) — `--prepend` inserts the new
+Keep the file's header bare (`# Changelog`), `--prepend` inserts the new
 section right after it, so prose there would end up under the wrong version. On the tag, `release.yml` runs the
 `publish-vscode` job, which:
 
@@ -53,7 +53,7 @@ The extension's in-editor **Install cartog** action pins `CARTOG_VERSION` to the
 extension's own version, so the installed binary matches the extension. The
 installer fetches `releases/download/v<version>/`, so that **GitHub Release and
 its binary assets must exist before a user runs Install** for the just-published
-version — otherwise `install.sh` 404s.
+version, otherwise `install.sh` 404s.
 
 `publish-vscode` therefore declares `needs: release`, and `release` in turn
 needs the whole build matrix. The tag's binary assets are published before the

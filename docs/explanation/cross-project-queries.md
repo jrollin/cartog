@@ -1,7 +1,7 @@
 # Cross-project queries
 
 **Status:** design proposal, not implemented. Rougher than
-[the project registry](project-registry.md) — steps 4-7 are sketched to fix
+[the project registry](project-registry.md), steps 4-7 are sketched to fix
 their boundaries and dependencies, and each needs its own review before
 implementation. Marked `[NEEDS REVIEW]` where a claim rests on an unverified
 assumption.
@@ -32,7 +32,7 @@ prerequisites from [project-registry.md](project-registry.md#prerequisites):
 - **P2, `cartog_db::probe_schema_version`.** Reading a foreign DB's schema
   version without the drift check. `Database::open_readonly` refuses on any
   mismatch in either direction, and `cartog-mcp` has no `rusqlite` dependency of
-  its own — it reaches SQLite only through `cartog-db` — so the "plain
+  its own (it reaches SQLite only through `cartog-db`) so the "plain
   read-only connection" workaround is unavailable to the crate that needs it.
 
 P2 is what makes per-project degradation implementable at all: without it, a
@@ -42,7 +42,7 @@ the rest.
 
 Step 5 does not inherit these (it touches the indexer, not cross-DB reads).
 
-## Step 4 — federated exact-symbol search
+## Step 4, federated exact-symbol search
 
 > **Status: implemented.** `cartog search --all` (CLI) and `cartog_search_all`
 > (the 18th MCP tool, hidden unless `[mcp] federated = true` / `serve --federated`). Resolved as designed below: fan out to each project's
@@ -73,7 +73,7 @@ mean the same thing in every database.
 
 So merging N result sets is a genuine merge, not a guess: sort by the same
 `rank`, and the combined ordering is exactly what a single database holding all
-N would have produced — with one caveat below.
+N would have produced, with one caveat below.
 
 This is the property `rag_search` lacks (step 6), and it is why step 4 can ship
 long before step 6 is even designed.
@@ -82,14 +82,14 @@ long before step 6 is even designed.
 
 The `ORDER BY` is `rank, in_degree DESC, is_test, kind, file_path, start_line`
 (`crates/cartog-db/src/store/queries.rs`). `rank` is absolute; **`in_degree` is
-not** — it counts references within one graph, so a large service's symbols
+not**, it counts references within one graph, so a large service's symbols
 carry systematically higher values than a small one's.
 
 The severity here is easy to understate. `rank` is **coarse**: `match_tier` is
 0/1/2 and `kind_penalty` is 0/3/6, so `rank` takes only a handful of distinct
 values across all results. Ties on `rank` are therefore the **common case, not
 the edge case**, which means the per-graph, incomparable `in_degree` decides
-most of the ordering in practice — it is the dominant ordering factor, not a
+most of the ordering in practice, it is the dominant ordering factor, not a
 tie-break.
 
 That promotes option 1 below from "probably right" to **the only defensible
@@ -106,7 +106,7 @@ default without a ranking benchmark**. Options:
 3. Ignore `in_degree` across projects and tie-break on project name. Simple,
    deterministic, and slightly worse within each project.
 
-Recommendation: **option 1**, and not merely on preference — a flat merge is
+Recommendation: **option 1**, and not merely on preference, a flat merge is
 not defensible until a benchmark shows the normalization in option 2 preserves
 relevance. Defer the flat variants until someone demonstrates a flat list is
 what they want *and* a measurement backs the ordering.
@@ -131,7 +131,7 @@ Mechanics:
 - Every result carries its project id and name, so an agent can drill in.
 - Start **serial**: `search` is one indexed query per DB, and N is small (a
   fleet is tens of repos, not thousands). Add concurrency only if a measured
-  fan-out exceeds a latency budget — and note the ordering is deterministic
+  fan-out exceeds a latency budget, and note the ordering is deterministic
   either way, since results sort by absolute `rank` (and by project under
   option 1), not by arrival. Per the measure-before-and-after rule, a
   concurrency change here needs a before/after number, not an intuition.
@@ -142,7 +142,7 @@ Mechanics:
 |---|---|---|
 | `search` | yes | absolute rank formula |
 | `outline` | no | inherently one file |
-| `refs`, `callees`, `impact`, `trace`, `hierarchy` | no | traverse edges, which stop at the repo boundary — cross-project traversal needs step 5 |
+| `refs`, `callees`, `impact`, `trace`, `hierarchy` | no | traverse edges, which stop at the repo boundary, cross-project traversal needs step 5 |
 | `stats`, `map` | aggregate only | a rollup, not a merge |
 | `rag_search`, `context` | no | step 6 |
 
@@ -158,17 +158,17 @@ multiple projects two ways, and **neither is live federation**:
 - Its multi-project MCP server routes **one call to one graph** via an optional
   `project_path` argument. No fan-out, no merged result set.
 - Its cross-project *querying* is achieved by merging graphs **offline** into
-  `~/.graphify/global-graph.json` — and that merged artifact is not wired into
+  `~/.graphify/global-graph.json`, and that merged artifact is not wired into
   the MCP server at all; it is a CLI-only concern.
 
 So the one shipped tool in this space reaches cross-project capability by
 route-then-drill (step 2 here) or by offline merge, and avoids merged-ranking
 fan-out entirely. That is consistent with the analysis in step 4: the merge is
 the hard part, not the fan-out. It also means a federated ranked result set
-would be novel rather than catch-up work — which raises the bar for proving it,
+would be novel rather than catch-up work, which raises the bar for proving it,
 not the reward for shipping it.
 
-## Step 5 — cross-service contract edges
+## Step 5, cross-service contract edges
 
 The prize for a microservice fleet, and the one feature here that would
 differentiate cartog rather than catch up to a competitor.
@@ -177,8 +177,8 @@ differentiate cartog rather than catch up to a competitor.
 
 Today an HTTP call from service A to service B is invisible. A's graph sees a
 URL string; B's graph sees a route handler. No edge connects them, so `impact`
-stops at the repo boundary. The question a fleet owner actually has — *if I
-change this endpoint, which services break?* — is structurally unanswerable.
+stops at the repo boundary. The question a fleet owner actually has: *if I
+change this endpoint, which services break?*, is structurally unanswerable.
 
 This cannot be recovered by merging per-repo graphs. The join key is not in
 either graph.
@@ -187,15 +187,15 @@ either graph.
 
 A shared contract artifact is what both sides reference:
 
-- **OpenAPI / Swagger** — HTTP. Operation id or method+path is the key.
-- **Protobuf / gRPC** — service + method. Strongest case: both sides generate
+- **OpenAPI / Swagger**: HTTP. Operation id or method+path is the key.
+- **Protobuf / gRPC**, service + method. Strongest case: both sides generate
   from the same `.proto`, so the key is exact.
-- **AsyncAPI / schema registry** — events and queues. Publisher and subscriber
+- **AsyncAPI / schema registry**, events and queues. Publisher and subscriber
   join on a channel or topic.
 
 Shape: each repo's index links its own symbols to *contract operations* rather
-than to each other. A contract operation becomes a third kind of node —
-provided by one service's handler, consumed by another's client — and
+than to each other. A contract operation becomes a third kind of node, 
+provided by one service's handler, consumed by another's client, and
 `impact` traverses through it.
 
 ### Hard problems, stated not solved
@@ -224,11 +224,11 @@ It is the only step here that answers a question no per-repo tool can answer at
 all. Steps 4, 6, and 7 make existing capabilities wider; step 5 adds a new one.
 
 Suggested scoping: **one protocol, one framework, one direction, behind a
-flag** — most likely protobuf (exact keys, generated stubs on both sides)
+flag**, most likely protobuf (exact keys, generated stubs on both sides)
 before OpenAPI. Prove the model on the easy case before touching string-built
 URLs.
 
-## Step 6 — federated semantic search
+## Step 6, federated semantic search
 
 ### Blockers, all real
 
@@ -239,7 +239,7 @@ three properties make that merge ill-defined:
 1. **RRF ranks are per-result-set.** Reciprocal-rank fusion produces a rank
    *within* a retrieval. Rank 1 of a 200-symbol service and rank 1 of a
    50k-symbol service are not the same quantity.
-2. **In-degree centrality is per-graph** — the same issue as step 4, but here it
+2. **In-degree centrality is per-graph**, the same issue as step 4, but here it
    feeds a score rather than a tie-break, so it cannot be sidestepped by
    grouping.
 3. **Embedding fingerprints are per-DB.** `embedding_provider`,
@@ -283,7 +283,7 @@ fn score_batch(&mut self, query: &str, documents: &[&str]) -> Result<Vec<f32>>;
 
 A cross-encoder takes **one query and a list of document texts**. It never sees
 a `Database`, a rank, or an `in_degree`. Its scores are therefore a function of
-`(query, document text)` alone — **absolute, and independent of which project a
+`(query, document text)` alone: **absolute, and independent of which project a
 document came from**.
 
 So reranking a merged candidate pool is well-defined even though the retrieval
@@ -291,12 +291,12 @@ scores that produced the pool are not. That makes the pipeline for step 6:
 
 1. Retrieve candidates per project (each DB's own FTS5 + vector + RRF).
 2. Merge the candidate **texts** into one pool, discarding the per-project
-   ranks entirely — they are the incomparable quantity, so do not carry them.
+   ranks entirely, they are the incomparable quantity, so do not carry them.
 3. `score_batch` the union against the query; sort by that score.
 
 This sidesteps blockers 1 and 2 completely rather than normalizing around them.
 Blocker 3 (embedding fingerprint) still binds the *retrieval* stage, since each
-project's vector search must be internally valid — but a fingerprint mismatch
+project's vector search must be internally valid, but a fingerprint mismatch
 now degrades to "that project contributes keyword-only candidates" instead of
 poisoning the merged ranking.
 
@@ -306,7 +306,7 @@ Two constraints on this design:
   The union pool across N projects must be capped *before* scoring, so
   per-project retrieval limits have to shrink as N grows rather than each
   contributing a full candidate set.
-- **Rerank scores are raw logits** — whole result sets can be negative — so they
+- **Rerank scores are raw logits** (whole result sets can be negative) so they
   must never be scaled multiplicatively, blended as probabilities, or compared
   against an RRF score.
 
@@ -318,13 +318,13 @@ Caveat: reranker scores are **raw logits** (whole result sets can be negative),
 so they must never be scaled multiplicatively or blended as if they were
 probabilities.
 
-## Step 7 — shared read-only multi-project server
+## Step 7, shared read-only multi-project server
 
 ### The measurement already exists, and it argues for this step
 
 `benchmarks/idle_memory.sh` documents real numbers: **four idle serve peers
 measured 2.06 GB combined**, and RSS reported only 5-35 MB each because the
-pages were compressed out — which is why the harness uses macOS `footprint` /
+pages were compressed out, which is why the harness uses macOS `footprint` /
 Linux `smaps_rollup` instead. The guard is 150 MB per idle process, against
 measured baselines of 246 MB (eager reranker), 91 MB (lazy), 84 MB (no
 reranker configured).
@@ -333,7 +333,7 @@ Correcting my own earlier framing: I said this step was gated on measuring
 N × idle footprint. That measurement is largely already done, and the
 per-process floor is ~84-91 MB even with the reranker lazy. At
 5 projects × 2 clients the duplication is real. The remaining unknown is not
-the footprint but whether users actually run that many at once — which the
+the footprint but whether users actually run that many at once, which the
 registry (step 1) answers.
 
 ### Design: read-only by construction
@@ -368,11 +368,11 @@ Three properties worth copying verbatim:
 1. **Pin the default, LRU the rest.** The project the session is actually
    working in stays warm without consuming a cache slot, so a burst of routing
    to sibling projects cannot evict the one the agent keeps coming back to.
-   For cartog the pinned entry is the cwd-resolved project — the same one a
+   For cartog the pinned entry is the cwd-resolved project, the same one a
    plain `cartog serve` would have served.
 2. **Key the entry on file identity, not just path.** `(mtime_ns, size)` means
    a project re-indexed by its own `serve --watch` is picked up on next access
-   rather than served stale from cache — which matters more here than for
+   rather than served stale from cache, which matters more here than for
    graphify, since cartog's per-repo DBs are updated by live peers.
 
    **But `(mtime_ns, size)` is not sufficient for cartog**, and this is the one
@@ -381,8 +381,8 @@ Three properties worth copying verbatim:
    content. A SQLite DB in WAL mode does not: a writer can commit into the
    `-wal` sidecar leaving the main file's mtime and size unchanged, so a cached
    entry would serve stale data with no signal. Key on SQLite's own
-   `PRAGMA data_version` instead — it changes whenever another connection
-   commits — or on the `-wal` file's identity alongside the main file's.
+   `PRAGMA data_version` instead, it changes whenever another connection
+   commits, or on the `-wal` file's identity alongside the main file's.
    Reusing the JSON-shaped key here would be a correctness bug, not an
    optimization.
 3. **A bad project is a tool error, not a process exit.** graphify explicitly
@@ -400,7 +400,7 @@ memory problem it exists to solve.
 
 This removes the N-slot election problem entirely (so no TLA+/Loom work on the
 verified single-writer protocol), the cross-project watcher, the consent matrix,
-and LSP entanglement — while keeping the one real benefit, a single shared model
+and LSP entanglement, while keeping the one real benefit, a single shared model
 set.
 
 `cartog serve` with no project list stays **exactly** as it is today. That is
@@ -438,7 +438,7 @@ So the real topology per DB is **two slots, both claimed by whoever is writing**
 |---|---|---|
 | `cartog serve` (no `--watch`) | primary, or read-only attach | not claimed |
 | `cartog serve --watch` (primary) | held | held by its watcher |
-| `cartog serve --watch` (read-only peer) | not held | not claimed — no watcher runs |
+| `cartog serve --watch` (read-only peer) | not held | not claimed, no watcher runs |
 | `cartog watch` (standalone) | not claimed | held, hard-bails if taken |
 | `cartog pull` | held for the swap | held for the swap |
 
@@ -468,7 +468,7 @@ Baselines used throughout (from `benchmarks/idle_memory.sh`, measured on a
 | no reranker configured | 84 MB |
 | CI guard ceiling | 150 MB |
 
-`footprint`/`smaps_rollup` numbers, not RSS — the script header notes four idle
+`footprint`/`smaps_rollup` numbers, not RSS, the script header notes four idle
 peers measured **2.06 GB combined** while `ps` RSS showed 5-35 MB each, because
 the pages were compressed out. Any capacity reasoning from RSS is wrong.
 
@@ -485,7 +485,7 @@ Established by reading the code, and they hold in every scenario below:
 2. **Election is per-DB, and locks are never held across a wait.** The lock is
    an `O_EXCL` PID file, acquired once at startup and released on `Drop`. There
    is no lock ordering to get wrong, because a process only ever contends for
-   the two slots of the DB it was pointed at — and `pull`, the one actor that
+   the two slots of the DB it was pointed at, and `pull`, the one actor that
    takes both explicitly, takes them in a fixed order and refuses rather than
    blocking. **Deadlock is structurally absent: no actor ever waits while
    holding.**
@@ -494,7 +494,7 @@ The remaining risk is therefore **not** deadlock or split-brain. It is process
 count and resident memory. That is a capacity problem, and it has an engineering
 answer.
 
-### Scenario A — mono-repo, one editor (today's default)
+### Scenario A, mono-repo, one editor (today's default)
 
 One `serve --watch`. Holds both slots, runs the watcher, owns the index.
 
@@ -502,7 +502,7 @@ One `serve --watch`. Holds both slots, runs the watcher, owns the index.
 - **Memory:** ~91 MB idle
 - **Verdict:** the verified path. Nothing in these specs changes it.
 
-### Scenario B — mono-repo, several editors on one repo
+### Scenario B, mono-repo, several editors on one repo
 
 Three editors, same repo: 3 `serve` processes, 1 primary + 2 read-only
 attachers. Each attacher runs a promoter polling every **10 s**
@@ -519,12 +519,12 @@ Note the promoters are cheap but not free: each is a filesystem `stat` every
 10 s. At 3 peers that is invisible; the point is it scales linearly with peer
 count, so it belongs in the capacity arithmetic below.
 
-### Scenario C — monorepo indexed as one root
+### Scenario C, monorepo indexed as one root
 
 One repo, many packages, **one** DB and one `serve`. Same process/memory profile
 as Scenario A.
 
-The cost here is not concurrency — it is resolution quality. Measured on a
+The cost here is not concurrency, it is resolution quality. Measured on a
 real React+Vue monorepo (2,119 files, 16,168 edges): **29 % of edges resolved
 heuristics-only, 58 % with LSP working**, versus **88 %** for one app indexed
 standalone. The cross-app noise came from the `unique_global` tier matching
@@ -538,12 +538,12 @@ trade, not a concurrency one:
 | One root, one DB | 1 | ~58 % (LSP) | cross-package noise; simplest |
 | Per-package DBs via `--db` | 1 per package you serve | ~88 % | N× the idle memory if all served at once |
 
-Neither is a concurrency hazard — separate DBs mean separate slots, so there is
+Neither is a concurrency hazard, separate DBs mean separate slots, so there is
 no contention between them. The per-package split trades memory for accuracy.
 A package-boundary resolution tier (out of scope here) would give the accuracy
 without the process multiplication, which is why it is the better long-term fix.
 
-### Scenario D — multi-repo fleet, per-project servers (the one to worry about)
+### Scenario D, multi-repo fleet, per-project servers (the one to worry about)
 
 This is where the user's concern is well founded. Process count is
 **projects × editors**, and each process pays a full idle footprint.
@@ -555,7 +555,7 @@ This is where the user's concern is well founded. Process count is
 | 10 | 2 | 20 | ~1.8 GB |
 | 20 | 3 | 60 | ~5.5 GB |
 
-**Still no deadlock and no split-brain** — every DB has its own independent
+**Still no deadlock and no split-brain**, every DB has its own independent
 election. But 60 processes holding 5.5 GB to serve mostly-idle indexes is a
 machine-usability problem, exactly as feared.
 
@@ -574,7 +574,7 @@ Three mitigations, in order of cost:
    from N processes to 1, sharing one model set. This is its real justification,
    and the numbers above are the argument.
 
-### Scenario E — shared read-only server (step 7)
+### Scenario E, shared read-only server (step 7)
 
 One process, N project DBs, LRU-bounded residency, **no locks, no watcher, no
 LSP**, write tools absent.
@@ -583,7 +583,7 @@ LSP**, write tools absent.
 |---|---|---|---|
 | 20 | 3 | 1 shared + 3 per-repo writers | ~91 MB + 3×91 MB ≈ 364 MB |
 
-Versus 5.5 GB in Scenario D — a **15× reduction** at 20 repos.
+Versus 5.5 GB in Scenario D, a **15× reduction** at 20 repos.
 
 Why it is concurrency-safe by construction:
 
@@ -603,10 +603,10 @@ What it costs, stated plainly:
 - **Version coupling:** one binary must match all N schemas, so a cartog upgrade
   makes every not-yet-re-indexed project unreadable until re-indexed.
 - **Writes still need a per-repo writer.** The shared server does not index, so
-  Scenario D's writer processes do not disappear — they are just no longer
+  Scenario D's writer processes do not disappear, they are just no longer
   duplicated per editor.
 
-### Scenario F — the pathological configuration to avoid
+### Scenario F, the pathological configuration to avoid
 
 Worth naming so nobody builds it: **a shared server that also writes.** That
 would mean one process holding N `serve-<hash>` locks and N `watch-<hash>`
@@ -617,7 +617,7 @@ Why this is the design to refuse:
 
 - The election protocol is TLA+-specified and Loom-checked for **one slot per
   process** (`specs/tla/`, `make loom`). N-slots-in-one-process is a different
-  state space, not a configuration change — it would need new spec work before
+  state space, not a configuration change, it would need new spec work before
   any code.
 - It reintroduces the master/slave complexity the user is right to fear: a
   process that is simultaneously master of DB A and slave of DB B, with partial
@@ -638,7 +638,7 @@ concurrency model as simple as it is today.
 | C′: monorepo, per-package | 1/package | 91 MB × pkgs | none | none |
 | D: 20 repos × 3 editors | 60 | ~5.5 GB | none | none |
 | E: shared read-only + writers | 1 + writers | ~364 MB | none | none |
-| F: shared **writable** server | 1 | — | **unspecified** | **unspecified** |
+| F: shared **writable** server | 1 | - | **unspecified** | **unspecified** |
 
 Every row except F is deadlock-free and split-brain-free by construction. The
 problem the specs must solve is row D's memory, and row E is the answer. Row F
@@ -652,7 +652,7 @@ committing:
 1. Run `benchmarks/idle_memory.sh` with 10 and 20 concurrent peers to confirm
    per-process cost stays roughly linear rather than growing (shared page cache
    across DBs could make it sublinear; allocator behavior could make it worse).
-2. Instrument how many projects a real user actually serves at once — the
+2. Instrument how many projects a real user actually serves at once, the
    registry (step 1) provides this, and it decides whether row D is a real
    configuration or a hypothetical one.
 3. Measure resident cost per *additional DB inside one process* for step 7,
@@ -687,7 +687,7 @@ Whichever step lands first, per the docs + site-sync rule: this document and
 `docs/explanation/README.md` **and** `docs/README.md` (both indexes enumerate
 every explanation doc), and any new CLI flag, MCP tool, or config key updates
 `docs/reference/`, `docs/usage.md`, README, `AGENTS.md`/`CLAUDE.md`,
-`skills/cartog/SKILL.md`, and both `site/src/pages/{index,usage}.astro` — a new
+`skills/cartog/SKILL.md`, and both `site/src/pages/{index,usage}.astro`, a new
 config key needing **both** a summary-table row and an explanation + example
 block.
 
@@ -707,10 +707,10 @@ problem, not gaps in the plan:
   size: 20 repos means 20 re-indexes before cross-project queries work again.
 - **Cross-service edges will never be complete.** Contracts cover what is
   declared. A hand-built URL, a dynamically-dispatched client, a message routed
-  by a runtime-computed topic — all invisible. Step 5 raises coverage from zero;
+  by a runtime-computed topic, all invisible. Step 5 raises coverage from zero;
   it does not reach the certainty an in-repo compiler-checked call graph has, and
   its edges must stay provenance-tagged so a consumer can weigh them differently.
-- **Federated semantic search requires fleet-wide embedding uniformity** — same
+- **Federated semantic search requires fleet-wide embedding uniformity**, same
   provider, same model, same dimension. That is an operational discipline, not a
   feature, and it breaks the moment one repo is embedded on a different machine
   with a different config.
@@ -724,19 +724,19 @@ problem, not gaps in the plan:
 
 ## Recommended order
 
-0. **P1 + P2** (see [Inherited prerequisites](#inherited-prerequisites)) — no
+0. **P1 + P2** (see [Inherited prerequisites](#inherited-prerequisites)), no
    cross-DB step is implementable without them. P1 is a move-only refactor that
    lands on its own.
-1. ~~The `serve`/`watch` slot boundary decision~~ — **withdrawn.** The
+1. ~~The `serve`/`watch` slot boundary decision~~: **withdrawn.** The
    topology is already correct: `serve --watch` claims both slots. See
    [The serve/watch lock topology](#the-servewatch-lock-topology-corrected).
-2. **The embedding-fingerprint diagnostic** in `cartog projects list` — a few
+2. **The embedding-fingerprint diagnostic** in `cartog projects list`, a few
    lines, and it tells you whether step 6 is even reachable.
-3. ~~**Step 4** (federated `search`)~~ — **shipped.** Grouped-per-project
+3. ~~**Step 4** (federated `search`)~~: **shipped.** Grouped-per-project
    output, so the cross-graph ranking question never had to be answered.
-4. **Step 5** (contract edges) — the differentiating feature; scope to one
+4. **Step 5** (contract edges), the differentiating feature; scope to one
    protocol behind a flag. Independent of 4, 6, 7.
-5. **Step 6 / step 7** — only on evidence. Step 6 needs matching fingerprints
+5. **Step 6 / step 7**, only on evidence. Step 6 needs matching fingerprints
    plus a benchmark; step 7 needs users who actually run many projects at once.
 
 ## Entry conditions: what evidence unblocks each step
@@ -764,12 +764,12 @@ Until then, every step below is a hypothesis about a problem nobody has
 demonstrated having. The registry cost ~11ms per changed pass to build; the
 next step should not cost more than that on the strength of a guess.
 
-### Step 4 — federated exact-symbol search — **built**
+### Step 4 (federated exact-symbol search) **built**
 
 Built without waiting for its entry condition, on an explicit instruction to
 implement it. Recorded plainly because the reasoning still stands: step 4 was
 the cheapest of the four and the only one whose value does not depend on the
-others, and it was also the one most likely to be *unnecessary* — descriptions
+others, and it was also the one most likely to be *unnecessary*, descriptions
 exist so the project is usually known before the query, and step 4's premise is
 that they sometimes are not enough.
 
@@ -780,13 +780,13 @@ for. It cost no schema change and no new crate, so an unused `--all` is a small
 loss; the note is here so a future reader does not mistake "shipped" for
 "validated".
 
-### Step 5 — cross-service contract edges
+### Step 5, cross-service contract edges
 
 | | |
 |---|---|
 | **Entry condition** | Concrete cases of "who calls this endpoint?" that the per-project graph cannot answer, in a fleet where the contract is actually declared somewhere machine-readable (OpenAPI, protobuf, a schema registry). |
 | **Evidence to keep** | The contract artifact, and whether producer and consumer both reference it in a form a parser could join on. |
-| **Falsified if** | The join key does not exist in practice — contracts are prose, hand-rolled clients, or drifted from the code. Then the edges would be derived from something untrue, which is worse than absent. |
+| **Falsified if** | The join key does not exist in practice, contracts are prose, hand-rolled clients, or drifted from the code. Then the edges would be derived from something untrue, which is worse than absent. |
 | **Blocked on** | [Open question 2](#open-questions) (where contract operations live), which this document calls step 5's central unresolved question. |
 
 This is the differentiating feature and the one whose entry condition is
@@ -794,21 +794,21 @@ hardest to satisfy honestly. The failure mode is not "we built it and it was
 slow" but "we built it and it was confidently wrong", which is why the
 falsification test is about the join key existing rather than about demand.
 
-### Step 6 — federated semantic search
+### Step 6, federated semantic search
 
 | | |
 |---|---|
-| **Entry condition** | Two things, both mechanical: the `embed-mismatch` marker is *absent* across the projects in question (matching provider/model/dimension — vectors in different spaces cannot be merged meaningfully), **and** rerank-the-union beats per-project search on `make bench-rag`. |
+| **Entry condition** | Two things, both mechanical: the `embed-mismatch` marker is *absent* across the projects in question (matching provider/model/dimension, vectors in different spaces cannot be merged meaningfully), **and** rerank-the-union beats per-project search on `make bench-rag`. |
 | **Evidence to keep** | The marker distribution across a real fleet, then the benchmark delta. |
 | **Falsified if** | Fleets are heterogeneously embedded in practice, or the union does not beat the parts. The benchmark is the arbiter, not the argument. |
-| **Blocked on** | The marker survey, which needs no new code — `cartog projects list` already reports it. |
+| **Blocked on** | The marker survey, which needs no new code, `cartog projects list` already reports it. |
 
 The [cheap check that might delete this step](#the-cheap-check-that-might-delete-this-step)
 is the right first move here, and it is now runnable: backfill (step 3b) is what
 makes a *whole fleet's* markers visible without re-indexing each project, which
 is exactly the survey this step needs.
 
-### Step 7 — shared read-only multi-project server
+### Step 7, shared read-only multi-project server
 
 | | |
 |---|---|
@@ -838,7 +838,7 @@ is that none has.
 2. **Where do contract operations live** if the registry stays metadata-only?
    The central unresolved question of step 5.
 3. ~~Does rerank-the-union sidestep RRF normalization entirely?~~
-   **Resolved** — yes, on the retrieval-score side. `RerankerProvider::score_batch`
+   **Resolved**, yes, on the retrieval-score side. `RerankerProvider::score_batch`
    takes `(query, documents)` with no DB coupling, so its scores are absolute.
    See [Rerank-the-union](#rerank-the-union-likely-the-actual-answer). What
    remains is a *quality* question for `make bench-rag`, not a design one.
@@ -849,7 +849,7 @@ is that none has.
    carries its own `#[tool(description = ...)]`
    (`crates/cartog-mcp/src/tools/search.rs`), and that description is the only
    thing steering an agent's choice. A boolean flag on `cartog_search` is
-   invisible in tool selection — the agent must already know to set it — whereas
+   invisible in tool selection (the agent must already know to set it) whereas
    a separate tool can say *when* cross-project search is appropriate. The cost
    is one more tool in a 16-tool surface (17 with `cartog_list_projects`). Worth
    settling with a skill eval (`make eval-skill`) rather than by argument, since

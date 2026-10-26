@@ -13,7 +13,7 @@ cartog resolves the database path using the following priority (highest wins):
 | 3 | Auto git-root detection | `<root>/.cartog/db.sqlite` (legacy `<root>/.cartog.db` still read if only it exists) |
 | 4 | Current directory fallback | `.cartog/db.sqlite` in cwd |
 
-> **Migrating from `.cartog.db`** — older versions of cartog stored the database
+> **Migrating from `.cartog.db`**, older versions of cartog stored the database
 > as `.cartog.db` at the project root. New installs default to
 > `.cartog/db.sqlite`. Existing legacy files keep working (a one-shot warning
 > is printed). Run `cartog self migrate-db` (add `--dry-run` to preview) to
@@ -76,7 +76,7 @@ Both fields are optional, so a bare `[project]` header is valid and inert.
   that paragraph; a blockquote that *leads with* a link or image, or that opens
   a `Note:`/`Warning:`/`Tip:`/`Important:`/`Caution:` callout, is skipped.
 
-No env-var override for either field — a project's identity is not the kind
+No env-var override for either field, a project's identity is not the kind
 of per-machine knob the other sections' env vars exist for.
 
 **Validation**, at config load (a violation rejects the config, with a
@@ -96,7 +96,7 @@ This section is only read by config-aware writers (`cartog index`,
 `cartog serve` startup and the watcher leave the registry's stored name and
 description untouched. A **rejected** config also leaves them untouched: its
 `[project]` could not be read, so cartog keeps whatever a working config last
-stored rather than replacing it with the README fallback. `cartog config` and `cartog doctor` also read it — see
+stored rather than replacing it with the README fallback. `cartog config` and `cartog doctor` also read it, see
 [cli.md](cli.md#cartog-config) and [cli.md](cli.md#cartog-doctor).
 
 ## Cross-project MCP tools (`[mcp]`)
@@ -116,7 +116,7 @@ federated = true   # expose cartog_list_projects + cartog_search_all (default: f
 `cartog serve --federated` turns them on for one launch; either source is
 sufficient, and an explicit `false` here does not veto the flag. There is no
 environment variable: this is a per-project privacy decision, not a per-machine
-knob. The CLI's `cartog search --all` is unaffected — it is explicit per
+knob. The CLI's `cartog search --all` is unaffected, it is explicit per
 invocation. An unknown key inside `[mcp]` is salvaged like any other section.
 See [mcp-tools.md](mcp-tools.md#enabling-the-cross-project-tools).
 
@@ -127,25 +127,25 @@ config-less repository stays untouched until you opt in. Consent is granted by
 **any one** of:
 
 1. a present `.cartog.toml` (run `cartog init` to scaffold one);
-2. an existing index — once `.cartog/db.sqlite` (or the legacy `.cartog.db`)
+2. an existing index, once `.cartog/db.sqlite` (or the legacy `.cartog.db`)
    exists, the project is opted in and steady-state updates keep working, even
    with no config and no env var;
-3. `CARTOG_AUTO_INIT` set to any non-empty value — indexes with in-memory
+3. `CARTOG_AUTO_INIT` set to any non-empty value, indexes with in-memory
    defaults and **never writes a `.cartog.toml`**.
 
-A broken (`Rejected`) `.cartog.toml` **is** still consent — the file's existence
+A broken (`Rejected`) `.cartog.toml` **is** still consent, the file's existence
 is the opt-in, and whether its contents parse is a separate question. Reporting
 `no .cartog.toml in this project` at someone looking straight at one is the
 failure this avoids.
 
 Rejection is wider than a syntax error: a credential-shaped `[remote]` key, an
 `endpoint` carrying userinfo, an unknown `provider`, a malformed `[index]
-exclude` glob, or an unreadable file all reject too. All of them grant consent —
+exclude` glob, or an unreadable file all reject too. All of them grant consent, 
 indexing reads none of those sections, and `push`/`pull` still refuse outright on
 a rejected config, so the credential checks keep their teeth.
 
 Settings still fail closed: every value falls back to its default and the reason
-is printed. One exception protects you — creating a **new** index is refused,
+is printed. One exception protects you, creating a **new** index is refused,
 because the unreadable config may have set `[database] path` and cartog will not
 guess a location you configured away from. Fix the parse error, or pass
 `--db <PATH>` to choose explicitly. An already-existing index re-indexes
@@ -159,14 +159,14 @@ Behavior when none of the three hold:
 | `cartog serve` / `cartog serve --watch` (the MCP plugin default) | Start **degraded**: no `.cartog/`, read tools return empty + a hint, the 2 write tools (`cartog_index`/`cartog_rag_index`) refuse, and `cartog_stats` reports the degraded state. With `--watch`, the watcher pre-builds the index the moment `cartog init` runs; the running server stays degraded until the client relaunches it. |
 | Read commands (`search`, `map`, `refs`, …) and read MCP tools | Return empty results + a hint; no `.cartog/` created. |
 | `cartog init` / `config` / `doctor` / `completions` / `manpage` / `self *` | Unchanged, never gated. |
-| `cartog pull` / `push` | Not gated — invoking them **is** the opt-in (an explicit user action, like `cartog init`). `pull` materializes `.cartog/` because downloading a remote index is its whole job. |
+| `cartog pull` / `push` | Not gated, invoking them **is** the opt-in (an explicit user action, like `cartog init`). `pull` materializes `.cartog/` because downloading a remote index is its whole job. |
 
 The guarantee is that cartog never creates a `.cartog/` *on its own* (a
 background hook, an MCP server, or a stray read). An explicit `cartog pull` you
 typed is consent in itself, so it is allowed to create the index it fetches.
 
 Installation and editor wiring (`cartog install` / `cartog ide`, the plugin's
-MCP entry) are independent of this gate — they only touch the binary and MCP
+MCP entry) are independent of this gate, they only touch the binary and MCP
 config files, never the index.
 
 ## Embedding provider configuration
@@ -175,7 +175,7 @@ For a task-oriented guide to switching providers, see [../how-to/switch-embeddin
 
 Configure the embedding provider in `.cartog.toml`:
 
-These options are mutually exclusive — use only one `[embedding]` section per `.cartog.toml`.
+These options are mutually exclusive, use only one `[embedding]` section per `.cartog.toml`.
 
 **Watcher auto-embed** (keep the local ONNX provider, control when embeddings run):
 
@@ -219,7 +219,7 @@ max_concurrent_requests = 4   # in-flight HTTP embed requests; 1..16, default 4
 ```
 
 `max_concurrent_requests` caps how many embedding requests are in flight at once
-for the network providers (the local ONNX provider ignores it — it parallelizes
+for the network providers (the local ONNX provider ignores it, it parallelizes
 via `[embedding.local] intra_threads`). Default **4**, clamped `1..=16`; `1` is
 serial. `CARTOG_EMBED_CONCURRENCY` overrides it (env > TOML > default). It is a
 transport setting, not part of the embedding fingerprint, so changing it never
@@ -232,29 +232,29 @@ regardless of this value.
 | Provider | Config | Setup | Notes |
 |----------|--------|-------|-------|
 | `local` (default) | No config needed | `cartog rag setup` to download models | ONNX Runtime via fastembed, ~230MB models |
-| `ollama` | `provider = "ollama"` | Ollama server running with model pulled | No model download needed, dimension auto-detected. Compiled into every default build; **local ONNX stays the default provider** — set `provider = "ollama"` to use it. |
-| `openai` | `provider = "openai"` | Reachable OpenAI-compatible `/v1` endpoint; API key in an env var (keyless for local servers) | One generic client for OpenAI, Mistral, Voyage, Jina, OVHcloud AI Endpoints, Together/Fireworks/DeepInfra, and local `/v1` servers (Ollama, LM Studio, vLLM) — switch vendors by changing `base_url`. Dimension auto-detected. **API key read from the `api_key_env` env var, never stored in `.cartog.toml`**; unset → no auth header (keyless local). Compiled into every default build; opt in with `provider = "openai"`. Azure OpenAI is not supported (its `…/deployments/{id}/embeddings?api-version=…` path + `api-key:` header differ from the plain `/v1` + `Bearer` shape). |
+| `ollama` | `provider = "ollama"` | Ollama server running with model pulled | No model download needed, dimension auto-detected. Compiled into every default build; **local ONNX stays the default provider**, set `provider = "ollama"` to use it. |
+| `openai` | `provider = "openai"` | Reachable OpenAI-compatible `/v1` endpoint; API key in an env var (keyless for local servers) | One generic client for OpenAI, Mistral, Voyage, Jina, OVHcloud AI Endpoints, Together/Fireworks/DeepInfra, and local `/v1` servers (Ollama, LM Studio, vLLM), switch vendors by changing `base_url`. Dimension auto-detected. **API key read from the `api_key_env` env var, never stored in `.cartog.toml`**; unset → no auth header (keyless local). Compiled into every default build; opt in with `provider = "openai"`. Azure OpenAI is not supported (its `…/deployments/{id}/embeddings?api-version=…` path + `api-key:` header differ from the plain `/v1` + `Bearer` shape). |
 
 **Default models (local provider):**
 
 | Role | Config value | HuggingFace repo (downloaded) | Dim | Download size |
 |------|-------------|-------------------------------|-----|---------------|
 | Embedding | `BAAI/bge-small-en-v1.5` | `Qdrant/bge-small-en-v1.5-onnx-Q` (ONNX-quantized) | 384 | ~80MB |
-| Reranker | `jinaai/jina-reranker-v1-turbo-en` (default) | `jinaai/jina-reranker-v1-turbo-en` | — | ~150MB |
+| Reranker | `jinaai/jina-reranker-v1-turbo-en` (default) | `jinaai/jina-reranker-v1-turbo-en` | - | ~150MB |
 
 Sizes above are **on-disk download size**, not resident memory. Loading a model
 costs more than its weights (ONNX Runtime arenas scale with thread count), so
-these figures are not a memory budget — set `[reranker] enabled = false` if you
+these figures are not a memory budget, set `[reranker] enabled = false` if you
 need to avoid the cross-encoder's footprint entirely.
 
 The embedding config value is the fastembed model code you set under `[embedding]
 model`; cartog downloads the matching ONNX-quantized repo from HuggingFace into the
 shared model cache (`$FASTEMBED_CACHE_DIR`, else `$XDG_CACHE_HOME/cartog/models`, else
-`~/.cache/cartog/models`). English-only — non-English identifiers/comments get
+`~/.cache/cartog/models`). English-only, non-English identifiers/comments get
 degraded embeddings. Override the embedding model with any fastembed built-in via
 `[embedding] model = "..."`.
 
-An unknown `provider` value (embedding: `local`, `ollama`, `openai`; reranker: `local`, `none`) is rejected when `.cartog.toml` is loaded, with an error naming the bad value — a typo like `provider = "ollma"` fails fast instead of silently falling back to the default.
+An unknown `provider` value (embedding: `local`, `ollama`, `openai`; reranker: `local`, `none`) is rejected when `.cartog.toml` is loaded, with an error naming the bad value, a typo like `provider = "ollma"` fails fast instead of silently falling back to the default.
 
 **Advanced local configuration:**
 
@@ -275,9 +275,9 @@ this to leave headroom on a busy machine (e.g. `intra_threads = 4`). The
 `CARTOG_ONNX_THREADS` env var overrides it (e.g. `CARTOG_ONNX_THREADS=1`); env >
 TOML > uncapped. Read at provider load, so restart `cartog serve` to change it.
 
-**Reranker model** — the cross-encoder is configurable, mirroring `[embedding]
+**Reranker model**, the cross-encoder is configurable, mirroring `[embedding]
 model`. The value is a fastembed reranker HuggingFace repo path; unset uses the
-default (`jinaai/jina-reranker-v1-turbo-en`, ~150MB to download — small, fast,
+default (`jinaai/jina-reranker-v1-turbo-en`, ~150MB to download, small, fast,
 and higher BEIR NDCG@10 than the older `bge-reranker-base`):
 
 ```toml
@@ -288,7 +288,7 @@ model    = "BAAI/bge-reranker-base"             # opt back to the former default
 # model  = "jinaai/jina-reranker-v2-base-multilingual"  # multilingual (~300MB)
 ```
 
-The reranker is not persisted, so switching models needs no re-index — the change
+The reranker is not persisted, so switching models needs no re-index, the change
 takes effect on the next search (a new model downloads once; a previously-used one
 is reused from cache). Existing users who never pinned `model` are switched to the
 new default automatically; pin `model = "BAAI/bge-reranker-base"` to keep the old
@@ -322,16 +322,16 @@ rerank_max = 50            # max candidates sent to the cross-encoder reranker (
 rerank_min = 8             # skip reranker if fewer than this many candidates survive RRF (default: 8)
 ```
 
-- `retrieval_multiplier` — both FTS5 and vector search retrieve `limit × retrieval_multiplier` candidates before Reciprocal Rank Fusion. Larger values improve recall at the cost of more reranker work.
-- `retrieval_floor` — minimum number of candidates to retrieve, regardless of `limit`. Prevents degenerate behaviour on very small `--limit` values.
-- `rerank_max` — caps the number of RRF-merged candidates forwarded to the cross-encoder. Lowering it speeds up reranking; raising it improves precision at the tail.
-- `rerank_min` — if fewer than this many candidates survive RRF merge, the cross-encoder is skipped entirely. Avoids model overhead when the result set is already small.
+- `retrieval_multiplier`, both FTS5 and vector search retrieve `limit × retrieval_multiplier` candidates before Reciprocal Rank Fusion. Larger values improve recall at the cost of more reranker work.
+- `retrieval_floor`, minimum number of candidates to retrieve, regardless of `limit`. Prevents degenerate behaviour on very small `--limit` values.
+- `rerank_max`, caps the number of RRF-merged candidates forwarded to the cross-encoder. Lowering it speeds up reranking; raising it improves precision at the tail.
+- `rerank_min`, if fewer than this many candidates survive RRF merge, the cross-encoder is skipped entirely. Avoids model overhead when the result set is already small.
 
 ## Remote storage (`[remote]`)
 
 For a task-oriented guide to push/pull setup, see [../how-to/set-up-s3-sync.md](../how-to/set-up-s3-sync.md).
 
-Opt in to sharing a pre-built index over an S3-compatible bucket by adding a `[remote]` section. This is **off by default** — no push or pull happens until the section is configured.
+Opt in to sharing a pre-built index over an S3-compatible bucket by adding a `[remote]` section. This is **off by default**, no push or pull happens until the section is configured.
 
 ```toml
 [remote]
@@ -378,8 +378,8 @@ For `.gitignore` interaction and the built-in prune list, see [`.gitignore` awar
 
 cartog already prunes common dependency and build directories (`node_modules`,
 `target`, `vendor`, `dist`, `build`, `.dart_tool`, dot-directories, ...). To skip
-additional paths — vendored or generated trees under non-standard names that the
-built-in list misses — add repo-root-relative globs:
+additional paths, vendored or generated trees under non-standard names that the
+built-in list misses, add repo-root-relative globs:
 
 ```toml
 [index]
@@ -392,8 +392,8 @@ exclude = ["vendor/**", "third_party/**", "**/*.generated.*"]
 - `dir/**` excludes everything under `dir` and prunes `dir` itself; `**/*.ext`
   excludes files by extension anywhere in the tree.
 - `*` and `?` are **segment-local** (they don't cross `/`), like `.gitignore`.
-  `src/*` matches every direct entry of `src` — including subdirectories, which
-  are then pruned — so it effectively excludes the whole of `src` (same as
+  `src/*` matches every direct entry of `src`, including subdirectories, which
+  are then pruned, so it effectively excludes the whole of `src` (same as
   `.gitignore`). To exclude only files at one level, use a suffix glob like
   `src/*.rs`; to exclude a whole subtree explicitly, use `src/**`.
 - A malformed or empty glob is rejected when the config loads, not at first index.
@@ -416,7 +416,7 @@ jobs = 4
 ```
 
 - Absent or `0` = auto (`available_parallelism`, i.e. CPU count); any value is
-  clamped to `1..=64`. (`0` means auto, not serial — use `1` for single-threaded.)
+  clamped to `1..=64`. (`0` means auto, not serial, use `1` for single-threaded.)
 - Precedence: `cartog index --jobs N` flag > `CARTOG_JOBS` env > this key.
 - The parse phase runs inside a dedicated pool sized to this value, so the cap
   applies on **every** index, including under a long-lived `cartog serve` /
@@ -426,7 +426,7 @@ jobs = 4
 ## `.gitignore` awareness
 
 cartog honors `.gitignore` (and `.git/info/exclude`) by default, including
-**nested** `.gitignore` files in subdirectories — so vendored or generated trees
+**nested** `.gitignore` files in subdirectories, so vendored or generated trees
 that git already ignores (`node_modules`, a CocoaPods `Pods/`, build output, …)
 are skipped without any cartog config. `.gitignore` is applied even when the
 tree has no `.git` directory.
@@ -434,7 +434,7 @@ tree has no `.git` directory.
 - A `.cartogignore` file (same syntax as `.gitignore`, including negation and
   nested files) adds cartog-specific ignores and is always honored.
 - The built-in prune list (`node_modules`, `target`, `vendor`, `dist`, `build`,
-  `.dart_tool`, dot-directories, …) and `[index] exclude` apply **on top** —
+  `.dart_tool`, dot-directories, …) and `[index] exclude` apply **on top**, 
   they prune even paths that `.gitignore` would have kept (e.g. a repo that
   `!`-unignores `node_modules`).
 - To index files git ignores (e.g. committed generated code), opt out:
@@ -452,7 +452,7 @@ For a task-oriented guide, see [../how-to/configure-lsp-servers.md](../how-to/co
 
 By default cartog resolves a language's LSP server from `PATH` (e.g.
 `rust-analyzer`, `gopls`). `[lsp.<lang>]` overrides that with an explicit
-command — most usefully a Dockerized server, so cartog can resolve edges on a
+command, most usefully a Dockerized server, so cartog can resolve edges on a
 host without the language's native toolchain installed:
 
 ```toml
@@ -466,7 +466,7 @@ command = ["docker", "run", "--rm", "-i",
 - `${ROOT}` in any element expands to the indexed project root (host-absolute).
 - **Path mirroring is required.** cartog talks to the server over stdio using
   `file://` URIs built from the host path. A container must therefore see the
-  repo at the *same* path — hence `-v ${ROOT}:${ROOT} -w ${ROOT}`. A container
+  repo at the *same* path, hence `-v ${ROOT}:${ROOT} -w ${ROOT}`. A container
   path that differs from the host path will make every definition resolve as
   "external" and is unsupported.
 - The override only applies to the keyed cartog language (`dart`, `go`,
@@ -476,7 +476,7 @@ command = ["docker", "run", "--rm", "-i",
   (a native server gets cartog's real PID). A container runs in its own PID
   namespace where cartog's host PID does not exist, so a real `processId` would
   trip the LSP parent-liveness check and make some servers (notably pyright and
-  typescript-language-server) exit at startup. Handled automatically — no config
+  typescript-language-server) exit at startup. Handled automatically, no config
   needed. The override server is still reaped when cartog exits normally.
 
 Run `cartog index --force <path>` after adding an override; the server is
@@ -513,14 +513,14 @@ Runtime overrides (per-machine / per-invocation), in addition to `.cartog.toml`:
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `CARTOG_DB` | auto-detect | Database path (same as `--db`). |
-| `CARTOG_AUTO_INIT` | unset | Opt a config-less project into indexing. Set to any non-empty value to let `cartog index` / `rag index` / `watch` (and the MCP write tools + watcher) create a `.cartog/` with in-memory defaults — **no `.cartog.toml` is written**. Unset and with no `.cartog.toml` and no existing index, those write paths refuse and `cartog serve` starts degraded (see [the consent gate](#index-creation-consent-gate)). |
+| `CARTOG_AUTO_INIT` | unset | Opt a config-less project into indexing. Set to any non-empty value to let `cartog index` / `rag index` / `watch` (and the MCP write tools + watcher) create a `.cartog/` with in-memory defaults: **no `.cartog.toml` is written**. Unset and with no `.cartog.toml` and no existing index, those write paths refuse and `cartog serve` starts degraded (see [the consent gate](#index-creation-consent-gate)). |
 | `CARTOG_JOBS` | CPU count | Parse worker pool size for `cartog index` (clamped `1..=64`). Overrides `[index] jobs`; the `--jobs` flag overrides it. |
 | `CARTOG_LSP_MAX_SERVERS` | `min(langs, 4)` | Max concurrent LSP servers in the indexer's edge pass. Overrides `[lsp] max_concurrent_servers`; `1` forces serial. |
 | `CARTOG_ONNX_THREADS` | all cores | Caps ONNX CPU threads for `rag index` + reranking. Overrides `[embedding.local] intra_threads`. `1` forces single-core. |
 | `CARTOG_EMBED_CONCURRENCY` | `4` | In-flight HTTP embed requests for ollama/openai (clamped `1..=16`). Overrides `[embedding] max_concurrent_requests`. Ignored for local. |
 | `CARTOG_WATCH_RAG` | unset | Force watcher auto-embed; overrides `[embedding] auto_embed` and `--rag`:<br>`1` = force on<br>`0` = force off<br>unset = auto-detect from the DB |
 | `CARTOG_SINGLE_WRITER` | `1` | `0` disables MCP single-writer election (every `cartog serve` opens read-write). |
-| `CARTOG_REGISTRY` | `<state_dir>/projects.sqlite` | Path to the machine-local project registry read by `cartog projects`. Must be **absolute** — a relative value is refused (it would give each directory its own registry). Set to an **empty** value to disable the registry entirely: both reads and writes become no-ops. `cartog doctor` prints the resolved path, or names which of the three causes disabled it. |
+| `CARTOG_REGISTRY` | `<state_dir>/projects.sqlite` | Path to the machine-local project registry read by `cartog projects`. Must be **absolute**, a relative value is refused (it would give each directory its own registry). Set to an **empty** value to disable the registry entirely: both reads and writes become no-ops. `cartog doctor` prints the resolved path, or names which of the three causes disabled it. |
 | `CARTOG_MCP_MAX_BYTES` | `65536` | Max bytes per MCP tool response before truncation. |
 | `CARTOG_MCP_COMPACT` | `1` (on) | MCP tools strip heavy fields by default (symbol cache hashes + docstrings; `cartog_rag_search`/`cartog_trace` bodies bounded to a ~500-byte snippet; `cartog_context` keeps budgeted bodies). Set `0`/`false`/`no`/`off` to return full bodies. |
 | `CARTOG_NO_UPDATE_CHECK` | unset | Set to skip the background self-update check, and to silence every drift notice: the plugin's SessionStart notice, `doctor`'s version row, and the MCP server's drift sentence and `cartog_stats` pin fields. An explicit `cartog_update` still arms the plugin's pinned version. |

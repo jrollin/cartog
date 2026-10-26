@@ -20,7 +20,7 @@ Configurable via `.cartog.toml` `[embedding]` section. Supports pluggable provid
 | **ollama** | `provider-ollama` | Any Ollama model (nomic-embed-text, mxbai-embed-large, etc.) | HTTP client, auto-detects dimension |
 | **openai** | `provider-openai` | Any OpenAI-compatible `/v1/embeddings` model (OpenAI, Mistral, Voyage, Jina, …) | HTTP client; switch vendors via `base_url`, API key from the env var named by `api_key_env` |
 
-**Reranker**: jina-reranker-v1-turbo-en (default, ~150MB) — cross-encoder that scores (query, document) pairs jointly (optional, local only). Configurable via `[reranker] model` (any fastembed reranker repo path); unset uses the default.
+**Reranker**: jina-reranker-v1-turbo-en (default, ~150MB), cross-encoder that scores (query, document) pairs jointly (optional, local only). Configurable via `[reranker] model` (any fastembed reranker repo path); unset uses the default.
 
 Local models cached in `~/.cache/cartog/models/` (respects `FASTEMBED_CACHE_DIR` and `XDG_CACHE_HOME`). Ollama models are managed by the Ollama server.
 
@@ -39,12 +39,12 @@ model = "nomic-embed-text"
 
 ### Hybrid search pipeline
 
-1. **FTS5 keyword search** — BM25 ranking over symbol names and source content
-2. **Vector KNN search** — cosine similarity on configurable-dimension embeddings via sqlite-vec
-3. **RRF merge** — Reciprocal Rank Fusion (k=60) combines both ranked lists
-4. **Hydration** — load symbol metadata and source content from the database
-5. **Cross-encoder reranking** — reranker scores top-50 candidates (if model available)
-6. **Final sort** — by rerank score (if present), else RRF score, with in-degree tiebreaker
+1. **FTS5 keyword search**: BM25 ranking over symbol names and source content
+2. **Vector KNN search**, cosine similarity on configurable-dimension embeddings via sqlite-vec
+3. **RRF merge**: Reciprocal Rank Fusion (k=60) combines both ranked lists
+4. **Hydration**, load symbol metadata and source content from the database
+5. **Cross-encoder reranking**, reranker scores top-50 candidates (if model available)
+6. **Final sort**, by rerank score (if present), else RRF score, with in-degree tiebreaker
 
 Over-retrieves `(limit * 3).max(20)` candidates from each source to improve fusion quality before applying the final limit.
 

@@ -6,7 +6,7 @@
 
 By default cartog resolves a language's LSP server from `PATH` (e.g.
 `rust-analyzer`, `gopls`). `[lsp.<lang>]` overrides that with an explicit
-command — most usefully a Dockerized server, so cartog can resolve edges on a
+command, most usefully a Dockerized server, so cartog can resolve edges on a
 host without the language's native toolchain installed:
 
 ```toml
@@ -20,7 +20,7 @@ command = ["docker", "run", "--rm", "-i",
 - `${ROOT}` in any element expands to the indexed project root (host-absolute).
 - **Path mirroring is required.** cartog talks to the server over stdio using
   `file://` URIs built from the host path. A container must therefore see the
-  repo at the *same* path — hence `-v ${ROOT}:${ROOT} -w ${ROOT}`. A container
+  repo at the *same* path, hence `-v ${ROOT}:${ROOT} -w ${ROOT}`. A container
   path that differs from the host path will make every definition resolve as
   "external" and is unsupported.
 - The override only applies to the keyed cartog language (`dart`, `go`,
@@ -30,7 +30,7 @@ command = ["docker", "run", "--rm", "-i",
   (a native server gets cartog's real PID). A container runs in its own PID
   namespace where cartog's host PID does not exist, so a real `processId` would
   trip the LSP parent-liveness check and make some servers (notably pyright and
-  typescript-language-server) exit at startup. Handled automatically — no config
+  typescript-language-server) exit at startup. Handled automatically, no config
   needed. The override server is still reaped when cartog exits normally.
 
 Run `cartog index --force <path>` after adding an override; the server is

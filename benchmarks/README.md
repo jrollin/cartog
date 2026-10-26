@@ -4,7 +4,7 @@ Compares cartog graph queries vs grep/cat approaches for common code navigation 
 
 ## Benchmark surfaces
 
-One row per entry point — if you're lost, start here:
+One row per entry point, if you're lost, start here:
 
 | Surface | Question it answers | Run with |
 |---------|---------------------|----------|
@@ -20,7 +20,7 @@ One row per entry point — if you're lost, start here:
 
 The shell suite below is **per-query** (no LLM). The
 [agent-task suite](agent/README.md) drives a real agent through whole tasks with
-and without cartog — the end-to-end "does it actually help" claim. See
+and without cartog, the end-to-end "does it actually help" claim. See
 [docs/tech.md → Benchmarks](../docs/tech.md#benchmarks) for the full
 test-and-benchmark matrix.
 
@@ -57,7 +57,7 @@ full 13-scenario shell suite and `ground_truth/` cover the 10 code-language fixt
 no scenario ground truth yet). The four component fixtures (`webapp_react` and the
 three SFC apps) are component apps, not the shared backend graph, so their
 `ground_truth/` covers only the scenarios that fit one (outline, callees, deps,
-search) — derived from real `cartog --json` output and hand-verified.
+search), derived from real `cartog --json` output and hand-verified.
 `webapp_react` exists to keep JSX component-usage edges under test: it is the
 only fixture with `.tsx` files.
 
@@ -86,13 +86,13 @@ writes to the repo-root `.cartog`, where every fixture would clobber the next an
 recall would be measured against whichever fixture indexed last. `token_savings.sh`
 and the scenarios pin `CARTOG_DB` to a per-fixture file under `benchmarks/.indexes/`
 (gitignored) so each fixture stays isolated. Any new `cartog` invocation in a
-scenario must do the same — use `fixture_db_path "$fixture_dir"` from `lib/common.sh`.
+scenario must do the same, use `fixture_db_path "$fixture_dir"` from `lib/common.sh`.
 
 ## Known cartog gaps
 
 Some scenarios deliberately keep ground truth at the *objectively correct* answer
 read from source, so cartog scores below 100% where its resolution is incomplete.
-These rows exist to track that — they should approach parity as the gaps close:
+These rows exist to track that, they should approach parity as the gaps close:
 
 - **Rust traits / Go interfaces (excluded from scenario 04)**: Rust uses traits and
   Go uses struct embedding, not class inheritance. cartog does not model
@@ -136,12 +136,12 @@ edges). Re-run after extractor or resolver changes.
 ## Resolution scaling (quadratic-regression guard)
 
 The rate fixtures are ~50 files each, so a *time-complexity* regression hides in
-them — the tier-2 quadratic fixed in #110 only diverged at transformers scale.
+them, the tier-2 quadratic fixed in #110 only diverged at transformers scale.
 `resolution_scale.sh` is the time-axis complement: it generates a synthetic
 Python repo with heavy cross-file imports (so most edges resolve via tier-2, the
 #110 hot path) at sizes N and 2N, times `cartog index --no-lsp --force` for each,
 and asserts `time(2N)/time(N)` stays under a near-linear threshold. Linear
-resolution doubles (~2x); quadratic quadruples (~4x). Self-calibrating — no
+resolution doubles (~2x); quadratic quadruples (~4x). Self-calibrating, no
 committed baseline, so it is machine-independent. Exit 1 on regression.
 
 ```bash
@@ -165,10 +165,10 @@ Opt-in (not in `make check`): the large run is seconds-to-minutes depending on N
 Both result files now carry provenance so a published number can be traced back
 to an exact build:
 
-- `results/resolution_rate{,_lsp}.json` — top-level `cartog_version`, `git_sha`,
+- `results/resolution_rate{,_lsp}.json`, top-level `cartog_version`, `git_sha`,
   `timestamp`, plus per-language `lsp_source` (`docker:<image>`, `host:<bin>`, or
   `none`).
-- `results/latest.jsonl` — first line is a `{"_meta": {...}}` header with the
+- `results/latest.jsonl`, first line is a `{"_meta": {...}}` header with the
   same `cartog_version` / `git_sha` / `timestamp` (the summary loop skips it).
 
 To reproduce:
@@ -195,7 +195,7 @@ kotlin, vue, svelte, astro). Under
 `--docker-lsp` the script generates a `[lsp.<lang>]` Docker override (`docker run
 -i -v ${ROOT}:${ROOT} -w ${ROOT} <image>`) and records `lsp_source=docker:<image>`.
 It is **strict**: a missing `cartog-lsp-<lang>:stable` image is an explicit error
-(no host fallback), so the numbers always reflect the containerized server — a
+(no host fallback), so the numbers always reflect the containerized server, a
 preflight check lists any unbuilt images and tells you to run `make lsp-images`.
 Build a single image with, e.g., `docker build -t cartog-lsp-go:stable -f
 benchmarks/lsp-images/go.Dockerfile benchmarks/lsp-images`. See the "LSP server
@@ -208,7 +208,7 @@ All 16 containerized servers resolve **identically to host** (same `lsp`-tier
 edge count). `python` and `typescript` use the upstream `lspcontainers` images
 (pinned by digest); the other 14 self-build on a pinned official base. cartog
 sends `processId: null` to a command-override server because its host PID is
-absent from a container's PID namespace — without that, pyright and
+absent from a container's PID namespace, without that, pyright and
 typescript-language-server honor the LSP parent-liveness check and exit at
 startup (they alone enforce it strictly).
 
@@ -228,7 +228,7 @@ make bench-criterion
 make bench-onnx
 ```
 
-### `queries` — query latency (`cartog`)
+### `queries`, query latency (`cartog`)
 
 Microsecond-scale latency for `search`, `refs`, `impact`, `outline`, `callees`,
 `hierarchy`, `deps`, `stats` on the Python and Java fixtures. Query latency is
@@ -239,7 +239,7 @@ cargo bench -p cartog --bench queries
 cargo bench -p cartog --bench queries -- search_token   # one bench (substring match)
 ```
 
-### `indexing` — per-language indexing (`cartog-indexer`)
+### `indexing`, per-language indexing (`cartog-indexer`)
 
 Lives in `cartog-indexer`, which has no `cartog-rag`/ONNX dependency, so it builds
 and runs without the native ONNX library. Per-language cost lives in the
@@ -253,21 +253,21 @@ cargo bench -p cartog-indexer --bench indexing -- index_full_force/rs   # one la
 
 | Benchmark | What it measures |
 |-----------|-----------------|
-| `index_full_force/<lang>` | Full index of each fixture (force=true) — `py ts go rs rb java php dart swift kt` |
+| `index_full_force/<lang>` | Full index of each fixture (force=true), `py ts go rs rb java php dart swift kt` |
 | `index_incremental_noop` | Re-index with no changes (all files skipped via hash); Python |
 | `index_incremental_one_file` | One file's hash invalidated, triggers Merkle diff + scoped resolution; Python |
 
-### `rag_search` — hybrid search (`cartog`)
+### `rag_search`, hybrid search (`cartog`)
 
 `hybrid_search` (FTS5 + vector KNN + RRF merge) over the embedded Python fixture,
-using a deterministic stub embedding provider — no ONNX model is loaded, so it runs
+using a deterministic stub embedding provider, no ONNX model is loaded, so it runs
 in CI.
 
 ```bash
 cargo bench -p cartog --bench rag_search
 ```
 
-### `rag_onnx` — real embedding + reranking (`cartog`, opt-in)
+### `rag_onnx`, real embedding + reranking (`cartog`, opt-in)
 
 Loads the actual fastembed/ONNX models to measure `embed_query`,
 `embed_documents`, and cross-encoder `rerank`. **Not run in CI**; requires the
@@ -279,7 +279,7 @@ make bench-onnx   # or: cargo bench -p cartog --bench rag_onnx
 
 ## Benchmark any project
 
-`bench-project.sh` runs cartog vs grep on **any codebase** — no ground truth needed.
+`bench-project.sh` runs cartog vs grep on **any codebase**, no ground truth needed.
 
 It auto-discovers symbols, runs 5 comparison scenarios (outline, callers, callees, deps, impact), and reports token efficiency.
 

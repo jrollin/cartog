@@ -14,7 +14,7 @@ two protections are **on by default**:
   GitHub PATs, Slack tokens, Stripe keys, JWTs, and quoted
   `password`/`secret`/`token`/`api_key` assignments) are replaced with
   `[REDACTED_SECRET]` before being stored or embedded. This is **best-effort
-  mitigation, not a guarantee** — it favours not mangling real code over total
+  mitigation, not a guarantee**, it favours not mangling real code over total
   recall, so bare high-entropy strings and secrets in unrecognised forms can
   still be indexed. Do not rely on it as your only control against committing
   secrets. Configurable via `[security] redact_secrets` in `.cartog.toml`.
