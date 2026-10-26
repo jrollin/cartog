@@ -290,6 +290,10 @@ jobs:
     name: Publish VS Code extension
     needs: release
     runs-on: ubuntu-latest
+    environment: marketplace-publish
+    permissions:
+      id-token: write
+      contents: read
     defaults:
       run:
         working-directory: editors/vscode
@@ -324,15 +328,21 @@ jobs:
       # below fails the job only if BOTH failed, so a genuine total failure
       # still surfaces while a single-registry hiccup does not.
       #
-      # Marketplace auth is a PAT (VSCE_PAT) for now. Azure DevOps is retiring
-      # global PATs on 2026-12-01; migrate to Entra `--azure-credential` before
-      # then (see docs/how-to/publish-vscode-extension.md).
+      # Marketplace auth is Entra workload identity (azure/login OIDC, no PAT).
+      # The federated credential is bound to the marketplace-publish environment
+      # (see docs/how-to/publish-vscode-extension.md).
+      - name: Azure login
+        continue-on-error: true
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
       - name: Publish to Visual Studio Marketplace
         id: vsce
         continue-on-error: true
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx --yes @vscode/vsce publish --no-dependencies --packagePath cartog.vsix
+        run: npx --yes @vscode/vsce publish --no-dependencies --packagePath cartog.vsix --azure-credential
 
       - name: Publish to Open VSX
         id: ovsx
