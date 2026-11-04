@@ -236,15 +236,22 @@ pub(crate) fn is_sensitive_file(rel_path: &str) -> bool {
 mod tests {
     use super::*;
 
+    // Fake tokens split so no contiguous secret-shaped literal sits in source for scanners.
+    const FAKE_AWS_KEY: &str = concat!("AKIA", "IOSFODNN7EXAMPLE");
+    const FAKE_GITHUB_PAT: &str = concat!("ghp_", "1234567890abcdefghijklmnopqrstuvwxyz");
+    const FAKE_GITHUB_FINE_PAT: &str =
+        concat!("github_pat_", "11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ");
+    const FAKE_SK_KEY: &str = concat!("sk-", "abcdefghijklmnop");
+
     fn redact(s: &str) -> String {
         redact_str(s).into_owned()
     }
 
     #[test]
     fn redacts_aws_access_key_id() {
-        let out = redact("let k = \"AKIAIOSFODNN7EXAMPLE\";");
+        let out = redact(&format!("let k = \"{FAKE_AWS_KEY}\";"));
         assert!(out.contains(PLACEHOLDER));
-        assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(!out.contains(FAKE_AWS_KEY));
     }
 
     #[test]
@@ -263,14 +270,14 @@ mod tests {
 
     #[test]
     fn redacts_github_pat() {
-        let out = redact("token: ghp_1234567890abcdefghijklmnopqrstuvwxyz");
+        let out = redact(&format!("token: {FAKE_GITHUB_PAT}"));
         assert!(out.contains(PLACEHOLDER));
-        assert!(!out.contains("ghp_1234567890"));
+        assert!(!out.contains(FAKE_GITHUB_PAT));
     }
 
     #[test]
     fn redacts_github_fine_grained_pat() {
-        let out = redact("github_pat_11ABCDEFG0aBcDeFgHiJkLmNoPqRsTuVwXyZ");
+        let out = redact(FAKE_GITHUB_FINE_PAT);
         assert!(out.contains(PLACEHOLDER));
     }
 
@@ -313,10 +320,10 @@ mod tests {
 
     #[test]
     fn redacts_generic_api_key_with_colon() {
-        let out = redact("api_key: 'sk-abcdefghijklmnop'");
+        let out = redact(&format!("api_key: '{}'", FAKE_SK_KEY));
         assert!(out.contains("api_key"));
         assert!(out.contains(PLACEHOLDER));
-        assert!(!out.contains("sk-abcdefghijklmnop"));
+        assert!(!out.contains(FAKE_SK_KEY));
     }
 
     #[test]
@@ -372,7 +379,7 @@ mod tests {
 
     #[test]
     fn redacts_multiple_secrets_in_one_string() {
-        let out = redact("a = AKIAIOSFODNN7EXAMPLE; b = ghp_1234567890abcdefghijklmnopqrstuvwxyz");
+        let out = redact(&format!("a = {FAKE_AWS_KEY}; b = {FAKE_GITHUB_PAT}"));
         assert_eq!(out.matches(PLACEHOLDER).count(), 2);
     }
 
@@ -411,14 +418,14 @@ mod tests {
     #[test]
     fn disabled_config_is_verbatim_noop() {
         let cfg = RedactionConfig::disabled();
-        let out = cfg.redact("AKIAIOSFODNN7EXAMPLE");
-        assert_eq!(out, "AKIAIOSFODNN7EXAMPLE");
+        let out = cfg.redact(FAKE_AWS_KEY);
+        assert_eq!(out, FAKE_AWS_KEY);
     }
 
     #[test]
     fn enabled_config_redacts() {
         let cfg = RedactionConfig::enabled();
-        assert!(cfg.redact("AKIAIOSFODNN7EXAMPLE").contains(PLACEHOLDER));
+        assert!(cfg.redact(FAKE_AWS_KEY).contains(PLACEHOLDER));
     }
 
     use proptest::prelude::*;

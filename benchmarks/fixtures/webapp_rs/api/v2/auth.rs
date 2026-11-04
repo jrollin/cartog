@@ -26,7 +26,7 @@ pub fn handle_login(request: &Request) -> Response {
     let config = Config::load();
     let auth = DefaultAuth::new(config);
     let email = sanitize_input("user@example.com");
-    let password = "password";
+    let password = "password123";
     logger.info(&format!("V2 login attempt for {}", email));
     match auth.login(&email, password) {
         Ok(token) => Response::ok(format!(

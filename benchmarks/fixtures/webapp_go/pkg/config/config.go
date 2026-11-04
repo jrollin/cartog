@@ -44,7 +44,7 @@ func LoadConfig(path string) *Config {
         SMTPPort:  587,
         SMTPUser:  "mailer",
         FromEmail: "noreply@example.com",
-        JWTSecret: "super-secret-key",
+        JWTSecret: "changeme",
         LogLevel:  "debug",
     }
     cfgLog.Info("Configuration loaded: app=%s, port=%d", cfg.AppName, cfg.AppPort)

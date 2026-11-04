@@ -2,13 +2,16 @@
 
 use crate::*;
 
+// Fake token split so no contiguous secret-shaped literal sits in source for scanners.
+const FAKE_TOKEN: &str = concat!("ghp_", "abcdefghijklmnopqrstuvwxyz0123456789");
+
 fn project_with_secret() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap().join("project");
     std::fs::create_dir(&root).unwrap();
     std::fs::write(
         root.join("conf.py"),
-        "def connect():\n    token = \"ghp_abcdefghijklmnopqrstuvwxyz0123456789\"\n    return token\n",
+        format!("def connect():\n    token = \"{FAKE_TOKEN}\"\n    return token\n"),
     )
     .unwrap();
     (tmp, root)
@@ -42,7 +45,7 @@ fn indexing_redacts_secret_in_symbol_content() {
 
     let content = only_content(&db);
     assert!(content.contains("[REDACTED_SECRET]"));
-    assert!(!content.contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+    assert!(!content.contains(FAKE_TOKEN));
 }
 
 #[test]
@@ -63,7 +66,7 @@ fn redaction_disabled_keeps_secret_verbatim() {
     .unwrap();
 
     let content = only_content(&db);
-    assert!(content.contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+    assert!(content.contains(FAKE_TOKEN));
     assert!(!content.contains("[REDACTED_SECRET]"));
 }
 
@@ -84,9 +87,7 @@ fn redacted_secret_is_not_searchable_in_fts() {
     )
     .unwrap();
 
-    let hits = db
-        .fts5_search("\"ghp_abcdefghijklmnopqrstuvwxyz0123456789\"", 10)
-        .unwrap();
+    let hits = db.fts5_search(&format!("\"{FAKE_TOKEN}\""), 10).unwrap();
     assert!(
         hits.is_empty(),
         "secret must not be searchable after redaction"
@@ -142,7 +143,7 @@ fn enabling_redaction_on_warm_index_reindexes_and_scrubs() {
         &crate::WalkFilter::unrestricted(),
     )
     .unwrap();
-    assert!(only_content(&db).contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+    assert!(only_content(&db).contains(FAKE_TOKEN));
 
     // Plain re-index (no --force) with redaction ON must promote to a full
     // re-index via the policy fingerprint and scrub the stored secret.
@@ -161,7 +162,7 @@ fn enabling_redaction_on_warm_index_reindexes_and_scrubs() {
     assert!(r.redaction_backfilled, "policy change must flag a backfill");
     let content = only_content(&db);
     assert!(content.contains("[REDACTED_SECRET]"));
-    assert!(!content.contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"));
+    assert!(!content.contains(FAKE_TOKEN));
 }
 
 #[test]

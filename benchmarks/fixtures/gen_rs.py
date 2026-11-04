@@ -2157,7 +2157,7 @@ w(
         let config = Config::load();
         let auth = DefaultAuth::new(config);
         let email = sanitize_input("user@example.com");
-        let password = "password";
+        let password = "password123";
         logger.info(&format!("V1 login attempt for {}", email));
         match auth.login(&email, password) {
             Ok(token) => Response::ok(format!("{{\"token\": \"{}\", \"version\": \"v1\"}}", token)),
@@ -2300,7 +2300,7 @@ w(
         let config = Config::load();
         let auth = DefaultAuth::new(config);
         let email = sanitize_input("user@example.com");
-        let password = "password";
+        let password = "password123";
         logger.info(&format!("V2 login attempt for {}", email));
         match auth.login(&email, password) {
             Ok(token) => {
@@ -2809,7 +2809,7 @@ w(
         let logger = get_logger("routes.users");
         let email = sanitize_input("new@example.com");
         let name = sanitize_input("New User");
-        let password = "securepassword123";
+        let password = "password123";
         match user::validate(&email, &name, password) {
             Ok(()) => {
                 logger.info(&format!("User registered: {}", email));

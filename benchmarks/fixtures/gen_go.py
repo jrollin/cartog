@@ -1727,7 +1727,7 @@ w(
         gwLog.Info("Creating PaymentGateway for provider: %s", provider)
         return &PaymentGateway{
             Provider:  provider,
-            APIKey:    "test_key_placeholder",
+            APIKey:    "changeme",
             BaseURL:   fmt.Sprintf("https://api.%s.com/v1", provider),
             Connected: true,
         }
@@ -3562,7 +3562,7 @@ w(
             SMTPPort:  587,
             SMTPUser:  "mailer",
             FromEmail: "noreply@example.com",
-            JWTSecret: "super-secret-key",
+            JWTSecret: "changeme",
             LogLevel:  "debug",
         }
         cfgLog.Info("Configuration loaded: app=%s, port=%d", cfg.AppName, cfg.AppPort)
