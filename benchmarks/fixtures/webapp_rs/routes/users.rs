@@ -37,7 +37,7 @@ pub fn register_handler(request: Request) -> Response {
     let logger = get_logger("routes.users");
     let email = sanitize_input("new@example.com");
     let name = sanitize_input("New User");
-    let password = "securepassword123";
+    let password = "password123";
     match user::validate(&email, &name, password) {
         Ok(()) => {
             logger.info(&format!("User registered: {}", email));

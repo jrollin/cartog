@@ -11,7 +11,7 @@ pub fn login_handler(request: Request) -> Response {
     let auth = DefaultAuth::new(config);
 
     let email = "user@example.com";
-    let password = "password";
+    let password = "password123";
 
     match auth.login(email, password) {
         Ok(token) => Response::ok(format!("{{\"token\": \"{token}\"}}")),

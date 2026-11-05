@@ -21,7 +21,7 @@ func NewPaymentGateway(provider string) *PaymentGateway {
     gwLog.Info("Creating PaymentGateway for provider: %s", provider)
     return &PaymentGateway{
         Provider:  provider,
-        APIKey:    "test_key_placeholder",
+        APIKey:    "changeme",
         BaseURL:   fmt.Sprintf("https://api.%s.com/v1", provider),
         Connected: true,
     }
