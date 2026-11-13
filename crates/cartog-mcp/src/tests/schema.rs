@@ -62,20 +62,31 @@ fn read_tools_advertise_output_schemas() {
     }
 }
 
-/// `schema_for_output` rejects non-object schemas, so list tools must wrap
-/// their arrays. Building each schema proves the wrappers stay object-typed
-/// (a regression here would panic the tool macro at startup).
+/// MCP `structuredContent` is a JSON object, so list tools wrap their arrays.
+/// rmcp 3 no longer enforces an object root, so assert it here.
 #[test]
 fn output_schemas_are_objects() {
-    output_schema_for::<SymbolList>();
-    output_schema_for::<EdgeList>();
-    output_schema_for::<RefList>();
-    output_schema_for::<ImpactList>();
-    output_schema_for::<HierarchyList>();
-    output_schema_for::<MapResult>();
-    output_schema_for::<StatsResult>();
-    output_schema_for::<cartog_core::ChangesResult>();
-    output_schema_for::<rag::search::HybridSearchResult>();
+    fn root_type<T: schemars::JsonSchema + std::any::Any>() -> Option<serde_json::Value> {
+        output_schema_for::<T>().get("type").cloned()
+    }
+    let object = Some(serde_json::json!("object"));
+    assert_eq!(root_type::<SymbolList>(), object, "SymbolList");
+    assert_eq!(root_type::<EdgeList>(), object, "EdgeList");
+    assert_eq!(root_type::<RefList>(), object, "RefList");
+    assert_eq!(root_type::<ImpactList>(), object, "ImpactList");
+    assert_eq!(root_type::<HierarchyList>(), object, "HierarchyList");
+    assert_eq!(root_type::<MapResult>(), object, "MapResult");
+    assert_eq!(root_type::<StatsResult>(), object, "StatsResult");
+    assert_eq!(
+        root_type::<cartog_core::ChangesResult>(),
+        object,
+        "ChangesResult"
+    );
+    assert_eq!(
+        root_type::<rag::search::HybridSearchResult>(),
+        object,
+        "HybridSearchResult"
+    );
 }
 
 /// Non-standard integer formats (`uint32`, …) are stripped so strict client
