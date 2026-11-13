@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.35.1] - 2026-11-13
+
+### Bug Fixes
+
+- **vscode**: Bump transitive deps for uuid, qs, follow-redirects advisories ([`5b8999f`](https://github.com/jrollin/cartog/commit/5b8999fa92d81cde50f26c4abe633aca4708941b))
+- **deps**: Bump rmcp 3.10 and rusqlite 0.42 for RUSTSEC advisories ([`5040016`](https://github.com/jrollin/cartog/commit/5040016b231a7c0f7c626a22017accb88771566d))
+
+### Build
+
+- **deps**: Bump qs from 6.16.0 to 6.17.1 in /editors/vscode ([`566771c`](https://github.com/jrollin/cartog/commit/566771c11744ca2fb8bbb692b201871392b16e15))
+- **deps-dev**: Bump follow-redirects in /editors/vscode ([`9daa3e8`](https://github.com/jrollin/cartog/commit/9daa3e8bca5bcaa8017ece34c59355f9255ee23a))
+- **deps**: Bump the github-actions group with 6 updates ([`ecb09ad`](https://github.com/jrollin/cartog/commit/ecb09ade5bd2037ceb59b89612c692de576da4cc))
+- **deps**: Bump the github-actions group with 2 updates ([`11359c2`](https://github.com/jrollin/cartog/commit/11359c279e17537bc994132d5c91fd0f8107b444))
+
+### Documentation
+
+- Document the VS Code publish workflow and secrets in AGENTS.md ([`14af24f`](https://github.com/jrollin/cartog/commit/14af24f7c212f0353495d834298dd16e67bb595f))
+- Clarify that a green publish job proves one registry, not both ([`1c458de`](https://github.com/jrollin/cartog/commit/1c458de790ddfbe588ebd5b6585d6c4c9b5e5aa5))
+
+### Testing
+
+- **mcp**: Assert output schemas keep an object root under rmcp 3 ([`240c239`](https://github.com/jrollin/cartog/commit/240c239b3f35b83f6300bd30617abb47d322191f))
+
 ## [0.35.0] - 2026-10-26
 
 ### Bug Fixes
