@@ -455,7 +455,7 @@ fn narrowing_hint_for(tool: &str) -> &'static str {
 /// warning per field on every connection. Removing them keeps the schema valid
 /// (the field is still an `integer`) and the client log clean.
 fn output_schema_for<T: schemars::JsonSchema + std::any::Any>() -> Arc<JsonObject> {
-    let schema = schema_for_output::<T>().expect("output schema must be a JSON object");
+    let schema = schema_for_output::<T>();
     let mut value = serde_json::Value::Object((*schema).clone());
     strip_int_formats(&mut value);
     match value {
@@ -1393,8 +1393,8 @@ pub const FEDERATED_TOOLS: [&str; 2] = ["cartog_list_projects", "cartog_search_a
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for CartogServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("cartog", env!("CARGO_PKG_VERSION")))
             .with_protocol_version(ProtocolVersion::LATEST)
             .with_instructions(self.instructions())
