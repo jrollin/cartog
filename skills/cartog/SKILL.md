@@ -453,13 +453,14 @@ When an agent calls `cartog_index` via MCP, LSP servers are started once and **k
 ```bash
 cartog self update              # upgrade in place to latest stable
 cartog self update --check      # report whether an update exists; exit 1 if outdated
+cartog self update --force      # update even while serve/watch processes run (macOS/Linux)
 cartog self version             # version + target + install source + last check
 cartog self rollback            # restore the previous binary saved at <bin>.old
 cartog self migrate-db          # move legacy .cartog.db (+ -wal/-shm/.bak) into .cartog/
 cartog self migrate-db --dry-run  # preview the planned moves
 ```
 
-User-facing maintenance commands. Inside a plugin session the SessionStart hooks already notify the user (once a day) and auto-arm a drifted binary's update (cargo installs excepted: they cannot self-update), so the agent should not repeat that notice on its own, only mention it if a tool call fails because of the drift, or the user asks, using the update command from `get_info`'s instructions or `cartog_stats.update_command` when present. Outside a plugin session, if the agent observes a "new cartog version available" hint or a stale binary, it can suggest the user run `cartog self update`. `cargo install cartog` users get an exit-3 refusal pointing at `cargo install cartog --force` instead. If the agent sees a one-shot deprecation warning about a legacy `.cartog.db`, suggest `cartog self migrate-db`.
+User-facing maintenance commands. Inside a plugin session the SessionStart hooks already notify the user (once a day) and auto-arm a drifted binary's update (cargo installs excepted: they cannot self-update), so the agent should not repeat that notice on its own, only mention it if a tool call fails because of the drift, or the user asks, using the update command from `get_info`'s instructions or `cartog_stats.update_command` when present. Outside a plugin session, if the agent observes a "new cartog version available" hint or a stale binary, it can suggest the user run `cartog self update`; when that exits 6 because other cartog processes run, suggest `cartog self update --force` (macOS/Linux). Never run `sudo` for an update: when it exits 5 with `cannot write to`, give the user the command from the message to run in their own terminal. `cargo install cartog` users get an exit-3 refusal pointing at `cargo install cartog --force` instead. If the agent sees a one-shot deprecation warning about a legacy `.cartog.db`, suggest `cartog self migrate-db`.
 
 ### Init (scaffold project config, user-facing)
 ```bash

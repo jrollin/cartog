@@ -35,6 +35,12 @@ Windows: %LOCALAPPDATA%\cartog\
   `cartog serve` holding a given database's serve lock. Used by
   `cartog index` to defer its LSP pass to a peer's warm language servers.
 
+- **Schema-upgrade guard**, `schema_upgrade_blocker` finds another `serve` or
+  `watch` still holding a database whose schema is older than the caller's.
+  That holder runs an older cartog, so the caller must not migrate the file
+  under it; `schema_upgrade_refusal` words the error. Callers pass both schema
+  versions in as numbers, keeping this crate free of a `cartog-db` dependency.
+
 - **The project registry**, `projects.sqlite` in the state directory, one row
   per indexed project. It lets a session in one repository discover the *other*
   indexed projects on the machine, where their databases live, and a summary

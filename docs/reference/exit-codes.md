@@ -11,8 +11,8 @@
 | `2` | Network or parse error reaching `api.github.com` |
 | `3` | Refused, binary was installed via `cargo install`. Run `cargo install cartog --force` instead |
 | `4` | Checksum mismatch; no filesystem mutation, original binary intact |
-| `5` | New binary failed smoke test; previous binary restored |
-| `6` | A peer `cartog serve`/`watch` is running |
+| `5` | New binary failed smoke test, previous binary restored; or the install directory is not writable (the message ends with an installer command to run yourself); or the update lock cannot be created in the state directory |
+| `6` | `cartog serve`/`watch` processes are running (all listed; `--force` skips this check on macOS/Linux), another update holds the update lock, or another update replaced the binary while this one waited (rerun) |
 
 ## Exit codes, `--defer`
 

@@ -46,7 +46,7 @@ with three controls, highest precedence first: `CARTOG_WATCH_RAG` (env) override
 | `cartog_rag_search` | `query`, `kind?`, `limit?` | Semantic search (FTS5 + vector + re-ranking) |
 | `cartog_list_projects` | - | The other cartog-indexed projects on this machine, with each one's `db_path` |
 | `cartog_search_all` | `query`, `kind?`, `limit?`, `under?`, `lang?`, `max_projects?` | Find a symbol by name across the *other* indexed projects, grouped per project |
-| `cartog_update` | `version?` | Arm a deferred self-update (write; touches the state file, not the index). When launched by the plugin, it arms the plugin's pinned version by default (the pin is resolved from `plugin.json` via `CLAUDE_PLUGIN_ROOT`, forwarded by the plugin's MCP server config); otherwise it falls back to the latest release. |
+| `cartog_update` | - | Arm a deferred self-update (write; touches the state file, not the index). When launched by the plugin, it arms the plugin's pinned version by default (the pin is resolved from `plugin.json` via `CLAUDE_PLUGIN_ROOT`, forwarded by the plugin's MCP server config); otherwise it falls back to the latest release. Only the Claude Code plugin's hooks apply an armed update: under the plugin `apply` is `session-end-or-restart`; for other clients it is `manual` and `message` gives the user `cartog self update --force --to <version>` to run in their own terminal. When the installed binary is already newer than the running server, `current` reports the installed version and `message` asks for a restart. |
 
 Read tools (everything except `cartog_index`, `cartog_rag_index`, and `cartog_update`)
 carry an `outputSchema` and return `structuredContent`. All tool responses also include a JSON text block.

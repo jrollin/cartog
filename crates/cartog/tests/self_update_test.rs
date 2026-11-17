@@ -1820,3 +1820,368 @@ fn apply_pending_skips_when_another_apply_holds_the_lock() {
         "intent must be kept for the in-flight apply to complete"
     );
 }
+
+// ── multiple running processes, --force, --to, permission hint ────────
+
+/// A live process whose PID a test can plant in a lock file; killed on drop.
+#[cfg(unix)]
+struct Sleeper(std::process::Child);
+
+#[cfg(unix)]
+impl Sleeper {
+    fn spawn() -> Self {
+        Self(
+            Command::new("sleep")
+                .arg("120")
+                .spawn()
+                .expect("spawn sleep"),
+        )
+    }
+    fn pid(&self) -> u32 {
+        self.0.id()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Sleeper {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[cfg(unix)]
+fn plant_lock(home: &std::path::Path, slot: &str, pid: u32) {
+    let dir = isolated_lock_dir(home);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("{slot}.pid")), pid.to_string()).unwrap();
+}
+
+/// Release mock serving a valid 99.0.0 tarball. The API URL is a black hole, so
+/// only a run that takes its target from `--to` reaches the download.
+#[cfg(unix)]
+fn pinned_release_mock() -> String {
+    use sha2::{Digest, Sha256};
+    let archive_name = format!("cartog-{}.tar.gz", cartog_target_triple());
+    let archive_bytes = make_valid_cartog_tarball("99.0.0");
+    let sha = format!("{:x}", Sha256::digest(&archive_bytes));
+    let (_api, dl_base) =
+        spawn_release_mock("99.0.0", archive_bytes, format!("{sha}  {archive_name}\n"));
+    dl_base
+}
+
+#[cfg(unix)]
+fn run_sandboxed_update(
+    bin: &std::path::Path,
+    home: &std::path::Path,
+    dl_base: &str,
+    args: &[&str],
+    install_source: &str,
+) -> std::process::Output {
+    Command::new(bin)
+        .args(["self", "update"])
+        .args(args)
+        .env("HOME", home)
+        .env("XDG_STATE_HOME", home.join("state"))
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("CARTOG_REGISTRY", "")
+        .env("CARTOG_GITHUB_API_URL", "http://127.0.0.1:1/blackhole")
+        .env("CARTOG_GITHUB_DOWNLOAD_BASE", dl_base)
+        .env("CARTOG_TEST_INSTALL_SOURCE", install_source)
+        .env_remove("CARGO_HOME")
+        .output()
+        .expect("spawn sandboxed cartog")
+}
+
+#[cfg(unix)]
+fn combined(out: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unforced_update_lists_every_running_process_and_offers_force() {
+    let (a, b) = (Sleeper::spawn(), Sleeper::spawn());
+    let home = tempfile::TempDir::new().unwrap();
+    plant_lock(home.path(), "serve-aaaa", a.pid());
+    plant_lock(home.path(), "watch-aaaa", a.pid());
+    plant_lock(home.path(), "serve-bbbb", b.pid());
+
+    let out = run_self_update_full(
+        home.path(),
+        "http://127.0.0.1:1/blackhole",
+        &[("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")],
+    );
+
+    assert_eq!(out.status.code(), Some(6), "{}", combined(&out));
+    let text = combined(&out);
+    assert!(text.contains("2 cartog processes are running"), "{text}");
+    assert!(
+        text.contains(&format!("PID {} (serve-aaaa)", a.pid())),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("PID {} (serve-bbbb)", b.pid())),
+        "{text}"
+    );
+    assert!(text.contains("cartog self update --force"), "{text}");
+}
+
+#[cfg(unix)]
+#[test]
+fn force_swaps_under_running_processes_and_lists_them_as_stale() {
+    let (a, b) = (Sleeper::spawn(), Sleeper::spawn());
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    let bin = copy_cartog_into(install_dir.path());
+    plant_lock(home.path(), "serve-aaaa", a.pid());
+    plant_lock(home.path(), "watch-bbbb", b.pid());
+
+    let out = run_sandboxed_update(
+        &bin,
+        home.path(),
+        &pinned_release_mock(),
+        &["--force", "--to", "99.0.0"],
+        "release-tarball",
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", combined(&out));
+    assert!(
+        std::fs::read_to_string(&bin)
+            .unwrap()
+            .starts_with("#!/bin/sh"),
+        "the binary must be swapped for the pinned release"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("2 processes are still running the previous version"),
+        "{stdout}"
+    );
+    assert!(stdout.contains(&format!("PID {}", a.pid())), "{stdout}");
+    assert!(stdout.contains(&format!("PID {}", b.pid())), "{stdout}");
+}
+
+#[cfg(unix)]
+#[test]
+fn force_json_reports_stale_processes_in_the_updated_payload() {
+    let a = Sleeper::spawn();
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    let bin = copy_cartog_into(install_dir.path());
+    plant_lock(home.path(), "serve-aaaa", a.pid());
+
+    let out = run_sandboxed_update(
+        &bin,
+        home.path(),
+        &pinned_release_mock(),
+        &["--force", "--to", "99.0.0", "--json"],
+        "release-tarball",
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", combined(&out));
+    let payload: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", combined(&out)));
+    assert_eq!(payload["status"], "updated");
+    assert_eq!(payload["stale_peers"][0]["pid"], a.pid());
+}
+
+#[cfg(unix)]
+#[test]
+fn force_still_refuses_a_cargo_installed_binary() {
+    let a = Sleeper::spawn();
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    let bin = copy_cartog_into(install_dir.path());
+    plant_lock(home.path(), "serve-aaaa", a.pid());
+
+    let out = run_sandboxed_update(
+        &bin,
+        home.path(),
+        "http://127.0.0.1:1/blackhole",
+        &["--force", "--to", "99.0.0"],
+        "cargo",
+    );
+
+    assert_eq!(out.status.code(), Some(3), "{}", combined(&out));
+}
+
+#[cfg(unix)]
+#[test]
+fn force_refuses_while_another_update_holds_the_update_lock() {
+    let updater = Sleeper::spawn();
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    let bin = copy_cartog_into(install_dir.path());
+    plant_lock(home.path(), "apply-update", updater.pid());
+
+    let out = run_sandboxed_update(
+        &bin,
+        home.path(),
+        &pinned_release_mock(),
+        &["--force", "--to", "99.0.0"],
+        "release-tarball",
+    );
+
+    assert_eq!(out.status.code(), Some(6), "{}", combined(&out));
+    assert!(
+        combined(&out).contains("another cartog update is already in progress"),
+        "{}",
+        combined(&out)
+    );
+    assert!(
+        !std::fs::read_to_string(&bin).is_ok_and(|s| s.starts_with("#!/bin/sh")),
+        "no swap may happen while another update holds the lock"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unwritable_install_dir_prints_the_installer_command_for_the_user() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    // Root ignores mode 0o555, so this setup cannot make the directory
+    // unwritable when the suite runs as root (Docker CI, dev containers).
+    if std::fs::metadata(install_dir.path()).unwrap().uid() == 0 {
+        eprintln!("skipped: running as root, directory permissions are not enforced");
+        return;
+    }
+    let bin = copy_cartog_into(install_dir.path());
+    std::fs::set_permissions(install_dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let out = run_sandboxed_update(
+        &bin,
+        home.path(),
+        &pinned_release_mock(),
+        &["--to", "99.0.0"],
+        "release-tarball",
+    );
+    std::fs::set_permissions(install_dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(out.status.code(), Some(5), "{}", combined(&out));
+    assert!(
+        combined(&out).contains(
+            "curl -fsSL https://www.cartog.dev/install.sh | CARTOG_VERSION=99.0.0 \
+             CARTOG_INSTALL_DIR="
+        ),
+        "{}",
+        combined(&out)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_in_place_update_clears_a_previously_armed_deferred_update() {
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    let bin = copy_cartog_into(install_dir.path());
+    let state_path = seeded_state_path(home.path());
+    std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        "[pending_update]\ntarget_version = \"999.0.0\"\n",
+    )
+    .unwrap();
+
+    let out = run_sandboxed_update(
+        &bin,
+        home.path(),
+        &pinned_release_mock(),
+        &["--to", "99.0.0"],
+        "release-tarball",
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", combined(&out));
+    let state = std::fs::read_to_string(&state_path).unwrap();
+    assert!(
+        !state.contains("[pending_update]"),
+        "the explicit version must win over the armed 999.0.0, got: {state}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_explicit_older_target_says_it_does_not_downgrade() {
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    let bin = copy_cartog_into(install_dir.path());
+
+    let out = run_sandboxed_update(
+        &bin,
+        home.path(),
+        "http://127.0.0.1:1/blackhole",
+        &["--to", "0.0.1"],
+        "release-tarball",
+    );
+
+    assert_eq!(out.status.code(), Some(0), "{}", combined(&out));
+    assert!(
+        combined(&out).contains("does not downgrade"),
+        "{}",
+        combined(&out)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_arm_message_pins_the_force_command_to_the_armed_version() {
+    let home = tempfile::TempDir::new().unwrap();
+    let out = Command::new(cartog_bin())
+        .args(["self", "update", "--defer", "--to", "999.0.0"])
+        .env("HOME", home.path())
+        .env("XDG_STATE_HOME", home.path().join("state"))
+        .env("XDG_DATA_HOME", home.path().join("data"))
+        .env("XDG_CONFIG_HOME", home.path().join("config"))
+        .env("CARTOG_TEST_INSTALL_SOURCE", "release-tarball")
+        .env_remove("CARGO_HOME")
+        .output()
+        .expect("spawn cartog");
+    assert_eq!(out.status.code(), Some(0), "{}", combined(&out));
+    assert!(
+        combined(&out).contains("`cartog self update --force --to 999.0.0`"),
+        "{}",
+        combined(&out)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_update_refuses_to_swap_when_the_update_lock_cannot_be_created() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    // Root ignores mode 0o555, so this setup cannot block the lock file.
+    if std::fs::metadata(home.path()).unwrap().uid() == 0 {
+        eprintln!("skipped: running as root, directory permissions are not enforced");
+        return;
+    }
+    let bin = copy_cartog_into(install_dir.path());
+    let lock_dir = isolated_lock_dir(home.path());
+    std::fs::create_dir_all(&lock_dir).unwrap();
+    std::fs::set_permissions(&lock_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let out = run_sandboxed_update(
+        &bin,
+        home.path(),
+        &pinned_release_mock(),
+        &["--force", "--to", "99.0.0"],
+        "release-tarball",
+    );
+    std::fs::set_permissions(&lock_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(out.status.code(), Some(5), "{}", combined(&out));
+    assert!(
+        combined(&out).contains("cannot take the update lock"),
+        "{}",
+        combined(&out)
+    );
+    assert!(
+        !std::fs::read_to_string(&bin).is_ok_and(|s| s.starts_with("#!/bin/sh")),
+        "no swap may happen without the update lock"
+    );
+}

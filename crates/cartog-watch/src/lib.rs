@@ -427,6 +427,15 @@ fn watch_loop(
         Database::open_existing_rw(db_path)
             .context("failed to open database for watcher (existing-rw)")?
     } else {
+        // Checked here, with the watch slot held and consent granted, right
+        // before the migrating open: an older serve may hold the index.
+        cartog_registry::refuse_schema_upgrade(
+            std::path::Path::new(db_path),
+            config.pid_lock_dir.as_deref(),
+            |p| cartog_db::read_schema_version_at(p).ok(),
+            cartog_db::CURRENT_SCHEMA_VERSION,
+        )
+        .map_err(anyhow::Error::msg)?;
         Database::open(db_path, config.rag_config.resolved_dimension())
             .context("failed to open database for watcher")?
     };
@@ -1975,6 +1984,53 @@ mod tests {
         assert!(
             !db_path.parent().unwrap().exists(),
             "no .cartog/ after a shutdown-before-consent run"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn watcher_refuses_to_migrate_an_index_an_older_serve_still_holds() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let db_path = root.join(".cartog").join("db.sqlite");
+        let db = Database::open(&db_path, cartog_db::DEFAULT_EMBEDDING_DIM).unwrap();
+        db.set_metadata(
+            cartog_db::SCHEMA_VERSION_KEY,
+            &(cartog_db::CURRENT_SCHEMA_VERSION - 1).to_string(),
+        )
+        .unwrap();
+        drop(db);
+        let state_dir = tmp.path().join("state");
+        std::fs::create_dir(&state_dir).unwrap();
+        let mut older_serve = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("spawn sleep");
+        let serve_slot = cartog_registry::slot_for_db("serve", &db_path);
+        std::fs::write(
+            state_dir.join(format!("{serve_slot}.pid")),
+            older_serve.id().to_string(),
+        )
+        .unwrap();
+        let mut config = WatchConfig::new(root.clone());
+        config.allow_create = true;
+        config.pid_lock_dir = Some(state_dir);
+        config.pid_lock_slot = Some(cartog_registry::slot_for_db("watch", &db_path));
+
+        let result = watch_loop(
+            config,
+            &root,
+            &db_path.to_string_lossy(),
+            &Arc::new(AtomicBool::new(false)),
+        );
+        let _ = older_serve.kill();
+        let _ = older_serve.wait();
+
+        let err = result.expect_err("the watcher must not migrate under an older serve");
+        assert!(
+            err.to_string().contains("older cartog still has it open"),
+            "{err}"
         );
     }
 

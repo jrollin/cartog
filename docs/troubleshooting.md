@@ -333,7 +333,9 @@ unconfigured projects get no cartog output at all.
 For most users no action is needed: the SessionStart hook automatically arms
 the pinned update, and it applies at the next safe boundary (this session's
 end, or, if that is cancelled by teardown, the next SessionStart's catch-up).
-Run `/cartog-install` to apply it sooner instead of waiting.
+Run `/cartog-install` to apply it sooner instead of waiting. Sessions in other
+projects can keep the update blocked: choose **update now** there, or see
+[`cartog self update` refuses](#cartog-self-update-refuses-n-cartog-processes-are-running).
 
 A `cargo install cartog` binary cannot auto-update (`cartog self update`
 refuses it); the notice names the exact replacement command,
@@ -343,6 +345,32 @@ Set `CARTOG_NO_UPDATE_CHECK=1` to silence it entirely: the notice, the
 background update check, `doctor`'s version row, and the MCP server's drift
 sentence and `cartog_stats` pin fields. Asking for an update explicitly still
 works.
+
+### `cartog self update` refuses: "N cartog processes are running"
+
+Every running `cartog serve`/`watch` blocks an in-place update (exit `6`). The message lists each one by PID and project. Each open Claude Code session, editor with cartog configured, or terminal `cartog watch` is one of them.
+
+- **Wait** (Claude Code plugin): an armed update applies when the sessions end. `cartog self version` shows whether one is pending; if not, arm it first with `cartog self update --defer` (or `/cartog-install`).
+- **Update now** (macOS/Linux): `cartog self update --force` (add `--to <version>` to land on an armed or pinned version). Running processes keep the previous version until restarted, and the output lists them.
+- **Windows**: close every cartog process, then rerun `cartog self update` (with `--to <version>` for a pinned version).
+- **Binary from 0.35.1 or older** (no `--force`): run `/cartog-install` and choose update now, or rerun the installer from the [quickstart](tutorials/quickstart.md).
+- **"another cartog update is already in progress"**: another update holds the update lock. Retry once it finishes.
+
+Without the Claude plugin nothing applies an armed update (`--defer`, `cartog_update`), so use `--force` or close the processes.
+
+### `cartog self update` exits 5: "cannot write to <dir>"
+
+The install directory is not writable by your user (for example a root-owned `/usr/local/bin`). The message ends with a command to run in your own terminal:
+
+```bash
+curl -fsSL https://www.cartog.dev/install.sh | CARTOG_VERSION=<version> CARTOG_INSTALL_DIR='<dir>' sh
+```
+
+The installer asks for `sudo` only when the directory needs it. An agent cannot answer a `sudo` password prompt, so run it yourself.
+
+### "index … uses schema vN, older than this cartog's … an older cartog still has it open"
+
+A forced update (or a reinstall) replaced the binary while a `cartog serve`/`watch` started earlier still uses this index. Opening the index with the new version would upgrade its format under that older process, so cartog refuses: CLI commands and `cartog watch` print this error, and a new `cartog serve` exits with it (the MCP client reports the server failed to start; the reason is in its log). Restart or close the process the message names (usually a Claude Code session or editor), then rerun.
 
 ### My editor still starts a cartog MCP server after I stopped using cartog
 

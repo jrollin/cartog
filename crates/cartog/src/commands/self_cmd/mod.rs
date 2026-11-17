@@ -9,6 +9,7 @@
 mod download;
 mod exit;
 mod migrate;
+mod peers;
 mod update;
 mod version;
 
@@ -16,12 +17,13 @@ mod version;
 // items (cross-concern calls: run_check -> fetch_latest_version, run_upgrade ->
 // perform_upgrade, etc.).
 pub(crate) use download::*;
+pub(crate) use peers::*;
 pub(crate) use update::*;
 pub(crate) use version::*;
 
 // The public `cartog self` surface, re-exported for commands/mod.rs.
 pub use migrate::cmd_self_migrate_db;
-pub use update::{cmd_self_rollback, cmd_self_update, UpdateMode};
+pub use update::{cmd_self_rollback, cmd_self_update, UpdateFlags, UpdateMode};
 pub use version::cmd_self_version;
 
 // migrate's planning + peer-guard internals are referenced only by its tests.

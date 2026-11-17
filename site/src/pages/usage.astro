@@ -637,7 +637,7 @@ cartog serve --federated      <span class="comment"># also expose the 2 cross-pr
             <tr><td><code>cartog_rag_search</code></td><td>read</td><td>Semantic search</td></tr>
             <tr><td><code>cartog_list_projects</code></td><td>read · opt-in</td><td>The other cartog-indexed projects on this machine, each with its <code>db_path</code> and description</td></tr>
             <tr><td><code>cartog_search_all</code></td><td>read · opt-in</td><td>Find a symbol by name across the <em>other</em> indexed projects, grouped per project (filters: <code>under</code>, <code>lang</code>, <code>max_projects</code>)</td></tr>
-            <tr><td><code>cartog_update</code></td><td>write</td><td>Arm a deferred self-update (defaults to the plugin's pinned version when launched by the plugin)</td></tr>
+            <tr><td><code>cartog_update</code></td><td>write</td><td>Arm a deferred self-update (defaults to the plugin's pinned version when launched by the plugin). Only the plugin's hooks apply it; for other clients <code>apply</code> is <code>manual</code> and the result gives the user a <code>cartog self update --force</code> command to run</td></tr>
           </tbody>
         </table>
 
@@ -1401,6 +1401,8 @@ cartog search CreateOrder --db "$DB"</pre>
         <p>Manage the installed cartog binary in place: upgrade, inspect, or roll back. <code>cargo install cartog</code> users get an exit-3 refusal pointing at <code>cargo install cartog --force</code>; release-tarball installs swap atomically with SHA256 verification and a <code>&lt;bin&gt;.old</code> rollback slot.</p>
         <pre>cartog self update              <span class="comment"># upgrade to the latest stable</span>
 cartog self update --check      <span class="comment"># exit 1 if outdated, 0 if current</span>
+cartog self update --force      <span class="comment"># update even while serve/watch run (macOS/Linux)</span>
+cartog self update --to 0.36.0  <span class="comment"># target an exact version (also with --defer / --force)</span>
 cartog self version             <span class="comment"># version + describe + target + install source + last check</span>
 cartog self rollback            <span class="comment"># restore the previous binary</span>
 cartog self migrate-db          <span class="comment"># move legacy .cartog.db into .cartog/db.sqlite</span>
@@ -1411,6 +1413,21 @@ cartog self migrate-db --dry-run <span class="comment"># preview the move withou
   target:            aarch64-apple-darwin
   install source:    release-tarball
   last update check: 2026-05-27T14:50:47Z</pre>
+        <h3 id="self-update-running">Updating while cartog runs</h3>
+        <p>Each Claude Code session, editor, or terminal watcher runs a <code>cartog serve</code>/<code>watch</code>. While any runs, <code>cartog self update</code> exits 6 and lists every process by PID and project. A read-only <code>serve</code> secondary holds no lock, so it is not listed.</p>
+        <p><code>--force</code> swaps the binary anyway on macOS and Linux:</p>
+        <ul>
+          <li>running processes keep the previous version until restarted</li>
+          <li>until then, the new version refuses to open an index whose format it would upgrade under them (CLI commands, <code>cartog watch</code>, a new <code>cartog serve</code>), and names the process to restart</li>
+          <li>the output lists them (<code>stale_peers</code> in <code>--json</code>)</li>
+          <li>it still refuses a cargo install (exit 3), a concurrent update (exit 6), and an update lock it cannot create (exit 5)</li>
+          <li>it is unavailable on Windows, where a running <code>cartog.exe</code> cannot be replaced</li>
+        </ul>
+        <p>Without the Claude Code plugin nothing applies a deferred update (<code>--defer</code>, <code>cartog_update</code>), so use <code>--force</code> or close the processes.</p>
+        <p>An in-place update clears any armed deferred update, so the version you chose is not replaced when the session ends. <code>self update</code> never downgrades: a <code>--to</code> below the installed version exits 0 and points at <code>cartog self rollback</code> or the installer.</p>
+        <h3 id="self-update-permission">Permission denied</h3>
+        <p>When the install directory is not writable (for example a root-owned <code>/usr/local/bin</code>), the update exits 5 with a command to run in your own terminal. The installer asks for <code>sudo</code> only when needed:</p>
+        <pre>curl -fsSL https://www.cartog.dev/install.sh | CARTOG_VERSION=0.36.0 CARTOG_INSTALL_DIR='/usr/local/bin' sh</pre>
         <p>Auto-check runs at most once per 24h on interactive sessions; suppressed under <code>CARTOG_NO_UPDATE_CHECK=1</code>, non-TTY stdout, and inside <code>cartog serve</code>/<code>watch</code>. <code>migrate-db</code> refuses to overwrite an existing <code>.cartog/db.sqlite</code>, refuses to run while a peer process holds the lock <strong>for this project's database</strong> (a peer on an unrelated project does not block it), and refuses symlinked sources. See <a href="https://github.com/jrollin/cartog/blob/main/docs/updates.md">docs/updates.md</a> for the full exit-code matrix and state file location.</p>
 
         <h2 id="cmd-completions"><code>cartog completions &lt;shell&gt;</code></h2>

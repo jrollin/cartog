@@ -441,3 +441,70 @@ fn cartog_update_is_registered_and_not_gated_read_only() {
         "cartog_update must NOT be in the DB-write set that refuse_if_read_only gates"
     );
 }
+
+// ── schema-upgrade guard (a primary must not migrate under an older holder) ──
+
+/// An on-disk index stamped one schema version behind this binary.
+#[cfg(unix)]
+fn index_one_schema_behind(dir: &std::path::Path) -> std::path::PathBuf {
+    let db_path = dir.join("db.sqlite");
+    let db = Database::open(&db_path, cartog_db::DEFAULT_EMBEDDING_DIM).unwrap();
+    db.set_metadata(
+        cartog_db::SCHEMA_VERSION_KEY,
+        &(cartog_db::CURRENT_SCHEMA_VERSION - 1).to_string(),
+    )
+    .unwrap();
+    db_path
+}
+
+/// A live process other than this one; killed on drop.
+#[cfg(unix)]
+struct OtherProcess(std::process::Child);
+
+#[cfg(unix)]
+impl Drop for OtherProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[cfg(unix)]
+fn hold_watch_lock(state_dir: &std::path::Path, db_path: &std::path::Path) -> OtherProcess {
+    let child = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .expect("spawn sleep");
+    let slot = cartog_registry::slot_for_db("watch", db_path);
+    std::fs::write(
+        state_dir.join(format!("{slot}.pid")),
+        child.id().to_string(),
+    )
+    .unwrap();
+    OtherProcess(child)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_primary_refuses_to_migrate_an_index_an_older_watch_still_holds() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = index_one_schema_behind(dir.path());
+    let _watch = hold_watch_lock(dir.path(), &db_path);
+
+    let err = refuse_schema_upgrade_under_older_holder(&db_path, Some(dir.path()))
+        .expect_err("a primary must not migrate under an older watch");
+
+    assert!(
+        err.to_string().contains("older cartog still has it open"),
+        "{err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_primary_migrates_an_older_index_nobody_else_holds() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = index_one_schema_behind(dir.path());
+
+    assert!(refuse_schema_upgrade_under_older_holder(&db_path, Some(dir.path())).is_ok());
+}

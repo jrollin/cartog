@@ -595,9 +595,17 @@ fn main() -> Result<()> {
                 to,
                 apply_pending,
                 at_startup,
+                force,
                 quiet,
             } => commands::cmd_self_update(
-                commands::UpdateMode::from_flags(check, defer, to, apply_pending, at_startup),
+                commands::UpdateMode::from_flags(commands::UpdateFlags {
+                    check,
+                    defer,
+                    to,
+                    apply_pending,
+                    at_startup,
+                    force,
+                }),
                 &db_path,
                 quiet,
                 cli.json,

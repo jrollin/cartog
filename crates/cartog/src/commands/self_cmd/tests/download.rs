@@ -242,3 +242,81 @@ fn sweep_removes_old_staging_dirs_and_keeps_fresh() {
     assert!(fresh.exists(), "fresh staging dir must survive");
     assert!(unrelated.exists(), "non-cartog dirs must not be touched");
 }
+
+fn denied() -> std::io::Error {
+    std::io::Error::from(std::io::ErrorKind::PermissionDenied)
+}
+
+#[test]
+fn permission_and_read_only_failures_are_permission_errors() {
+    assert!(is_permission_error(&denied()));
+    assert!(is_permission_error(&std::io::Error::from(
+        std::io::ErrorKind::ReadOnlyFilesystem
+    )));
+    assert!(!is_permission_error(&std::io::Error::from(
+        std::io::ErrorKind::NotFound
+    )));
+}
+
+#[test]
+fn permission_hint_gives_a_pasteable_installer_command_pinned_to_the_target() {
+    let hint = permission_hint(Path::new("/usr/local/bin"), "0.36.0", &denied(), false);
+    assert!(hint.contains("cannot write to /usr/local/bin"), "{hint}");
+    assert!(
+        hint.contains(
+            "curl -fsSL https://www.cartog.dev/install.sh | CARTOG_VERSION=0.36.0 \
+             CARTOG_INSTALL_DIR='/usr/local/bin' sh"
+        ),
+        "{hint}"
+    );
+}
+
+#[test]
+fn permission_hint_quotes_an_install_dir_with_spaces_and_quotes() {
+    let hint = permission_hint(Path::new("/Users/a b/it's/bin"), "0.36.0", &denied(), false);
+    assert!(
+        hint.contains(r"CARTOG_INSTALL_DIR='/Users/a b/it'\''s/bin' sh"),
+        "{hint}"
+    );
+}
+
+#[test]
+fn the_windows_permission_hint_pins_the_target_version() {
+    let hint = permission_hint(Path::new(r"C:\cartog"), "0.36.0", &denied(), true);
+    assert!(hint.contains("`cartog self update --to 0.36.0`"), "{hint}");
+}
+
+#[test]
+fn installed_path_keeps_a_normal_binary_path() {
+    let p = Path::new("/usr/local/bin/cartog");
+    assert_eq!(installed_path_for(p), p);
+}
+
+#[test]
+fn installed_path_maps_a_renamed_or_deleted_running_binary_to_the_installed_one() {
+    for running in [
+        "/usr/local/bin/cartog.old",
+        "/usr/local/bin/cartog.old (deleted)",
+        "/usr/local/bin/cartog (deleted)",
+    ] {
+        assert_eq!(
+            installed_path_for(Path::new(running)),
+            Path::new("/usr/local/bin/cartog"),
+            "{running}"
+        );
+    }
+}
+
+#[test]
+fn the_version_is_read_from_the_first_line_of_version_output() {
+    assert_eq!(
+        parse_version_output("cartog 0.36.0\ndescribe: v0.36.0\n").as_deref(),
+        Some("0.36.0")
+    );
+}
+
+#[test]
+fn unrecognised_version_output_yields_no_version() {
+    assert_eq!(parse_version_output("not cartog\n"), None);
+    assert_eq!(parse_version_output("cartog v0.36\n"), None);
+}

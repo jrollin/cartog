@@ -9,9 +9,13 @@ use super::*;
 use crate::state::{self, State};
 use cartog::time_fmt::rfc3339_now;
 
+/// Download, verify, swap, and smoke-test `latest`. `stale_peers` are the
+/// serve/watch processes a forced swap ran under; they are reported as still on
+/// the previous version.
 pub(crate) fn perform_upgrade(
     current: &str,
     latest: &str,
+    stale_peers: &[RunningPeer],
     quiet: bool,
     json: bool,
 ) -> std::result::Result<(), UpgradeError> {
@@ -42,7 +46,7 @@ pub(crate) fn perform_upgrade(
     }
 
     // Stage in install_dir (same FS) — default $TMPDIR could trigger EXDEV on rename.
-    let current_bin = std::env::current_exe()
+    let current_bin = installed_binary_path()
         .map_err(|e| UpgradeError::Filesystem(format!("cannot resolve current exe: {e}")))?;
     let install_dir = current_bin.parent().ok_or_else(|| {
         UpgradeError::Filesystem(format!(
@@ -57,10 +61,14 @@ pub(crate) fn perform_upgrade(
         .prefix(".cartog-update-")
         .tempdir_in(install_dir)
         .map_err(|e| {
-            UpgradeError::Filesystem(format!(
-                "failed to create staging dir under {}: {e}",
-                install_dir.display(),
-            ))
+            if is_permission_error(&e) {
+                UpgradeError::Filesystem(permission_hint(install_dir, latest, &e, cfg!(windows)))
+            } else {
+                UpgradeError::Filesystem(format!(
+                    "failed to create staging dir under {}: {e}",
+                    install_dir.display(),
+                ))
+            }
         })?;
     let archive_path = staging.path().join(&archive_name);
     std::fs::write(&archive_path, &archive_bytes)
@@ -73,7 +81,12 @@ pub(crate) fn perform_upgrade(
     self_update::Move::from_source(&new_bin)
         .replace_using_temp(&backup_path)
         .to_dest(&current_bin)
-        .map_err(|e| UpgradeError::Filesystem(format!("atomic swap failed: {e}")))?;
+        .map_err(|e| match e {
+            self_update::errors::Error::Io(ref io) if is_permission_error(io) => {
+                UpgradeError::Filesystem(permission_hint(install_dir, latest, io, cfg!(windows)))
+            }
+            other => UpgradeError::Filesystem(format!("atomic swap failed: {other}")),
+        })?;
 
     if let Err(smoke_err) = smoke_test(&current_bin) {
         match std::fs::rename(&backup_path, &current_bin) {
@@ -111,21 +124,122 @@ pub(crate) fn perform_upgrade(
 
     if !quiet {
         if json {
-            let payload = serde_json::json!({
+            let mut payload = serde_json::json!({
                 "status": "updated",
                 "current": current,
                 "latest": latest,
                 "backup": backup_path.to_string_lossy(),
             });
+            if !stale_peers.is_empty() {
+                payload["stale_peers"] = serde_json::json!(stale_peers);
+            }
             println!("{payload}");
         } else {
             println!(
                 "cartog: updated {current} -> {latest} (previous binary saved at {})",
                 backup_path.display()
             );
+            if !stale_peers.is_empty() {
+                println!("{}", stale_peers_message(stale_peers, latest));
+            }
         }
     }
     Ok(())
+}
+
+/// The binary installed where this process was started from.
+///
+/// After another updater swapped the binary, Linux reports this process's
+/// executable at its renamed path (`<bin>.old`, or `<bin>.old (deleted)`, or
+/// `<bin> (deleted)` after an installer replaced it). Swapping there would
+/// overwrite the rollback copy instead of the installed binary.
+pub(crate) fn installed_binary_path() -> std::io::Result<PathBuf> {
+    std::env::current_exe().map(|running| installed_path_for(&running))
+}
+
+/// Map a running executable's reported path back to the installed binary.
+#[must_use]
+pub(crate) fn installed_path_for(running: &Path) -> PathBuf {
+    let Some(name) = running.file_name().and_then(|n| n.to_str()) else {
+        return running.to_path_buf();
+    };
+    let name = name.strip_suffix(" (deleted)").unwrap_or(name);
+    let name = name.strip_suffix(".old").unwrap_or(name);
+    running.with_file_name(name)
+}
+
+/// The version `bin --version` reports, or `None` if it cannot be run or read
+/// within [`SMOKE_TEST_TIMEOUT`].
+pub(crate) fn installed_binary_version(bin: &Path) -> Option<String> {
+    let mut child = std::process::Command::new(bin)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + SMOKE_TEST_TIMEOUT;
+    loop {
+        match child.try_wait().ok()? {
+            Some(status) if status.success() => break,
+            Some(_) => return None,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+    let mut out = String::new();
+    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut out).ok()?;
+    parse_version_output(&out)
+}
+
+/// `cartog 0.36.0` (first line of `--version`) → `0.36.0`.
+#[must_use]
+pub(crate) fn parse_version_output(out: &str) -> Option<String> {
+    let version = out.lines().next()?.strip_prefix("cartog ")?.trim();
+    is_stable_semver(version).then(|| version.to_string())
+}
+
+/// Whether an I/O failure means this user cannot write the install directory.
+pub(crate) fn is_permission_error(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+    )
+}
+
+/// Single-quote `s` for a POSIX shell, so a pasted command survives spaces.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// The failure message when cartog cannot write its own install directory,
+/// ending with a command the user can run themselves. An agent often cannot
+/// (no sudo password, sandboxed shell), so the command must be copy-pasteable.
+pub(crate) fn permission_hint(
+    install_dir: &Path,
+    target: &str,
+    err: &std::io::Error,
+    windows: bool,
+) -> String {
+    let dir = install_dir.display().to_string();
+    if windows {
+        format!(
+            "cannot write to {dir} ({err}). Run `cartog self update --to {target}` from a \
+             terminal opened as administrator, or download the .zip for {target} from \
+             https://github.com/jrollin/cartog/releases"
+        )
+    } else {
+        format!(
+            "cannot write to {dir} ({err}). Run this in your own terminal; it asks for sudo \
+             only if needed: curl -fsSL https://www.cartog.dev/install.sh | \
+             CARTOG_VERSION={target} CARTOG_INSTALL_DIR={} sh",
+            shell_quote(&dir),
+        )
+    }
 }
 
 /// Emit a one-line status message in the right shape for the user.

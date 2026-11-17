@@ -8,6 +8,8 @@
 |---------|--------------|
 | `cartog self update` | Upgrade in place to the latest stable release |
 | `cartog self update --check` | Check whether an update exists; do nothing else |
+| `cartog self update --force` | Upgrade in place even while `cartog serve`/`watch` processes run (macOS/Linux); they keep the old version until restarted |
+| `cartog self update --to <version>` | Target an exact version instead of the latest (also with `--defer` and `--force`) |
 | `cartog self update --defer` | Arm a deferred update (record the target, do **not** swap); succeeds even while a peer runs |
 | `cartog self update --apply-pending` | Apply a previously-armed deferred update once no peer holds the lock |
 | `cartog self version` | Print version, `describe` build string, target triple, install source, last check timestamp, pending update |
@@ -21,7 +23,51 @@ cartog self update
 
 Downloads the matching tarball/zip for your platform, verifies its SHA256 against the release's `SHA256SUMS` asset, atomically swaps the binary in place, and runs a smoke test. The previous binary is preserved as a sibling `<bin>.old` for one rollback.
 
-If a peer `cartog serve` or `cartog watch` is still running, the upgrade refuses (exit `6`) and names the live process so you can stop it first. PID files at the platform state directory (see below) are the detection mechanism.
+If any `cartog serve` or `cartog watch` is still running, the upgrade refuses with exit `6` and lists every such process:
+
+- each entry shows the PID and the project root from the [project registry](explanation/project-registry.md), or the lock slot when the project is not registered
+- the list shows 5 processes, then "and N more"
+- a read-only `serve` secondary holds no PID lock file, so it is not listed
+
+Stop them and retry, or use `--force`.
+
+### Update while cartog is running (`--force`)
+
+```bash
+cartog self update --force               # latest stable, even with serve/watch running
+cartog self update --force --to 0.36.0   # an exact version
+```
+
+On macOS and Linux the swap is an atomic rename, so running processes keep the old binary open:
+
+- they keep working on the **previous version** until their session restarts
+- the output lists them (`stale_peers` in `--json`)
+- until they restart, the new version refuses to open an index whose format it would upgrade under them (CLI commands, `cartog watch`, and a new `cartog serve`), and names the process to restart
+- an unlisted read-only secondary also stays on the old version, and takes over as writer if its primary exits
+
+`--force` only skips the running-process check. It still refuses:
+
+- a cargo-installed binary (exit `3`): run `cargo install cartog --force`
+- a concurrent update from another `cartog self update` or a hook's `--apply-pending` (exit `6`, "another cartog update is already in progress"): retry once it finishes
+- an update lock it cannot create in the state directory (exit `5`): it never swaps unserialized
+- Windows (exit `6`): a running `cartog.exe` cannot be replaced, so close every cartog process first
+
+### Choosing a version (`--to`)
+
+- an in-place update clears any armed deferred update, so the version you chose is not replaced when the session ends
+- after taking the update lock it re-reads the installed version: if another update already reached the target it stops with exit `0`, and if it installed something else it stops with exit `6` so you can rerun
+- `self update` never downgrades: a `--to` below the installed version exits `0` and says so, pointing at `cartog self rollback` or the installer with `CARTOG_VERSION`
+
+### Permission denied
+
+When cartog cannot write its own install directory (for example a root-owned `/usr/local/bin`), it exits `5`. The message ends with a command to run yourself, pinned to the target version:
+
+```bash
+curl -fsSL https://www.cartog.dev/install.sh | CARTOG_VERSION=0.36.0 CARTOG_INSTALL_DIR='/usr/local/bin' sh
+```
+
+- the installer asks for `sudo` only when the directory needs it
+- run it in your own terminal: an agent cannot answer a `sudo` password prompt
 
 ### Output formats
 
@@ -40,8 +86,8 @@ cartog self update --check --quiet      # no output; exit code is the only signa
 | `2` | Network or parse error reaching `api.github.com` |
 | `3` | Refused, binary was installed via `cargo install`. Run `cargo install cartog --force` instead |
 | `4` | Checksum mismatch; no filesystem mutation, original binary intact |
-| `5` | New binary failed smoke test; previous binary restored |
-| `6` | A peer `cartog serve`/`watch` is running |
+| `5` | New binary failed smoke test, previous binary restored; or the install directory is not writable (the message ends with an installer command to run yourself); or the update lock cannot be created in the state directory |
+| `6` | `cartog serve`/`watch` processes are running (all listed; `--force` skips this check on macOS/Linux), another update holds the update lock, or another update replaced the binary while this one waited (rerun) |
 
 ## Deferred update (in-session)
 
@@ -100,6 +146,15 @@ When a new plugin version ships, here is what each cohort experiences:
 - **New user**, `cartog serve` can't start the first session (no binary yet); the SessionStart hook forks `install.sh` pinned to the plugin version (downloads the release tarball, **verifies its SHA-256**, installs). cartog tools are live from the **next** session. `/cartog-install` installs synchronously if you don't want to wait.
 - **Existing user, passive, `>= 0.20`**, the SessionStart hook auto-arms the pinned version on drift (`--defer --to $PLUGIN_VERSION`) as soon as it is seen, not only at SessionEnd, so a session that never ends cleanly still converges. Arming never applies in the same run; the apply happens at SessionEnd once the serve lock clears, or at the next SessionStart's background catch-up if that SessionEnd apply was cancelled by teardown. Either way the next SessionStart confirms "cartog updated to X". No manual action required.
 - **Existing user, active**, running `/cartog-install` (or the `cartog_update` tool) mid-session arms the pin immediately; it lands at the same SessionEnd boundary.
+- **Existing user blocked by other sessions**, sessions in other projects hold their locks for as long as they stay open, so an armed update can wait indefinitely. `/cartog-install` offers **update now**:
+  - with `--force` support: `cartog self update --force --to $PLUGIN_VERSION`
+  - with a binary from 0.35.1 or older: the bundled `install.sh` pinned to `$PLUGIN_VERSION`, which writes a new file instead of overwriting the running one
+  - either way, running sessions keep the old version until restarted
+- **User without the Claude plugin** (Cursor, VS Code, a terminal `cartog watch`), no hook runs `--apply-pending`, so `--defer` and the `cartog_update` tool only arm the update. To apply it:
+  - macOS/Linux: `cartog self update --force --to <version>`
+  - any platform: close every cartog process, then `cartog self update --to <version>`
+  - `<version>` is the armed target (`cartog self version` shows it); without `--to` the latest release is installed instead
+  - binary from 0.35.1 or older: rerun the [public installer](tutorials/quickstart.md)
 - **Existing user, `0.14`–`0.20`**, these binaries have `cartog self update` but predate the deferred flags (`--defer`/`--apply-pending` landed in 0.20.0). The SessionEnd hook probes capability and converges them via the bundled `install.sh` pinned to `$PLUGIN_VERSION`, the same pin-exact path as the legacy cohort. (A plain `cartog self update` would fetch the **latest** release, overshooting the pin with no `--to` to constrain it on those versions.) Without this, firing the deferred flags at them errored with clap exit `2` and looped forever as a false "transient" failure.
 - **cargo-installed user**, `cartog self update` refuses (exit `3`) because it must not clobber a cargo-managed binary. The SessionStart drift line and the SessionEnd breadcrumb both tell this cohort to run `cargo install cartog --force` (not `/cartog-install`).
 - **Legacy `<0.14` user**, auto-upgraded at SessionEnd via `install.sh` (that cohort predates `cartog self update`).
@@ -107,7 +162,7 @@ When a new plugin version ships, here is what each cohort experiences:
 Notes and edge cases:
 
 - **Confirmation latency**, for the armed/active path the full loop spans two session boundaries (arm this session → apply at SessionEnd → confirm next SessionStart). There is no mid-session confirmation; SessionEnd hook output goes to the session log, not the chat.
-- **Multi-window**, a second Claude Code window holding the serve lock defers the apply (exit `6`, intent kept) until that window closes; the SessionStart drift line says so. The separate `drift_notice.sh` notice is deduplicated across windows and projects by a 24-hour marker keyed on the (installed, pin) pair, so a second window open on the same drifted binary does not repeat the notice. Windows that start at the same instant are serialised by an atomic claim, so exactly one of them prints; a claim left behind by a killed run is reclaimed after an hour.
+- **Multi-window**, a second Claude Code window holding the serve lock defers the apply (exit `6`, intent kept) until that window closes; the SessionStart drift line says so. To update without closing it, run `/cartog-install` and choose **update now**, or `cartog self update --force`. The separate `drift_notice.sh` notice is deduplicated across windows and projects by a 24-hour marker keyed on the (installed, pin) pair, so a second window open on the same drifted binary does not repeat the notice. Windows that start at the same instant are serialised by an atomic claim, so exactly one of them prints; a claim left behind by a killed run is reclaimed after an hour.
 - **Release timing**, `release.sh` pushes the version bump and tag before the release workflow finishes building the tarballs. In the few-minute build window the pinned tarball can 404; armed paths self-heal (network failure keeps the intent and retries next session), and the marketplace only serves new plugin files to users after the build completes in practice.
 - **A broken release**, a checksum (`4`) or smoke-test (`7`) failure clears the intent, restores the previous binary, and surfaces an actionable message rather than retry-looping. If a swap is interrupted (e.g. SIGKILL mid-rename), the previous binary is preserved at `<bin>.old`, recover with `cartog self rollback`.
 
