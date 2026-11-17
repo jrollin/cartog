@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.36.0] - 2026-11-17
+
+### Bug Fixes
+
+- **self**: Address review on update locking and schema guard ([`efc2a38`](https://github.com/jrollin/cartog/commit/efc2a38ccd36a17c90f83e3c50469b8b9be11fee))
+
+### Build
+
+- **deps**: Bump astro from 7.3.8 to 7.4.12 in /site ([`2fcacd3`](https://github.com/jrollin/cartog/commit/2fcacd3b93a283a6d3e83e71bf1df35be93ec19b))
+- **deps**: Bump taiki-e/install-action ([`4014aac`](https://github.com/jrollin/cartog/commit/4014aacffe2c126ce5509b9e4681a90005a37d2b))
+
+### Features
+
+- **self**: Add self update --force and guard mixed-version peers ([`f8cc429`](https://github.com/jrollin/cartog/commit/f8cc429ef1161be869984ed30e18ab00fe4ce909))
+
+### Testing
+
+- **self**: Wait out ETXTBSY on freshly copied binaries ([`20d5c3f`](https://github.com/jrollin/cartog/commit/20d5c3fdbae378cee0f9fa52e79199f7c3c1dd39))
+
 ## [0.35.1] - 2026-11-13
 
 ### Bug Fixes
