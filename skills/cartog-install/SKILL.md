@@ -93,13 +93,22 @@ binaries reject `--force`, and reject `--to` without `--defer`:
 cartog self update --help 2>&1 | grep -q -- '--force' && echo "HAS_FORCE"
 ```
 
-Then run the in-place update, substituting `$PLUGIN_VERSION`:
+Without `HAS_FORCE` (binary 0.35.1 or older), do not run `cartog self update`:
+it can only target the latest release and would overshoot the pin. Ask the
+user to **wait** (`cartog self update --defer --to $PLUGIN_VERSION`, applied
+when the session ends) or **update now** with the bundled installer pinned to
+the plugin version, which writes a new file rather than overwriting the
+running one:
 
-- `HAS_FORCE`: `cartog self update --to $PLUGIN_VERSION` (lands on the pin).
-- Otherwise: `cartog self update` (an old binary can only target the latest
-  release here).
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/skills/cartog/scripts/install.sh" $PLUGIN_VERSION
+```
 
-Relay its output to the user verbatim, then handle the exit code:
+After the installer, tell the user to restart every Claude Code session. On
+Windows the installer does not apply: see **Exit 6: wait or update now**.
+
+With `HAS_FORCE`, run `cartog self update --to $PLUGIN_VERSION` (lands on the
+pin). Relay its output to the user verbatim, then handle the exit code:
 
 | Exit | Meaning | What to do |
 |---|---|---|
@@ -127,9 +136,13 @@ Ask the user, with waiting as the default:
      one: `bash "${CLAUDE_PLUGIN_ROOT}/skills/cartog/scripts/install.sh" $PLUGIN_VERSION`.
      Then tell the user to restart every Claude Code session. The new binary
      has `--force` for next time.
-   - On Windows neither works while cartog runs: tell the user to close every
-     Claude Code session and editor using cartog, then run
-     `cartog self update --to $PLUGIN_VERSION` in a terminal.
+   - On Windows nothing replaces a running `cartog.exe`: tell the user to close
+     every Claude Code session and editor using cartog, then, in a terminal:
+     - `HAS_FORCE`: `cartog self update --to $PLUGIN_VERSION`
+     - no `--force`: download the `.zip` for `$PLUGIN_VERSION` from
+       `https://github.com/jrollin/cartog/releases/tag/v$PLUGIN_VERSION` and
+       replace `cartog.exe` with the one inside (an old binary rejects `--to`
+       without `--defer`).
 
 #### Commands you cannot run
 

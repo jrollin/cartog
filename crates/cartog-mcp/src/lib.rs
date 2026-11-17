@@ -627,13 +627,29 @@ fn parse_arm_output(output: &std::process::Output, plugin: bool) -> UpdateResult
                 .to_string(),
             }
         }
-        "up-to-date" => UpdateResult {
-            current: current.clone(),
-            target: None,
-            status: "up-to-date".to_string(),
-            apply: "n/a".to_string(),
-            message: format!("cartog is already up to date ({current})."),
-        },
+        "up-to-date" => {
+            // The child is the installed binary, which a forced update may have
+            // moved past the version this server still runs.
+            let installed = obj
+                .get("current")
+                .and_then(|v| v.as_str())
+                .map_or_else(|| current.clone(), str::to_string);
+            let message = if installed == current {
+                format!("cartog is already up to date ({current}).")
+            } else {
+                format!(
+                    "cartog {installed} is installed and up to date, but this MCP server still \
+                     runs {current}. Restart the session to use {installed}."
+                )
+            };
+            UpdateResult {
+                current: installed,
+                target: None,
+                status: "up-to-date".to_string(),
+                apply: "n/a".to_string(),
+                message,
+            }
+        }
         "cargo" => UpdateResult {
             current,
             target: None,

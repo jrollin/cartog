@@ -59,7 +59,7 @@ pub use model::{
 };
 pub use path::{registry_path, REGISTRY_ENV};
 pub use read::{list_projects, list_projects_at};
-pub use schema_guard::{schema_upgrade_blocker, schema_upgrade_refusal};
+pub use schema_guard::{refuse_schema_upgrade, schema_upgrade_blocker, schema_upgrade_refusal};
 pub use slot::{detect_live_serve_peer, slot_for_db};
 pub use state_dir::{default_state_dir, default_state_file};
 pub use write::record_project;

@@ -536,6 +536,10 @@ pub fn read_schema_version_at(path: &std::path::Path) -> anyhow::Result<u32> {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )
     .with_context(|| format!("open {} read-only for schema check", path.display()))?;
+    // A brief writer lock must not read as "unknown version": callers treat an
+    // error as "no check possible" and go on to migrate.
+    conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS.into()))
+        .with_context(|| format!("set busy timeout for schema check on {}", path.display()))?;
     Ok(read_schema_version(&conn)?)
 }
 

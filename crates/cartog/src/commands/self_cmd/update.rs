@@ -270,7 +270,7 @@ fn run_upgrade(force: bool, target_override: Option<&str>, quiet: bool, json: bo
     // updater's lock; it no longer counts as a peer, so this is the guard now.
     let _update_lock = match acquire_update_lock() {
         Ok(lock) => lock,
-        Err(holder) => {
+        Err(UpdateLockError::Held(holder)) => {
             emit_upgrade_message(
                 quiet,
                 json,
@@ -282,7 +282,34 @@ fn run_upgrade(force: bool, target_override: Option<&str>, quiet: bool, json: bo
             );
             return exit::PEER_RUNNING;
         }
+        Err(UpdateLockError::Unavailable(msg)) => {
+            emit_upgrade_message(quiet, json, "filesystem-failed", &msg);
+            return exit::DISK_OR_PERMISSION_FAILED;
+        }
     };
+
+    // Another updater may have finished while this one waited for the lock.
+    match installed_check(current, &latest) {
+        InstalledCheck::Unchanged => {}
+        InstalledCheck::AtOrPastTarget(installed) => {
+            if !quiet {
+                println!(
+                    "{}",
+                    up_to_date_message(&installed, &latest, target_override.is_some())
+                );
+            }
+            return exit::SUCCESS;
+        }
+        InstalledCheck::Changed(installed) => {
+            emit_upgrade_message(
+                quiet,
+                json,
+                "installed-changed",
+                &installed_changed_message(current, &installed),
+            );
+            return exit::PEER_RUNNING;
+        }
+    }
 
     match perform_upgrade(current, &latest, &peers, quiet, json) {
         Ok(()) => {
@@ -383,23 +410,91 @@ fn resolve_target(target_override: Option<&str>, quiet: bool, json: bool) -> Res
     }
 }
 
+/// Why the update lock was not taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UpdateLockError {
+    /// Another updater (this PID) holds it.
+    Held(u32),
+    /// The lock file could not be created: refuse rather than swap unserialized.
+    Unavailable(String),
+}
+
 /// Take the machine-wide [`APPLY_LOCK_SLOT`] that serializes binary swaps.
 ///
-/// `Err(pid)` when another updater holds it. An I/O failure (or no state dir)
-/// yields `Ok(None)`: the swap proceeds unserialized rather than being blocked
-/// by a lock it cannot create.
-pub(crate) fn acquire_update_lock() -> Result<Option<cartog_process_lock::ProcessLock>, u32> {
+/// `Ok(None)` only when no state dir resolves at all (no lock can exist, and
+/// no peer could be detected either).
+pub(crate) fn acquire_update_lock(
+) -> Result<Option<cartog_process_lock::ProcessLock>, UpdateLockError> {
     let Some(dir) = state::default_state_dir() else {
         return Ok(None);
     };
     match cartog_process_lock::ProcessLock::acquire(&dir, APPLY_LOCK_SLOT) {
         Ok(lock) => Ok(Some(lock)),
-        Err(cartog_process_lock::AcquireError::Held(holder)) => Err(holder.pid),
+        Err(cartog_process_lock::AcquireError::Held(holder)) => {
+            Err(UpdateLockError::Held(holder.pid))
+        }
         Err(cartog_process_lock::AcquireError::Io(e)) => {
-            tracing::warn!(error = %e, "update lock unavailable; proceeding unserialized");
-            Ok(None)
+            Err(UpdateLockError::Unavailable(format!(
+                "cannot take the update lock in {} ({e}); refusing to replace the binary \
+                 without it. Check that the directory is writable, then retry.",
+                dir.display()
+            )))
         }
     }
+}
+
+/// What the binary on disk says once this process holds the update lock.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InstalledCheck {
+    /// Still the version this process runs (or unreadable): go ahead.
+    Unchanged,
+    /// Another updater already installed this version, at or past the target.
+    AtOrPastTarget(String),
+    /// Another updater installed this version, below the target.
+    Changed(String),
+}
+
+/// Pure decision behind [`installed_check`].
+#[must_use]
+pub(crate) fn classify_installed(
+    running: &str,
+    installed: Option<&str>,
+    target: &str,
+) -> InstalledCheck {
+    match installed {
+        None => InstalledCheck::Unchanged,
+        Some(v) if v == running => InstalledCheck::Unchanged,
+        Some(v) if compare_stable_versions(v, target) != std::cmp::Ordering::Less => {
+            InstalledCheck::AtOrPastTarget(v.to_string())
+        }
+        Some(v) => InstalledCheck::Changed(v.to_string()),
+    }
+}
+
+/// Re-read the installed binary's version: a process started before another
+/// updater finished still carries its old compiled version.
+fn installed_check(running: &str, target: &str) -> InstalledCheck {
+    let installed = installed_binary_path()
+        .ok()
+        .and_then(|bin| installed_binary_version(&bin));
+    classify_installed(running, installed.as_deref(), target)
+}
+
+/// Whether the state file at `state_path` still arms exactly `target`.
+#[must_use]
+pub(crate) fn pending_target_is(state_path: &Path, target: &str) -> bool {
+    State::load_from(state_path)
+        .pending_update
+        .is_some_and(|p| p.target_version == target)
+}
+
+/// The refusal when another updater changed the binary while this one waited.
+#[must_use]
+pub(crate) fn installed_changed_message(running: &str, installed: &str) -> String {
+    format!(
+        "another update replaced cartog {running} with {installed} while this one waited; \
+         rerun `cartog self update` to continue from {installed}"
+    )
 }
 
 /// Categorised error so [`run_upgrade`] can map to the right exit code.
@@ -881,12 +976,49 @@ fn run_apply_pending(at_startup: bool, db_path: &Path, quiet: bool, json: bool) 
     // `<bin>.old` rollback target. Held → another apply is in flight; treat as a
     // benign no-op (it will land the swap and clear the intent). Held by RAII
     // until this function returns.
-    let Ok(_apply_lock) = acquire_update_lock() else {
+    let _apply_lock = match acquire_update_lock() {
+        Ok(lock) => lock,
+        Err(UpdateLockError::Held(_)) => {
+            if !quiet && !json {
+                println!("cartog: another deferred update is already in progress; skipping.");
+            }
+            return exit::SUCCESS;
+        }
+        Err(UpdateLockError::Unavailable(msg)) => {
+            emit_upgrade_message(quiet, json, "filesystem-failed", &msg);
+            return exit::DISK_OR_PERMISSION_FAILED;
+        }
+    };
+
+    // The intent read above may be stale: an explicit `self update` that held
+    // the lock meanwhile clears it, and a re-arm changes it.
+    if !pending_target_is(&state_path, &target) {
         if !quiet && !json {
-            println!("cartog: another deferred update is already in progress; skipping.");
+            println!("cartog: the deferred update to {target} was cleared or replaced; skipping.");
         }
         return exit::SUCCESS;
-    };
+    }
+    match installed_check(current, &target) {
+        InstalledCheck::Unchanged => {}
+        InstalledCheck::AtOrPastTarget(installed) => {
+            let mut state = State::load_from(&state_path);
+            state.pending_update = None;
+            let _ = state.save_to(&state_path);
+            if !quiet && !json {
+                println!("cartog: already at {installed}; cleared deferred update ({target}).");
+            }
+            return exit::SUCCESS;
+        }
+        InstalledCheck::Changed(installed) => {
+            emit_upgrade_message(
+                quiet,
+                json,
+                "installed-changed",
+                &installed_changed_message(current, &installed),
+            );
+            return exit::PEER_RUNNING;
+        }
+    }
 
     let err = match perform_upgrade(current, &target, &[], quiet, json) {
         Ok(()) => {

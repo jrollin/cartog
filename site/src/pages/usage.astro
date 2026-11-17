@@ -1420,7 +1420,7 @@ cartog self migrate-db --dry-run <span class="comment"># preview the move withou
           <li>running processes keep the previous version until restarted</li>
           <li>until then, the new version refuses to open an index whose format it would upgrade under them (CLI commands, <code>cartog watch</code>, a new <code>cartog serve</code>), and names the process to restart</li>
           <li>the output lists them (<code>stale_peers</code> in <code>--json</code>)</li>
-          <li>it still refuses a cargo install (exit 3) and a concurrent update (exit 6)</li>
+          <li>it still refuses a cargo install (exit 3), a concurrent update (exit 6), and an update lock it cannot create (exit 5)</li>
           <li>it is unavailable on Windows, where a running <code>cartog.exe</code> cannot be replaced</li>
         </ul>
         <p>Without the Claude Code plugin nothing applies a deferred update (<code>--defer</code>, <code>cartog_update</code>), so use <code>--force</code> or close the processes.</p>

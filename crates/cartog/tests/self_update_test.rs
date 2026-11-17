@@ -2148,3 +2148,40 @@ fn the_arm_message_pins_the_force_command_to_the_armed_version() {
         combined(&out)
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn an_update_refuses_to_swap_when_the_update_lock_cannot_be_created() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let install_dir = tempfile::TempDir::new().unwrap();
+    let home = tempfile::TempDir::new().unwrap();
+    // Root ignores mode 0o555, so this setup cannot block the lock file.
+    if std::fs::metadata(home.path()).unwrap().uid() == 0 {
+        eprintln!("skipped: running as root, directory permissions are not enforced");
+        return;
+    }
+    let bin = copy_cartog_into(install_dir.path());
+    let lock_dir = isolated_lock_dir(home.path());
+    std::fs::create_dir_all(&lock_dir).unwrap();
+    std::fs::set_permissions(&lock_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let out = run_sandboxed_update(
+        &bin,
+        home.path(),
+        &pinned_release_mock(),
+        &["--force", "--to", "99.0.0"],
+        "release-tarball",
+    );
+    std::fs::set_permissions(&lock_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(out.status.code(), Some(5), "{}", combined(&out));
+    assert!(
+        combined(&out).contains("cannot take the update lock"),
+        "{}",
+        combined(&out)
+    );
+    assert!(
+        !std::fs::read_to_string(&bin).is_ok_and(|s| s.starts_with("#!/bin/sh")),
+        "no swap may happen without the update lock"
+    );
+}

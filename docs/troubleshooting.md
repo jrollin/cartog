@@ -350,9 +350,9 @@ works.
 
 Every running `cartog serve`/`watch` blocks an in-place update (exit `6`). The message lists each one by PID and project. Each open Claude Code session, editor with cartog configured, or terminal `cartog watch` is one of them.
 
-- **Wait** (Claude Code plugin): the update is armed and applies when the sessions end.
-- **Update now** (macOS/Linux): `cartog self update --force`. Running processes keep the previous version until restarted, and the output lists them.
-- **Windows**: close every cartog process, then rerun `cartog self update`.
+- **Wait** (Claude Code plugin): an armed update applies when the sessions end. `cartog self version` shows whether one is pending; if not, arm it first with `cartog self update --defer` (or `/cartog-install`).
+- **Update now** (macOS/Linux): `cartog self update --force` (add `--to <version>` to land on an armed or pinned version). Running processes keep the previous version until restarted, and the output lists them.
+- **Windows**: close every cartog process, then rerun `cartog self update` (with `--to <version>` for a pinned version).
 - **Binary from 0.35.1 or older** (no `--force`): run `/cartog-install` and choose update now, or rerun the installer from the [quickstart](tutorials/quickstart.md).
 - **"another cartog update is already in progress"**: another update holds the update lock. Retry once it finishes.
 

@@ -9,29 +9,17 @@ use anyhow::Result;
 
 /// Refuse when the index at `db_path` is on an older schema than this binary
 /// and another `serve`/`watch` for it still holds its lock in `state_dir`.
-///
-/// Absent files, unreadable versions and a missing state dir pass, so the open
-/// itself reports those.
 pub(crate) fn refuse_schema_upgrade_under_live_peer(
     db_path: &Path,
     state_dir: Option<&Path>,
 ) -> Result<()> {
-    let Some(state_dir) = state_dir else {
-        return Ok(());
-    };
-    if !db_path.exists() {
-        return Ok(());
-    }
-    let Ok(on_disk) = cartog_db::read_schema_version_at(db_path) else {
-        return Ok(());
-    };
-    let current = cartog_db::CURRENT_SCHEMA_VERSION;
-    match cartog_registry::schema_upgrade_blocker(db_path, state_dir, on_disk, current) {
-        Some(holder) => anyhow::bail!(cartog_registry::schema_upgrade_refusal(
-            db_path, on_disk, current, &holder
-        )),
-        None => Ok(()),
-    }
+    cartog_registry::refuse_schema_upgrade(
+        db_path,
+        state_dir,
+        |p| cartog_db::read_schema_version_at(p).ok(),
+        cartog_db::CURRENT_SCHEMA_VERSION,
+    )
+    .map_err(anyhow::Error::msg)
 }
 
 #[cfg(test)]

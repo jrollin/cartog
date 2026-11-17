@@ -50,11 +50,13 @@ On macOS and Linux the swap is an atomic rename, so running processes keep the o
 
 - a cargo-installed binary (exit `3`): run `cargo install cartog --force`
 - a concurrent update from another `cartog self update` or a hook's `--apply-pending` (exit `6`, "another cartog update is already in progress"): retry once it finishes
+- an update lock it cannot create in the state directory (exit `5`): it never swaps unserialized
 - Windows (exit `6`): a running `cartog.exe` cannot be replaced, so close every cartog process first
 
 ### Choosing a version (`--to`)
 
 - an in-place update clears any armed deferred update, so the version you chose is not replaced when the session ends
+- after taking the update lock it re-reads the installed version: if another update already reached the target it stops with exit `0`, and if it installed something else it stops with exit `6` so you can rerun
 - `self update` never downgrades: a `--to` below the installed version exits `0` and says so, pointing at `cartog self rollback` or the installer with `CARTOG_VERSION`
 
 ### Permission denied
@@ -142,8 +144,9 @@ When a new plugin version ships, here is what each cohort experiences:
   - with a binary from 0.35.1 or older: the bundled `install.sh` pinned to `$PLUGIN_VERSION`, which writes a new file instead of overwriting the running one
   - either way, running sessions keep the old version until restarted
 - **User without the Claude plugin** (Cursor, VS Code, a terminal `cartog watch`), no hook runs `--apply-pending`, so `--defer` and the `cartog_update` tool only arm the update. To apply it:
-  - macOS/Linux: `cartog self update --force`
-  - any platform: close every cartog process, then `cartog self update`
+  - macOS/Linux: `cartog self update --force --to <version>`
+  - any platform: close every cartog process, then `cartog self update --to <version>`
+  - `<version>` is the armed target (`cartog self version` shows it); without `--to` the latest release is installed instead
   - binary from 0.35.1 or older: rerun the [public installer](../tutorials/quickstart.md)
 - **Existing user, `0.14`–`0.20`**, these binaries have `cartog self update` but predate the deferred flags (`--defer`/`--apply-pending` landed in 0.20.0). The SessionEnd hook probes capability and converges them via the bundled `install.sh` pinned to `$PLUGIN_VERSION`, the same pin-exact path as the legacy cohort. (A plain `cartog self update` would fetch the **latest** release, overshooting the pin with no `--to` to constrain it on those versions.) Without this, firing the deferred flags at them errored with clap exit `2` and looped forever as a false "transient" failure.
 - **cargo-installed user**, `cartog self update` refuses (exit `3`) because it must not clobber a cargo-managed binary. The SessionStart drift line and the SessionEnd breadcrumb both tell this cohort to run `cargo install cartog --force` (not `/cartog-install`).

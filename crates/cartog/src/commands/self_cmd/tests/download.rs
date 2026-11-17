@@ -285,3 +285,38 @@ fn the_windows_permission_hint_pins_the_target_version() {
     let hint = permission_hint(Path::new(r"C:\cartog"), "0.36.0", &denied(), true);
     assert!(hint.contains("`cartog self update --to 0.36.0`"), "{hint}");
 }
+
+#[test]
+fn installed_path_keeps_a_normal_binary_path() {
+    let p = Path::new("/usr/local/bin/cartog");
+    assert_eq!(installed_path_for(p), p);
+}
+
+#[test]
+fn installed_path_maps_a_renamed_or_deleted_running_binary_to_the_installed_one() {
+    for running in [
+        "/usr/local/bin/cartog.old",
+        "/usr/local/bin/cartog.old (deleted)",
+        "/usr/local/bin/cartog (deleted)",
+    ] {
+        assert_eq!(
+            installed_path_for(Path::new(running)),
+            Path::new("/usr/local/bin/cartog"),
+            "{running}"
+        );
+    }
+}
+
+#[test]
+fn the_version_is_read_from_the_first_line_of_version_output() {
+    assert_eq!(
+        parse_version_output("cartog 0.36.0\ndescribe: v0.36.0\n").as_deref(),
+        Some("0.36.0")
+    );
+}
+
+#[test]
+fn unrecognised_version_output_yields_no_version() {
+    assert_eq!(parse_version_output("not cartog\n"), None);
+    assert_eq!(parse_version_output("cartog v0.36\n"), None);
+}

@@ -133,6 +133,41 @@ fn parse_arm_output_up_to_date_maps() {
 
 #[cfg(unix)]
 #[test]
+fn parse_arm_output_up_to_date_reports_the_installed_version_and_asks_for_a_restart() {
+    let r = parse_arm_output(
+        &output_ok(
+            r#"{"status":"up-to-date","current":"99.0.0","latest":"99.0.0"}"#,
+            "",
+        ),
+        true,
+    );
+    assert_eq!(r.current, "99.0.0");
+    assert!(
+        r.message.contains("Restart the session to use 99.0.0"),
+        "{}",
+        r.message
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_arm_output_up_to_date_on_the_running_version_needs_no_restart() {
+    let current = env!("CARGO_PKG_VERSION");
+    let r = parse_arm_output(
+        &output_ok(
+            &format!(r#"{{"status":"up-to-date","current":"{current}","latest":"{current}"}}"#),
+            "",
+        ),
+        true,
+    );
+    assert_eq!(
+        r.message,
+        format!("cartog is already up to date ({current}).")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn parse_arm_output_cargo_maps_to_cargo_refused() {
     let r = parse_arm_output(
         &output_ok(

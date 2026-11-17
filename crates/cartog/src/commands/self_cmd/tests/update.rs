@@ -580,3 +580,58 @@ fn an_older_latest_release_is_up_to_date_not_a_refused_downgrade() {
         "cartog: already up to date (0.36.0)"
     );
 }
+
+#[test]
+fn an_unreadable_or_unchanged_install_lets_the_swap_proceed() {
+    assert_eq!(
+        classify_installed("0.35.1", None, "0.36.0"),
+        InstalledCheck::Unchanged
+    );
+    assert_eq!(
+        classify_installed("0.35.1", Some("0.35.1"), "0.36.0"),
+        InstalledCheck::Unchanged
+    );
+}
+
+#[test]
+fn an_install_already_at_the_target_needs_no_swap() {
+    assert_eq!(
+        classify_installed("0.35.1", Some("0.36.0"), "0.36.0"),
+        InstalledCheck::AtOrPastTarget("0.36.0".to_string())
+    );
+}
+
+#[test]
+fn an_install_past_an_older_target_is_not_downgraded() {
+    assert_eq!(
+        classify_installed("0.35.1", Some("0.37.0"), "0.36.0"),
+        InstalledCheck::AtOrPastTarget("0.37.0".to_string())
+    );
+}
+
+#[test]
+fn an_install_changed_below_the_target_is_refused() {
+    assert_eq!(
+        classify_installed("0.35.1", Some("0.35.2"), "0.36.0"),
+        InstalledCheck::Changed("0.35.2".to_string())
+    );
+}
+
+#[test]
+fn the_pending_target_check_matches_only_the_armed_version() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("state.toml");
+    std::fs::write(&path, "[pending_update]\ntarget_version = \"0.36.0\"\n").unwrap();
+
+    assert!(pending_target_is(&path, "0.36.0"));
+    assert!(!pending_target_is(&path, "0.37.0"));
+}
+
+#[test]
+fn a_cleared_intent_no_longer_matches() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("state.toml");
+    std::fs::write(&path, "").unwrap();
+
+    assert!(!pending_target_is(&path, "0.36.0"));
+}

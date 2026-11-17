@@ -46,7 +46,7 @@ pub(crate) fn perform_upgrade(
     }
 
     // Stage in install_dir (same FS) — default $TMPDIR could trigger EXDEV on rename.
-    let current_bin = std::env::current_exe()
+    let current_bin = installed_binary_path()
         .map_err(|e| UpgradeError::Filesystem(format!("cannot resolve current exe: {e}")))?;
     let install_dir = current_bin.parent().ok_or_else(|| {
         UpgradeError::Filesystem(format!(
@@ -145,6 +145,62 @@ pub(crate) fn perform_upgrade(
         }
     }
     Ok(())
+}
+
+/// The binary installed where this process was started from.
+///
+/// After another updater swapped the binary, Linux reports this process's
+/// executable at its renamed path (`<bin>.old`, or `<bin>.old (deleted)`, or
+/// `<bin> (deleted)` after an installer replaced it). Swapping there would
+/// overwrite the rollback copy instead of the installed binary.
+pub(crate) fn installed_binary_path() -> std::io::Result<PathBuf> {
+    std::env::current_exe().map(|running| installed_path_for(&running))
+}
+
+/// Map a running executable's reported path back to the installed binary.
+#[must_use]
+pub(crate) fn installed_path_for(running: &Path) -> PathBuf {
+    let Some(name) = running.file_name().and_then(|n| n.to_str()) else {
+        return running.to_path_buf();
+    };
+    let name = name.strip_suffix(" (deleted)").unwrap_or(name);
+    let name = name.strip_suffix(".old").unwrap_or(name);
+    running.with_file_name(name)
+}
+
+/// The version `bin --version` reports, or `None` if it cannot be run or read
+/// within [`SMOKE_TEST_TIMEOUT`].
+pub(crate) fn installed_binary_version(bin: &Path) -> Option<String> {
+    let mut child = std::process::Command::new(bin)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + SMOKE_TEST_TIMEOUT;
+    loop {
+        match child.try_wait().ok()? {
+            Some(status) if status.success() => break,
+            Some(_) => return None,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+    let mut out = String::new();
+    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut out).ok()?;
+    parse_version_output(&out)
+}
+
+/// `cartog 0.36.0` (first line of `--version`) → `0.36.0`.
+#[must_use]
+pub(crate) fn parse_version_output(out: &str) -> Option<String> {
+    let version = out.lines().next()?.strip_prefix("cartog ")?.trim();
+    is_stable_semver(version).then(|| version.to_string())
 }
 
 /// Whether an I/O failure means this user cannot write the install directory.

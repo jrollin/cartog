@@ -34,6 +34,38 @@ pub fn schema_upgrade_blocker(
         .find(|lock| lock.pid != own_pid && slots.contains(&lock.slot))
 }
 
+/// Refuse with [`schema_upgrade_refusal`]'s text when [`schema_upgrade_blocker`]
+/// finds a holder for `db_path`.
+///
+/// `read_on_disk_schema` reads the file's schema version (callers own the
+/// `cartog-db` dependency). No state dir, no file, or an unreadable version
+/// passes, so the open itself reports those.
+pub fn refuse_schema_upgrade(
+    db_path: &Path,
+    state_dir: Option<&Path>,
+    read_on_disk_schema: impl FnOnce(&Path) -> Option<u32>,
+    current_schema: u32,
+) -> Result<(), String> {
+    let Some(state_dir) = state_dir else {
+        return Ok(());
+    };
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let Some(on_disk) = read_on_disk_schema(db_path) else {
+        return Ok(());
+    };
+    match schema_upgrade_blocker(db_path, state_dir, on_disk, current_schema) {
+        Some(holder) => Err(schema_upgrade_refusal(
+            db_path,
+            on_disk,
+            current_schema,
+            &holder,
+        )),
+        None => Ok(()),
+    }
+}
+
 /// The refusal shown when [`schema_upgrade_blocker`] finds a holder.
 #[must_use]
 pub fn schema_upgrade_refusal(
