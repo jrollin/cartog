@@ -858,13 +858,15 @@ Manage the installed cartog binary in place: upgrade, inspect, roll back, or mig
 ```bash
 cartog self update             # upgrade to the latest stable
 cartog self update --check     # report whether an update exists; exit 1 if outdated
+cartog self update --force     # update even while serve/watch processes run (macOS/Linux)
+cartog self update --to 0.36.0 # target an exact version (also with --defer / --force)
 cartog self version            # version + describe build string + target + install source + last check
 cartog self rollback           # restore the previous binary saved at <bin>.old
 cartog self migrate-db         # move legacy .cartog.db (+ -wal/-shm/.bak) into .cartog/
 cartog self migrate-db --dry-run  # preview the planned moves without touching the filesystem
 ```
 
-`cartog self update` refuses to overwrite a `cargo install cartog` binary (exit 3) and points at `cargo install cartog --force` instead. See [../how-to/update-cartog.md](../how-to/update-cartog.md) for the full procedural guide, and [exit-codes.md](exit-codes.md) for the exit-code matrix.
+`cartog self update` refuses to overwrite a `cargo install cartog` binary (exit 3) and points at `cargo install cartog --force` instead. While `cartog serve`/`watch` processes run, it refuses (exit 6) and lists them; `--force` swaps anyway on macOS/Linux, and those processes keep the previous version until restarted. When the install directory is not writable it exits 5 with an installer command to run yourself. See [../how-to/update-cartog.md](../how-to/update-cartog.md) for the full procedural guide, and [exit-codes.md](exit-codes.md) for the exit-code matrix.
 
 `cartog self migrate-db` refuses to overwrite an existing `.cartog/db.sqlite`, refuses to run while a peer cartog process (`serve` / `watch`) holds the lock **for this project's database** (a peer serving an unrelated project does not block it), and refuses to migrate a symlinked `.cartog.db`.
 

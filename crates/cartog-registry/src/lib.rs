@@ -10,6 +10,8 @@
 //!   filesystem-safe slot name `cartog-process-lock` writes as `<slot>.pid`.
 //! - [`detect_live_serve_peer`] — finds a running `cartog serve` holding a
 //!   given database's serve lock.
+//! - [`schema_upgrade_blocker`] — finds an older `serve`/`watch` that still
+//!   holds a database a newer binary would migrate.
 //! - [`record_project`] / [`list_projects`] / [`forget_project_at`] /
 //!   [`prune_projects_at`] — the machine-local project registry
 //!   (`projects.sqlite`): one row per indexed project, so a session in one
@@ -44,6 +46,7 @@ mod open;
 mod path;
 mod read;
 mod schema;
+mod schema_guard;
 mod slot;
 mod state_dir;
 mod write;
@@ -56,6 +59,7 @@ pub use model::{
 };
 pub use path::{registry_path, REGISTRY_ENV};
 pub use read::{list_projects, list_projects_at};
+pub use schema_guard::{schema_upgrade_blocker, schema_upgrade_refusal};
 pub use slot::{detect_live_serve_peer, slot_for_db};
 pub use state_dir::{default_state_dir, default_state_file};
 pub use write::record_project;

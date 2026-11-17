@@ -368,6 +368,10 @@ pub fn cmd_watch(
     allow_create: bool,
     json: bool,
 ) -> Result<()> {
+    super::schema_guard::refuse_schema_upgrade_under_live_peer(
+        db_path,
+        crate::state::default_state_dir().as_deref(),
+    )?;
     let mut config = WatchConfig::new(PathBuf::from(path));
     config.debounce = Duration::from_secs(debounce);
     config.rag_override = rag_override;

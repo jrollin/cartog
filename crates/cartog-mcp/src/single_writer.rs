@@ -177,6 +177,31 @@ pub fn acquire_serve_lock(opts: &ServerOptions) -> anyhow::Result<ServeLockOutco
 /// server starts **degraded** (no `.cartog/`, write tools refuse, watcher waits
 /// for consent then pre-builds for the next relaunch); when `true` it opens
 /// normally, creating the DB if needed.
+/// Fail when `db_path` is on an older schema than this binary and another
+/// process (necessarily an older cartog) holds its serve/watch lock in
+/// `state_dir`. No state dir, no file, or an unreadable version: nothing to check.
+pub(crate) fn refuse_schema_upgrade_under_older_holder(
+    db_path: &std::path::Path,
+    state_dir: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    let Some(state_dir) = state_dir else {
+        return Ok(());
+    };
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let Ok(on_disk) = cartog_db::read_schema_version_at(db_path) else {
+        return Ok(());
+    };
+    let current = cartog_db::CURRENT_SCHEMA_VERSION;
+    match cartog_registry::schema_upgrade_blocker(db_path, state_dir, on_disk, current) {
+        Some(holder) => anyhow::bail!(cartog_registry::schema_upgrade_refusal(
+            db_path, on_disk, current, &holder
+        )),
+        None => Ok(()),
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // order-stable server knobs threaded from main
 pub async fn run_server(
     db_path: &std::path::Path,
@@ -209,6 +234,13 @@ pub async fn run_server(
             (Role::ReadOnly, None, Some(held))
         }
     };
+
+    // A primary migrates the index on open (its watcher first). Refuse while an
+    // older terminal `cartog watch` still holds it, rather than upgrade the
+    // schema under that process; the error names it.
+    if role == Role::Primary {
+        refuse_schema_upgrade_under_older_holder(db_path, opts.pid_lock_dir.as_deref())?;
+    }
 
     // Only the primary owns the watcher: starting one as a secondary would
     // give us two indexers fighting over the DB. Read-only clients ride

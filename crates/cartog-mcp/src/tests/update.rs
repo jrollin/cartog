@@ -84,10 +84,13 @@ fn parse_plugin_pin_rejects_non_bare_versions() {
 #[cfg(unix)]
 #[test]
 fn parse_arm_output_armed_maps_fields() {
-    let r = parse_arm_output(&output_ok(
-        r#"{"status":"armed","current":"0.19.0","target":"0.20.0","apply":"session-end-or-restart"}"#,
-        "",
-    ));
+    let r = parse_arm_output(
+        &output_ok(
+            r#"{"status":"armed","current":"0.19.0","target":"0.20.0","apply":"session-end-or-restart"}"#,
+            "",
+        ),
+        true,
+    );
     assert_eq!(r.status, "armed");
     assert_eq!(r.target.as_deref(), Some("0.20.0"));
     assert_eq!(r.apply, "session-end-or-restart");
@@ -96,11 +99,33 @@ fn parse_arm_output_armed_maps_fields() {
 
 #[cfg(unix)]
 #[test]
+fn parse_arm_output_armed_gives_non_plugin_clients_a_command_to_run() {
+    let r = parse_arm_output(
+        &output_ok(
+            r#"{"status":"armed","current":"0.19.0","target":"0.20.0","apply":"session-end-or-restart"}"#,
+            "",
+        ),
+        false,
+    );
+    assert!(
+        r.message
+            .contains("`cartog self update --force --to 0.20.0`"),
+        "{}",
+        r.message
+    );
+    assert_eq!(r.apply, "manual");
+}
+
+#[cfg(unix)]
+#[test]
 fn parse_arm_output_up_to_date_maps() {
-    let r = parse_arm_output(&output_ok(
-        r#"{"status":"up-to-date","current":"0.19.0","latest":"0.19.0"}"#,
-        "",
-    ));
+    let r = parse_arm_output(
+        &output_ok(
+            r#"{"status":"up-to-date","current":"0.19.0","latest":"0.19.0"}"#,
+            "",
+        ),
+        true,
+    );
     assert_eq!(r.status, "up-to-date");
     assert_eq!(r.apply, "n/a");
     assert!(r.target.is_none());
@@ -109,10 +134,13 @@ fn parse_arm_output_up_to_date_maps() {
 #[cfg(unix)]
 #[test]
 fn parse_arm_output_cargo_maps_to_cargo_refused() {
-    let r = parse_arm_output(&output_ok(
-        r#"{"status":"cargo","message":"cartog was installed via cargo. Run `cargo install cartog --force` to upgrade."}"#,
-        "",
-    ));
+    let r = parse_arm_output(
+        &output_ok(
+            r#"{"status":"cargo","message":"cartog was installed via cargo. Run `cargo install cartog --force` to upgrade."}"#,
+            "",
+        ),
+        true,
+    );
     assert_eq!(r.status, "cargo-refused");
     assert!(r.message.contains("cargo install cartog --force"));
 }
@@ -120,10 +148,13 @@ fn parse_arm_output_cargo_maps_to_cargo_refused() {
 #[cfg(unix)]
 #[test]
 fn parse_arm_output_foreign_status_echoes_message_as_error() {
-    let r = parse_arm_output(&output_ok(
-        r#"{"status":"fetch-failed","message":"GitHub API returned status 500"}"#,
-        "",
-    ));
+    let r = parse_arm_output(
+        &output_ok(
+            r#"{"status":"fetch-failed","message":"GitHub API returned status 500"}"#,
+            "",
+        ),
+        true,
+    );
     assert_eq!(r.status, "error");
     assert!(r.message.contains("GitHub API returned status 500"));
 }
@@ -133,10 +164,13 @@ fn parse_arm_output_foreign_status_echoes_message_as_error() {
 fn parse_arm_output_skips_log_lines_before_json() {
     // A daily-update-check hint or any noise line before the JSON must not
     // break the parse — the reverse scan finds the real object.
-    let r = parse_arm_output(&output_ok(
-        "cartog: a new version is available\n{\"status\":\"armed\",\"target\":\"0.20.0\"}\n",
-        "",
-    ));
+    let r = parse_arm_output(
+        &output_ok(
+            "cartog: a new version is available\n{\"status\":\"armed\",\"target\":\"0.20.0\"}\n",
+            "",
+        ),
+        true,
+    );
     assert_eq!(r.status, "armed");
     assert_eq!(r.target.as_deref(), Some("0.20.0"));
 }
@@ -146,10 +180,10 @@ fn parse_arm_output_skips_log_lines_before_json() {
 fn parse_arm_output_ignores_trailing_bare_scalar() {
     // A trailing bare scalar that is valid JSON must NOT be picked over the
     // real status object earlier in the stream.
-    let r = parse_arm_output(&output_ok(
-        "{\"status\":\"armed\",\"target\":\"1.2.3\"}\n99\n",
-        "",
-    ));
+    let r = parse_arm_output(
+        &output_ok("{\"status\":\"armed\",\"target\":\"1.2.3\"}\n99\n", ""),
+        true,
+    );
     assert_eq!(r.status, "armed", "bare scalar must be skipped");
     assert_eq!(r.target.as_deref(), Some("1.2.3"));
 }
@@ -167,7 +201,7 @@ fn parse_arm_output_empty_output_names_exit_and_next_action() {
         stdout: Vec::new(),
         stderr: Vec::new(),
     };
-    let r = parse_arm_output(&out);
+    let r = parse_arm_output(&out, true);
     assert_eq!(r.status, "error");
     assert!(
         r.message.contains("exit 9"),
@@ -184,7 +218,41 @@ fn parse_arm_output_empty_output_names_exit_and_next_action() {
 #[cfg(unix)]
 #[test]
 fn parse_arm_output_nonjson_stderr_surfaces_detail() {
-    let r = parse_arm_output(&output_ok("", "boom: something broke"));
+    let r = parse_arm_output(&output_ok("", "boom: something broke"), true);
     assert_eq!(r.status, "error");
     assert!(r.message.contains("boom: something broke"));
+}
+
+#[test]
+fn installed_exe_keeps_a_normal_binary_path() {
+    use crate::tools::manage::installed_exe;
+    let p = std::path::Path::new("/usr/local/bin/cartog");
+    assert_eq!(installed_exe(p), p);
+}
+
+#[test]
+fn installed_exe_maps_a_renamed_backup_to_the_installed_binary() {
+    use crate::tools::manage::installed_exe;
+    assert_eq!(
+        installed_exe(std::path::Path::new("/usr/local/bin/cartog.old")),
+        std::path::Path::new("/usr/local/bin/cartog")
+    );
+}
+
+#[test]
+fn installed_exe_maps_a_deleted_backup_to_the_installed_binary() {
+    use crate::tools::manage::installed_exe;
+    assert_eq!(
+        installed_exe(std::path::Path::new("/usr/local/bin/cartog.old (deleted)")),
+        std::path::Path::new("/usr/local/bin/cartog")
+    );
+}
+
+#[test]
+fn installed_exe_maps_a_deleted_binary_to_its_replacement() {
+    use crate::tools::manage::installed_exe;
+    assert_eq!(
+        installed_exe(std::path::Path::new("/usr/local/bin/cartog (deleted)")),
+        std::path::Path::new("/usr/local/bin/cartog")
+    );
 }

@@ -2,5 +2,6 @@
 
 mod download;
 mod migrate;
+mod peers;
 mod update;
 mod version;

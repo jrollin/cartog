@@ -148,6 +148,17 @@ fn check_database(
             details: Vec::new(),
         };
     }
+    if let Err(e) = super::schema_guard::refuse_schema_upgrade_under_live_peer(
+        db_path,
+        crate::state::default_state_dir().as_deref(),
+    ) {
+        return CheckResult {
+            name: "database".into(),
+            status: CheckStatus::Error,
+            message: e.to_string(),
+            details: Vec::new(),
+        };
+    }
     match Database::open(db_path, embedding_dim) {
         Ok(db) => match db.stats() {
             Ok(stats) if stats.num_files > 0 => CheckResult {
@@ -824,6 +835,11 @@ fn indexed_for_lsp(
     if !db_path.exists() {
         return None;
     }
+    super::schema_guard::refuse_schema_upgrade_under_live_peer(
+        db_path,
+        crate::state::default_state_dir().as_deref(),
+    )
+    .ok()?;
     let db = Database::open(db_path, embedding_dim).ok()?;
     let languages = db.stats().ok()?.languages;
     let has_c_family = languages.iter().any(|(l, _)| l == "c" || l == "cpp");

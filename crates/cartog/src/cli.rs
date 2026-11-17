@@ -672,12 +672,13 @@ pub enum SelfCommand {
         #[arg(long, conflicts_with_all = ["check", "apply_pending"])]
         defer: bool,
 
-        /// With `--defer`, arm exactly this `MAJOR.MINOR.PATCH` version
+        /// Target exactly this `MAJOR.MINOR.PATCH` version
         ///
-        /// Overrides resolving the latest stable release. Used by
-        /// `/cartog-install` to arm the plugin's pinned version. Requires
-        /// `--defer`.
-        #[arg(long, value_name = "VERSION", requires = "defer")]
+        /// Overrides resolving the latest stable release, for an in-place
+        /// update or with `--defer`. Used by `/cartog-install` to land on the
+        /// plugin's pinned version. A version at or below the installed one is
+        /// a no-op.
+        #[arg(long, value_name = "VERSION", conflicts_with_all = ["check", "apply_pending"])]
         to: Option<String>,
 
         /// Apply a previously-armed deferred update (see `--defer`)
@@ -701,6 +702,16 @@ pub enum SelfCommand {
         /// cannot be renamed while a peer holds it). Requires `--apply-pending`.
         #[arg(long, requires = "apply_pending")]
         at_startup: bool,
+
+        /// Update in place even while `cartog serve`/`watch` processes run
+        ///
+        /// Running processes keep the previous version until restarted; the
+        /// output lists them. Use when other sessions keep the update blocked
+        /// (exit 6). Still refuses a cargo-installed binary (exit 3) and a
+        /// concurrent update (exit 6). Not available on Windows, where a
+        /// running cartog.exe cannot be replaced.
+        #[arg(long, conflicts_with_all = ["check", "defer", "apply_pending"])]
+        force: bool,
 
         /// Suppress all output; the exit code is the sole signal.
         #[arg(long)]

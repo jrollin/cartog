@@ -22,32 +22,53 @@ pub enum UpdateMode {
     /// is `--at-startup`: exclude this project's own serve/watch peer from the
     /// peer-wait (the same-session peer never clears; the swap is safe under it).
     ApplyPending { at_startup: bool },
-    /// Default: upgrade in place now.
-    Now,
+    /// Default: upgrade in place now. `force` swaps even while serve/watch
+    /// processes run (not on Windows); `target` (`--to`) pins the version.
+    Now { force: bool, target: Option<String> },
+}
+
+/// The `cartog self update` flags, as parsed by clap.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UpdateFlags {
+    pub check: bool,
+    pub defer: bool,
+    pub to: Option<String>,
+    pub apply_pending: bool,
+    pub at_startup: bool,
+    pub force: bool,
 }
 
 impl UpdateMode {
     /// Map the (mutually exclusive) clap flags to a mode. clap guarantees at
-    /// most one of check/defer/apply_pending is set (via `conflicts_with_all`)
-    /// and that `to` is only present with `defer` (via `requires`).
+    /// most one of check/defer/apply_pending/force is set and that `to` is
+    /// never combined with check/apply_pending (via `conflicts_with_all`).
     #[must_use]
-    pub fn from_flags(
-        check: bool,
-        defer: bool,
-        to: Option<String>,
-        apply_pending: bool,
-        at_startup: bool,
-    ) -> Self {
-        match (check, defer, apply_pending) {
+    pub fn from_flags(flags: UpdateFlags) -> Self {
+        match (flags.check, flags.defer, flags.apply_pending) {
             (true, _, _) => Self::Check,
-            (_, true, _) => Self::Defer(to),
-            (_, _, true) => Self::ApplyPending { at_startup },
-            _ => Self::Now,
+            (_, true, _) => Self::Defer(flags.to),
+            (_, _, true) => Self::ApplyPending {
+                at_startup: flags.at_startup,
+            },
+            _ => Self::Now {
+                force: flags.force,
+                target: flags.to,
+            },
         }
     }
 }
 
-/// `cartog self update [--check|--defer|--apply-pending] [--quiet] [--json]`.
+/// Whether an in-place swap may proceed while serve/watch processes run.
+///
+/// Only when forced, and never on Windows, where a running `cartog.exe` cannot
+/// be renamed. Elsewhere the atomic rename leaves running processes on the old
+/// inode, so they keep working on the previous version until restarted.
+#[must_use]
+pub(crate) fn may_swap_under_peers(force: bool, windows: bool) -> bool {
+    force && !windows
+}
+
+/// `cartog self update [--check|--defer|--apply-pending|--force] [--to V] [--quiet] [--json]`.
 ///
 /// - `--check` is read-only (see [`run_check`]).
 /// - `--defer` arms a deferred update without swapping (see [`run_arm`]) —
@@ -57,13 +78,17 @@ impl UpdateMode {
 ///
 /// In the default upgrade mode the flow is:
 /// 1. Refuse for cargo-installed binaries (exit 3) — direct user to
-///    `cargo install cartog --force`.
-/// 2. Refuse if a peer `cartog serve`/`watch` is still running (exit 6).
-/// 3. Fetch the latest stable tag. Already up to date → exit 0.
-/// 4. Download the platform tarball/zip and `SHA256SUMS`, verify the
+///    `cargo install cartog --force`. `--force` does not bypass this.
+/// 2. Refuse if any `cartog serve`/`watch` is still running (exit 6), listing
+///    every one, unless `--force` (not on Windows).
+/// 3. Resolve the target (`--to`, else the latest stable tag). Already at or
+///    past it → exit 0.
+/// 4. Take the machine-wide update lock (exit 6 if another update holds it).
+/// 5. Download the platform tarball/zip and `SHA256SUMS`, verify the
 ///    checksum (exit 4 on mismatch), atomically swap the binary in
 ///    place, preserve `<bin>.old`, smoke-test the new binary
-///    (exit 5 on failure → restore `.old`).
+///    (exit 5 on failure → restore `.old`). A forced swap lists the
+///    processes left on the previous version.
 pub fn cmd_self_update(mode: UpdateMode, db_path: &Path, quiet: bool, json: bool) -> Result<()> {
     let exit_code = match mode {
         UpdateMode::Check => run_check(quiet, json),
@@ -71,7 +96,7 @@ pub fn cmd_self_update(mode: UpdateMode, db_path: &Path, quiet: bool, json: bool
         UpdateMode::ApplyPending { at_startup } => {
             run_apply_pending(at_startup, db_path, quiet, json)
         }
-        UpdateMode::Now => run_upgrade(quiet, json),
+        UpdateMode::Now { force, target } => run_upgrade(force, target.as_deref(), quiet, json),
     };
     std::process::exit(exit_code);
 }
@@ -196,7 +221,7 @@ fn run_rollback() -> i32 {
 // ── --check internals ─────────────────────────────────────────────────
 
 /// Drive the upgrade path and return the desired exit code.
-fn run_upgrade(quiet: bool, json: bool) -> i32 {
+fn run_upgrade(force: bool, target_override: Option<&str>, quiet: bool, json: bool) -> i32 {
     let source = effective_install_source();
     if source == "cargo" {
         emit_upgrade_message(
@@ -208,31 +233,17 @@ fn run_upgrade(quiet: bool, json: bool) -> i32 {
         return exit::CARGO_INSTALL_REFUSED;
     }
 
-    if let Some(dir) = state::default_state_dir() {
-        let active = cartog_process_lock::find_active_locks(&dir);
-        if let Some(peer) = active.first() {
-            emit_upgrade_message(
-                quiet,
-                json,
-                "peer-running",
-                &format!(
-                    "another cartog process is running ({slot}, PID {pid}); stop it before updating",
-                    slot = peer.slot,
-                    pid = peer.pid,
-                ),
-            );
-            return exit::PEER_RUNNING;
-        }
+    let peers = state::default_state_dir()
+        .map(|dir| running_peers(&dir))
+        .unwrap_or_default();
+    if !peers.is_empty() && !may_swap_under_peers(force, cfg!(windows)) {
+        emit_peer_refusal(&peers, quiet, json);
+        return exit::PEER_RUNNING;
     }
 
-    // 3. Fetch latest release tag.
-    let api_url = github_latest_url();
-    let latest = match fetch_latest_version(&api_url) {
+    let latest = match resolve_target(target_override, quiet, json) {
         Ok(v) => v,
-        Err(e) => {
-            emit_upgrade_message(quiet, json, "fetch-failed", &e.to_string());
-            return exit::NETWORK_OR_PARSE_ERROR;
-        }
+        Err(code) => return code,
     };
     let current = env!("CARGO_PKG_VERSION");
     if compare_stable_versions(current, &latest) != std::cmp::Ordering::Less {
@@ -245,15 +256,39 @@ fn run_upgrade(quiet: bool, json: bool) -> i32 {
                 });
                 println!("{payload}");
             } else {
-                println!("cartog: already up to date ({current})");
+                println!(
+                    "{}",
+                    up_to_date_message(current, &latest, target_override.is_some())
+                );
             }
         }
         return exit::SUCCESS;
     }
 
-    // 4. Download tarball + SHA256SUMS, verify, swap.
-    match perform_upgrade(current, &latest, quiet, json) {
-        Ok(()) => exit::SUCCESS,
+    // Serialize against another swap: a concurrent `self update` or a hook's
+    // `--apply-pending`. Unforced, the peer check above used to catch that
+    // updater's lock; it no longer counts as a peer, so this is the guard now.
+    let _update_lock = match acquire_update_lock() {
+        Ok(lock) => lock,
+        Err(holder) => {
+            emit_upgrade_message(
+                quiet,
+                json,
+                "update-in-progress",
+                &format!(
+                    "another cartog update is already in progress (PID {holder}); retry once it \
+                     finishes"
+                ),
+            );
+            return exit::PEER_RUNNING;
+        }
+    };
+
+    match perform_upgrade(current, &latest, &peers, quiet, json) {
+        Ok(()) => {
+            clear_pending_update();
+            exit::SUCCESS
+        }
         Err(UpgradeError::Network(msg)) => {
             emit_upgrade_message(quiet, json, "fetch-failed", &msg);
             exit::NETWORK_OR_PARSE_ERROR
@@ -267,6 +302,102 @@ fn run_upgrade(quiet: bool, json: bool) -> i32 {
         Err(UpgradeError::Smoke(msg)) | Err(UpgradeError::Filesystem(msg)) => {
             emit_upgrade_message(quiet, json, "filesystem-failed", &msg);
             exit::DISK_OR_PERMISSION_FAILED
+        }
+    }
+}
+
+/// The "nothing to do" line. An explicit `--to` below the installed version
+/// says it was not applied, rather than "up to date", and names the ways back.
+#[must_use]
+pub(crate) fn up_to_date_message(current: &str, target: &str, explicit_target: bool) -> String {
+    if explicit_target && compare_stable_versions(current, target) == std::cmp::Ordering::Greater {
+        format!(
+            "cartog: {current} is newer than {target}; `cartog self update` does not downgrade. \
+             Run `cartog self rollback` to restore the previous binary, or reinstall {target} \
+             with `curl -fsSL https://www.cartog.dev/install.sh | CARTOG_VERSION={target} sh`."
+        )
+    } else {
+        format!("cartog: already up to date ({current})")
+    }
+}
+
+/// Drop any armed deferred update after an explicit in-place update: the user's
+/// chosen version wins, so a later `--apply-pending` must not move past it.
+fn clear_pending_update() {
+    let Some(state_path) = state::default_state_file() else {
+        return;
+    };
+    let mut state = State::load_from(&state_path);
+    if state.pending_update.take().is_some() {
+        if let Err(e) = state.save_to(&state_path) {
+            tracing::warn!(
+                error = %e,
+                path = %state_path.display(),
+                "updated, but failed to clear the armed deferred update",
+            );
+        }
+    }
+}
+
+/// Report every running serve/watch process blocking an unforced update.
+fn emit_peer_refusal(peers: &[RunningPeer], quiet: bool, json: bool) {
+    if quiet {
+        return;
+    }
+    let message = peer_refusal_message(peers, cfg!(windows));
+    if json {
+        let payload = serde_json::json!({
+            "status": "peer-running",
+            "message": message,
+            "peers": peers,
+        });
+        println!("{payload}");
+    } else {
+        eprintln!("cartog: {message}");
+    }
+}
+
+/// The version to install: `--to` when given (validated), else the latest
+/// stable release. `Err` carries the exit code after reporting the failure.
+fn resolve_target(target_override: Option<&str>, quiet: bool, json: bool) -> Result<String, i32> {
+    match target_override {
+        Some(v) => {
+            // An explicit pin must be a bare MAJOR.MINOR.PATCH — reject garbage
+            // up front rather than chasing an unappliable target.
+            if is_stable_semver(v) {
+                Ok(v.to_string())
+            } else {
+                emit_upgrade_message(
+                    quiet,
+                    json,
+                    "invalid-version",
+                    &format!("`--to {v}` is not a MAJOR.MINOR.PATCH version"),
+                );
+                Err(exit::NETWORK_OR_PARSE_ERROR)
+            }
+        }
+        None => fetch_latest_version(&github_latest_url()).map_err(|e| {
+            emit_upgrade_message(quiet, json, "fetch-failed", &e.to_string());
+            exit::NETWORK_OR_PARSE_ERROR
+        }),
+    }
+}
+
+/// Take the machine-wide [`APPLY_LOCK_SLOT`] that serializes binary swaps.
+///
+/// `Err(pid)` when another updater holds it. An I/O failure (or no state dir)
+/// yields `Ok(None)`: the swap proceeds unserialized rather than being blocked
+/// by a lock it cannot create.
+pub(crate) fn acquire_update_lock() -> Result<Option<cartog_process_lock::ProcessLock>, u32> {
+    let Some(dir) = state::default_state_dir() else {
+        return Ok(None);
+    };
+    match cartog_process_lock::ProcessLock::acquire(&dir, APPLY_LOCK_SLOT) {
+        Ok(lock) => Ok(Some(lock)),
+        Err(cartog_process_lock::AcquireError::Held(holder)) => Err(holder.pid),
+        Err(cartog_process_lock::AcquireError::Io(e)) => {
+            tracing::warn!(error = %e, "update lock unavailable; proceeding unserialized");
+            Ok(None)
         }
     }
 }
@@ -588,31 +719,9 @@ fn run_arm(target_override: Option<&str>, quiet: bool, json: bool) -> i32 {
         return exit::CARGO_INSTALL_REFUSED;
     }
 
-    let latest = match target_override {
-        Some(v) => {
-            // An explicit pin must be a bare MAJOR.MINOR.PATCH — reject garbage
-            // up front rather than arming an unappliable target.
-            if !is_stable_semver(v) {
-                emit_upgrade_message(
-                    quiet,
-                    json,
-                    "invalid-version",
-                    &format!("`--to {v}` is not a MAJOR.MINOR.PATCH version"),
-                );
-                return exit::NETWORK_OR_PARSE_ERROR;
-            }
-            v.to_string()
-        }
-        None => {
-            let api_url = github_latest_url();
-            match fetch_latest_version(&api_url) {
-                Ok(v) => v,
-                Err(e) => {
-                    emit_upgrade_message(quiet, json, "fetch-failed", &e.to_string());
-                    return exit::NETWORK_OR_PARSE_ERROR;
-                }
-            }
-        }
+    let latest = match resolve_target(target_override, quiet, json) {
+        Ok(v) => v,
+        Err(code) => return code,
     };
     let current = env!("CARGO_PKG_VERSION");
 
@@ -678,9 +787,10 @@ fn run_arm(target_override: Option<&str>, quiet: bool, json: bool) -> i32 {
             println!("{payload}");
         } else {
             println!(
-                "cartog: armed update {current} -> {latest}; it will be applied when the \
-                 current session ends (or run `cartog self update` from a terminal with no \
-                 cartog serve/watch running)."
+                "cartog: armed update {current} -> {latest}. The Claude Code plugin applies it \
+                 when the session ends; without the plugin nothing applies it automatically, so \
+                 run `cartog self update --apply-pending` once no cartog serve/watch is running, \
+                 or `cartog self update --force --to {latest}` to swap now (not on Windows)."
             );
         }
     }
@@ -770,26 +880,15 @@ fn run_apply_pending(at_startup: bool, db_path: &Path, quiet: bool, json: bool) 
     // wait, download in parallel, and interleave atomic swaps — muddying the
     // `<bin>.old` rollback target. Held → another apply is in flight; treat as a
     // benign no-op (it will land the swap and clear the intent). Held by RAII
-    // until this function returns. An Io failure here is non-fatal: fall through
-    // and let the swap proceed unserialized rather than block the update.
-    let _apply_lock = match state::default_state_dir() {
-        Some(dir) => match cartog_process_lock::ProcessLock::acquire(&dir, APPLY_LOCK_SLOT) {
-            Ok(lock) => Some(lock),
-            Err(cartog_process_lock::AcquireError::Held(_)) => {
-                if !quiet && !json {
-                    println!("cartog: another deferred update is already in progress; skipping.");
-                }
-                return exit::SUCCESS;
-            }
-            Err(cartog_process_lock::AcquireError::Io(e)) => {
-                tracing::warn!(error = %e, "apply-update lock unavailable; proceeding unserialized");
-                None
-            }
-        },
-        None => None,
+    // until this function returns.
+    let Ok(_apply_lock) = acquire_update_lock() else {
+        if !quiet && !json {
+            println!("cartog: another deferred update is already in progress; skipping.");
+        }
+        return exit::SUCCESS;
     };
 
-    let err = match perform_upgrade(current, &target, quiet, json) {
+    let err = match perform_upgrade(current, &target, &[], quiet, json) {
         Ok(()) => {
             // perform_upgrade already refreshed last_known_*; reload and clear
             // the pending intent.

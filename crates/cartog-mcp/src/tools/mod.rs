@@ -3,8 +3,15 @@
 
 mod graph;
 mod index;
-mod manage;
 mod rag;
+
+// Private like its siblings in a normal build. Widened only under `cfg(test)`,
+// where `tests/update.rs` drives the pure `installed_exe` path mapping directly:
+// the Linux rename it handles cannot be reproduced from a test process.
+#[cfg(not(test))]
+mod manage;
+#[cfg(test)]
+pub(crate) mod manage;
 
 // Private like its siblings in a normal build. Widened only under `cfg(test)`,
 // where `tests/search_all.rs` drives the pure candidate-selection helper

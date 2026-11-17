@@ -8,31 +8,82 @@ use crate::commands::self_cmd::*;
 
 #[test]
 fn update_mode_from_flags_maps_each_combination() {
+    let flags = UpdateFlags::default;
     assert_eq!(
-        UpdateMode::from_flags(true, false, None, false, false),
+        UpdateMode::from_flags(UpdateFlags {
+            check: true,
+            ..flags()
+        }),
         UpdateMode::Check
     );
     assert_eq!(
-        UpdateMode::from_flags(false, true, None, false, false),
+        UpdateMode::from_flags(UpdateFlags {
+            defer: true,
+            ..flags()
+        }),
         UpdateMode::Defer(None)
     );
     assert_eq!(
-        UpdateMode::from_flags(false, true, Some("0.20.0".to_string()), false, false),
+        UpdateMode::from_flags(UpdateFlags {
+            defer: true,
+            to: Some("0.20.0".to_string()),
+            ..flags()
+        }),
         UpdateMode::Defer(Some("0.20.0".to_string())),
         "--to pins an explicit target"
     );
     assert_eq!(
-        UpdateMode::from_flags(false, false, None, true, false),
+        UpdateMode::from_flags(UpdateFlags {
+            apply_pending: true,
+            ..flags()
+        }),
         UpdateMode::ApplyPending { at_startup: false }
     );
     assert_eq!(
-        UpdateMode::from_flags(false, false, None, true, true),
+        UpdateMode::from_flags(UpdateFlags {
+            apply_pending: true,
+            at_startup: true,
+            ..flags()
+        }),
         UpdateMode::ApplyPending { at_startup: true },
         "--at-startup propagates into the apply-pending variant"
     );
     assert_eq!(
-        UpdateMode::from_flags(false, false, None, false, false),
-        UpdateMode::Now
+        UpdateMode::from_flags(flags()),
+        UpdateMode::Now {
+            force: false,
+            target: None
+        }
+    );
+}
+
+#[test]
+fn update_mode_from_flags_carries_force_and_target_into_an_in_place_update() {
+    assert_eq!(
+        UpdateMode::from_flags(UpdateFlags {
+            force: true,
+            to: Some("0.36.0".to_string()),
+            ..UpdateFlags::default()
+        }),
+        UpdateMode::Now {
+            force: true,
+            target: Some("0.36.0".to_string())
+        }
+    );
+}
+
+#[test]
+fn a_running_peer_blocks_an_unforced_swap_everywhere() {
+    assert!(!may_swap_under_peers(false, false));
+    assert!(!may_swap_under_peers(false, true));
+}
+
+#[test]
+fn force_swaps_under_running_peers_except_on_windows() {
+    assert!(may_swap_under_peers(true, false));
+    assert!(
+        !may_swap_under_peers(true, true),
+        "a running cartog.exe cannot be renamed, so --force must not apply on Windows"
     );
 }
 
@@ -504,4 +555,28 @@ fn wait_for_no_peer_excluding_still_blocks_other_slot() {
     let result = wait_for_no_peer_excluding(dir.path(), Duration::from_millis(150), &excluded);
     assert!(result.is_err(), "a non-excluded peer must still time out");
     assert_eq!(result.unwrap_err().slot, "serve-other999");
+}
+
+#[test]
+fn an_explicit_target_below_the_installed_version_is_reported_as_not_applied() {
+    let msg = up_to_date_message("0.36.0", "0.35.1", true);
+    assert!(msg.contains("does not downgrade"), "{msg}");
+    assert!(msg.contains("cartog self rollback"), "{msg}");
+    assert!(msg.contains("CARTOG_VERSION=0.35.1"), "{msg}");
+}
+
+#[test]
+fn an_explicit_target_equal_to_the_installed_version_is_up_to_date() {
+    assert_eq!(
+        up_to_date_message("0.36.0", "0.36.0", true),
+        "cartog: already up to date (0.36.0)"
+    );
+}
+
+#[test]
+fn an_older_latest_release_is_up_to_date_not_a_refused_downgrade() {
+    assert_eq!(
+        up_to_date_message("0.36.0", "0.35.1", false),
+        "cartog: already up to date (0.36.0)"
+    );
 }

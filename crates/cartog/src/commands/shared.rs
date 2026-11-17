@@ -12,6 +12,8 @@ use serde::Serialize;
 
 use cartog_db::{Database, DbError};
 
+use super::schema_guard::refuse_schema_upgrade_under_live_peer;
+
 /// The project's declared identity, resolved from `[project]` plus its README.
 ///
 /// The one place the bin-side `ProjectConfig` meets the library-side
@@ -73,6 +75,7 @@ pub(crate) fn declared_update_for(
 /// [`open_db_create`] instead — they are gated on consent *above* `main`'s
 /// dispatch, so they never reach this fallback.
 pub(crate) fn open_db(path: &Path, embedding_dim: usize) -> Result<Database> {
+    refuse_schema_upgrade_under_live_peer(path, crate::state::default_state_dir().as_deref())?;
     match Database::open_existing(path, embedding_dim) {
         Ok(db) => Ok(db),
         // No index yet → empty in-memory DB; the command returns empty + hint
@@ -89,6 +92,7 @@ pub(crate) fn open_db(path: &Path, embedding_dim: usize) -> Result<Database> {
 /// `main` has confirmed the project is opted in — so this materializing the
 /// `.cartog/` is intended, not a surprise.
 pub(crate) fn open_db_create(path: &Path, embedding_dim: usize) -> Result<Database> {
+    refuse_schema_upgrade_under_live_peer(path, crate::state::default_state_dir().as_deref())?;
     Database::open(path, embedding_dim).map_err(|e| open_db_error(path, e.into()))
 }
 

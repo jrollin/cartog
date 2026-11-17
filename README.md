@@ -190,6 +190,7 @@ Once cartog is on your `PATH`:
 ```bash
 cartog self update           # upgrade in place to the latest stable
 cartog self update --check   # report whether an update exists; exit 1 if outdated
+cartog self update --force   # update even while serve/watch processes run (macOS/Linux)
 cartog self version          # show installed version + last-check timestamp
 cartog self rollback         # restore the previous binary
 ```

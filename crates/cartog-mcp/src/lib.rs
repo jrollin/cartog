@@ -538,10 +538,31 @@ fn fit_to_budget<T: Serialize>(items: Vec<T>, budget: usize) -> (Vec<T>, usize) 
     (kept, omitted)
 }
 
+/// What an agent tells the user after arming: when it lands under the plugin,
+/// or the command to run themselves when no hook will apply it.
+fn armed_message(target: Option<&str>, plugin: bool) -> String {
+    match (target, plugin) {
+        (Some(t), true) => format!(
+            "Armed update to {t}. It applies when this Claude Code session ends (or on the \
+             next restart); the current session keeps running the installed binary."
+        ),
+        (Some(t), false) => format!(
+            "Armed update to {t}, but this client has no hook that applies it. Ask the user to \
+             run `cartog self update --force --to {t}` in their own terminal (on Windows: close \
+             every cartog process, then `cartog self update --to {t}`)."
+        ),
+        (None, _) => "Armed a deferred update.".to_string(),
+    }
+}
+
 /// Map the JSON envelope from `cartog self update --defer --json` to an
 /// [`UpdateResult`]. The CLI is the single source of truth for arming
 /// behavior and exit semantics; this only reshapes its output for MCP.
-fn parse_arm_output(output: &std::process::Output) -> UpdateResult {
+///
+/// `plugin` is whether the Claude Code plugin launched this server: only its
+/// hooks apply an armed update, so any other client gets `apply: "manual"` and a
+/// command for the user to run.
+fn parse_arm_output(output: &std::process::Output, plugin: bool) -> UpdateResult {
     let current = env!("CARGO_PKG_VERSION").to_string();
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Scan from the last line for an object carrying a string `status`. The
@@ -594,18 +615,16 @@ fn parse_arm_output(output: &std::process::Output) -> UpdateResult {
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
             UpdateResult {
-                message: match &target {
-                    Some(t) => format!(
-                        "Armed update to {t}. It applies when this Claude Code session ends \
-                         (or on the next restart) — the current session keeps running the \
-                         installed binary."
-                    ),
-                    None => "Armed a deferred update.".to_string(),
-                },
+                message: armed_message(target.as_deref(), plugin),
                 current,
                 target,
                 status: "armed".to_string(),
-                apply: "session-end-or-restart".to_string(),
+                apply: if plugin {
+                    "session-end-or-restart"
+                } else {
+                    "manual"
+                }
+                .to_string(),
             }
         }
         "up-to-date" => UpdateResult {
@@ -1432,8 +1451,8 @@ pub use single_writer::{
 };
 #[cfg(test)]
 pub(crate) use single_writer::{
-    promoter_task, serve_to_watch_slot, test_validate_call_counter, validate_pinned_state,
-    PromoterArgs,
+    promoter_task, refuse_schema_upgrade_under_older_holder, serve_to_watch_slot,
+    test_validate_call_counter, validate_pinned_state, PromoterArgs,
 };
 
 #[cfg(test)]

@@ -13,6 +13,7 @@
 //! - [`ide`], [`init`], [`remote`], [`config_display`], [`doctor`], [`self_cmd`] — already standalone
 
 mod progress;
+mod schema_guard;
 mod shared;
 
 #[cfg(test)]
@@ -56,5 +57,6 @@ pub use projects::{
 };
 pub(crate) use self_cmd::plugin_pin_for_serve;
 pub use self_cmd::{
-    cmd_self_migrate_db, cmd_self_rollback, cmd_self_update, cmd_self_version, UpdateMode,
+    cmd_self_migrate_db, cmd_self_rollback, cmd_self_update, cmd_self_version, UpdateFlags,
+    UpdateMode,
 };
