@@ -518,11 +518,9 @@ fn copy_cartog_into(dir: &std::path::Path) -> PathBuf {
     use std::fs::OpenOptions;
     use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("cartog");
-    // Linux returns ETXTBSY from execve() if any process still holds a write
-    // fd on the binary. `std::fs::copy` returns when bytes hit the page cache,
-    // not when the write fd is closed: racing parallel tests can then fail
-    // to spawn the freshly copied binary. Open/write/fsync/drop the dest fd
-    // in its own scope to close the race window before chmod+exec.
+    // Linux returns ETXTBSY from execve() while any process holds a write fd
+    // on the binary. Drop our own dest fd before chmod+exec; a sibling's forked
+    // child may still hold a copy of it, which `wait_until_executable` outlasts.
     {
         let mut src = std::fs::File::open(cartog_bin()).expect("open cartog");
         let mut dst = OpenOptions::new()
@@ -537,7 +535,63 @@ fn copy_cartog_into(dir: &std::path::Path) -> PathBuf {
     let mut perms = std::fs::metadata(&bin).unwrap().permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&bin, perms).unwrap();
+    wait_until_executable(&bin);
     bin
+}
+
+/// Run `bin --version` until exec(2) stops failing with ETXTBSY.
+///
+/// Closing our own write fd is not enough on Linux: a sibling test thread that
+/// forks while that fd is open hands a copy to its child, which holds it until
+/// the child execs. Exec of `bin` fails with "Text file busy" in that window
+/// (seen in CI as `self_rollback_exits_one_when_no_old_present`).
+#[cfg(unix)]
+fn wait_until_executable(bin: &std::path::Path) {
+    for attempt in 1..=50u64 {
+        match Command::new(bin)
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+        {
+            Ok(_) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(10 * attempt.min(10)));
+            }
+            Err(e) => panic!("cannot execute the copied binary {}: {e}", bin.display()),
+        }
+    }
+    panic!(
+        "{} stayed \"Text file busy\" after 50 attempts (~4 s)",
+        bin.display()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_copied_binary_waits_out_a_write_handle_held_elsewhere() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let bin = copy_cartog_into(dir.path());
+    // Stands in for a sibling's forked child that inherited the copy's write fd.
+    let held = std::fs::OpenOptions::new().write(true).open(&bin).unwrap();
+    assert_eq!(
+        Command::new(&bin)
+            .arg("--version")
+            .status()
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::ExecutableFileBusy,
+        "precondition: exec must fail while a write handle is open"
+    );
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        drop(held);
+    });
+
+    wait_until_executable(&bin);
+
+    release.join().unwrap();
 }
 
 #[cfg(unix)]
