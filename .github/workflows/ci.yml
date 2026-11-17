@@ -179,6 +179,14 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deny
+      # `cargo deny` resolves metadata, which clones the `[patch]` git pin of
+      # tree-sitter-ruby: 320 MB of history, ~4 min uncached. Cache the cargo
+      # registry + git downloads only; this job builds nothing, and leaving
+      # ~/.cargo/bin alone keeps the cargo-deny that install-action just placed.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-targets: "false"
+          cache-bin: "false"
       - run: cargo deny check
 
   # --- Performance (informational) ---
@@ -300,6 +308,12 @@ jobs:
           key: cargo-cyclonedx-${{ runner.os }}-0.5.7
       - if: steps.cache-cyclonedx.outputs.cache-hit != 'true'
         run: cargo install cargo-cyclonedx --version 0.5.7 --locked
+      # Same tree-sitter-ruby git clone as the `deny` job (~4 min uncached).
+      # ~/.cargo/bin stays with the dedicated cargo-cyclonedx cache above.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-targets: "false"
+          cache-bin: "false"
       - run: cargo cyclonedx --format json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
