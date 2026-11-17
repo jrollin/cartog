@@ -179,6 +179,14 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deny
+      # `cargo deny` resolves metadata, which clones the `[patch]` git pin of
+      # tree-sitter-ruby: 320 MB of history, ~4 min uncached. Cache the cargo
+      # registry + git downloads only; this job builds nothing, and leaving
+      # ~/.cargo/bin alone keeps the cargo-deny that install-action just placed.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-targets: "false"
+          cache-bin: "false"
       - run: cargo deny check
 
   # --- Performance (informational) ---
@@ -195,7 +203,7 @@ jobs:
     # real fastembed/ONNX model and is intentionally NOT named here — that is
     # how it is excluded (criterion's regex filter cannot express exclusion).
     #
-    # Budget knobs (kept short so the whole suite is ~1–2 min of measurement on
+    # Budget knobs (kept short so the whole suite is ~4–5 min of measurement on
     # top of the compile):
     # - `--sample-size 10` is criterion's minimum (default 100).
     # - `--warm-up-time 1 --measurement-time 1` trims each bench to ~2 s of
@@ -208,6 +216,14 @@ jobs:
     env:
       # Shared by every step; `index_full_force/*` reuses the same knobs.
       CRITERION_ARGS: "--sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot"
+      # Compile time, not measurement, dominated this job: each bench binary
+      # took ~150 s to build under the release profile's thin LTO + bench debug
+      # info, four times per PR (two targets x merge base and head). Locally a
+      # warm rebuild drops 55 s -> 14 s without them. Base and head share this
+      # profile, so the comparison stays like-for-like; absolute numbers are no
+      # longer LTO-release numbers. `make bench-criterion` keeps the full profile.
+      CARGO_PROFILE_BENCH_LTO: "off"
+      CARGO_PROFILE_BENCH_DEBUG: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -235,6 +251,10 @@ jobs:
           head="$(git rev-parse HEAD)"
           echo "Baselining queries + rag_search at merge base $base"
           git checkout --quiet "$base"
+          # Build both targets in one invocation so their links run in parallel;
+          # the per-target runs below then reuse the binaries.
+          cargo bench -p cartog --bench queries --bench rag_search --no-run || \
+            echo "::warning::could not prebuild both benches on base; building per target"
           cargo bench -p cartog --bench queries -- $CRITERION_ARGS --save-baseline base || \
             echo "::warning::queries bench not present on base; skipping its baseline"
           cargo bench -p cartog --bench rag_search -- $CRITERION_ARGS --save-baseline base || \
@@ -255,6 +275,8 @@ jobs:
             fi
             cargo bench $crate_bench -- $CRITERION_ARGS
           }
+          # One build for both targets, so their links run in parallel.
+          cargo bench -p cartog --bench queries --bench rag_search --no-run
           run_bench "-p cartog --bench queries"
           run_bench "-p cartog --bench rag_search"
 
@@ -286,6 +308,12 @@ jobs:
           key: cargo-cyclonedx-${{ runner.os }}-0.5.7
       - if: steps.cache-cyclonedx.outputs.cache-hit != 'true'
         run: cargo install cargo-cyclonedx --version 0.5.7 --locked
+      # Same tree-sitter-ruby git clone as the `deny` job (~4 min uncached).
+      # ~/.cargo/bin stays with the dedicated cargo-cyclonedx cache above.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-targets: "false"
+          cache-bin: "false"
       - run: cargo cyclonedx --format json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
