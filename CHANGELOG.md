@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.36.1] - 2026-11-26
+
+### Bug Fixes
+
+- **deps**: Bump url and cookie for RUSTSEC advisories ([`c7fb722`](https://github.com/jrollin/cartog/commit/c7fb722ed8f1ce2936ad10ddd301b310fef609c2))
+
 ## [0.36.0] - 2026-11-17
 
 ### Bug Fixes
